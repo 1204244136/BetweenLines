@@ -10,6 +10,8 @@
 
 两份文档都描述同一个项目，但职责不同：公共行为变化需要同步更新 README，内部路径或验证规则变化只更新 AGENTS；如果一个改动同时影响两者，应分别从各自读者的角度记录一次，不要整段复制。
 
+判断一条信息该放哪里：读者需要据此操作或评估项目，放 README；只有改代码的人需要据此保证正确性（字段键名、模式裁剪、存储边界、定位规则、验证命令、故障根因），放 AGENTS。产物字段清单、快照保留策略、写回定位规则和内部故障处置都属于后者，README 只描述用户可观察到的结果。
+
 ## 实现所依赖的领域契约
 
 BetweenLines 共享本地、文件型文本处理和分析能力；当前的 TransComparator 翻译比较工作台可以处理最多三份文本：
@@ -146,6 +148,16 @@ Pandoc 会忠实输出完整 linear text；过滤职责属于共享 ingest 层�
 
 涉及原文时，任何组合都必须保留完整原文段落。
 
+## 写回契约
+
+写回实现位于 `src/ingest/writeback.js`，由 `src/runtime/input-server.js` 调用；它把工作台行文本或说话人标记写回输入选择登记的原文件。
+
+- 目标类型只有四种常量：`text`、`html`、`epub-archive`、`epub-directory`，对应 TXT、XHTML/HTML、EPUB 文件和单本解压的 EPUB 目录。
+- 定位方式按行文本匹配：纯文本段落直接替换；含内联标记的段落按块级元素（`p`/`h1-6`/`blockquote`/`li`/`dd`/`dt`）文本匹配后整段替换，替换文本中的 `ruby`/`rt`/`b`/`sup`/`a noteref` 等内联标记原样保留。
+- 多段合并行按空行拆分后逐段写回，允许跨 XHTML 文档；定位失败的行必须留空不写，并在返回结果中单独报告，不得静默跳过或模糊匹配兜底。
+- EPUB 写回重新打包时必须保持 `mimetype` 条目规范；写入使用本地原子写，避免半途失败留下损坏文件。
+- 写回目标始终是登记的原始路径。遗留的浏览器上传导入副本（`out/runtime/imported-inputs/`）仍可读写，但返回结果必须如实标注目标类型是导入副本。
+
 ## 生成文件与重型文件
 
 `.codegraph/` 是 CodeGraph 目录索引插件的本地索引依赖，不属于可清理生成物。不要删除、移动或重建该目录，除非用户明确要求重新生成 CodeGraph 索引。
@@ -156,6 +168,8 @@ Pandoc 会忠实输出完整 linear text；过滤职责属于共享 ingest 层�
 - `.staging/` 只保存尚未发布的控制台生成任务。
 - `projects/` 只保存不可变项目快照。
 - 顶层只允许 `active-project.json` 指针，不要重新引入顶层 `paragraphs.json`、`jp-align.json` 或 `translation-compare.*`。
+- 快照保留由 `pruneProjectSnapshots` 控制：每次发布新快照后按 `keep: 2` 清理旧快照，当前活动快照额外保留，即使不在最近两个之内。
+- `out/runtime/imported-inputs/` 是早期浏览器上传导入副本的遗留位置，仍可读写；新的输入选择应登记本机原始路径，不要再新增该目录的用途。
 
 除非用户明确要求，不要提交或复制：
 
@@ -239,9 +253,15 @@ Pandoc 输出混入非正文：优先调整转换后的块级正文边界规则�
 
 双语产物出现第三列内容（`TW paragraphs: 0`、`counts.tw`、行里的 `tw`/`twCn`/`refinedScore`、页面上的"台版/参考文本"）：先确认活动快照是否由旧版本生成——模式裁剪只对新构建生效，重新运行 `npm run align:jp && npm run build` 即可；若重新生成后仍存在，检查是哪一层又把 `tw` 加了回来（`validateSelection`、`loadParagraphs`、`rowFieldsFor`/`exportRows`、`makeHtml` 的 `pageLabels`）。
 
+输出混入后记、特典或版权页：调整 `src/ingest/text-utils.js` 的正文结束规则，然后重新运行 `npm run align:jp && npm run build`。
+
+对齐发生连锁错位：检查快照中的 `paragraphs.json` 是否混入图片占位、页码、脚注或元信息，再重新运行对齐与构建。
+
+写回定位失败或写错位置：先确认目标类型是否被正确识别（四种 `TARGET_*` 之一），再检查原文件块的文本是否与行文本一致；含内联标记的段落必须走块级匹配路径，不能回退到朴素字符串替换。定位失败的行不得写入。
+
 ## 当前限制
 
-- UI 是静态 HTML table，尚未针对超大型文本做虚拟滚动或分页。
+- UI 是静态 HTML table，使用客户端分页切片（翻译比较默认 100 行/页，说话人默认 50 行/页），行数据仍随页面整体内嵌；未实现虚拟滚动，超大文本下页面体积增长仍受行数据量限制。
 - 备注按 row index 存储，已核验记录同时带 `rowSig`；新空间只自动找回有行集或唯一行签名证据的记录。缺少签名的历史记录通过预览找回，行序推断必须逐行核验，不能当作可靠内容匹配。
 - 跨语言 embeddings 只是校对辅助，不是最终权威 alignment。
 - OpenCC 有助于比较中文变体，但无法归一化翻译风格差异。
