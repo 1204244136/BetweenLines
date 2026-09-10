@@ -1,0 +1,28 @@
+{
+  "name": "trans-comparator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BetweenLines local text analysis workbench; current translation comparison module.",
+  "scripts": {
+    "setup:env": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-env.ps1",
+    "setup:accelerator": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-accelerator.ps1",
+    "setup": "node src/runtime/input-server.js",
+    "detect:accelerator": "node scripts/detect-accelerator.js",
+    "check:pandoc": "node scripts/check-pandoc.js",
+    "export:paragraphs": "node scripts/export-paragraphs.js",
+    "check:accelerator": ".\\.venv\\Scripts\\python.exe scripts\\check-accelerator.py",
+    "check:gpu": "npm run check:accelerator",
+    "align:jp": "npm run check:accelerator && npm run export:paragraphs && .\\.venv\\Scripts\\python.exe src\\workbenches\\translation-compare\\align_jp.py",
+    "build": "node src/workbenches/translation-compare/build-compare.js",
+    "build:speaker": "node src/workbenches/speaker-attribution/build-workbench.js",
+    "test": "node --test scripts/*.test.js"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "diff": "^8.0.2",
+    "fast-xml-parser": "^5.9.2",
+    "html-to-text": "^10.0.0",
+    "jszip": "^3.10.1",
+    "opencc-js": "^1.0.5"
+  }
+}

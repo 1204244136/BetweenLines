@@ -1,0 +1,97 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+
+const {
+  guessLangOrder,
+  inferInputMode,
+  validateSelection,
+} = require("./input-selection");
+const { loadParagraphs } = require("./text-utils");
+
+function withTextFiles(count, callback) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-selection-"));
+  try {
+    const files = Array.from({ length: count }, (_, index) => {
+      const file = path.join(dir, `text-${index + 1}.txt`);
+      fs.writeFileSync(file, `paragraph ${index + 1}`, "utf8");
+      return file;
+    });
+    callback(files);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("bilingual selection drops the third role entirely", () => {
+  withTextFiles(2, ([jp, cn]) => {
+    const selection = validateSelection({
+      comparisonMode: "bilingual",
+      files: { jp, cn, tw: "" },
+      labels: { jp: "原文", cn: "主文本", tw: "参考文本" },
+      startMarkers: { tw: "不该出现的起始短语" },
+    });
+    assert.equal(selection.comparisonMode, "bilingual");
+    assert.deepEqual(Object.keys(selection.files), ["jp", "cn"]);
+    assert.equal(Object.hasOwn(selection.files, "tw"), false);
+    assert.deepEqual(Object.keys(selection.labels), ["jp", "cn"]);
+    assert.deepEqual(selection.startMarkers, {});
+    assert.equal(selection.inputMode, "txt");
+    assert.deepEqual(selection.inlineMarkup, { ruby: true, bold: true, noteref: true });
+  });
+});
+
+test("inline markup selection can disable EPUB noteref preservation", () => {
+  withTextFiles(2, ([jp, cn]) => {
+    const selection = validateSelection({
+      comparisonMode: "bilingual",
+      files: { jp, cn, tw: "" },
+      inlineMarkup: { noteref: false },
+    });
+
+    assert.deepEqual(selection.inlineMarkup, { ruby: true, bold: true, noteref: false });
+  });
+});
+
+test("trilingual selection still requires three files", () => {
+  withTextFiles(2, ([jp, cn]) => {
+    assert.throws(
+      () => validateSelection({ comparisonMode: "trilingual", files: { jp, cn, tw: "" } }),
+      /Missing tw input file/,
+    );
+  });
+});
+
+test("bilingual file guessing leaves the third role empty", () => {
+  withTextFiles(2, (files) => {
+    const guessed = guessLangOrder(files, "bilingual");
+    assert.ok(guessed.jp);
+    assert.ok(guessed.cn);
+    assert.equal(guessed.tw, null);
+    assert.equal(inferInputMode(guessed), "txt");
+  });
+});
+
+test("bilingual paragraph export does not read or emit a third file", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-paragraphs-"));
+  const jp = path.join(dir, "a.txt");
+  const cn = path.join(dir, "b.txt");
+  fs.writeFileSync(jp, "source paragraph", "utf8");
+  fs.writeFileSync(cn, "target paragraph", "utf8");
+  try {
+    const paragraphs = await loadParagraphs({
+      comparisonMode: "bilingual",
+      inputMode: "txt",
+      files: { jp, cn },
+    });
+    assert.ok(paragraphs.jp.length > 0);
+    assert.ok(paragraphs.cn.length > 0);
+    // 双语模式不写 tw 键，而不是写一个空数组冒充真实存在的列。
+    assert.equal(Object.hasOwn(paragraphs, "tw"), false);
+    assert.equal(paragraphs.comparisonMode, "bilingual");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

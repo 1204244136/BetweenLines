@@ -1,0 +1,152 @@
+// Pure helpers shared by the generated browser page and Node regression tests.
+function createNotesTools(alignLegacyNotes) {
+  const prefix = "translation-compare-notes-";
+  const auxiliary = (key) => /:previous-notes-migration-|:manual-done-prefix-/.test(key);
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value);
+  const isNote = (value) => record(value) && (
+    typeof value.note === "string" || typeof value.revisionText === "string"
+    || typeof value.manualDone === "boolean" || typeof value.done === "boolean" || typeof value.aiDone === "boolean"
+  );
+  const entries = (data) => Object.entries(record(data) ? data : {}).filter(([id, value]) =>
+    /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) && isNote(value));
+
+  function parse(raw) {
+    try {
+      const data = JSON.parse(raw);
+      if (!record(data) || Object.keys(data).length !== entries(data).length) return null;
+      return data;
+    } catch { return null; }
+  }
+
+  function identity(key) {
+    const base = key.replace(/:import-\d+(?:-\d+)?$/, "");
+    const match = base.match(/^translation-compare-notes-(v\d+):(.+):([^:]+)$/);
+    return match ? { version: match[1], project: match[2], rows: match[3] } : { version: "", project: "", rows: "" };
+  }
+
+  function inventory(storage, currentKey, currentNotes) {
+    const keys = new Set([currentKey]);
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(prefix) && !auxiliary(key)) keys.add(key);
+    }
+    const currentIdentity = identity(currentKey);
+    return [...keys].map((key) => {
+      const storedRaw = storage.getItem(key);
+      const current = key === currentKey;
+      const raw = current ? JSON.stringify(currentNotes) : storedRaw;
+      const data = current ? currentNotes : parse(raw);
+      const items = entries(data);
+      const numbers = items.map(([id]) => Number(id));
+      const info = identity(key);
+      return {
+        key, raw, data, current, ...info,
+        sameProject: Boolean(info.project && info.project === currentIdentity.project),
+        sameSnapshot: Boolean(info.rows && info.rows === currentIdentity.rows),
+        entries: items.length,
+        confirmed: items.filter(([, item]) => !item.recoveredUnverified && Boolean(item.manualDone)).length,
+        unverified: items.filter(([, item]) => item.recoveredUnverified).length,
+        bytes: 2 * (key.length + ((current ? raw : storedRaw)?.length || 0)),
+        minIndex: numbers.length ? Math.min(...numbers) : null,
+        maxIndex: numbers.length ? Math.max(...numbers) : null,
+        parseFailed: data === null,
+      };
+    }).sort((a, b) => Number(b.current) - Number(a.current)
+      || Number(b.sameSnapshot) - Number(a.sameSnapshot)
+      || Number(b.sameProject) - Number(a.sameProject)
+      || b.entries - a.entries || a.key.localeCompare(b.key));
+  }
+
+  function plan(data, rows, currentNotes, { sameSnapshot = false, byIndex = false, revisionTextFor = (item) => item.revisionText || "" } = {}) {
+    const items = entries(data);
+    const rowMap = new Map(rows.map((row) => [row.index, row]));
+    const sourceMap = new Map(items.map(([id, item]) => [Number(id), item]));
+    let pairs;
+    if (sameSnapshot || byIndex) {
+      pairs = items.filter(([id]) => rowMap.has(Number(id))).map(([id, item]) => ({
+        from: Number(id), to: Number(id),
+        verified: !byIndex && !item.recoveredUnverified
+          && (!item.rowSig || item.rowSig === rowMap.get(Number(id)).signature),
+      }));
+    } else {
+      const result = alignLegacyNotes(items.map(([id, item]) => ({
+        from: Number(id), signature: item.recoveredUnverified ? "" : String(item.rowSig || ""), text: revisionTextFor(item),
+      })), rows);
+      pairs = result.pairs.map((pair) => {
+        const item = sourceMap.get(pair.from);
+        return { ...pair, verified: !item.recoveredUnverified && Boolean(item.rowSig)
+          && item.rowSig === rowMap.get(pair.to)?.signature };
+      });
+    }
+    const occupied = pairs.filter((pair) => Object.hasOwn(currentNotes, String(pair.to))).length;
+    const available = pairs.filter((pair) => !Object.hasOwn(currentNotes, String(pair.to)));
+    return {
+      pairs: available, occupied, unmatched: items.length - pairs.length,
+      verified: available.filter((pair) => pair.verified).length,
+      unverified: available.filter((pair) => !pair.verified).length,
+    };
+  }
+
+  function backup(spaces) {
+    return { format: "betweenlines-notes", version: 1, spaces: spaces.map(({ key, raw }) => ({ key, raw })) };
+  }
+
+  function decodeBackup(payload) {
+    if (!record(payload)) throw new Error("文件不是备注备份对象。");
+    if (payload.format === "betweenlines-notes") {
+      if (payload.version !== 1 || !Array.isArray(payload.spaces) || !payload.spaces.length) throw new Error("不支持这个备注备份版本或备份为空。");
+      const seen = new Set();
+      return payload.spaces.map((space) => {
+        if (!record(space) || typeof space.key !== "string" || !space.key.startsWith(prefix)
+          || auxiliary(space.key) || typeof space.raw !== "string" || seen.has(space.key)) throw new Error("备份中含无效或重复的空间。");
+        seen.add(space.key);
+        return { key: space.key, raw: space.raw };
+      });
+    }
+    // 兼容旧的全空间备份，以及旧版单空间导出的裸备注对象。
+    if (Object.keys(payload).length && Object.keys(payload).every((key) => key.startsWith(prefix))) {
+      const spaces = Object.entries(payload).filter(([key]) => !auxiliary(key)).map(([key, data]) => {
+        const raw = JSON.stringify(data);
+        if (!parse(raw)) throw new Error("旧备份中含无法识别的备注数据。");
+        return { key, raw };
+      });
+      if (spaces.length) return spaces;
+    }
+    const raw = JSON.stringify(payload);
+    if (entries(payload).length && parse(raw)) return [{ key: prefix + "legacy-file", raw }];
+    throw new Error("文件里没有识别到备注空间，请选择本面板导出的 JSON。");
+  }
+
+  // 文件备份只登记独立空间；同名数据不会覆盖正在使用的页面或任何历史空间。
+  function importBackup(storage, spaces, currentKey, now = Date.now()) {
+    const imported = [];
+    let skipped = 0;
+    let error = null;
+    for (const space of spaces) {
+      let key = space.key;
+      try {
+        const base = key.replace(/:import-\d+(?:-\d+)?$/, "");
+        let duplicate = storage.getItem(key) === space.raw;
+        for (let index = 0; !duplicate && index < storage.length; index += 1) {
+          const existing = storage.key(index);
+          if (existing && (existing === base || existing.startsWith(base + ":import-"))) {
+            duplicate = storage.getItem(existing) === space.raw;
+          }
+        }
+        if (duplicate) { skipped += 1; continue; }
+        if (key === currentKey || storage.getItem(key) !== null || key === prefix + "legacy-file") {
+          key = base + ":import-" + now;
+          let counter = 1;
+          while (storage.getItem(key) !== null) key = base + ":import-" + now + "-" + counter++;
+        }
+        storage.setItem(key, space.raw);
+        imported.push(key);
+      } catch (failure) { error = failure; break; }
+    }
+    return { imported, skipped, failed: spaces.length - imported.length - skipped, error };
+  }
+
+  return { prefix, auxiliary, entries, parse, identity, inventory, plan, backup, decodeBackup, importBackup };
+}
+
+module.exports = { createNotesTools };

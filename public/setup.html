@@ -1,0 +1,1979 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BetweenLines 控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef1f6;
+      --surface: #ffffff;
+      --surface-subtle: #f6f8fb;
+      --surface-raised: #ffffff;
+      --head: #eaeef4;
+      --line: #dde3ec;
+      --line-strong: #c3ccd9;
+      --text: #161d27;
+      --muted: #5b6675;
+      --muted-2: #8a94a4;
+      --focus: #2a63cf;
+      --focus-hover: #1f4fa6;
+      --review: #fdeceb;
+      --review-strong: #c2392f;
+      --watch: #fdf3d8;
+      --watch-strong: #946312;
+      --ok: #e6f4ec;
+      --ok-strong: #1c7a42;
+      --info: #e9f1ff;
+      --info-strong: #2a63cf;
+      --radius: 8px;
+      --radius-sm: 6px;
+      --radius-pill: 999px;
+      --shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
+      --shadow-pop: 0 12px 28px rgba(16, 24, 40, 0.16);
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 32px;
+      --fs-page: 18px;
+      --fs-section: 13px;
+      --fs-body: 14px;
+      --fs-caption: 12px;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html {
+      background: var(--bg);
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      padding: var(--space-4) 22px 13px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(460px, 600px) minmax(0, 1fr);
+      gap: 28px;
+      padding: 18px 22px 28px;
+      align-items: start;
+    }
+    section {
+      min-width: 0;
+    }
+    .col-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 0 2px 2px;
+    }
+    .col-head h2 {
+      margin: 0;
+      font-size: var(--fs-section);
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .col-head .col-hint {
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-panel);
+    }
+    .file-list {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel {
+      padding: var(--space-4);
+    }
+    .work-panel {
+      padding: 18px;
+    }
+    .scope-panel {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+    }
+    .scope-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .scope-head h2 {
+      margin: 0;
+      font-size: var(--fs-section);
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .scope-item {
+      appearance: none;
+      width: 100%;
+      min-width: 0;
+      min-height: 108px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: inherit;
+      font: inherit;
+      height: auto;
+      text-align: left;
+      opacity: 0.68;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 7px;
+      transition: opacity 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+    }
+    .scope-item:hover {
+      opacity: 0.86;
+      background: var(--surface-subtle);
+    }
+    .scope-item:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--focus) 30%, transparent);
+      outline-offset: 2px;
+    }
+    .scope-item strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .scope-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      text-wrap: pretty;
+    }
+    .scope-item.trilingual,
+    .scope-item.bilingual {
+      border-color: var(--line);
+      box-shadow: none;
+    }
+    .scope-item.is-selected {
+      opacity: 1;
+      border-color: var(--focus);
+      box-shadow: inset 3px 0 0 var(--focus), 0 0 0 1px color-mix(in srgb, var(--focus) 18%, transparent);
+    }
+    .import-panel {
+      padding: 18px;
+    }
+    .import-intro {
+      margin: -2px 0 2px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .import-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .import-grid[data-count="1"] {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .import-grid[data-count="2"] {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .import-card {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+      container-type: inline-size;
+    }
+    .import-card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .import-card-head strong {
+      font-size: 14px;
+    }
+    .import-card-head small {
+      color: var(--muted-2);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .dropzone {
+      min-height: 116px;
+      height: auto;
+      padding: 12px 10px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted);
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 6px;
+      text-align: center;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .dropzone:hover {
+      border-color: var(--focus);
+      background: var(--info);
+      color: var(--info-strong);
+    }
+    .dropzone.has-file {
+      border-style: solid;
+      border-color: #b8dec5;
+      background: var(--ok);
+      color: var(--ok-strong);
+    }
+    .dropzone strong {
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+    }
+    .dropzone small {
+      color: var(--muted-2);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .dropzone.has-file small {
+      color: var(--ok-strong);
+    }
+    .import-selection-kind {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 1px 7px;
+      border: 1px solid #b8dec5;
+      border-radius: var(--radius-pill);
+      background: color-mix(in srgb, var(--ok) 66%, var(--surface));
+      color: var(--ok-strong);
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.3;
+    }
+    .import-feedback {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .import-feedback[data-state="error"] { color: var(--review-strong); }
+    .import-feedback[data-state="ok"] { color: var(--ok-strong); }
+    .file-remove {
+      width: auto;
+      height: 30px;
+      padding: 0 9px;
+      justify-self: end;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .file-folder {
+      width: auto;
+      min-height: 28px;
+      padding: 0 9px;
+      justify-self: start;
+      color: var(--muted);
+      background: var(--surface-subtle);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .file-folder:hover,
+    .file-folder:focus-visible {
+      border-color: var(--line-strong);
+      color: var(--ink);
+      background: var(--surface);
+    }
+    .import-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 30px;
+    }
+    .import-actions .file-remove {
+      flex: 0 0 auto;
+    }
+    .local-path-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .local-path-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+    }
+    .local-path-input:focus {
+      border-color: var(--line-strong);
+      outline: none;
+    }
+    .pick-menu {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      padding: 6px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
+    }
+    .pick-menu-label {
+      padding: 3px 9px 1px;
+      color: var(--muted-2);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+    }
+    .pick-menu-item {
+      display: flex;
+      flex: 0 0 auto;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      width: 100%;
+      min-width: 0;
+      min-height: 0;
+      height: auto;
+      padding: 7px 9px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .pick-menu-item strong,
+    .pick-menu-item small {
+      max-width: 100%;
+    }
+    .pick-menu-item small {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .pick-menu-item:hover,
+    .pick-menu-item:focus-visible {
+      border-color: var(--line-strong);
+      background: var(--surface-subtle);
+    }
+    .pick-menu-item--secondary {
+      margin-top: 2px;
+      border-top-color: var(--line);
+      border-radius: 0 0 6px 6px;
+      color: var(--muted);
+    }
+    @container (min-width: 320px) {
+      .pick-menu {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .pick-menu-label,
+      .pick-menu-item--secondary {
+        grid-column: 1 / -1;
+      }
+    }
+    .section-kicker {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 1px 7px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--surface-subtle);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: var(--fs-section);
+      line-height: 1.35;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .field {
+      display: grid;
+      gap: var(--space-1);
+    }
+    .field__label {
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--fs-caption);
+      font-weight: 700;
+    }
+    input,
+    select,
+    button,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 14px;
+      transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+    }
+    input,
+    select,
+    button {
+      height: 36px;
+      padding: 0 10px;
+    }
+    select {
+      appearance: none;
+      padding-right: 34px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4.75 6.25L8 9.5L11.25 6.25' stroke='%23344054' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-position: right 10px center;
+      background-repeat: no-repeat;
+      background-size: 16px 16px;
+    }
+    textarea {
+      min-height: 72px;
+      resize: vertical;
+      padding: 8px 10px;
+      line-height: 1.5;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 700;
+      background: var(--surface-subtle);
+    }
+    button:hover,
+    a.btn:hover,
+    input:hover,
+    select:hover,
+    textarea:hover {
+      border-color: var(--line-strong);
+    }
+    .btn {
+      height: 32px;
+      padding: 0 var(--space-3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 700;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-1);
+      text-decoration: none;
+    }
+    .btn:hover { border-color: var(--line-strong); }
+    .btn--primary { border-color: var(--focus); background: var(--focus); color: #fff; }
+    .btn--primary:hover { border-color: var(--focus-hover); background: var(--focus-hover); }
+    .btn--danger { border-color: #e6aaa5; background: var(--review); color: var(--review-strong); }
+    .btn--ghost { border-color: var(--line); background: var(--surface-subtle); color: var(--muted); }
+    .btn:disabled, .btn.disabled { cursor: not-allowed; opacity: 0.56; pointer-events: none; }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.56;
+    }
+    input:focus,
+    select:focus,
+    button:focus,
+    textarea:focus {
+      outline: 2px solid color-mix(in srgb, var(--focus) 22%, transparent);
+      border-color: var(--focus);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 112px;
+      gap: 8px;
+      align-items: end;
+    }
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+    .status {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status.ok { background: var(--ok); color: var(--ok-strong); border-color: #b8dec5; }
+    .status.warn { background: var(--watch); color: var(--watch-strong); border-color: #ead08d; }
+    .status.error { background: var(--review); color: var(--review-strong); border-color: #f1b6b0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+    th,
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    th {
+      background: var(--head);
+      color: var(--muted);
+      font-weight: 700;
+    }
+    th:nth-child(1), td:nth-child(1) { width: 18%; }
+    th:nth-child(2), td:nth-child(2) { width: 54%; }
+    th:nth-child(3), td:nth-child(3) { width: 14%; }
+    th:nth-child(4), td:nth-child(4) { width: 14%; }
+    .file-meta {
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .project-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .project-picker {
+      flex: 1 1 260px;
+      min-width: 0;
+      max-width: 820px;
+    }
+    .project-actions {
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    /* 全局规则把 button 设成 width:100%，会让这三个按钮各占一行；这里按内容收窄并与选择框同高。 */
+    .project-actions .btn {
+      width: auto;
+      height: 36px;
+      padding: 0 var(--space-3);
+      flex: 0 0 auto;
+    }
+    .project-controls label {
+      margin-bottom: 5px;
+    }
+    #projectsPanel {
+      gap: 10px;
+    }
+    #projectsPanel .scope-head {
+      margin-bottom: 0;
+    }
+    .project-summary {
+      min-height: 26px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .project-summary strong {
+      color: var(--text);
+    }
+    .check-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .check-item {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+    }
+    .check-item input {
+      width: 16px;
+      height: 16px;
+      margin: 3px 0 0;
+      padding: 0;
+      accent-color: var(--focus);
+    }
+    .check-item label {
+      margin: 0;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+    .check-item small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted-2);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 12px 14px;
+      box-shadow: var(--shadow-panel);
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+    }
+    details .stack {
+      margin-top: 12px;
+    }
+    .mono {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 12px;
+    }
+    .log {
+      height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: var(--surface-subtle);
+      color: var(--text);
+      border-color: var(--line);
+      line-height: 1.55;
+    }
+    .progress-panel {
+      display: grid;
+      gap: 7px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+    }
+    .progress-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .progress-meta strong {
+      color: var(--text);
+      font-size: 13px;
+    }
+    .progress-track {
+      height: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--line);
+    }
+    .progress-bar {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--focus);
+      transition: width 520ms cubic-bezier(.22, .8, .25, 1), background-color 180ms ease;
+    }
+    .progress-bar.is-done { background: var(--ok-strong); }
+    .progress-bar.is-failed { background: var(--review-strong); }
+    .run-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    /* 主按钮按内容取宽，不再随右列宽度被拉成半屏。 */
+    .run-actions .btn {
+      width: auto;
+      min-width: 152px;
+      padding: 0 var(--space-4);
+      justify-content: center;
+    }
+    .task-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 120px 120px;
+      gap: 8px;
+      align-items: center;
+    }
+    @media (max-width: 980px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 620px) {
+      .scope-grid {
+        grid-template-columns: 1fr;
+      }
+      .import-grid[data-count] {
+        grid-template-columns: 1fr;
+      }
+      .scope-head {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .project-actions {
+        flex: 1 1 100%;
+      }
+      .project-actions .btn {
+        flex: 1 1 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BetweenLines 控制台</h1>
+    <div class="subtle">管理输入文件、生成流程和后台任务；逐行校对与说话人确认在工作台中完成。</div>
+  </header>
+  <main>
+    <section class="stack">
+      <div class="col-head">
+        <h2>输入配置</h2>
+        <span class="col-hint">扫描目录、分配角色、设定正文范围</span>
+      </div>
+
+      <div class="scope-panel" aria-label="工作台类型" id="workbenchScopePanel">
+        <div class="scope-head">
+          <h2>工作台类型</h2>
+          <span class="subtle">选择输入与生成目标</span>
+        </div>
+        <div class="scope-grid">
+          <button id="translationWorkbench" class="scope-item trilingual is-selected" type="button" aria-pressed="true">
+            <strong>翻译比较</strong>
+            <p>对齐原文与多个非原文版本，逐行比较翻译差异。</p>
+          </button>
+          <button id="speakerWorkbench" class="scope-item bilingual" type="button" aria-pressed="false">
+            <strong>说话人归属</strong>
+            <p>从单语或已预对齐的双语输入中确认每行说话人。</p>
+          </button>
+        </div>
+      </div>
+
+      <div class="scope-panel" aria-label="比较范围说明" id="comparisonScopePanel">
+        <div class="scope-head">
+          <h2>比较范围</h2>
+        </div>
+        <div class="scope-grid">
+          <button id="trilingualScope" class="scope-item trilingual is-selected" type="button" aria-pressed="true">
+            <strong>三语模式</strong>
+            <p>原文 + 主文本（待修改文本） + 参考文本。AI 修改主文本（待修改文本），并对照原文与参考文本。</p>
+          </button>
+          <button id="bilingualScope" class="scope-item bilingual" type="button" aria-pressed="false">
+            <strong>双语模式</strong>
+            <p>原文 + 主文本（待修改文本）。AI 固定修改主文本（待修改文本），并对照原文。</p>
+          </button>
+        </div>
+      </div>
+
+      <div class="scope-panel" aria-label="说话人归属输入范围" id="speakerScopePanel" hidden>
+        <div class="scope-head">
+          <h2>输入范围</h2>
+          <span class="subtle">选择原文和主文本（待修改文本）的组合</span>
+        </div>
+        <div class="scope-grid">
+          <button id="speakerBilingualScope" class="scope-item bilingual is-selected" type="button" aria-pressed="true">
+            <strong>原文 + 主文本（待修改文本）</strong>
+            <p>双语输入。原文用于参考，主文本（待修改文本）用于确认说话人；生成前会先自动预对齐。</p>
+          </button>
+          <button id="speakerMonolingualScope" class="scope-item trilingual" type="button" aria-pressed="false">
+            <strong>只有主文本（待修改文本）</strong>
+            <p>单语输入。直接在主文本（待修改文本）上确认说话人，不执行双语预对齐。</p>
+          </button>
+        </div>
+      </div>
+
+        <div class="panel stack import-panel" id="importPanel">
+        <div class="scope-head">
+          <h2>导入文件</h2>
+          <span id="importKicker" class="section-kicker">三语需要 3 个文件</span>
+        </div>
+        <p id="importHint" class="import-intro">点击卡片直接登记本机文件或解压 EPUB 目录的原始路径；校对写回会直接修改原始文件。不再需要浏览器上传。</p>
+        <div id="importGrid" class="import-grid" data-count="3">
+          <div id="jpImportCard" class="import-card">
+            <div class="import-card-head"><strong id="jpImportTitle">原文</strong><small id="jpImportRequired">必需</small></div>
+            <button id="jpDropzone" class="dropzone" type="button" aria-label="导入原文" aria-controls="jpPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <div id="jpPickMenu" class="pick-menu" hidden>
+              <div class="pick-menu-label">选择导入方式</div>
+              <button id="jpNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+              <button id="jpNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+              <button id="jpLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+            </div>
+            <div id="jpLocalRow" class="local-path-row" hidden>
+              <input id="jpLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
+              <button id="jpLocalApply" class="file-folder" type="button">确认</button>
+            </div>
+            <div class="import-actions">
+              <p id="jpImportStatus" class="import-feedback" role="status" aria-live="polite" hidden></p>
+              <button id="jpRemove" class="file-remove" type="button" hidden>移除文件</button>
+            </div>
+          </div>
+          <div id="cnImportCard" class="import-card">
+            <div class="import-card-head"><strong id="cnImportTitle">主文本（待修改文本）</strong><small id="cnImportRequired">必需</small></div>
+            <button id="cnDropzone" class="dropzone" type="button" aria-label="导入主文本（待修改文本）" aria-controls="cnPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <div id="cnPickMenu" class="pick-menu" hidden>
+              <div class="pick-menu-label">选择导入方式</div>
+              <button id="cnNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+              <button id="cnNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+              <button id="cnLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+            </div>
+            <div id="cnLocalRow" class="local-path-row" hidden>
+              <input id="cnLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
+              <button id="cnLocalApply" class="file-folder" type="button">确认</button>
+            </div>
+            <div class="import-actions">
+              <p id="cnImportStatus" class="import-feedback" role="status" aria-live="polite" hidden></p>
+              <button id="cnRemove" class="file-remove" type="button" hidden>移除文件</button>
+            </div>
+          </div>
+          <div id="twImportCard" class="import-card">
+            <div class="import-card-head"><strong id="twImportTitle">参考文本</strong><small>必需</small></div>
+            <button id="twDropzone" class="dropzone" type="button" aria-label="导入参考文本" aria-controls="twPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <div id="twPickMenu" class="pick-menu" hidden>
+              <div class="pick-menu-label">选择导入方式</div>
+              <button id="twNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+              <button id="twNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+              <button id="twLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+            </div>
+            <div id="twLocalRow" class="local-path-row" hidden>
+              <input id="twLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
+              <button id="twLocalApply" class="file-folder" type="button">确认</button>
+            </div>
+            <div class="import-actions">
+              <p id="twImportStatus" class="import-feedback" role="status" aria-live="polite" hidden></p>
+              <button id="twRemove" class="file-remove" type="button" hidden>移除文件</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel stack" id="translationMarkupPanel">
+        <h2>EPUB 标记保留</h2>
+        <div class="check-grid">
+          <div class="check-item">
+            <input id="preserveRuby" type="checkbox" checked>
+            <label for="preserveRuby">
+              保留注音标记
+              <small>&lt;ruby&gt;A&lt;rt&gt;B&lt;/rt&gt;&lt;/ruby&gt;</small>
+            </label>
+          </div>
+          <div class="check-item">
+            <input id="preserveBold" type="checkbox" checked>
+            <label for="preserveBold">
+              保留加粗标记
+              <small>&lt;b&gt;A&lt;/b&gt;</small>
+            </label>
+          </div>
+          <div class="check-item">
+            <input id="preserveNoteref" type="checkbox" checked>
+            <label for="preserveNoteref">
+              保留注释标记
+              <small>&lt;a epub:type="noteref" ...&gt;&lt;sup&gt;㊟&lt;/sup&gt;&lt;/a&gt;</small>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stack">
+      <div class="col-head">
+        <h2>生成与运行</h2>
+        <span class="col-hint">查看文件、生成工作台、监控后台任务</span>
+      </div>
+
+      <div class="panel stack" id="projectsPanel">
+        <div class="scope-head">
+          <h2>已生成项目</h2>
+          <span id="projectCount" class="section-kicker">0 个项目</span>
+        </div>
+        <div class="project-controls">
+          <div class="project-picker">
+            <label for="projectSelect">选择项目</label>
+            <select id="projectSelect" disabled>
+              <option value="">尚无已生成项目</option>
+            </select>
+          </div>
+          <div class="project-actions">
+            <button id="switchProjectButton" class="btn btn--ghost" type="button" disabled>切换项目</button>
+            <button id="applyLayoutButton" class="btn btn--ghost" type="button" disabled title="使用最新的页面布局和样式重新生成该项目的网页，不重新运行文件比对与语义对齐，原有比对行与数据完整保留">应用新布局</button>
+            <button id="deleteProjectButton" class="btn btn--danger" type="button" disabled title="从本机删除所选项目的不可变快照（比对结果与生成的工作台页面）。源文本和浏览器里的备注不会被删除。">删除项目</button>
+          </div>
+        </div>
+        <div id="projectSummary" class="project-summary">生成完成的工作台会保存在这里。</div>
+      </div>
+      <div class="panel stack" id="generatedFilesPanel">
+        <h2>已导入文件</h2>
+        <div class="file-list">
+          <table>
+            <thead>
+              <tr>
+                <th>角色</th>
+                <th>文件名</th>
+                <th>格式</th>
+                <th>大小</th>
+              </tr>
+            </thead>
+            <tbody id="fileRows">
+              <tr><td colspan="4">尚未导入文件。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel stack" id="generatePanel">
+        <div class="scope-head">
+          <h2>生成与打开</h2>
+          <span id="generateKicker" class="section-kicker">三语工作台</span>
+        </div>
+        <div id="generateHint" class="subtle">导入原文、主文本（待修改文本）和参考文本后即可生成三语工作台；AI 固定修改主文本（待修改文本），并参考参考文本。</div>
+        <div class="run-actions">
+          <button id="runButton" class="btn btn--primary" type="button" disabled>开始生成</button>
+          <a id="openOutput" class="btn btn--ghost disabled" href="#" target="_blank" rel="noreferrer">打开工作台</a>
+        </div>
+        <div id="runStatus" class="status">等待导入所需文件。</div>
+        <div class="progress-panel" aria-label="生成进度">
+          <div class="progress-meta"><strong id="progressLabel">等待生成</strong><span id="progressPercent">0%</span></div>
+          <div class="progress-track" role="progressbar" aria-label="生成进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+        </div>
+        <div id="log" class="status mono log">生成日志会显示在这里。</div>
+      </div>
+      <div class="panel stack" id="aiPanel">
+        <h2>后台任务</h2>
+        <div class="subtle">AI 校对的配置和启动在工作台中完成；修改列和参考范围由当前比较模式决定。控制台只显示运行状态并提供紧急终止。</div>
+        <div class="task-actions">
+          <div id="aiStatus" class="status">没有后台 AI 任务。</div>
+          <a id="openOutputForAi" class="btn btn--ghost disabled" href="#" target="_blank" rel="noreferrer">打开工作台</a>
+          <button id="aiStopButton" class="btn btn--danger" type="button" disabled>终止任务</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const minimumApiVersion = 5;
+    const state = {
+      roleFiles: { jp: null, cn: null, tw: null },
+      workbenchMode: localStorage.getItem("between-lines:workbench-mode") === "speaker-attribution"
+        ? "speaker-attribution"
+        : "translation-compare",
+      speakerInputMode: localStorage.getItem("between-lines:speaker-input-mode") === "monolingual"
+        ? "monolingual"
+        : "bilingual",
+      comparisonMode: "trilingual",
+      inputMode: "",
+      saved: false,
+      savedSettingsLoaded: false,
+      uploading: new Set(),
+      pickingModes: {},
+      projects: [],
+      activeProjectKey: "",
+      switchingProject: false,
+      rebuildingLayout: false,
+      deletingProject: false,
+      pipelineRunning: false,
+      speakerPipeline: null,
+      inputsReady: false,
+      serverApiVersion: 0,
+    };
+    const ids = {
+      translationWorkbench: document.getElementById("translationWorkbench"),
+      speakerWorkbench: document.getElementById("speakerWorkbench"),
+      comparisonScopePanel: document.getElementById("comparisonScopePanel"),
+      speakerScopePanel: document.getElementById("speakerScopePanel"),
+      speakerBilingualScope: document.getElementById("speakerBilingualScope"),
+      speakerMonolingualScope: document.getElementById("speakerMonolingualScope"),
+      trilingualScope: document.getElementById("trilingualScope"),
+      bilingualScope: document.getElementById("bilingualScope"),
+      jpImportTitle: document.getElementById("jpImportTitle"),
+      jpImportRequired: document.getElementById("jpImportRequired"),
+      cnImportCard: document.getElementById("cnImportCard"),
+      cnImportTitle: document.getElementById("cnImportTitle"),
+      cnImportRequired: document.getElementById("cnImportRequired"),
+      twImportTitle: document.getElementById("twImportTitle"),
+      twImportCard: document.getElementById("twImportCard"),
+      importPanel: document.getElementById("importPanel"),
+      importGrid: document.getElementById("importGrid"),
+      importKicker: document.getElementById("importKicker"),
+      importHint: document.getElementById("importHint"),
+      generateKicker: document.getElementById("generateKicker"),
+      generateHint: document.getElementById("generateHint"),
+      translationMarkupPanel: document.getElementById("translationMarkupPanel"),
+      projectsPanel: document.getElementById("projectsPanel"),
+      aiPanel: document.getElementById("aiPanel"),
+      projectCount: document.getElementById("projectCount"),
+      projectSelect: document.getElementById("projectSelect"),
+      switchProjectButton: document.getElementById("switchProjectButton"),
+      applyLayoutButton: document.getElementById("applyLayoutButton"),
+      deleteProjectButton: document.getElementById("deleteProjectButton"),
+      projectSummary: document.getElementById("projectSummary"),
+      fileRows: document.getElementById("fileRows"),
+      runButton: document.getElementById("runButton"),
+      openOutput: document.getElementById("openOutput"),
+      openOutputForAi: document.getElementById("openOutputForAi"),
+      runStatus: document.getElementById("runStatus"),
+      progressLabel: document.getElementById("progressLabel"),
+      progressPercent: document.getElementById("progressPercent"),
+      progressTrack: document.querySelector(".progress-track"),
+      progressBar: document.getElementById("progressBar"),
+      log: document.getElementById("log"),
+      aiStatus: document.getElementById("aiStatus"),
+      aiStopButton: document.getElementById("aiStopButton"),
+      jpDropzone: document.getElementById("jpDropzone"),
+      cnDropzone: document.getElementById("cnDropzone"),
+      twDropzone: document.getElementById("twDropzone"),
+      jpRemove: document.getElementById("jpRemove"),
+      cnRemove: document.getElementById("cnRemove"),
+      twRemove: document.getElementById("twRemove"),
+      preserveRuby: document.getElementById("preserveRuby"),
+      preserveBold: document.getElementById("preserveBold"),
+      preserveNoteref: document.getElementById("preserveNoteref"),
+    };
+    for (const role of ["jp", "cn", "tw"]) {
+      for (const suffix of ["PickMenu", "LocalButton", "LocalRow", "LocalPath", "LocalApply", "NativeFileButton", "NativeFolderButton", "ImportStatus"]) {
+        ids[`${role}${suffix}`] = document.getElementById(`${role}${suffix}`);
+      }
+    }
+    const translationRoleNames = { jp: "原文", cn: "主文本（待修改文本）", tw: "参考文本" };
+
+    function setStatus(message, type = "") {
+      setRunStatus(message, type);
+    }
+
+    function setRunStatus(message, type = "") {
+      ids.runStatus.className = `status ${type}`.trim();
+      ids.runStatus.textContent = message;
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function setPickMenuOpen(role, open) {
+      ids[`${role}PickMenu`].hidden = !open;
+      ids[`${role}Dropzone`].setAttribute("aria-expanded", String(open));
+    }
+
+    function closePickMenus(exceptRole = "") {
+      for (const role of ["jp", "cn", "tw"]) {
+        if (role !== exceptRole) setPickMenuOpen(role, false);
+      }
+    }
+
+    function inputKindLabel(file) {
+      return file?.kind === "directory" ? "EPUB 文件夹" : "单个文件";
+    }
+
+    function setImportStatus(role, message, type = "") {
+      const feedback = ids[`${role}ImportStatus`];
+      feedback.textContent = message;
+      feedback.dataset.state = type;
+      feedback.hidden = !message;
+    }
+
+    function formatGeneratedAt(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "时间未知";
+      return new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(date);
+    }
+
+    function selectedProject() {
+      return state.projects.find((project) => project.id === ids.projectSelect.value) || null;
+    }
+
+    function projectBusy() {
+      return state.switchingProject || state.rebuildingLayout || state.deletingProject || state.pipelineRunning;
+    }
+
+    function updateProjectSelection() {
+      const project = selectedProject();
+      if (!project) {
+        ids.projectSummary.textContent = "生成完成的工作台会保存在这里。";
+        ids.switchProjectButton.disabled = true;
+        ids.applyLayoutButton.disabled = true;
+        ids.deleteProjectButton.disabled = true;
+        return;
+      }
+      const mode = project.comparisonMode === "bilingual" ? "双语" : "三语";
+      const files = Object.values(project.files || {}).map((file) => file.name).filter(Boolean).join(" / ");
+      ids.projectSummary.innerHTML = `<strong>${project.active ? "当前项目" : "可切换项目"}</strong> · ${mode} · ${project.rowCount} 行 · ${escapeHtml(formatGeneratedAt(project.generatedAt))}<br>${escapeHtml(files)}`;
+      ids.switchProjectButton.disabled = project.active || projectBusy();
+      ids.applyLayoutButton.disabled = projectBusy();
+      ids.deleteProjectButton.disabled = projectBusy();
+      ids.deleteProjectButton.title = project.active
+        ? "删除当前项目：从本机移除该项目的快照与工作台页面。源文本和浏览器里的备注不会被删除。"
+        : "删除所选项目：从本机移除该项目的快照与工作台页面。源文本和浏览器里的备注不会被删除。";
+    }
+
+    function renderProjects(projects = [], activeProjectKey = "") {
+      const previousSelection = ids.projectSelect.value;
+      state.projects = projects;
+      state.activeProjectKey = activeProjectKey;
+      ids.projectCount.textContent = `${projects.length} 个项目`;
+      ids.projectSelect.disabled = projects.length === 0;
+      ids.projectSelect.replaceChildren(...(projects.length ? projects.map((project) => {
+        const option = document.createElement("option");
+        option.value = project.id;
+        option.textContent = `${project.active ? "当前 · " : ""}${project.name}`;
+        return option;
+      }) : [new Option("尚无已生成项目", "")]));
+      const preferred = projects.some((project) => project.id === previousSelection)
+        ? previousSelection
+        : (activeProjectKey || projects[0]?.id || "");
+      ids.projectSelect.value = preferred;
+      updateProjectSelection();
+    }
+
+    function upsertCompletedProject(project) {
+      if (!project?.id) return;
+      const projects = [
+        { ...project, active: true, outputUrl: project.outputUrl || "/output/translation-compare.html" },
+        ...state.projects
+          .filter((item) => item.id !== project.id)
+          .map((item) => ({ ...item, active: false, outputUrl: "" })),
+      ];
+      renderProjects(projects, project.id);
+    }
+
+    function showServerVersionMismatch() {
+      state.serverApiVersion = 0;
+      state.projects = [];
+      state.activeProjectKey = "";
+      ids.projectCount.textContent = "需要重启";
+      ids.projectSelect.disabled = true;
+      ids.projectSelect.replaceChildren(new Option("本地服务版本过旧", ""));
+      ids.switchProjectButton.disabled = true;
+      ids.applyLayoutButton.disabled = true;
+      ids.deleteProjectButton.disabled = true;
+      ids.projectSummary.textContent = "页面已更新，但本地服务仍是旧版本。请停止后重新运行 npm run setup。";
+      ids.runButton.disabled = true;
+      setRunStatus("请重启本地控制台服务后再生成，旧服务不会保存项目快照。", "error");
+    }
+
+    function setOutputUrl(url) {
+      for (const link of [ids.openOutput, ids.openOutputForAi]) {
+        link.href = url || "#";
+        link.classList.toggle("disabled", !url);
+      }
+    }
+
+    function isSpeakerMode() {
+      return state.workbenchMode === "speaker-attribution";
+    }
+
+    function activeRoles() {
+      if (isSpeakerMode()) return state.speakerInputMode === "bilingual" ? ["jp", "cn"] : ["jp"];
+      return state.comparisonMode === "bilingual" ? ["jp", "cn"] : ["jp", "cn", "tw"];
+    }
+
+    function roleName(role) {
+      if (isSpeakerMode()) {
+        return state.speakerInputMode === "bilingual"
+          ? { jp: "原文", cn: "主文本（待修改文本）", tw: "未使用" }[role]
+          : { jp: "主文本（待修改文本）", cn: "未使用", tw: "未使用" }[role];
+      }
+      return translationRoleNames[role];
+    }
+
+    function renderImportPanel() {
+      const speaker = isSpeakerMode();
+      const speakerBilingual = state.speakerInputMode === "bilingual";
+      const importCount = speaker
+        ? (speakerBilingual ? 2 : 1)
+        : (state.comparisonMode === "bilingual" ? 2 : 3);
+      ids.importPanel.dataset.workbench = speaker ? "speaker" : "translation";
+      ids.importPanel.dataset.scope = speaker ? state.speakerInputMode : state.comparisonMode;
+      ids.importGrid.dataset.count = String(importCount);
+      ids.cnImportCard.hidden = speaker && !speakerBilingual;
+      ids.twImportCard.hidden = speaker || state.comparisonMode === "bilingual";
+      ids.jpImportTitle.textContent = speaker
+        ? (speakerBilingual ? "原文" : "主文本（待修改文本）")
+        : "原文";
+      ids.jpImportRequired.textContent = "必需";
+      ids.cnImportTitle.textContent = "主文本（待修改文本）";
+      ids.cnImportRequired.textContent = speaker ? (speakerBilingual ? "必需" : "不使用") : "必需";
+      ids.jpDropzone.setAttribute("aria-label", speaker
+        ? (speakerBilingual ? "导入原文" : "导入主文本（待修改文本）")
+        : "导入原文");
+      ids.cnDropzone.setAttribute("aria-label", "导入主文本（待修改文本）");
+      ids.twImportTitle.textContent = "参考文本";
+      ids.importKicker.textContent = speaker
+        ? (speakerBilingual ? "双语需要 2 个文件" : "单语需要 1 个文件")
+        : (state.comparisonMode === "bilingual" ? "双语需要 2 个文件" : "三语需要 3 个文件");
+      ids.importHint.textContent = speaker
+        ? (speakerBilingual
+          ? "导入原文和主文本（待修改文本）；支持 EPUB 压缩包或解压后的 EPUB 文件夹。"
+          : "只导入主文本（待修改文本）；支持 EPUB 压缩包或解压后的 EPUB 文件夹。")
+        : (state.comparisonMode === "bilingual"
+          ? "分别导入原文和主文本（待修改文本）；支持文件、EPUB 压缩包或解压后的 EPUB 文件夹。"
+          : "分别导入原文、主文本（待修改文本）和参考文本；支持文件、EPUB 压缩包或解压后的 EPUB 文件夹。");
+    }
+
+    function renderWorkbenchMode() {
+      const speaker = isSpeakerMode();
+      const speakerBilingual = state.speakerInputMode === "bilingual";
+      ids.translationWorkbench.classList.toggle("is-selected", !speaker);
+      ids.speakerWorkbench.classList.toggle("is-selected", speaker);
+      ids.translationWorkbench.setAttribute("aria-pressed", String(!speaker));
+      ids.speakerWorkbench.setAttribute("aria-pressed", String(speaker));
+      ids.comparisonScopePanel.hidden = speaker;
+      ids.speakerScopePanel.hidden = !speaker;
+      ids.speakerBilingualScope.classList.toggle("is-selected", speakerBilingual);
+      ids.speakerMonolingualScope.classList.toggle("is-selected", !speakerBilingual);
+      ids.speakerBilingualScope.setAttribute("aria-pressed", String(speakerBilingual));
+      ids.speakerMonolingualScope.setAttribute("aria-pressed", String(!speakerBilingual));
+      ids.translationMarkupPanel.hidden = speaker;
+      renderImportPanel();
+      ids.generateKicker.textContent = speaker
+        ? (speakerBilingual ? "说话人归属 · 双语" : "说话人归属 · 单语")
+        : (state.comparisonMode === "bilingual" ? "双语工作台" : "三语工作台");
+      ids.generateHint.textContent = speaker
+        ? (speakerBilingual
+          ? "导入原文和主文本（待修改文本）后即可生成；生成前会自动完成双语预对齐。"
+          : "导入主文本（待修改文本）后即可生成单语说话人确认工作台。")
+        : (state.comparisonMode === "bilingual"
+          ? "导入原文和主文本（待修改文本）后即可生成双语工作台；AI 固定修改主文本（待修改文本）。"
+          : "导入原文、主文本（待修改文本）和参考文本后即可生成三语工作台；AI 固定修改主文本（待修改文本），并参考参考文本。");
+    }
+
+    function renderComparisonMode() {
+      const bilingual = state.comparisonMode === "bilingual";
+      ids.trilingualScope.classList.toggle("is-selected", !bilingual);
+      ids.bilingualScope.classList.toggle("is-selected", bilingual);
+      ids.trilingualScope.setAttribute("aria-pressed", String(!bilingual));
+      ids.bilingualScope.setAttribute("aria-pressed", String(bilingual));
+      renderWorkbenchMode();
+    }
+
+    function importedFiles() {
+      return Object.values(state.roleFiles).filter(Boolean);
+    }
+
+    function renderFiles() {
+      const files = Object.entries(state.roleFiles).filter(([, file]) => file);
+      if (!files.length) {
+        ids.fileRows.innerHTML = '<tr><td colspan="4">尚未登记文件。</td></tr>';
+        return;
+      }
+      ids.fileRows.replaceChildren(...files.map(([role, file]) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${escapeHtml(roleName(role))}</td>
+          <td>${escapeHtml(file.name)}</td>
+          <td>${escapeHtml(file.kind === "directory" ? "EPUB 文件夹" : (file.ext || "-"))}</td>
+          <td>${formatSize(file.size)}</td>
+        `;
+        return row;
+      }));
+    }
+
+    function selectedFiles() {
+      if (isSpeakerMode()) {
+        return {
+          source: state.roleFiles.jp?.path || "",
+          parallel: state.roleFiles.cn?.path || "",
+        };
+      }
+      return {
+        jp: state.roleFiles.jp?.path || "",
+        cn: state.roleFiles.cn?.path || "",
+        tw: state.comparisonMode === "bilingual" ? "" : (state.roleFiles.tw?.path || ""),
+      };
+    }
+
+    function validateUnique({ announce = true } = {}) {
+      const requiredRoles = isSpeakerMode()
+        ? (state.speakerInputMode === "bilingual" ? ["jp", "cn"] : ["jp"])
+        : (state.comparisonMode === "bilingual" ? ["jp", "cn"] : ["jp", "cn", "tw"]);
+      const usedRoles = activeRoles();
+      const values = usedRoles.map((role) => state.roleFiles[role]?.path).filter(Boolean);
+      const missing = requiredRoles.filter((role) => !state.roleFiles[role]);
+      const ok = missing.length === 0 && new Set(values).size === values.length && state.uploading.size === 0;
+      state.inputsReady = ok;
+      ids.runButton.disabled = !ok || state.serverApiVersion < minimumApiVersion || Boolean(isSpeakerMode() ? state.speakerPipeline?.running : state.pipelineRunning);
+      if (announce && !ok && !state.uploading.size) {
+        setStatus(missing.length ? `还需导入：${missing.map(roleName).join("、")}` : "不同角色不能使用同一个文件。", "warn");
+      }
+      return ok;
+    }
+
+    function fileExtension(name) {
+      const match = String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+      return match ? match[1] : "";
+    }
+
+    function inputModeForImportedFiles() {
+      const roles = activeRoles();
+      const extensions = roles.map((role) => state.roleFiles[role]?.ext || fileExtension(state.roleFiles[role]?.name || state.roleFiles[role]?.path));
+      if (!extensions.every(Boolean)) return "";
+      if (extensions.every((extension) => extension === "txt")) return "txt";
+      if (extensions.every((extension) => extension === "epub")) return "epub";
+      return "document";
+    }
+
+    function registerLocalFile(role, file) {
+      const duplicateRole = activeRoles().find((other) => other !== role && state.roleFiles[other]?.path === file.path);
+      if (duplicateRole) throw new Error(`该路径已用于${roleName(duplicateRole)}，请为${roleName(role)}选择不同的输入。`);
+      state.roleFiles[role] = { ...file, source: file.source || "local" };
+      state.saved = false;
+      state.inputMode = file.kind === "directory" ? "epub" : inputModeForImportedFiles();
+      const targetLabel = file.source === "copy"
+        ? "已导入副本"
+        : (file.kind === "directory" ? "原始文件夹中的正文文件" : "原始文件");
+      setImportStatus(role, `已选择${inputKindLabel(file)}，点击卡片可更换。`, "ok");
+      setStatus(`${roleName(role)}已选择${inputKindLabel(file)}：${file.name}（写回将修改${targetLabel}）`, "ok");
+    }
+
+    // 弹出系统原生文件/文件夹选择窗口（由本机服务端打开），所选路径可直接用于写回。
+    async function applyNativePick(role, mode) {
+      if (state.uploading.size) return;
+      state.uploading.add(role);
+      state.pickingModes[role] = mode;
+      setImportStatus(role, "请在系统窗口中完成选择。", "pending");
+      closePickMenus();
+      renderRoleFiles();
+      validateUnique({ announce: false });
+      setStatus(`正在打开${mode === "folder" ? "EPUB 文件夹" : "文件"}选择窗口，请在弹出的窗口中选择...`, "warn");
+      try {
+        const response = await fetch("/api/pick-path", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        if (data.canceled) {
+          setImportStatus(role, state.roleFiles[role] ? "已取消更换，保留原选择。" : "已取消选择。");
+          setStatus("已取消选择。", "");
+          return;
+        }
+        registerLocalFile(role, data.file);
+      } catch (error) {
+        setImportStatus(role, error.message, "error");
+        setStatus(error.message, "error");
+      } finally {
+        state.uploading.delete(role);
+        delete state.pickingModes[role];
+        renderRoleFiles();
+        renderFiles();
+        renderWorkbenchMode();
+        validateUnique({ announce: false });
+      }
+    }
+
+    async function applyLocalPath(role) {
+      if (state.uploading.size) return;
+      const input = ids[`${role}LocalPath`];
+      const rawPath = input.value.trim().replace(/^["']|["']$/g, "");
+      if (!rawPath) {
+        setImportStatus(role, "请输入文件或解压 EPUB 目录的本机路径。", "error");
+        setStatus("请输入文件或解压 EPUB 目录的本地路径。", "error");
+        return;
+      }
+      state.uploading.add(role);
+      state.pickingModes[role] = "path";
+      setImportStatus(role, "正在校验本机路径...", "pending");
+      closePickMenus();
+      renderRoleFiles();
+      validateUnique({ announce: false });
+      setStatus(`正在校验${roleName(role)}本地路径...`, "warn");
+      try {
+        const response = await fetch("/api/validate-input", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: rawPath }),
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        registerLocalFile(role, data.file);
+        ids[`${role}LocalRow`].hidden = true;
+        input.value = "";
+      } catch (error) {
+        setImportStatus(role, error.message, "error");
+        setStatus(error.message, "error");
+      } finally {
+        state.uploading.delete(role);
+        delete state.pickingModes[role];
+        renderRoleFiles();
+        renderFiles();
+        renderWorkbenchMode();
+        validateUnique({ announce: false });
+      }
+    }
+
+    function renderRoleFiles() {
+      for (const role of ["jp", "cn", "tw"]) {
+        const file = state.roleFiles[role];
+        const dropzone = ids[`${role}Dropzone`];
+        const remove = ids[`${role}Remove`];
+        const uploading = state.uploading.has(role);
+        const pickingLabel = state.pickingModes[role] === "folder"
+          ? "EPUB 文件夹"
+          : (state.pickingModes[role] === "path" ? "本机路径" : "单个文件");
+        dropzone.classList.toggle("has-file", Boolean(file));
+        dropzone.disabled = state.uploading.size > 0;
+        dropzone.setAttribute("aria-busy", String(uploading));
+        for (const suffix of ["NativeFileButton", "NativeFolderButton", "LocalButton", "LocalPath", "LocalApply", "Remove"]) {
+          ids[`${role}${suffix}`].disabled = state.uploading.size > 0;
+        }
+        if (uploading) {
+          dropzone.innerHTML = state.pickingModes[role] === "path"
+            ? "<span>正在校验本机路径...</span><small>校验完成后即可使用</small>"
+            : `<span>正在选择${pickingLabel}...</span><small>请在系统窗口中完成选择</small>`;
+        } else if (file) {
+          const writebackLabel = file.source === "local"
+            ? (file.kind === "directory" ? "写回原始文件夹" : "写回原始文件")
+            : "写回已导入副本";
+          dropzone.innerHTML = `<span class="import-selection-kind">${inputKindLabel(file)}</span><strong>${escapeHtml(file.name)}</strong><small>${formatSize(file.size)} · ${writebackLabel}</small>`;
+        } else {
+          dropzone.innerHTML = "<span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small>";
+        }
+        // 卡片不再整行显示本机地址，完整路径改为悬停时由浏览器提示。
+        dropzone.title = (file && !uploading) ? (file.path || "") : "";
+        remove.hidden = !file || uploading;
+      }
+    }
+
+    function removeRoleFile(role) {
+      state.roleFiles[role] = null;
+      setImportStatus(role, "");
+      ids[`${role}LocalPath`].value = "";
+      ids[`${role}LocalRow`].hidden = true;
+      setPickMenuOpen(role, false);
+      state.saved = false;
+      renderRoleFiles();
+      renderFiles();
+      renderWorkbenchMode();
+      validateUnique();
+      setRunStatus("文件已移除，请确认剩余输入后重新生成。", "warn");
+    }
+
+    async function persistSelection() {
+      if (!validateUnique()) throw new Error("请先导入所需文件。");
+      const speaker = isSpeakerMode();
+      const response = await fetch(speaker ? "/api/speaker-selection" : "/api/selection", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(speaker ? {
+          files: selectedFiles(),
+        } : {
+          files: selectedFiles(),
+          comparisonMode: state.comparisonMode,
+          inputMode: state.inputMode,
+          labels: {
+            jp: "原文",
+            cn: "主文本（待修改文本）",
+            tw: "参考文本",
+          },
+          inlineMarkup: {
+            ruby: ids.preserveRuby.checked,
+            bold: ids.preserveBold.checked,
+            noteref: ids.preserveNoteref.checked,
+          },
+        }),
+      });
+      const data = await response.json();
+      if (!data.ok) throw new Error(data.error);
+      state.saved = true;
+      return data;
+    }
+
+    function updateProgress(progress = {}) {
+      const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+      const labels = {
+        idle: "等待生成",
+        starting: "准备生成",
+        "align:jp": "阶段 1/2：导出段落并完成跨语言对齐",
+        build: "阶段 2/2：构建比较工作台",
+        building: "读取输入并构建说话人工作台",
+        writing: "写入说话人工作台",
+        archive: "保存项目快照",
+        ready: "项目已就绪",
+        done: "生成完成",
+        failed: "生成失败",
+      };
+      const baseLabel = progress.detail || labels[progress.step] || "正在生成";
+      const current = Number(progress.current) || 0;
+      const total = Number(progress.total) || 0;
+      const label = total > 0
+        ? `${baseLabel} · ${current.toLocaleString()} / ${total.toLocaleString()}`
+        : baseLabel;
+      ids.progressLabel.textContent = label;
+      ids.progressPercent.textContent = `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`;
+      ids.progressBar.style.width = `${percent}%`;
+      ids.progressBar.classList.toggle("is-done", progress.step === "done");
+      ids.progressBar.classList.toggle("is-failed", progress.step === "failed");
+      ids.progressTrack.setAttribute("aria-valuenow", String(percent));
+    }
+
+    function renderPipeline(pipeline) {
+      if (!pipeline) return;
+      state.pipelineRunning = Boolean(pipeline.running);
+      if (pipeline.step === "done" && pipeline.completedProject) {
+        upsertCompletedProject(pipeline.completedProject);
+      }
+      ids.runButton.disabled = Boolean(pipeline.running) || !state.inputsReady || state.serverApiVersion < minimumApiVersion;
+      updateProjectSelection();
+      updateProgress(pipeline.progress || { step: pipeline.step });
+      const stickToBottom = ids.log.scrollHeight - ids.log.scrollTop - ids.log.clientHeight <= 24;
+      const logs = pipeline.logs?.length ? pipeline.logs.join("\n") : "生成日志会显示在这里。";
+      ids.log.textContent = logs;
+      if (stickToBottom) ids.log.scrollTop = ids.log.scrollHeight;
+      if (pipeline.outputExists && pipeline.outputUrl) {
+        setOutputUrl(pipeline.outputUrl);
+      }
+      if (pipeline.running) {
+        setRunStatus(`正在生成：${pipeline.step}`, "warn");
+      } else if (pipeline.step === "done") {
+        setRunStatus("生成完成，可以打开工作台。", "ok");
+      } else if (pipeline.step === "ready") {
+        setRunStatus("项目已切换，可以打开工作台。", "ok");
+      } else if (pipeline.step === "failed") {
+        setRunStatus(pipeline.error || "生成失败。", "error");
+      }
+    }
+
+    function applySavedSelection(saved, savedFiles = {}, force = false) {
+      if (!saved || (!force && (state.savedSettingsLoaded || importedFiles().length))) return;
+      state.comparisonMode = saved.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
+      state.roleFiles = {
+        jp: savedFiles.jp || null,
+        cn: savedFiles.cn || null,
+        tw: savedFiles.tw || null,
+      };
+      state.inputMode = saved.inputMode || "";
+      renderComparisonMode();
+      renderRoleFiles();
+      renderFiles();
+      ids.preserveRuby.checked = saved.inlineMarkup?.ruby !== false;
+      ids.preserveBold.checked = saved.inlineMarkup?.bold !== false;
+      ids.preserveNoteref.checked = saved.inlineMarkup?.noteref !== false;
+      state.saved = validateUnique();
+      state.savedSettingsLoaded = true;
+    }
+
+    function applySavedSpeakerSelection(saved, savedFiles = {}, force = false) {
+      if (!saved || (!force && (state.savedSettingsLoaded || importedFiles().length))) return;
+      state.roleFiles = {
+        jp: savedFiles.jp || null,
+        cn: savedFiles.cn || null,
+        tw: null,
+      };
+      state.speakerInputMode = saved.files?.parallel ? "bilingual" : "monolingual";
+      state.inputMode = saved.inputMode || "";
+      localStorage.setItem("between-lines:speaker-input-mode", state.speakerInputMode);
+      renderComparisonMode();
+      renderRoleFiles();
+      renderFiles();
+      state.saved = validateUnique();
+      state.savedSettingsLoaded = true;
+    }
+
+    function renderSpeakerPipeline(pipeline) {
+      if (!pipeline) return;
+      state.speakerPipeline = pipeline;
+      ids.runButton.disabled = Boolean(pipeline.running) || !state.inputsReady || state.serverApiVersion < minimumApiVersion;
+      updateProgress(pipeline.progress || { step: pipeline.step });
+      const stickToBottom = ids.log.scrollHeight - ids.log.scrollTop - ids.log.clientHeight <= 24;
+      const logs = pipeline.logs?.length ? pipeline.logs.join("\n") : "生成日志会显示在这里。";
+      ids.log.textContent = logs;
+      if (stickToBottom) ids.log.scrollTop = ids.log.scrollHeight;
+      if (pipeline.outputExists && pipeline.outputUrl) setOutputUrl(pipeline.outputUrl);
+      if (pipeline.running) {
+        setRunStatus("正在生成说话人归属工作台...", "warn");
+      } else if (pipeline.step === "done") {
+        setRunStatus("生成完成，可以打开说话人归属工作台。", "ok");
+      } else if (pipeline.step === "failed") {
+        setRunStatus(pipeline.error || "说话人归属工作台生成失败。", "error");
+      }
+    }
+
+    async function refreshPipeline() {
+      try {
+        const response = await fetch("/api/status");
+        const data = await response.json();
+        if (data.ok) {
+          state.serverApiVersion = Number(data.apiVersion) || 0;
+          const nativePicker = Boolean(data.nativePicker);
+          for (const role of ["jp", "cn", "tw"]) {
+            ids[`${role}NativeFileButton`].hidden = !nativePicker;
+            ids[`${role}NativeFolderButton`].hidden = !nativePicker;
+            ids[`${role}LocalButton`].hidden = false;
+          }
+          if (state.serverApiVersion >= minimumApiVersion && Array.isArray(data.projects)) {
+            renderProjects(data.projects, data.activeProjectKey);
+          }
+          if (isSpeakerMode()) {
+            applySavedSpeakerSelection(data.speakerSaved, data.speakerSavedFiles);
+            renderSpeakerPipeline(data.speaker);
+          } else {
+            applySavedSelection(data.saved, data.savedFiles);
+            if (state.serverApiVersion >= minimumApiVersion) renderPipeline(data.pipeline);
+          }
+          if (state.serverApiVersion < minimumApiVersion) showServerVersionMismatch();
+        }
+      } catch {
+      }
+    }
+
+    function renderAiStatus(ai) {
+      if (!ai) return;
+      ids.aiStopButton.disabled = !ai.running;
+      const modeLabel = ai.proofreadMode === "bilingual" ? "双语" : "三语";
+      if (ai.running) {
+        ids.aiStatus.className = "status warn";
+        ids.aiStatus.textContent = `${modeLabel} AI 运行中：${ai.processed}/${ai.total}，已处理 ${ai.handled}，建议 ${ai.suggested}，错误 ${ai.errors}`;
+      } else if (ai.finishedAt) {
+        ids.aiStatus.className = ai.errors ? "status warn" : "status ok";
+        ids.aiStatus.textContent = `${modeLabel} AI ${ai.stopRequested ? "已终止" : "已完成"}：${ai.processed}/${ai.total}，已处理 ${ai.handled}，建议 ${ai.suggested}，错误 ${ai.errors}`;
+      } else {
+        ids.aiStatus.className = "status";
+        ids.aiStatus.textContent = "没有后台 AI 任务。";
+      }
+    }
+
+    async function refreshAiStatus() {
+      try {
+        const response = await fetch("/api/ai-proofread/status");
+        const data = await response.json();
+        if (data.ok) renderAiStatus(data.ai);
+      } catch {
+      }
+    }
+
+    async function stopAiProofread() {
+      ids.aiStopButton.disabled = true;
+      ids.aiStatus.className = "status warn";
+      ids.aiStatus.textContent = "正在终止后台 AI 任务...";
+      try {
+        const response = await fetch("/api/ai-proofread/stop", { method: "POST" });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        renderAiStatus(data.ai);
+      } catch (error) {
+        ids.aiStatus.className = "status error";
+        ids.aiStatus.textContent = error.message;
+      }
+    }
+
+    async function runPipeline() {
+      if (!validateUnique()) {
+        setRunStatus("请先导入所需文件。", "warn");
+        return;
+      }
+      if (state.serverApiVersion < minimumApiVersion) {
+        showServerVersionMismatch();
+        return;
+      }
+      ids.runButton.disabled = true;
+      setRunStatus("正在启动生成流程...", "warn");
+      updateProgress({ current: 0, total: isSpeakerMode() ? 1 : 2, percent: 0, step: "starting" });
+      try {
+        const speaker = isSpeakerMode();
+        if (!state.saved) await persistSelection();
+        const response = await fetch(speaker ? "/api/speaker-run" : "/api/run", { method: "POST" });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        state.serverApiVersion = Number(data.apiVersion) || state.serverApiVersion;
+        if (speaker) renderSpeakerPipeline(data.pipeline);
+        else renderPipeline(data.pipeline);
+      } catch (error) {
+        setRunStatus(error.message, "error");
+      }
+    }
+
+    async function switchProject() {
+      const project = selectedProject();
+      if (!project || project.active || projectBusy()) return;
+      state.switchingProject = true;
+      updateProjectSelection();
+      setRunStatus(`正在切换项目：${project.name}`, "warn");
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/activate`, { method: "POST" });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        applySavedSelection(data.saved, data.savedFiles, true);
+        renderProjects(data.projects, data.activeProjectKey);
+        renderPipeline(data.pipeline);
+        setStatus(`已载入项目：${data.project.name}`, "ok");
+      } catch (error) {
+        setRunStatus(error.message, "error");
+      } finally {
+        state.switchingProject = false;
+        updateProjectSelection();
+      }
+    }
+
+    async function applyProjectLayout() {
+      const project = selectedProject();
+      if (!project || projectBusy()) return;
+      state.rebuildingLayout = true;
+      updateProjectSelection();
+      setRunStatus(`正在为项目应用新布局：${project.name}...`, "warn");
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/rebuild-html`, { method: "POST" });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        if (Array.isArray(data.projects)) {
+          renderProjects(data.projects, data.activeProjectKey || state.activeProjectKey);
+        }
+        if (data.project?.active && data.project?.outputUrl) {
+          ids.openOutput.href = data.project.outputUrl;
+          ids.openOutput.classList.remove("disabled");
+        }
+        setStatus(data.message || `已成功应用新布局：${project.name}`, "ok");
+      } catch (error) {
+        setRunStatus(error.message, "error");
+      } finally {
+        state.rebuildingLayout = false;
+        updateProjectSelection();
+      }
+    }
+
+    async function deleteSelectedProject() {
+      const project = selectedProject();
+      if (!project || projectBusy()) return;
+      const mode = project.comparisonMode === "bilingual" ? "双语" : "三语";
+      const lines = [
+        `确定要删除${project.active ? "当前" : "该"}项目吗？`,
+        "",
+        project.name,
+        `${mode}工作台 · ${project.rowCount} 行 · ${formatGeneratedAt(project.generatedAt)}`,
+        "",
+        "项目在 out/projects 下的快照（比对结果与生成的工作台页面）将被永久删除，无法恢复。",
+        project.active
+          ? "删除后控制台会自动切换到最近保留的另一个项目；没有项目时活动指针会被清空。"
+          : "这不是当前项目，删除后活动项目保持不变。",
+        "源文本文件和浏览器里的工作台备注不会被删除。",
+      ];
+      if (!window.confirm(lines.join("\n"))) return;
+      state.deletingProject = true;
+      updateProjectSelection();
+      setRunStatus(`正在删除项目：${project.name}`, "warn");
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        if (data.saved) applySavedSelection(data.saved, data.savedFiles, true);
+        renderProjects(Array.isArray(data.projects) ? data.projects : [], data.activeProjectKey || "");
+        if (data.project && data.pipeline) renderPipeline(data.pipeline);
+        if (!data.project) setOutputUrl("");
+        if (data.warning) setRunStatus(data.warning, "warn");
+        else setStatus(data.project
+          ? `已删除项目：${project.name}；当前项目为 ${data.project.name}。`
+          : `已删除项目：${project.name}；本机暂无已生成项目。`, "ok");
+      } catch (error) {
+        setRunStatus(error.message, "error");
+      } finally {
+        state.deletingProject = false;
+        updateProjectSelection();
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    ids.runButton.addEventListener("click", runPipeline);
+    ids.projectSelect.addEventListener("change", updateProjectSelection);
+    ids.switchProjectButton.addEventListener("click", switchProject);
+    ids.applyLayoutButton.addEventListener("click", applyProjectLayout);
+    ids.deleteProjectButton.addEventListener("click", deleteSelectedProject);
+    ids.aiStopButton.addEventListener("click", stopAiProofread);
+    for (const role of ["jp", "cn", "tw"]) {
+      const dropzone = ids[`${role}Dropzone`];
+      dropzone.addEventListener("click", () => {
+        const menu = ids[`${role}PickMenu`];
+        const willOpen = menu.hidden;
+        closePickMenus(role);
+        setPickMenuOpen(role, willOpen);
+      });
+      ids[`${role}NativeFileButton`].addEventListener("click", () => {
+        setPickMenuOpen(role, false);
+        applyNativePick(role, "file");
+      });
+      ids[`${role}NativeFolderButton`].addEventListener("click", () => {
+        setPickMenuOpen(role, false);
+        applyNativePick(role, "folder");
+      });
+      ids[`${role}LocalButton`].addEventListener("click", () => {
+        setPickMenuOpen(role, false);
+        const row = ids[`${role}LocalRow`];
+        row.hidden = !row.hidden;
+        if (!row.hidden) ids[`${role}LocalPath`].focus();
+      });
+      ids[`${role}LocalApply`].addEventListener("click", () => applyLocalPath(role));
+      ids[`${role}LocalPath`].addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applyLocalPath(role);
+        }
+      });
+      ids[`${role}Remove`].addEventListener("click", () => removeRoleFile(role));
+    }
+    document.addEventListener("click", (event) => {
+      if (event.target.closest(".pick-menu") || event.target.closest(".dropzone")) return;
+      closePickMenus();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const openRole = ["jp", "cn", "tw"].find((role) => !ids[`${role}PickMenu`].hidden);
+      if (openRole) {
+        event.preventDefault();
+        closePickMenus();
+        ids[`${openRole}Dropzone`].focus();
+      }
+    });
+    function selectComparisonMode(mode) {
+      const nextMode = mode === "bilingual" ? "bilingual" : "trilingual";
+      if (state.comparisonMode === nextMode) return;
+      state.comparisonMode = nextMode;
+      state.saved = false;
+      renderComparisonMode();
+      validateUnique();
+      setStatus(importedFiles().length ? "比较模式已变更，请确认导入文件。" : "比较模式已变更，请导入所需文件。", "warn");
+      setRunStatus("比较模式已变更，请确认输入文件。", "warn");
+    }
+    function selectSpeakerInputMode(mode) {
+      if (!isSpeakerMode()) return;
+      const nextMode = mode === "monolingual" ? "monolingual" : "bilingual";
+      if (state.speakerInputMode === nextMode) return;
+      state.speakerInputMode = nextMode;
+      localStorage.setItem("between-lines:speaker-input-mode", nextMode);
+      state.saved = false;
+      if (nextMode === "monolingual") {
+        state.roleFiles.cn = null;
+      }
+      renderWorkbenchMode();
+      renderRoleFiles();
+      renderFiles();
+      validateUnique();
+      setStatus(nextMode === "bilingual"
+        ? "已选择“原文 + 主文本（待修改文本）”，请导入两份文件。"
+        : "已选择“只有主文本（待修改文本）”，只需导入主文本（待修改文本）。", "warn");
+      setRunStatus("输入范围已变更，请确认输入文件。", "warn");
+    }
+    function selectWorkbenchMode(mode) {
+      const nextMode = mode === "speaker-attribution" ? "speaker-attribution" : "translation-compare";
+      if (state.workbenchMode === nextMode) return;
+      state.workbenchMode = nextMode;
+      state.saved = false;
+      state.savedSettingsLoaded = false;
+      localStorage.setItem("between-lines:workbench-mode", nextMode);
+      state.roleFiles = { jp: null, cn: null, tw: null };
+      state.inputMode = "";
+      for (const role of ["jp", "cn", "tw"]) {
+        setImportStatus(role, "");
+        ids[`${role}LocalPath`].value = "";
+        ids[`${role}LocalRow`].hidden = true;
+        setPickMenuOpen(role, false);
+      }
+      renderComparisonMode();
+      renderRoleFiles();
+      renderFiles();
+      validateUnique();
+      setOutputUrl("");
+      setStatus(nextMode === "speaker-attribution"
+        ? "已切换到说话人归属。请先选择输入范围。"
+        : "已切换到翻译比较。请确认比较模式和输入文件。", "warn");
+      setRunStatus("工作台类型已变更，请确认输入文件。", "warn");
+      refreshPipeline();
+    }
+    ids.translationWorkbench.addEventListener("click", () => selectWorkbenchMode("translation-compare"));
+    ids.speakerWorkbench.addEventListener("click", () => selectWorkbenchMode("speaker-attribution"));
+    ids.trilingualScope.addEventListener("click", () => selectComparisonMode("trilingual"));
+    ids.bilingualScope.addEventListener("click", () => selectComparisonMode("bilingual"));
+    ids.speakerBilingualScope.addEventListener("click", () => selectSpeakerInputMode("bilingual"));
+    ids.speakerMonolingualScope.addEventListener("click", () => selectSpeakerInputMode("monolingual"));
+    for (const id of ["preserveRuby", "preserveBold", "preserveNoteref"]) {
+      ids[id].addEventListener("change", () => {
+        state.saved = false;
+        validateUnique();
+        setRunStatus("EPUB 标记保留设置已变更，请重新生成。", "warn");
+      });
+    }
+    renderComparisonMode();
+    renderRoleFiles();
+    renderFiles();
+    validateUnique();
+    refreshPipeline();
+    refreshAiStatus();
+    setInterval(refreshPipeline, 700);
+    setInterval(refreshAiStatus, 1500);
+  </script>
+</body>
+</html>

@@ -1,0 +1,1180 @@
+const fs = require("fs");
+const path = require("path");
+const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
+const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
+const { providerDefaults, proofreadPromptFor, errorCircuitBreaker } = require("./ai/ai-proofread");
+const { createProjectContext, rowSignature } = require("../../core/project-context");
+const { publishProject } = require("../../storage/project-store");
+const { createNotesTools } = require("./notes-spaces");
+
+const workbenchStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "workbench-style.css"), "utf8");
+const aiPanelStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "ai-panel.css"), "utf8");
+const workbenchClient = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "workbench-client.js"), "utf8");
+const progressPrefix = "@@transcomparator-progress@@";
+
+function reportProgress(percent, label, current = 0, total = 0) {
+  if (process.env.TRANS_COMPARATOR_MACHINE_PROGRESS !== "1") return;
+  console.log(`${progressPrefix}${JSON.stringify({ percent, label, current, total })}`);
+}
+
+function resolveModelOptions(models, selected = "") {
+  const values = [];
+  const seen = new Set();
+  for (const model of models || []) {
+    const value = String(typeof model === "string" ? model : model?.id || "").trim();
+    if (!value || value === "custom" || seen.has(value)) continue;
+    seen.add(value);
+    values.push(value);
+  }
+
+  const current = String(selected || "").trim();
+  return {
+    models: values,
+    options: [...values, "custom"],
+    selected: seen.has(current) ? current : values[0] || "custom",
+  };
+}
+
+function normalizeApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+// 备注空间键随 projectKey / rowsSignature 变化后，历史备注只能按内容重新对应到当前行。
+function alignLegacyNotes(entries, rows) {
+  const normalize = (value) => String(value ?? "").replace(/\s+/g, "");
+  const signatureTargets = new Map();
+  const textTargets = new Map();
+  const rowIndexes = new Set();
+  const addUnique = (map, key, index) => {
+    if (!map.has(key)) map.set(key, index);
+    else if (map.get(key) !== index) map.set(key, null);
+  };
+  for (const row of rows || []) {
+    if (!Number.isInteger(row?.index)) continue;
+    rowIndexes.add(row.index);
+    const signature = String(row.signature || "");
+    if (signature) addUnique(signatureTargets, signature, row.index);
+    for (const column of ["cn", "tw", "twCn"]) {
+      const text = normalize(row[column]);
+      if (!text) continue;
+      addUnique(textTargets, text, row.index);
+    }
+  }
+
+  const total = (entries || []).length;
+  const sourceSignatures = new Map();
+  for (const entry of entries || []) {
+    if (entry?.signature) sourceSignatures.set(entry.signature, (sourceSignatures.get(entry.signature) || 0) + 1);
+  }
+  const used = new Set();
+  const pairs = [];
+  const remaining = [];
+  for (const entry of entries || []) {
+    const from = Number(entry?.from);
+    if (!Number.isInteger(from)) continue;
+    const signature = String(entry.signature || "");
+    const target = signature ? signatureTargets.get(signature) : undefined;
+    if (target != null && sourceSignatures.get(signature) === 1 && !used.has(target)) {
+      used.add(target);
+      pairs.push({ from, to: target });
+      continue;
+    }
+    remaining.push({ from, text: normalize(entry.text) });
+  }
+  const signaturePairs = pairs.slice();
+  const anchors = [];
+  for (const item of remaining) {
+    if (item.text.length < 12) continue;
+    const to = textTargets.get(item.text);
+    if (to != null && !used.has(to)) anchors.push({ from: item.from, to });
+  }
+  const monotonic = [];
+  const anchorTargets = new Map();
+  for (const anchor of anchors) anchorTargets.set(anchor.to, (anchorTargets.get(anchor.to) || 0) + 1);
+  for (const anchor of anchors.sort((a, b) => a.from - b.from || a.to - b.to)) {
+    if (anchorTargets.get(anchor.to) !== 1) continue;
+    if (!monotonic.length || anchor.to > monotonic.at(-1).to) monotonic.push(anchor);
+  }
+  // 少量长文本偶然相同不足以证明这份备注属于当前行集，宁可不找回。
+  if (monotonic.length < 3) {
+    return {
+      method: signaturePairs.length ? "signature" : "anchors",
+      pairs: signaturePairs,
+      unmatched: total - signaturePairs.length,
+      anchors: monotonic.length,
+    };
+  }
+  const offsetAt = (from) => {
+    let before = null;
+    let after = null;
+    for (const anchor of monotonic) {
+      if (anchor.from <= from) before = anchor;
+      if (anchor.from >= from && !after) after = anchor;
+    }
+    if (!before || !after) return null;
+    if (before === after) return before.to - before.from;
+    const beforeOffset = before.to - before.from;
+    return beforeOffset === after.to - after.from ? beforeOffset : null;
+  };
+  const aligned = [];
+  for (const item of remaining) {
+    const offset = offsetAt(item.from);
+    if (offset === null) continue;
+    const to = item.from + offset;
+    if (!rowIndexes.has(to) || used.has(to)) continue;
+    used.add(to);
+    aligned.push({ from: item.from, to });
+  }
+  const merged = [...signaturePairs, ...aligned];
+  return {
+    method: signaturePairs.length ? "mixed" : "anchors",
+    pairs: merged,
+    unmatched: total - merged.length,
+    anchors: monotonic.length,
+  };
+}
+
+// 按行号搬回：行号本身没有内容证据，所以只搬当前行集里仍存在的行，
+// 且当前空间已有记录的行不被覆盖。
+function alignNotesByIndex(entryIds, rows, occupiedIds) {
+  const rowIndexes = new Set();
+  for (const row of rows || []) {
+    if (Number.isInteger(row?.index)) rowIndexes.add(row.index);
+  }
+  const occupied = new Set();
+  for (const id of occupiedIds || []) occupied.add(String(id));
+  const pairs = [];
+  let missing = 0;
+  let occupiedCount = 0;
+  for (const rawId of entryIds || []) {
+    const from = Number(rawId);
+    if (!Number.isInteger(from)) continue;
+    if (!rowIndexes.has(from)) { missing += 1; continue; }
+    if (occupied.has(String(from))) { occupiedCount += 1; continue; }
+    occupied.add(String(from));
+    pairs.push({ from, to: from });
+  }
+  return { pairs, missing, occupied: occupiedCount };
+}
+
+function restorableModelOptions(saved) {
+  if (!saved || typeof saved !== "object") return [];
+  const baseUrl = normalizeApiBaseUrl(saved.baseUrl);
+  const optionsBaseUrl = normalizeApiBaseUrl(saved.modelOptionsBaseUrl);
+  if (!baseUrl || !optionsBaseUrl || baseUrl !== optionsBaseUrl) return [];
+  return Array.isArray(saved.modelOptions)
+    ? saved.modelOptions.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+}
+
+function normalizeZh(text) {
+  return toCn(text)
+    .toLowerCase()
+    .replace(/[「」『』“”‘’（）()【】《》〈〉—\-─…、，。！？：；,.!?;:\s0-9a-z]/g, "");
+}
+
+function bigrams(text) {
+  const chars = Array.from(normalizeZh(text));
+  if (chars.length < 2) return new Set(chars);
+  const grams = new Set();
+  for (let i = 0; i < chars.length - 1; i += 1) grams.add(chars[i] + chars[i + 1]);
+  return grams;
+}
+
+function similarity(a, b) {
+  const aSet = bigrams(a);
+  const bSet = bigrams(b);
+  if (!aSet.size && !bSet.size) return 1;
+  if (!aSet.size || !bSet.size) return 0;
+
+  let intersection = 0;
+  for (const gram of aSet) {
+    if (bSet.has(gram)) intersection += 1;
+  }
+  return intersection / (aSet.size + bSet.size - intersection);
+}
+
+function lengthScore(a, b) {
+  const aLen = Math.max(1, Array.from(normalizeZh(a)).length);
+  const bLen = Math.max(1, Array.from(normalizeZh(b)).length);
+  return Math.min(aLen, bLen) / Math.max(aLen, bLen);
+}
+
+function paragraphScore(a, b) {
+  if (!a || !b) return 0;
+  return (similarity(a, b) * 0.72) + (lengthScore(a, b) * 0.28);
+}
+
+function splitComparableUnits(text) {
+  const normalized = String(text || "").replace(/\r\n?/g, "\n");
+  const sentenceEnd = new Set(["。", "！", "？", "!", "?"]);
+  const closers = new Set(["」", "』", "）", ")", "】"]);
+  const units = [];
+  let buffer = "";
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const char = normalized[i];
+    buffer += char;
+    if (!sentenceEnd.has(char)) continue;
+
+    while (i + 1 < normalized.length && (sentenceEnd.has(normalized[i + 1]) || closers.has(normalized[i + 1]))) {
+      i += 1;
+      buffer += normalized[i];
+    }
+
+    const trimmed = buffer.trim();
+    if (trimmed) units.push(trimmed);
+    buffer = "";
+  }
+
+  const tail = buffer.trim();
+  if (tail) units.push(tail);
+  return units;
+}
+
+function makeFragmentItem(text, base) {
+  return {
+    sourceIndex: base?.sourceIndex ?? null,
+    lang: base?.lang || "",
+    chapter: base?.chapter || "",
+    text,
+    cnText: base?.lang === "tw" ? toCn(text) : text,
+    chars: Array.from(text).length,
+  };
+}
+
+function splitGroupItems(items) {
+  const result = [];
+  for (const item of items) {
+    const units = splitComparableUnits(item.text);
+    if (units.length <= 1) {
+      result.push(item);
+      continue;
+    }
+    for (const unit of units) result.push(makeFragmentItem(unit, item));
+  }
+  return result;
+}
+
+function joinTexts(items, field = "text") {
+  return items.filter(Boolean).map((item) => item[field] || "").filter(Boolean).join("\n\n");
+}
+
+function sumChars(items) {
+  return items.filter(Boolean).reduce((sum, item) => sum + (item.chars || 0), 0);
+}
+
+function groupText(items, lang) {
+  if (lang === "twCn") return joinTexts(items, "cnText");
+  return joinTexts(items, "text");
+}
+
+function groupScore(left, right) {
+  if (!left.length || !right.length) return -0.22;
+  const score = paragraphScore(groupText(left, "cn"), groupText(right, "twCn"));
+  const mergePenalty = 0.03 * Math.max(0, left.length + right.length - 2);
+  return score - mergePenalty;
+}
+
+function textLengthForAnchor(text) {
+  return Array.from(normalizeZh(text)).length;
+}
+
+function bestRightForLeft(left, right, i, radius) {
+  let best = null;
+  const start = Math.max(0, i - radius);
+  const end = Math.min(right.length - 1, i + radius);
+  for (let j = start; j <= end; j += 1) {
+    const score = paragraphScore(left[i].text, right[j].cnText);
+    if (!best || score > best.score) best = { j, score };
+  }
+  return best;
+}
+
+function bestLeftForRight(left, right, j, radius) {
+  let best = null;
+  const start = Math.max(0, j - radius);
+  const end = Math.min(left.length - 1, j + radius);
+  for (let i = start; i <= end; i += 1) {
+    const score = paragraphScore(left[i].text, right[j].cnText);
+    if (!best || score > best.score) best = { i, score };
+  }
+  return best;
+}
+
+function findLocalAnchors(left, right, radius = 6) {
+  const anchors = [];
+  let lastI = -1;
+  let lastJ = -1;
+
+  for (let i = 0; i < left.length; i += 1) {
+    if (textLengthForAnchor(left[i].text) < 10) continue;
+    const bestRight = bestRightForLeft(left, right, i, radius);
+    if (!bestRight || bestRight.score < 0.34) continue;
+    if (textLengthForAnchor(right[bestRight.j].cnText) < 10) continue;
+
+    const bestLeft = bestLeftForRight(left, right, bestRight.j, radius);
+    if (!bestLeft || bestLeft.i !== i) continue;
+    if (i <= lastI || bestRight.j <= lastJ) continue;
+
+    anchors.push({ i, j: bestRight.j, score: bestRight.score });
+    lastI = i;
+    lastJ = bestRight.j;
+  }
+
+  return anchors;
+}
+
+function alignGroupsCore(left, right, band = 60) {
+  const n = left.length;
+  const m = right.length;
+  const moves = [[1, 1], [1, 2], [2, 1], [2, 2], [1, 0], [0, 1]];
+  const neg = -1e9;
+  const dp = Array.from({ length: n + 1 }, () => new Float32Array(m + 1).fill(neg));
+  const trace = Array.from({ length: n + 1 }, () => Array.from({ length: m + 1 }, () => null));
+
+  dp[0][0] = 0;
+  for (let i = 0; i <= n; i += 1) {
+    const expected = Math.round((i / Math.max(1, n)) * m);
+    const jStart = Math.max(0, expected - band);
+    const jEnd = Math.min(m, expected + band);
+
+    for (let j = jStart; j <= jEnd; j += 1) {
+      if (dp[i][j] <= neg / 2) continue;
+
+      for (const [li, rj] of moves) {
+        const ni = i + li;
+        const nj = j + rj;
+        if (ni > n || nj > m) continue;
+
+        const nextExpected = Math.round((ni / Math.max(1, n)) * m);
+        if (Math.abs(nj - nextExpected) > band) continue;
+
+        const score = groupScore(left.slice(i, ni), right.slice(j, nj));
+        const candidate = dp[i][j] + score;
+        if (candidate > dp[ni][nj]) {
+          dp[ni][nj] = candidate;
+          trace[ni][nj] = [li, rj, score];
+        }
+      }
+    }
+  }
+
+  const groups = [];
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    let step = trace[i][j];
+    if (!step) {
+      step = i > 0 && j > 0 ? [1, 1, groupScore(left.slice(i - 1, i), right.slice(j - 1, j))]
+        : i > 0 ? [1, 0, groupScore(left.slice(i - 1, i), [])]
+          : [0, 1, groupScore([], right.slice(j - 1, j))];
+    }
+
+    const [li, rj, score] = step;
+    const leftStart = i - li;
+    const rightStart = j - rj;
+    groups.push({
+      left: left.slice(leftStart, i),
+      right: right.slice(rightStart, j),
+      score,
+      relation: `${li}:${rj}`,
+    });
+    i = leftStart;
+    j = rightStart;
+  }
+
+  return groups.reverse();
+}
+
+function alignGroups(left, right, band = 60) {
+  const anchors = findLocalAnchors(left, right);
+  if (!anchors.length) return alignGroupsCore(left, right, band);
+
+  const groups = [];
+  let leftStart = 0;
+  let rightStart = 0;
+
+  for (const anchor of anchors) {
+    if (anchor.i > leftStart || anchor.j > rightStart) {
+      groups.push(...alignGroupsCore(left.slice(leftStart, anchor.i), right.slice(rightStart, anchor.j), band));
+    }
+    groups.push({
+      left: [left[anchor.i]],
+      right: [right[anchor.j]],
+      score: anchor.score,
+      relation: "1:1",
+    });
+    leftStart = anchor.i + 1;
+    rightStart = anchor.j + 1;
+  }
+
+  if (leftStart < left.length || rightStart < right.length) {
+    groups.push(...alignGroupsCore(left.slice(leftStart), right.slice(rightStart), band));
+  }
+
+  return groups;
+}
+
+function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
+  const bilingual = comparisonMode === "bilingual";
+  // 双语模式只有一份译文：不伪造 cn↔tw 对齐组，每个主文本段落直接作为技术 pivot 单元。
+  const cnTw = bilingual
+    ? cn.map((item) => ({
+        left: [item],
+        right: [],
+        score: 0,
+        relation: "1:0",
+        cnStart: item.sourceIndex,
+        cnEnd: item.sourceIndex + 1,
+        twStart: null,
+        twEnd: null,
+      }))
+    : alignGroups(cn, tw).map((group) => ({
+        ...group,
+        cnStart: group.left[0]?.sourceIndex ?? null,
+        cnEnd: group.left.length ? group.left[group.left.length - 1].sourceIndex + 1 : null,
+        twStart: group.right[0]?.sourceIndex ?? null,
+        twEnd: group.right.length ? group.right[group.right.length - 1].sourceIndex + 1 : null,
+      }));
+  const jpPivotGroups = loadJpGroupAlignmentList(jp);
+  const pivotLang = loadJpPivotLang(comparisonMode);
+  const rows = [];
+
+  for (let i = 0; i < cnTw.length;) {
+    const firstGroup = cnTw[i];
+    const firstStart = groupPivotStart(firstGroup, pivotLang);
+    const firstEnd = groupPivotEnd(firstGroup, pivotLang);
+    if (firstStart == null || firstEnd == null) {
+      i += 1;
+      continue;
+    }
+
+    const firstJpGroups = jpPivotGroups.filter((group) => rangesOverlap(firstStart, firstEnd, group.pivotStart, group.pivotEnd));
+    if (!firstJpGroups.length) {
+      i += 1;
+      continue;
+    }
+
+    let unionStart = Math.min(firstStart, ...firstJpGroups.map((group) => group.pivotStart));
+    let unionEnd = Math.max(firstEnd, ...firstJpGroups.map((group) => group.pivotEnd));
+    let endIndex = i + 1;
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (const jpGroup of jpPivotGroups) {
+        if (rangesOverlap(unionStart, unionEnd, jpGroup.pivotStart, jpGroup.pivotEnd)) {
+          const nextStart = Math.min(unionStart, jpGroup.pivotStart);
+          const nextEnd = Math.max(unionEnd, jpGroup.pivotEnd);
+          if (nextStart !== unionStart || nextEnd !== unionEnd) {
+            unionStart = nextStart;
+            unionEnd = nextEnd;
+            changed = true;
+          }
+        }
+      }
+
+      while (endIndex < cnTw.length) {
+        const nextGroup = cnTw[endIndex];
+        const nextStart = groupPivotStart(nextGroup, pivotLang);
+        const nextEnd = groupPivotEnd(nextGroup, pivotLang);
+        if (nextStart == null || nextEnd == null) {
+          endIndex += 1;
+          continue;
+        }
+        if (nextStart >= unionEnd) break;
+        unionStart = Math.min(unionStart, nextStart);
+        unionEnd = Math.max(unionEnd, nextEnd);
+        endIndex += 1;
+        changed = true;
+      }
+    }
+
+    const cnGroups = cnTw.slice(i, endIndex)
+      .filter((group) => groupPivotStart(group, pivotLang) != null && groupPivotEnd(group, pivotLang) != null)
+      .filter((group) => rangesOverlap(groupPivotStart(group, pivotLang), groupPivotEnd(group, pivotLang), unionStart, unionEnd));
+    const jpGroups = jpPivotGroups.filter((group) => rangesOverlap(unionStart, unionEnd, group.pivotStart, group.pivotEnd));
+    if (jpGroups.length) {
+      rows.push(makeRow(rows.length + 1, cnGroups, jpGroups, comparisonMode));
+    }
+    i = endIndex;
+  }
+
+  return rows;
+}
+
+function groupPivotStart(group, pivotLang) {
+  return pivotLang === "cn" ? group.cnStart : group.twStart;
+}
+
+function groupPivotEnd(group, pivotLang) {
+  return pivotLang === "cn" ? group.cnEnd : group.twEnd;
+}
+
+function makeRow(index, cnGroups, jpGroups, comparisonMode = "trilingual") {
+    const bilingual = comparisonMode === "bilingual";
+    const cnItems = cnGroups.flatMap((group) => group.left);
+    const jpItems = uniqueBySourceIndex(jpGroups.flatMap((group) => group.items));
+    const jpText = joinTexts(jpItems, "text");
+    const jpRelation = relationSummary(jpGroups, "items", "pivotItems");
+    const jpScore = average(jpGroups.map((group) => group.score));
+
+    if (bilingual) {
+      // 双语模式：cn 是唯一译文，不生成第三列文本、繁简对照、字符数和细分对齐副产物。
+      return {
+        index,
+        chapter: cnItems[0]?.chapter || jpItems[0]?.chapter || "",
+        relation: `原文-译文 ${jpRelation}`,
+        jp: jpText,
+        jpAlignScore: jpGroups.length ? jpScore : null,
+        cn: groupText(cnItems, "cn"),
+        score: jpScore,
+        cnChars: sumChars(cnItems),
+        jpChars: sumChars(jpItems),
+      };
+    }
+
+    const twItems = cnGroups.flatMap((group) => group.right);
+    const cnText = groupText(cnItems, "cn");
+    const twText = groupText(twItems, "tw");
+    const twCnText = groupText(twItems, "twCn");
+    const baseScore = cnText && twCnText ? paragraphScore(cnText, twCnText) : 0;
+    const refined = refineLowConfidenceGroups(cnItems, twItems, baseScore);
+    const cnRelation = refined ? `细分 ${refined.relation}` : relationSummary(cnGroups, "left", "right");
+
+    return {
+      index,
+      chapter: cnItems[0]?.chapter || twItems[0]?.chapter || jpItems[0]?.chapter || "",
+      relation: `简台 ${cnRelation}${jpRelation ? ` / 日文 ${jpRelation}` : ""}`,
+      jp: jpText,
+      jpAlignScore: jpGroups.length ? jpScore : null,
+      cn: refined?.cnText ?? cnText,
+      tw: refined?.twText ?? twText,
+      twCn: refined?.twCnText ?? twCnText,
+      score: refined?.score ?? baseScore,
+      refinedScore: refined?.averageMatched ?? null,
+      cnChars: sumChars(cnItems),
+      twChars: sumChars(twItems),
+      jpChars: sumChars(jpItems),
+    };
+}
+
+function pivotLabel(pivotLang, labels) {
+  return pivotLang === "cn" ? labels.cn : labels.tw;
+}
+
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+function uniqueBySourceIndex(items) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    if (!item || seen.has(item.sourceIndex)) continue;
+    seen.add(item.sourceIndex);
+    result.push(item);
+  }
+  return result;
+}
+
+function relationSummary(groups, leftKey, rightKey) {
+  const leftCount = groups.reduce((sum, group) => sum + group[leftKey].length, 0);
+  const rightCount = groups.reduce((sum, group) => sum + group[rightKey].length, 0);
+  if (groups.length === 1 && groups[0].relation) return groups[0].relation;
+  return `${leftCount}:${rightCount}`;
+}
+
+function refineLowConfidenceGroups(cnItems, twItems, baseScore) {
+  if (baseScore >= 0.22 || !cnItems.length || !twItems.length) return null;
+
+  const cnFragments = splitGroupItems(cnItems);
+  const twFragments = splitGroupItems(twItems);
+  if (cnFragments.length === cnItems.length && twFragments.length === twItems.length) return null;
+  if (cnFragments.length > 8 || twFragments.length > 8) return null;
+
+  const refinedGroups = alignGroupsCore(cnFragments, twFragments, 8);
+  const refinedScore = paragraphScore(groupText(cnFragments, "cn"), groupText(twFragments, "twCn"));
+  const matchedScores = refinedGroups
+    .filter((group) => group.left.length && group.right.length)
+    .map((group) => paragraphScore(groupText(group.left, "cn"), groupText(group.right, "twCn")));
+  const averageMatched = average(matchedScores) ?? 0;
+
+  if (averageMatched < Math.max(0.26, baseScore + 0.12)) return null;
+
+  return {
+    groups: refinedGroups,
+    score: refinedScore,
+    relation: relationSummary(refinedGroups, "left", "right"),
+    cnText: groupText(cnFragments, "cn"),
+    twText: groupText(twFragments, "tw"),
+    twCnText: groupText(twFragments, "twCn"),
+    averageMatched,
+  };
+}
+
+function average(values) {
+  const filtered = values.filter((value) => Number.isFinite(value));
+  if (!filtered.length) return null;
+  return filtered.reduce((sum, value) => sum + value, 0) / filtered.length;
+}
+
+function pivotRangeOf(group) {
+  // jp-align.json 现在只写 pivotStart/pivotEnd；旧快照仍带 twStart/twEnd 别名。
+  return {
+    start: group.pivotStart ?? group.twStart ?? null,
+    end: group.pivotEnd ?? group.twEnd ?? null,
+  };
+}
+
+function loadJpGroupAlignmentList(jp) {
+  const alignFile = path.join(outputDir, "jp-align.json");
+  if (!fs.existsSync(alignFile)) return [];
+
+  const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
+  return (data.groups || [])
+    .map((group) => ({ group, range: pivotRangeOf(group) }))
+    .filter(({ range }) => range.start != null && range.end != null && range.start !== range.end)
+    .filter(({ group }) => group.jpStart !== group.jpEnd)
+    .map(({ group, range }) => ({
+      score: group.score,
+      relation: group.relation,
+      pivotStart: range.start,
+      pivotEnd: range.end,
+      jpStart: group.jpStart,
+      jpEnd: group.jpEnd,
+      items: jp.slice(group.jpStart, group.jpEnd),
+      pivotItems: Array.from(
+        { length: range.end - range.start },
+        (_, index) => ({ sourceIndex: range.start + index })
+      ),
+    }));
+}
+
+function loadJpPivotLang(comparisonMode = "trilingual") {
+  if (comparisonMode === "bilingual") return "cn";
+  const alignFile = path.join(outputDir, "jp-align.json");
+  if (!fs.existsSync(alignFile)) return "tw";
+
+  const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
+  return data.pivotLang || "tw";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function rowClass(score) {
+  if (score >= 0.35) return "ok";
+  if (score >= 0.18) return "watch";
+  return "review";
+}
+
+// 每种模式只保留自己那一组字段：双语模式没有第三列，产物里就不出现 tw/twCn/twChars/refinedScore。
+const rowFieldsByMode = {
+  bilingual: ["index", "chapter", "relation", "jp", "jpAlignScore", "cn", "score", "cnChars", "jpChars"],
+  trilingual: [
+    "index", "chapter", "relation", "jp", "jpAlignScore", "cn", "tw", "twCn",
+    "score", "refinedScore", "cnChars", "twChars", "jpChars",
+  ],
+};
+
+function rowFieldsFor(comparisonMode) {
+  return rowFieldsByMode[comparisonMode === "bilingual" ? "bilingual" : "trilingual"];
+}
+
+function pickRowFields(row, fields) {
+  const picked = {};
+  for (const field of fields) {
+    if (row[field] !== undefined) picked[field] = row[field];
+  }
+  return picked;
+}
+
+function exportRows(rows, comparisonMode = "trilingual") {
+  const fields = rowFieldsFor(comparisonMode);
+  return rows.map((row) => ({ ...pickRowFields(row, fields), signature: rowSignature(row) }));
+}
+
+function workbenchClientRows(rows, comparisonMode = "trilingual") {
+  const fields = rowFieldsFor(comparisonMode);
+  return rows.map((row) => {
+    const cls = rowClass(row.score);
+    return {
+      ...pickRowFields(row, fields),
+      signature: rowSignature(row),
+      cls,
+      scoreText: `${((row.score || 0) * 100).toFixed(0)}%`,
+      jpAlignScoreText: row.jpAlignScore == null ? "" : `${(row.jpAlignScore * 100).toFixed(0)}%`,
+    };
+  });
+}
+
+function makeHtml(rows, selection, projectContext) {
+  const comparisonMode = selection.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
+  const bilingual = comparisonMode === "bilingual";
+  const proofreadPrompt = proofreadPromptFor(comparisonMode);
+  const generatedAt = new Date(projectContext.generatedAt).toLocaleString("zh-CN", { hour12: false });
+  // 显示标签只覆盖该模式真实存在的列，双语页面不会出现第三列的名字。
+  const labels = Object.fromEntries(activeLangs(comparisonMode).map((lang) => [
+    lang,
+    selection.labels?.[lang] || defaultDisplayLabels[lang],
+  ]));
+  const pivotLang = loadJpPivotLang(comparisonMode);
+  const similarityLabel = bilingual ? `${labels.jp}-${labels.cn}` : `${labels.cn}-${labels.tw}`;
+  const semanticLabel = `${labels.jp}-${pivotLabel(pivotLang, labels)}`;
+  const stats = rows.reduce((acc, row) => {
+    const cls = rowClass(row.score);
+    acc[cls] += 1;
+    acc.total += 1;
+    acc.emptySource += row.jp ? 0 : 1;
+    acc.scoreSum += row.score || 0;
+    return acc;
+  }, { total: 0, review: 0, watch: 0, ok: 0, emptySource: 0, scoreSum: 0 });
+  const avgScore = stats.total ? stats.scoreSum / stats.total : 0;
+  const fileNames = Object.fromEntries(Object.entries(selection.files || {})
+    .map(([lang, file]) => [lang, path.basename(file)]));
+  const rowsSignature = projectContext.rowsSignature;
+  const storageKey = projectContext.notesStorage.key;
+  const clientMeta = {
+    project: projectContext,
+    comparisonMode,
+    pageLabels: labels,
+    similarityLabel,
+    semanticLabel,
+    providerDefaults,
+    proofreadPrompt,
+    rowsSignature,
+    projectKey: projectContext.projectKey,
+    glossaryFile: selection.glossaryFile || "",
+  };
+  const defaultProofreadMode = comparisonMode;
+  const clientRows = workbenchClientRows(rows, comparisonMode);
+  const rowsJson = JSON.stringify(clientRows).replace(/</g, "\\u003c");
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${bilingual ? "双语" : "三语"}翻译对比校对工作台</title>
+  <style>${workbenchStyle}${aiPanelStyle}</style>
+</head>
+<body>
+  <div class="app-shell mode-${comparisonMode}">
+    <header>
+      <div class="topbar">
+        <div>
+          <h1>${bilingual ? "双语" : "三语"}翻译对比校对工作台</h1>
+          <div class="subtle">生成时间 ${escapeHtml(generatedAt)} · 平均相似 ${(avgScore * 100).toFixed(0)}% · 空原文 ${stats.emptySource}</div>
+          <div class="files" title="原文 A ${escapeHtml(fileNames.jp || "")} · ${bilingual ? "译文 B" : "非原文 B"} ${escapeHtml(fileNames.cn || "")}${bilingual ? "" : ` · 非原文 C ${escapeHtml(fileNames.tw || "")}`} ">
+            原文 A ${escapeHtml(fileNames.jp || "")} · ${bilingual ? "译文 B" : "非原文 B"} ${escapeHtml(fileNames.cn || "")}${bilingual ? "" : ` · 非原文 C ${escapeHtml(fileNames.tw || "")}`}
+          </div>
+        </div>
+        <div class="stats" aria-label="校对统计">
+          <div class="stat"><strong>${stats.total}</strong>总行</div>
+          <div class="stat review" title="相似度低于 18%"><strong>${stats.review}</strong>较低相似度</div>
+          <div class="stat watch" title="相似度为 18% 至 35%"><strong>${stats.watch}</strong>中等相似度</div>
+          <div class="stat ok" title="相似度不低于 35%"><strong>${stats.ok}</strong>较高相似度</div>
+          <div class="stat-divider" aria-hidden="true"></div>
+          <div class="stat"><strong id="doneCount">0</strong>人工确认</div>
+          <div class="stat"><strong id="aiDoneCount">0</strong>自动结果</div>
+        </div>
+      </div>
+    </header>
+    <div class="control-stack">
+      <details id="prefilterPanel" class="panel-details" aria-label="预筛选">
+        <summary class="panel-summary"><span>预筛选</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开预筛选"></button></summary>
+        <div class="prefilter-body">
+          <div class="prefilter-config">
+            <div class="ai-field">
+              <label for="prefilterSimilarity">${escapeHtml(similarityLabel)}相似度预筛</label>
+              <input id="prefilterSimilarity" type="text" inputmode="decimal" value="92%" aria-label="${escapeHtml(similarityLabel)}相似度预筛百分比">
+            </div>
+            <p class="prefilter-hint">规则预筛统一繁简、全半角、空白和不可见字符；完全一致或两列均空直接通过，结构化内容不一致标记为冲突。相似度预筛只处理足够长的正文，数字或标识符不同、文本过短或长度差异明显时不启用。预筛结果会写入备注，AI 校对会跳过已通过预筛的行。</p>
+          </div>
+          <div class="prefilter-runbar">
+            <div id="prefilterStats" class="prefilter-stats" aria-live="polite">尚未运行预筛选。</div>
+            <div class="prefilter-actions">
+              <button id="prefilterStart" class="btn btn--primary" type="button">开始预筛</button>
+              <button id="prefilterConfirm" class="btn btn--success" type="button" disabled>确认预筛</button>
+              <button id="prefilterStop" class="btn btn--danger" type="button" disabled>停止</button>
+            </div>
+          </div>
+        </div>
+      </details>
+      <details id="notesPanel" class="panel-details" aria-label="备注空间与找回">
+        <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
+        <div class="notes-body">
+          <div class="notes-toolbar">
+            <p>找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
+            <div class="notes-actions">
+              <button id="exportAllNotes" class="btn" type="button">备份全部</button>
+              <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
+              <button id="clearCurrentNotes" class="btn btn--subtle" type="button">清空本页</button>
+              <button id="clearHistoryNotes" class="btn btn--subtle" type="button">清空历史</button>
+              <button id="refreshNotesSpaces" class="btn btn--ghost" type="button">刷新</button>
+            </div>
+          </div>
+          <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
+          <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
+          <div id="notesCurrentSpace"></div>
+          <div class="notes-history-heading"><strong>历史记录</strong><span id="notesSpaceSummary"></span></div>
+          <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
+          <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
+          <p class="notes-hint">优先按内容找回，保留本页已有记录。仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
+        </div>
+      </details>
+      <dialog id="notesRecoveryDialog" class="notes-recovery-dialog" aria-labelledby="notesRecoveryTitle">
+        <h2 id="notesRecoveryTitle">预览备注找回</h2>
+        <div id="notesRecoveryPreview"></div>
+        <div class="notes-dialog-actions"><button id="cancelNotesRecovery" class="btn btn--ghost" type="button" autofocus>取消</button><button id="applyNotesRecovery" class="btn btn--primary" type="button">找回记录</button></div>
+      </dialog>
+      <div class="filter-bar" aria-label="筛选">
+        <input id="query" class="filter-search" type="search" placeholder="搜索原文、译文、备注">
+        <div class="filter-groups">
+          <div class="segmented" role="group" aria-label="相似度状态">
+            <span class="segmented__label">相似度</span>
+            <button type="button" class="segmented__btn is-active" data-severity="all">全部</button>
+            <button type="button" class="segmented__btn" data-severity="review" title="相似度低于 18%">较低</button>
+            <button type="button" class="segmented__btn" data-severity="watch" title="相似度为 18% 至 35%">中等</button>
+            <button type="button" class="segmented__btn" data-severity="ok" title="相似度不低于 35%">较高</button>
+          </div>
+          <div class="segmented" role="group" aria-label="自动分析结果">
+            <span class="segmented__label">自动</span>
+            <button type="button" class="segmented__btn is-active" data-ai-result="all">全部</button>
+            <button type="button" class="segmented__btn" data-ai-result="modify">需改</button>
+            <button type="button" class="segmented__btn" data-ai-result="same">不改</button>
+            <button type="button" class="segmented__btn" data-ai-result="unclear">待判</button>
+          </div>
+          <div class="segmented" role="group" aria-label="AI 翻译质量评分分级">
+            <span class="segmented__label" title="按扣分制（满分100）质量分级筛选">评分</span>
+            <button type="button" class="segmented__btn is-active" data-issue-severity="all">全部</button>
+            <button type="button" class="segmented__btn" data-issue-severity="excellent" title="优等 (90~100分)：极佳，无缺陷或仅个别微瑕">优等</button>
+            <button type="button" class="segmented__btn" data-issue-severity="good" title="良好 (75~89分)：总体良好，有个别轻微缺陷">良好</button>
+            <button type="button" class="segmented__btn" data-issue-severity="fair" title="一般 (60~74分)：存在较明显缺陷，需重点修改">一般</button>
+            <button type="button" class="segmented__btn" data-issue-severity="poor" title="较差 (<60分)：存在致命错译或严重缺陷，不及格">较差</button>
+          </div>
+          <button id="prefilterResultFilter" class="chip" type="button" aria-pressed="false" disabled>预筛结果</button>
+          <button id="noteFilter" class="chip" type="button" aria-pressed="false">有备注</button>
+          <button id="doneFilter" class="chip" type="button" data-mode="open" aria-pressed="false">未人工确认</button>
+        </div>
+        <button id="clearFilter" class="btn btn--ghost" type="button">清筛选</button>
+      </div>
+      <div class="action-bar">
+        <div class="action-group" aria-label="显示设置">
+          <span class="action-group__label">显示</span>
+          <label class="toggle-inline"><input id="showSource" type="checkbox" checked>原文</label>
+          ${bilingual ? "" : '<label class="toggle-inline"><input id="showTranslationDiff" type="checkbox" checked>译文差异</label>'}
+          <label class="toggle-inline"><input id="showRevisionDiff" type="checkbox" checked>修改差异</label>
+        </div>
+        <div class="action-group" aria-label="修改结果操作">
+          <span class="action-group__label">修改结果</span>
+          <button id="acceptAiSame" class="btn btn--success" type="button">确认自动不改</button>
+          <button id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回</button>
+          <button id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认</button>
+        </div>
+      </div>
+      <details id="aiPanel" class="panel-details ai-panel" aria-label="AI 校对">
+        <summary class="ai-panel-title"><span>AI 辅助校对</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
+        <details id="aiConfigSection" class="ai-config-details" open><summary class="ai-section-summary">服务与任务设置</summary><div class="ai-config-stack">
+          <section class="ai-config-band ai-service-band" aria-labelledby="aiServiceLabel">
+            <div id="aiServiceLabel" class="ai-config-label">AI 服务</div>
+            <div id="aiServiceFields" class="ai-service-fields has-reasoning">
+              <div class="ai-field">
+                <label for="aiProvider">接口</label>
+                <select id="aiProvider">
+                  <option value="local">本地默认</option>
+                  <option value="claude">Claude</option>
+                  <option value="compatible">第三方兼容服务</option>
+                </select>
+              </div>
+              <div class="ai-field">
+                <label for="aiBaseUrl">地址</label>
+                <input id="aiBaseUrl" type="url" value="${escapeHtml(providerDefaults.local.baseUrl)}">
+              </div>
+              <div class="ai-field">
+                <div class="ai-field-head">
+                  <label for="aiModel">模型</label>
+                  <span id="aiModelHint" class="ai-model-hint" hidden></span>
+                </div>
+                <div class="ai-model-row">
+                  <select id="aiModel">
+                    <option value="${escapeHtml(providerDefaults.local.model)}">${escapeHtml(providerDefaults.local.model)}</option>
+                  </select>
+                  <button id="aiRefreshModels" type="button">刷新</button>
+                </div>
+              </div>
+              <div id="aiReasoningField" class="ai-field">
+                <label for="aiReasoningEffort">推理强度</label>
+                <select id="aiReasoningEffort" title="模型默认时不发送推理或采样参数">
+                  <option value="" selected>模型默认</option>
+                </select>
+              </div>
+              <div class="ai-field">
+                <label for="aiApiKey">API Key</label>
+                <input id="aiApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(providerDefaults.local.apiKeyPlaceholder || "")}">
+              </div>
+            </div>
+          </section>
+          <section class="ai-config-band ai-proofread-band" aria-labelledby="aiProofreadLabel">
+            <div id="aiProofreadLabel" class="ai-config-label">校对设置</div>
+            <div class="ai-proofread-fields">
+              <div class="ai-field">
+                <label for="aiProofreadMode">校对模式</label>
+                <select id="aiProofreadMode" disabled>
+                  <option value="${defaultProofreadMode}">${bilingual ? "双语版本校对" : "三语语境校对"}</option>
+                </select>
+              </div>
+              <div class="ai-field">
+                <label for="aiTarget">校对列</label>
+                <select id="aiTarget"${bilingual ? " disabled" : ""}>
+                  <option value="cn">${escapeHtml(labels.cn)}</option>
+                  ${bilingual ? "" : `<option value="tw">${escapeHtml(labels.tw)}</option>`}
+                </select>
+              </div>
+              <div class="ai-field">
+                <label for="aiConcurrency">并发</label>
+                <input id="aiConcurrency" type="number" min="1" max="12" value="3">
+              </div>
+              <div class="ai-field">
+                <label for="aiBreakerThreshold">熔断阈值</label>
+                <div class="ai-breaker-row">
+                  <input id="aiBreakerThreshold" type="text" inputmode="decimal" value="${Math.round(errorCircuitBreaker.errorRate * 100)}%"
+                    title="最近 ${errorCircuitBreaker.windowSize} 次 AI 调用中失败占比达到该比例时自动终止任务；累计满 ${errorCircuitBreaker.minimumSamples} 次结果后开始判定。范围 ${Math.round(errorCircuitBreaker.minErrorRate * 100)}%–100%。">
+                  <label class="ai-breaker-off" for="aiBreakerDisabled" title="关闭后 AI 调用失败不再自动终止任务；接口配置或响应异常仍会终止。"><input id="aiBreakerDisabled" type="checkbox">关闭</label>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div></details>
+        <div class="ai-runbar">
+          <div class="toggle-row ai-options">
+            <label><input id="aiMonitorEnabled" type="checkbox">对话监控</label>
+            <label><input id="aiPromptVisible" type="checkbox">内置提示词</label>
+          </div>
+          <div class="ai-status">
+            <div id="aiStatus" class="ai-status-text" title="就绪">就绪</div>
+            <div id="aiProgressWrap" class="ai-progress" aria-hidden="true" hidden><span id="aiProgress"></span></div>
+          </div>
+          <div class="ai-actions">
+            <button id="aiStart" class="btn btn--primary" type="button">开始</button>
+            <button id="aiStop" class="btn btn--danger" type="button" disabled>停止</button>
+            <button id="clearAiLog" class="btn btn--subtle" type="button">清AI记录</button>
+          </div>
+        </div>
+        <details id="aiMonitorSection" class="ai-section" open>
+          <summary><span>AI 对话监控 <span id="aiMonitorState" class="ai-monitor-state">尚未启动</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 对话监控"></button></summary>
+          <div class="ai-monitor">
+            <div id="aiRequestList" class="ai-request-list">
+              <div class="ai-request-empty">启动 AI 校对后，这里会显示程序发给模型的问题和接口等待状态。</div>
+            </div>
+          </div>
+        </details>
+        <details id="aiPromptSection" class="ai-section">
+          <summary><span>内置提示词</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开内置提示词"></button></summary>
+          <div class="ai-prompt-box">
+          <div class="ai-monitor-head">
+            <div class="ai-prompt-actions">
+              <button id="aiPromptReset" type="button">恢复默认</button>
+            </div>
+          </div>
+          <textarea id="aiPrompt" spellcheck="false">${escapeHtml(proofreadPrompt.system)}</textarea>
+          </div>
+        </details>
+      </details>
+    </div>
+    <main class="wrap">
+      <div class="table-frame">
+        <table>
+          <thead>
+            <tr>
+              <th>位置</th>
+              <th>${escapeHtml(labels.jp)}</th>
+              <th>译文对照</th>
+              <th>校对备注</th>
+            </tr>
+          </thead>
+          <tbody>
+          </tbody>
+        </table>
+        <div id="keyboardScrollSpacer" class="keyboard-scroll-spacer" aria-hidden="true"></div>
+      </div>
+      <div id="paginationBar" class="pagination-bar">
+        <div id="paginationStatus">正在准备行数据...</div>
+        <div class="pagination-actions">
+          <button id="firstPage" type="button">首页</button>
+          <button id="prevPage" type="button">上一页</button>
+          <label for="pageInput">第</label>
+          <input id="pageInput" type="number" min="1" value="1" aria-label="页码">
+          <span id="pageTotal">/ 1 页</span>
+          <button id="nextPage" type="button">下一页</button>
+          <button id="lastPage" type="button">末页</button>
+        </div>
+        <label class="pagination-size" for="pageSize">
+          <span>每页</span>
+          <select id="pageSize">
+            <option value="50">50 行</option>
+            <option value="100" selected>100 行</option>
+            <option value="200">200 行</option>
+            <option value="500">500 行</option>
+          </select>
+        </label>
+      </div>
+      <div id="emptyState" class="empty-state">没有匹配的行</div>
+    </main>
+  </div>
+  <script id="rowData" type="application/json">${rowsJson}</script>
+  <script>
+    ${resolveModelOptions.toString()}
+    ${normalizeApiBaseUrl.toString()}
+    ${restorableModelOptions.toString()}
+    ${alignLegacyNotes.toString()}
+    ${alignNotesByIndex.toString()}
+    ${createNotesTools.toString()}
+
+    const storageKey = ${JSON.stringify(storageKey)};
+    const pageMeta = ${JSON.stringify(clientMeta)};
+${workbenchClient}</script>
+</body>
+</html>`;
+}
+
+function toCsv(rows, comparisonMode = "trilingual") {
+  const cols = comparisonMode === "bilingual"
+    ? ["index", "chapter", "relation", "score", "jpAlignScore", "jp", "cn"]
+    : ["index", "chapter", "relation", "score", "jpAlignScore", "jp", "cn", "tw", "twCn"];
+  const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  return [
+    cols.join(","),
+    ...rows.map((row) => cols.map((col) => escapeCsv(row[col])).join(",")),
+  ].join("\n");
+}
+
+async function main() {
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  reportProgress(5, "读取段落与对齐结果");
+  const selection = await resolveInputSelection({ allowPrompt: false });
+  const comparisonMode = selection.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
+  const paragraphs = await loadParagraphs(selection);
+  reportProgress(28, comparisonMode === "bilingual" ? "整理原文与译文段落" : "合并非原文对齐组");
+  const rows = alignRows(paragraphs.cn, paragraphs.tw || [], paragraphs.jp, comparisonMode);
+  reportProgress(58, "整理比较行", rows.length, rows.length);
+  const scopedSelection = { ...selection, comparisonMode };
+  const projectContext = createProjectContext(scopedSelection, rows);
+  const counts = Object.fromEntries(activeLangs(comparisonMode).map((lang) => [lang, paragraphs[lang].length]));
+
+  reportProgress(70, "渲染工作台页面");
+  const html = makeHtml(rows, scopedSelection, projectContext);
+  fs.writeFileSync(path.join(outputDir, "translation-compare.html"), html, "utf8");
+  reportProgress(86, "写入导出文件");
+  fs.writeFileSync(path.join(outputDir, "translation-compare.csv"), toCsv(rows, comparisonMode), "utf8");
+  fs.writeFileSync(path.join(outputDir, "translation-compare.json"), JSON.stringify({
+    project: projectContext,
+    files: selection.files,
+    labels: selection.labels,
+    counts,
+    rowsSignature: projectContext.rowsSignature,
+    rows: exportRows(rows, comparisonMode),
+  }, null, 2), "utf8");
+  reportProgress(100, "比较工作台构建完成", rows.length, rows.length);
+
+  const published = process.env.TRANSCOMPARATOR_OUTPUT_DIR
+    ? null
+    : publishProject(outputDir);
+
+  // 只报告该模式实际参与的列：双语模式不会出现 "TW paragraphs: 0"。
+  for (const [lang, count] of Object.entries(counts)) {
+    console.log(`${lang.toUpperCase()} paragraphs: ${count}`);
+  }
+  console.log(`Comparison mode: ${comparisonMode === "bilingual" ? "双语（原文 A + 译文 B）" : "三语（原文 A + 非原文 B/C）"}`);
+  console.log(`Rows: ${rows.length}`);
+  if (published) {
+    console.log(`Published project: ${published.id} (${published.outputUrl})`);
+  } else {
+    console.log(`HTML: ${path.join(outputDir, "translation-compare.html")}`);
+    console.log(`CSV: ${path.join(outputDir, "translation-compare.csv")}`);
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+function snapshotComparisonMode(compareData) {
+  const declared = compareData.project?.comparisonMode || compareData.comparisonMode;
+  if (declared === "bilingual" || declared === "trilingual") return declared;
+  // 旧快照没有声明模式时按数据推断：只有存在非空的第三列才算三语。
+  return compareData.counts?.tw || compareData.files?.tw ? "trilingual" : "bilingual";
+}
+
+function pickComparisonMode(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate === "bilingual" || candidate === "trilingual") return candidate;
+  }
+  return "trilingual";
+}
+
+function rebuildCompareHtmlFromSnapshot(snapshotDir) {
+  const dir = path.resolve(snapshotDir);
+  const jsonFile = path.join(dir, "translation-compare.json");
+  if (!fs.existsSync(jsonFile)) {
+    throw new Error(`快照目录缺少 translation-compare.json：${dir}`);
+  }
+  const compareData = JSON.parse(fs.readFileSync(jsonFile, "utf8"));
+  const selectionFile = path.join(dir, "input-selection.json");
+  let selection;
+  if (fs.existsSync(selectionFile)) {
+    selection = JSON.parse(fs.readFileSync(selectionFile, "utf8"));
+  } else {
+    selection = {
+      comparisonMode: snapshotComparisonMode(compareData),
+      files: compareData.files || {},
+      labels: compareData.labels || {},
+      glossaryFile: compareData.project?.glossaryFile || "",
+    };
+  }
+  const comparisonMode = pickComparisonMode(
+    selection.comparisonMode,
+    compareData.project?.comparisonMode,
+    snapshotComparisonMode(compareData),
+  );
+  const projectContext = compareData.project
+    || createProjectContext({ ...selection, comparisonMode }, compareData.rows || []);
+  const html = makeHtml(
+    compareData.rows || [],
+    { ...selection, comparisonMode, labels: selection.labels || compareData.labels || {} },
+    projectContext,
+  );
+  const htmlFile = path.join(dir, "translation-compare.html");
+  fs.writeFileSync(htmlFile, html, "utf8");
+  return {
+    htmlFile,
+    rowCount: (compareData.rows || []).length,
+    notesKey: projectContext.notesStorage?.key || "",
+  };
+}
+
+module.exports = {
+  alignLegacyNotes,
+  alignNotesByIndex,
+  alignRows,
+  exportRows,
+  main,
+  makeHtml,
+  rebuildCompareHtmlFromSnapshot,
+  restorableModelOptions,
+  resolveModelOptions,
+  rowFieldsFor,
+  toCsv,
+  workbenchClientRows,
+};
