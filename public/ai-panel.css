@@ -270,6 +270,38 @@ details[open] > summary .details-toggle::before {
   color: var(--review-strong, #c2392f);
 }
 
+/* ---- 对照表状态：特化规范声明的辅助判断数据是否可用 --------------------- */
+
+.ai-field--wide {
+  grid-column: 1 / -1;
+}
+.ai-term-hint {
+  color: var(--ai-muted-2);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-term-hint[data-state="ok"] {
+  color: var(--ai-muted);
+}
+.ai-term-hint[data-state="warning"] {
+  color: var(--review-strong, #c2392f);
+}
+.ai-term-hint[data-state="off"] {
+  opacity: 0.75;
+}
+
+/* 行内标记：构建期判定“疑似说话特色流失” */
+.ai-confirm-badge.is-habit-miss {
+  border-color: #b8860b;
+  color: #8a6100;
+  background: #fff8e6;
+  cursor: help;
+}
+
 /* ---- 运行栏：状态/进度 + 操作按钮 -------------------------------------- */
 
 .ai-runbar {

@@ -2,7 +2,9 @@ const fs = require("fs");
 const path = require("path");
 const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
 const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
-const { providerDefaults, proofreadPromptFor, errorCircuitBreaker } = require("./ai/ai-proofread");
+const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles } = require("./ai/ai-proofread");
+const { buildSpeechHabitLayer } = require("./speech-habit-layer");
+const { buildTermLayer, describeTermLayerEntry } = require("./term-layer");
 const { createProjectContext, rowSignature } = require("../../core/project-context");
 const { publishProject } = require("../../storage/project-store");
 const { createNotesTools } = require("./notes-spaces");
@@ -715,10 +717,12 @@ function workbenchClientRows(rows, comparisonMode = "trilingual") {
   });
 }
 
-function makeHtml(rows, selection, projectContext) {
+function makeHtml(rows, selection, projectContext, speechHabits = null, termPrefilter = null) {
   const comparisonMode = selection.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   const bilingual = comparisonMode === "bilingual";
   const proofreadPrompt = proofreadPromptFor(comparisonMode);
+  // 特化侧档案由 profiles/ 注册表提供，界面下拉只列出注册过的档案。
+  const profileOptions = listProfiles();
   const generatedAt = new Date(projectContext.generatedAt).toLocaleString("zh-CN", { hour12: false });
   // 显示标签只覆盖该模式真实存在的列，双语页面不会出现第三列的名字。
   const labels = Object.fromEntries(activeLangs(comparisonMode).map((lang) => [
@@ -749,9 +753,18 @@ function makeHtml(rows, selection, projectContext) {
     semanticLabel,
     providerDefaults,
     proofreadPrompt,
+    // 每个特化档案自带默认提示词，客户端切换下拉时无需等状态轮询即可替换未手改的提示词。
+    profiles: profileOptions.map((profile) => ({
+      ...profile,
+      prompt: proofreadPromptFor(comparisonMode, profile.id).system,
+    })),
     rowsSignature,
     projectKey: projectContext.projectKey,
     glossaryFile: selection.glossaryFile || "",
+    // 说话习惯层的构建期结果：页面用它显示“本卷命中概览”并标出疑似说话特色流失的行。
+    speechHabits,
+    // 对照表的构建期判定：页面用它标出“术语需改/术语一致”的行，并在跑任务前给出预筛数字。
+    termPrefilter,
   };
   const defaultProofreadMode = comparisonMode;
   const clientRows = workbenchClientRows(rows, comparisonMode);
@@ -866,6 +879,16 @@ function makeHtml(rows, selection, projectContext) {
                     <option value="cn">${escapeHtml(labels.cn)}</option>
                     ${bilingual ? "" : `<option value="tw">${escapeHtml(labels.tw)}</option>`}
                   </select>
+                </div>
+                <div class="ai-field">
+                  <label for="aiProfile">特化规范</label>
+                  <select id="aiProfile" title="${escapeHtml(profileOptions.map((profile) => `${profile.name}：${profile.summary}`).join("\n"))}">
+                    ${profileOptions.map((profile) => `<option value="${escapeHtml(profile.id)}"${profile.id === proofreadPrompt.profileId ? " selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="ai-field ai-field--wide">
+                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：命中的行先查表，不再调用模型。">对照表：检测中…</span>
+                  <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
                 </div>
                 <div class="ai-field">
                   <label for="aiConcurrency">并发</label>
@@ -1050,7 +1073,7 @@ function makeHtml(rows, selection, projectContext) {
     ${createNotesTools.toString()}
 
     const storageKey = ${JSON.stringify(storageKey)};
-    const pageMeta = ${JSON.stringify(clientMeta)};
+    const pageMeta = ${JSON.stringify(clientMeta).replace(/</g, "\\u003c")};
 ${workbenchClient}</script>
 </body>
 </html>`;
@@ -1081,8 +1104,31 @@ async function main() {
   const projectContext = createProjectContext(scopedSelection, rows);
   const counts = Object.fromEntries(activeLangs(comparisonMode).map((lang) => [lang, paragraphs[lang].length]));
 
+  reportProgress(64, "计算说话习惯层");
+  const speechHabits = buildSpeechHabitLayer({
+    rows: exportRows(rows, comparisonMode),
+    projectFiles: scopedSelection.files || {},
+    envTables: String(process.env.TRANSCOMPARATOR_SPEECH_TABLES || "").split(/[;\n]/),
+  });
+  for (const [profileId, entry] of Object.entries(speechHabits.byProfile || {})) {
+    console.log(`说话习惯（构建期）${profileId}：${entry.summary.chapters} 章 / ${entry.summary.activatedChapters} 章命中 ${entry.summary.activatedCharacters.length} 个角色 / ${entry.summary.missRows} 行疑似流失`);
+  }
+  for (const error of speechHabits.errors) console.warn(`说话习惯表告警：${error}`);
+
+  // 对照表判定与模型无关：构建期算一次，页面在跑任务前就能看到哪些行会被对照表处理。
+  reportProgress(67, "计算对照表层");
+  const termPrefilter = buildTermLayer({
+    rows: exportRows(rows, comparisonMode),
+    envTables: String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
+    comparisonMode,
+  });
+  for (const [profileId, entry] of Object.entries(termPrefilter.byProfile || {})) {
+    console.log(`对照表（构建期）${profileId}：${describeTermLayerEntry(entry)}`);
+  }
+  for (const error of termPrefilter.errors) console.warn(`对照表告警：${error}`);
+
   reportProgress(70, "渲染工作台页面");
-  const html = makeHtml(rows, scopedSelection, projectContext);
+  const html = makeHtml(rows, scopedSelection, projectContext, speechHabits, termPrefilter);
   fs.writeFileSync(path.join(outputDir, "translation-compare.html"), html, "utf8");
   reportProgress(86, "写入导出文件");
   fs.writeFileSync(path.join(outputDir, "translation-compare.csv"), toCsv(rows, comparisonMode), "utf8");
@@ -1092,6 +1138,10 @@ async function main() {
     labels: selection.labels,
     counts,
     rowsSignature: projectContext.rowsSignature,
+    // 说话习惯层写在行数据之外（顶层块），不改变任何行字段与 signature。
+    speechHabits,
+    // 对照表判定同理：只存行号结论（命中/一致/冲突），结果与备注仍由运行期生成。
+    termPrefilter,
     rows: exportRows(rows, comparisonMode),
   }, null, 2), "utf8");
   reportProgress(100, "比较工作台构建完成", rows.length, rows.length);
@@ -1165,6 +1215,8 @@ function rebuildCompareHtmlFromSnapshot(snapshotDir) {
     compareData.rows || [],
     { ...selection, comparisonMode, labels: selection.labels || compareData.labels || {} },
     projectContext,
+    compareData.speechHabits || null,
+    compareData.termPrefilter || null,
   );
   const htmlFile = path.join(dir, "translation-compare.html");
   fs.writeFileSync(htmlFile, html, "utf8");

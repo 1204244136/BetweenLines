@@ -39,7 +39,7 @@
     };
     let savedGptReasoningEffort = "";
     let savedNonGptIntensity = "";
-    const automatedNoteMarkers = ["[AI校对]", "[规则预筛]", "[相似度预筛]"];
+    const automatedNoteMarkers = ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[对照表]"];
     let notesPersistFailed = false;
     const allRows = JSON.parse(document.getElementById("rowData").textContent);
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
@@ -147,6 +147,9 @@
       apiKey: document.getElementById("aiApiKey"),
       proofreadMode: document.getElementById("aiProofreadMode"),
       target: document.getElementById("aiTarget"),
+      profile: document.getElementById("aiProfile"),
+      termTableHint: document.getElementById("aiTermTableHint"),
+      speechHabitHint: document.getElementById("aiSpeechHabitHint"),
       concurrency: document.getElementById("aiConcurrency"),
       breakerThreshold: document.getElementById("aiBreakerThreshold"),
       breakerDisabled: document.getElementById("aiBreakerDisabled"),
@@ -199,6 +202,49 @@
     let doneMode = "all";
     let providerDefaults = pageMeta.providerDefaults || {};
     let defaultProofreadPrompt = pageMeta.proofreadPrompt?.system || "";
+    // 构建期算好的说话习惯层：本卷命中概览 + 疑似流失行集合（用于行标记与状态行）。
+    const speechHabitLayer = pageMeta.speechHabits || null;
+    const speechHabitMissIndexes = new Set(
+      Object.values(speechHabitLayer?.byProfile || {})
+        .flatMap((entry) => entry.missIndexes || [])
+        .map(String),
+    );
+    function speechHabitLayerSummary() {
+      const entries = Object.values(speechHabitLayer?.byProfile || {});
+      if (!entries.length) return "";
+      return entries.map((entry) => `${entry.summary.activatedChapters}/${entry.summary.chapters} 章命中、${entry.summary.missRows} 行疑似流失`).join("；");
+    }
+    // 构建期算好的对照表判定：跑任务之前就能看到哪些行会被对照表处理（一致的行不调用模型）。
+    // 判定与「校对模式 + 目标列」绑定，切换后重新取用；跑过 AI/预筛的行以真实备注为准，不再叠徽标。
+    const termLayer = pageMeta.termPrefilter || null;
+    let termVerdicts = new Map();
+    function termVariantKeyForPage() {
+      const mode = aiIds.proofreadMode?.value === "bilingual" ? "bilingual" : "trilingual";
+      return mode + ":" + (mode === "bilingual" ? "cn" : (aiIds.target?.value === "tw" ? "tw" : "cn"));
+    }
+    // 当前档案 + 当前变体的落盘判定；该变体没算过时回落到档案的默认变体。
+    function currentTermVariant() {
+      const entry = termLayer?.byProfile?.[aiIds.profile?.value || ""] || null;
+      const variants = entry?.variants || {};
+      return { entry, variant: variants[termVariantKeyForPage()] || variants[entry?.defaultVariant] || null };
+    }
+    function refreshTermVerdicts() {
+      termVerdicts = new Map();
+      const { variant } = currentTermVariant();
+      if (!variant) return;
+      for (const index of variant.consistent || []) termVerdicts.set(String(index), "consistent");
+      for (const index of variant.conflicts || []) termVerdicts.set(String(index), "conflict");
+    }
+    function termLayerSummary() {
+      const { variant } = currentTermVariant();
+      if (!variant) return "";
+      return `构建期预筛 ${variant.hits} 行命中（一致 ${variant.summary.consistent} / 需确认 ${variant.summary.conflicts}），预计 ${variant.summary.aiRows} 行仍需 AI 判定`;
+    }
+    // 每个特化档案在页面里自带默认提示词：切换下拉时不必等状态轮询就能替换未手改的提示词。
+    function defaultPromptForProfile(profileId) {
+      const entry = (pageMeta.profiles || []).find((profile) => profile.id === profileId);
+      return (entry && entry.prompt) || "";
+    }
     let aiModelOptions = [];
     let statusMessageLockedUntil = 0;
     aiIds.monitorSection.hidden = !aiIds.monitorEnabled.checked;
@@ -550,6 +596,7 @@
         apiKey: aiIds.apiKey.value,
         proofreadMode: aiIds.proofreadMode.value,
         target: aiIds.target.value,
+        profileId: aiIds.profile.value,
         concurrency: aiIds.concurrency.value,
         breakerThreshold: formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         breakerDisabled: aiIds.breakerDisabled.checked,
@@ -600,6 +647,10 @@
       }
       if (saved.target === "cn" || saved.target === "tw") aiIds.target.value = saved.target;
       if (bilingualMode) aiIds.target.value = "cn";
+      if (typeof saved.profileId === "string"
+        && Array.from(aiIds.profile.options).some((option) => option.value === saved.profileId)) {
+        aiIds.profile.value = saved.profileId;
+      }
       if (saved.concurrency != null) aiIds.concurrency.value = saved.concurrency;
       if (saved.breakerThreshold != null) aiIds.breakerThreshold.value = formatPercentRatio(saved.breakerThreshold, 0.5, 0.1);
       aiIds.breakerDisabled.checked = Boolean(saved.breakerDisabled);
@@ -612,6 +663,7 @@
           aiIds.prompt.value = savedPrompt.systemPrompt;
           aiIds.prompt.dataset.touched = "1";
         } else {
+          defaultProofreadPrompt = defaultPromptForProfile(aiIds.profile.value) || defaultProofreadPrompt;
           aiIds.prompt.value = defaultProofreadPrompt;
           aiIds.prompt.dataset.touched = "";
         }
@@ -1154,6 +1206,11 @@
           : { cls: "is-same", text: "规则通过" };
       }
       if (marker === "[相似度预筛]") return { cls: "is-same", text: "相似跳过" };
+      if (marker === "[对照表]") {
+        if (note.modify === "是") return { cls: "is-modify", text: "术语需改" };
+        if (note.modify === "否") return { cls: "is-same", text: "术语一致" };
+        return { cls: "is-unclear", text: "术语待判" };
+      }
       if (note.modify === "是") return { cls: "is-modify", text: "AI需改" };
       if (note.modify === "否") return { cls: "is-same", text: "AI不改" };
       return { cls: "is-unclear", text: "AI待判" };
@@ -1180,6 +1237,18 @@
       const done = Boolean(note.manualDone);
       const aiBadgeStateValue = aiBadgeState(note);
       const aiBadge = '<span class="ai-confirm-badge ' + aiBadgeStateValue.cls + '" data-ai-done="' + id + '">' + aiBadgeStateValue.text + '</span>';
+      // 构建期判定“疑似说话特色流失”的行：给一个可点开的标记，提示人工核对口癖是否漏译。
+      const habitBadge = speechHabitMissIndexes.has(id)
+        ? '<span class="ai-confirm-badge is-habit-miss" title="构建期判定：本行原文有说话习惯特征，译文里没有体现；可在 AI 校对时按说话人习惯补回">特色流失</span>'
+        : "";
+      // 对照表的构建期判定只在「这一行还没跑过」时显示：跑过之后以备注里的真实结论为准。
+      const termVerdict = note.note ? "" : (termVerdicts.get(id) || "");
+      const termBadge = termVerdict === "conflict"
+        ? '<span class="ai-confirm-badge is-modify" title="构建期判定：本行原文命中对照表，译文里的译名与项目译名不一致；跑 AI 校对或预筛选时会先给出术语替换建议">术语需改</span>'
+        : (termVerdict === "consistent"
+          ? '<span class="ai-confirm-badge is-same" title="构建期判定：本行原文命中对照表，译文已使用项目译名；跑预筛选时这行不会调用模型">术语一致</span>'
+          : "");
+      const rowBadges = aiBadge + termBadge + habitBadge;
       const verifyBadge = note.recoveredUnverified
         ? '<button type="button" class="ai-confirm-badge is-unverified" data-verify="' + id + '" title="找回记录缺少完整内容证据；点击表示已核对本行内容">未校验</button>'
         : "";
@@ -1217,7 +1286,7 @@
         '<td class="note-cell">',
         '<div class="confirm-row">',
         '<label class="done-line"><input type="checkbox" data-done="' + id + '"' + (done ? " checked" : "") + '><span>人工确认</span></label>',
-        aiBadge,
+        rowBadges,
         verifyBadge,
         '</div>',
         renderNoteSummary(note, id),
@@ -1409,6 +1478,7 @@
       const marker = automatedNoteMarker(notes[String(row.index)]?.note || "");
       if (marker === "[规则预筛]") return "rule";
       if (marker === "[相似度预筛]") return "similarity";
+      if (marker === "[对照表]") return "term";
       return "";
     }
 
@@ -1857,11 +1927,6 @@
       }
     }
 
-    function shortTimestamp(date = new Date()) {
-      const pad = (value) => String(value).padStart(2, "0");
-      return pad(date.getMonth() + 1) + pad(date.getDate()) + "-" + pad(date.getHours()) + pad(date.getMinutes());
-    }
-
     document.getElementById("acceptAiSame").addEventListener("click", () => {
       const rows = currentAiSameRows();
       if (!rows.length) {
@@ -1934,8 +1999,8 @@
         const kind = prefilterResultKind(row);
         if (kind) result[kind] += 1;
         return result;
-      }, { rule: 0, similarity: 0 });
-      const message = "当前预筛结果共 " + rows.length + " 条：规则通过 " + counts.rule + " 条，相似度通过 " + counts.similarity + " 条。\n\n确认后将为这些行勾选“人工确认”。是否继续？";
+      }, { rule: 0, similarity: 0, term: 0 });
+      const message = "当前预筛结果共 " + rows.length + " 条：规则通过 " + counts.rule + " 条，相似度通过 " + counts.similarity + " 条，对照表命中 " + counts.term + " 条。\n\n确认后将为这些行勾选“人工确认”。是否继续？";
       if (!confirm(message)) return;
       for (const row of rows) {
         const id = String(row.index);
@@ -1960,6 +2025,7 @@
         apiKey: aiIds.apiKey.value,
         proofreadMode: aiIds.proofreadMode.value,
         target: aiIds.target.value,
+        profileId: aiIds.profile.value,
         concurrency: Number(aiIds.concurrency.value),
         circuitBreakerErrorRate: parsePercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         circuitBreakerEnabled: !aiIds.breakerDisabled.checked,
@@ -2137,6 +2203,70 @@
       '</details>';
     }
 
+    // 说话习惯层：按章/按卷命中人名后启用该角色的说话特色规则，防止刻意口癖被判成翻译错误。
+    function setSpeechHabitHint(status) {
+      const hint = aiIds.speechHabitHint;
+      if (!hint) return;
+      const builtSummary = speechHabitLayerSummary();
+      if (!status) {
+        hint.dataset.state = builtSummary ? "ok" : "pending";
+        hint.textContent = builtSummary ? "说话习惯：构建期 " + builtSummary : "说话习惯：检测中…";
+        hint.title = "特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。";
+        return;
+      }
+      const files = status.files || [];
+      const errors = status.errors || [];
+      const names = files.map((file) => String(file).split(/[\\/]/).pop()).join("、");
+      const scopeLabel = status.scope === "volume" ? "按卷" : "按章";
+      if (!files.length) {
+        hint.dataset.state = "off";
+        hint.textContent = "说话习惯：未声明";
+        hint.title = "当前特化规范没有声明 speechTables。可在该档案里加 speechTables 路径，或用环境变量 TRANSCOMPARATOR_SPEECH_TABLES 指向表格文件。";
+        return;
+      }
+      if (!status.entries) {
+        hint.dataset.state = "warning";
+        hint.textContent = "说话习惯：加载失败";
+        hint.title = errors.length ? errors.join("\n") : files.join("\n");
+        return;
+      }
+      const ok = errors.length === 0;
+      hint.dataset.state = ok ? "ok" : "warning";
+      hint.textContent = "说话习惯：" + names + "（" + status.entries + " 条，" + scopeLabel + "命中人名" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (builtSummary ? "；构建期：" + builtSummary : "");
+      hint.title = [files.join("\n"), ...errors].join("\n");
+    }
+    function setTermTableHint(status) {
+      const hint = aiIds.termTableHint;
+      if (!hint) return;
+      const built = termLayerSummary();
+      if (!status) {
+        // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
+        hint.dataset.state = built ? "ok" : "pending";
+        hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
+        hint.title = "特化规范里声明的译名对照表：命中的行先查表，不再调用模型。";
+        return;
+      }
+      const files = status.files || [];
+      const errors = status.errors || [];
+      const names = files.map((file) => String(file).split(/[\\/]/).pop()).join("、");
+      if (!files.length) {
+        hint.dataset.state = "off";
+        hint.textContent = "对照表：未声明";
+        hint.title = "当前特化规范没有声明 termTables。可在该档案里加 termTables 路径，或用环境变量 TRANSCOMPARATOR_TERM_TABLES 指向表格文件。";
+        return;
+      }
+      if (!status.entries) {
+        hint.dataset.state = "warning";
+        hint.textContent = "对照表：加载失败";
+        hint.title = errors.length ? errors.join("\n") : files.join("\n");
+        return;
+      }
+      const ok = errors.length === 0;
+      hint.dataset.state = ok ? "ok" : "warning";
+      hint.textContent = "对照表：" + names + "（" + status.entries + " 条术语" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (built ? "；" + built : "");
+      hint.title = [files.join("\n"), ...errors].join("\n");
+    }
+
     function renderAiStatus(ai) {
       if (!ai) return;
       const aiRunId = ai.runId || "";
@@ -2165,13 +2295,15 @@
         providerDefaults = ai.providerDefaults;
         applyProviderDefaults(providerDefaults[aiIds.provider.value]);
       }
-      if (sameAiScope && ai.proofreadPrompt?.system) {
+      if (sameAiScope && ai.proofreadPrompt?.system && (!ai.profileId || ai.profileId === aiIds.profile.value)) {
         const previousDefault = defaultProofreadPrompt;
         defaultProofreadPrompt = ai.proofreadPrompt.system;
         if (!aiIds.prompt.dataset.touched || aiIds.prompt.value === previousDefault) {
           aiIds.prompt.value = defaultProofreadPrompt;
         }
       }
+      if (ai.termTableStatus) setTermTableHint(ai.termTableStatus);
+      if (ai.speechHabitStatus) setSpeechHabitHint(ai.speechHabitStatus);
       aiIds.start.disabled = Boolean(ai.running);
       aiIds.stop.disabled = !ai.running;
       aiIds.monitorEnabled.disabled = Boolean(ai.running);
@@ -2187,12 +2319,13 @@
       const rulePrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.rulePrefiltered || 0));
       const similarityPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.similarityPrefiltered || 0));
       const structuredConflicts = Math.min(rowTotal || Infinity, Math.max(0, ai.structuredConflicts || 0));
+      const termPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.termPrefiltered || 0));
       aiIds.progress.style.width = Math.min(100, Math.round((done / total) * 100)) + "%";
       aiIds.progressWrap.hidden = !ai.running && done === 0 && !prefiltered;
       const isPrefilter = ai.kind === "prefilter";
       const queueText = done + "/" + aiTotal;
       const skipText = "人工确认跳过 " + skippedDone;
-      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered;
+      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered + (termPrefiltered ? "，对照表 " + termPrefiltered : "");
       const pendingText = "待 AI 校对 " + aiTotal;
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
@@ -2226,10 +2359,11 @@
           }
           appliedResult = true;
           pendingResults.push(result);
+          const isRuleOrSimilarityPrefilter = result.status === "rule-prefilter" || result.status === "similarity-prefilter";
           if (
             isPrefilter &&
             aiRunId === latestPrefilterRunId &&
-            (result.status === "rule-prefilter" || result.status === "similarity-prefilter")
+            (isRuleOrSimilarityPrefilter || result.status === "term-prefilter")
           ) {
             prefilterResultIds.add(String(result.index));
           }
@@ -2260,6 +2394,7 @@
       let hasMoreResults = false;
       try {
         const params = new URLSearchParams({ compact: "1", resultLimit: "64" });
+        if (aiIds.profile) params.set("profileId", aiIds.profile.value);
         if (lastAiRunId) {
           params.set("runId", lastAiRunId);
           params.set("afterRevision", String(lastAiResultRevision));
@@ -2413,7 +2548,15 @@
     });
     [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].forEach((input) => {
       input.addEventListener("input", saveAiConfig);
-      input.addEventListener("change", saveAiConfig);
+      input.addEventListener("change", () => {
+        saveAiConfig();
+        // 目标列/校对模式决定对照表的哪个变体生效：重取构建期判定并重绘徽标。
+        if (input === aiIds.target || input === aiIds.proofreadMode) {
+          refreshTermVerdicts();
+          setTermTableHint(null);
+          renderVisibleRows();
+        }
+      });
     });
     aiIds.proofreadMode.addEventListener("change", updateProofreadModeHint);
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
@@ -2435,10 +2578,31 @@
       saveAiPrompt();
     });
     aiIds.promptReset.addEventListener("click", () => {
+      defaultProofreadPrompt = defaultPromptForProfile(aiIds.profile.value) || defaultProofreadPrompt;
       aiIds.prompt.value = defaultProofreadPrompt;
       aiIds.prompt.dataset.touched = "";
       aiIds.prompt.focus();
       saveAiPrompt();
+    });
+    aiIds.profile.addEventListener("change", () => {
+      // 换特化规范：只替换没有手改过的提示词，手改过的提示词由服务端按“是否已带该档案”决定补不补。
+      const nextDefault = defaultPromptForProfile(aiIds.profile.value);
+      if (nextDefault && (!aiIds.prompt.dataset.touched || aiIds.prompt.value === defaultProofreadPrompt)) {
+        defaultProofreadPrompt = nextDefault;
+        aiIds.prompt.value = nextDefault;
+      }
+      aiIds.prompt.dataset.touched = aiIds.prompt.dataset.touched ? "1" : "";
+      refreshTermVerdicts();
+      setTermTableHint(null);
+      setSpeechHabitHint(null);
+      refreshAiStatus();
+      saveAiPrompt();
+      saveAiConfig();
+      renderVisibleRows();
+      const selected = aiIds.profile.selectedOptions[0];
+      if (!isStatusMessageLocked()) {
+        setTemporaryStatus("特化规范：" + ((selected && selected.textContent) || aiIds.profile.value), 6000);
+      }
     });
     aiIds.refreshModels.addEventListener("click", refreshAiModels);
     prefilterIds.start.addEventListener("click", async () => {
@@ -2827,6 +2991,8 @@
     document.querySelectorAll("select").forEach(enhanceSelect);
     restoreAiConfig();
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
+    // 特化规范 / 目标列都恢复后才有确定的对照表变体：这时再取构建期判定。
+    refreshTermVerdicts();
     refreshAiStatus();
     setInterval(refreshAiStatus, 1500);
     applyFilters();

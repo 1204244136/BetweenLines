@@ -15,6 +15,9 @@ out/
 .vscode/
 .idea/
 
+# 不想公开的额外提示词档案（仓库自带通用档案与示范档案，这里放私有的）
+src/workbenches/translation-compare/ai/profiles/local/
+
 # Local one-off diagnostics with machine-specific sample paths
 scripts/compare-epub-text.js
 

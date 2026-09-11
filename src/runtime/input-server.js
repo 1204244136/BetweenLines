@@ -635,6 +635,7 @@ async function handleApi(req, res, pathname, searchParams) {
           runId: searchParams.get("runId") || "",
           afterRevision: searchParams.get("afterRevision") || 0,
           resultLimit: searchParams.get("resultLimit") || 0,
+          profileId: searchParams.get("profileId") || "",
           knownRequestIds: searchParams.getAll("knownRequestId"),
           includeLogs: searchParams.get("compact") !== "1",
         }),

@@ -441,3 +441,92 @@ test("disabling the circuit breaker keeps an all-failing run going row by row", 
   assert.equal(finished.processed, rows.length);
   assert.match(finished.logs.join("\n"), /错误率熔断：已关闭/);
 });
+
+test("对齐片段行在模型索要上下文后直接终局，不再扩展相邻行", async () => {
+  clearProofreadCache();
+  const selection = {
+    comparisonMode: "bilingual",
+    inputMode: "txt",
+    files: {
+      jp: path.join(dataDir, "fragment-source.txt"),
+      cn: path.join(dataDir, "fragment-translation.txt"),
+      tw: "",
+    },
+    labels: { jp: "原文 A", cn: "非原文 B", tw: "非原文 C" },
+  };
+  const rows = [
+    { index: 1, jp: "しかし、", cn: "可是。", tw: "", twCn: "", score: 0 },
+    { index: 2, jp: "彼は黙っていた。", cn: "他保持着沉默。", tw: "", twCn: "", score: 0 },
+  ];
+  const project = createProjectContext(selection, rows);
+  const staging = createProjectStaging(selection, { dataDir });
+  fs.writeFileSync(path.join(staging.dir, "translation-compare.json"), JSON.stringify({
+    project,
+    rowsSignature: project.rowsSignature,
+    rows,
+  }), "utf8");
+  for (const name of projectArtifacts) {
+    const file = path.join(staging.dir, name);
+    if (fs.existsSync(file)) continue;
+    fs.writeFileSync(file, name.endsWith(".json") ? "{}" : "", "utf8");
+  }
+  publishProject(staging.dir, { dataDir });
+
+  const callsPerRow = new Map();
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      const payload = JSON.parse(body);
+      const user = JSON.parse(payload.messages[1].content);
+      const index = Number(user.row.index);
+      callsPerRow.set(index, (callsPerRow.get(index) || 0) + 1);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          semanticSame: true,
+          needsEdit: false,
+          needsContext: true,
+          decision: "keep",
+          summary: "需要补充上下文才能判断。",
+          revisedText: "",
+        }) } }],
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    await startProofread({
+      provider: "compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      model: "test-model",
+      proofreadMode: "bilingual",
+      concurrency: 1,
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    // 片段行（しかし、/可是。）只问一次：判定为对齐片段后直接转人工确认，不再补上下文。
+    assert.equal(callsPerRow.get(1), 1);
+    // 完整行仍会补充相邻行（本样例只有一行邻居可用，所以总计两次调用）。
+    assert.equal(callsPerRow.get(2), 2);
+    assert.match(finished.logs.join("\n"), /第 1 行：判定为对齐片段行，不再扩展上下文，直接转人工确认。/);
+    const fragmentResult = finished.results.find((result) => result.index === 1);
+    assert.equal(fragmentResult.done, false);
+    assert.match(fragmentResult.note, /是否需要修改：待人工确认/);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+      server.closeAllConnections();
+    });
+  }
+});
