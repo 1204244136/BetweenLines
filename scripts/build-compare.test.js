@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 
 const { createProjectContext } = require("./project-context");
 const { createNotesTools } = require("../src/workbenches/translation-compare/notes-spaces");
@@ -146,6 +147,19 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(html, /<details id="filterPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="筛选与显示">/);
   assert.match(html, /<details id="batchPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="批量操作">/);
   assert.match(html, /<details id="notesPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="备注空间与找回">/);
+  // 五个面板抽屉统辖于父抽屉之下，用于整组折叠；父级默认展开，不改变子级默认折叠
+  assert.match(html, /<details id="controlStackPanel" class="panel-group" data-panel-group open aria-label="控制面板组">/);
+  const groupIdx = html.indexOf('id="controlStackPanel"');
+  const groupBodyIdx = html.indexOf('<div class="panel-group-body">');
+  const groupEndIdx = html.indexOf('<dialog id="notesRecoveryDialog"');
+  assert.ok(groupIdx >= 0 && groupIdx < prefilterIdx, "父抽屉应在第一个面板抽屉之前");
+  assert.ok(groupBodyIdx > groupIdx && groupBodyIdx < prefilterIdx, "面板容器应在父抽屉内且先于第一个面板");
+  const groupPanelSlice = html.slice(groupBodyIdx, groupEndIdx);
+  ["prefilterPanel", "aiPanel", "filterPanel", "batchPanel", "notesPanel"].forEach((id) => {
+    assert.ok(groupPanelSlice.includes('id="' + id + '"'), id + " 应位于父抽屉面板容器内");
+  });
+  assert.match(groupPanelSlice, /<\/details>\s*<\/div>\s*<\/details>\s*$/, "面板容器与父抽屉应在最后一个面板抽屉之后闭合，且容器内不含非面板节点");
+  assert.match(html, /<span[^>]*data-panel-group-state[^>]*>/, "父摘要应带状态字段供客户端同步");
   // 摘要行带实时状态字段（属性顺序不固定）
   assert.match(html, /<span[^>]*(?:id="prefilterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="prefilterPanelState")[^>]*>/);
   assert.match(html, /<span[^>]*(?:id="aiPanelState"[^>]*class="ai-panel-state"|class="ai-panel-state"[^>]*id="aiPanelState")[^>]*>/);
@@ -168,6 +182,24 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.doesNotMatch(batchPanel, /id="showRevisionDiff"/);
 
   const script = html.split("<script>")[1].split("</script>")[0];
+  // 父抽屉的摘要状态由客户端按组内面板展开数同步；toggle 不冒泡，必须捕获阶段监听
+  assert.match(script, /function syncPanelGroupState\(group\) \{/);
+  assert.match(script, /function bindPanelGroups\(scope = document\) \{/);
+  assert.match(script, /group\.addEventListener\("toggle", \(\) => syncPanelGroupState\(group\), true\)/);
+  assert.match(script, /bindPanelGroups\(\);/);
+  const syncSource = script.match(/function syncPanelGroupState\(group\) \{[\s\S]*?\n    \}/)[0];
+  const runSync = (openFlags) => {
+    const fakeState = { textContent: "" };
+    const fakeGroup = {
+      querySelectorAll: () => openFlags.map((open) => ({ open })),
+      querySelector: () => fakeState,
+    };
+    vm.runInNewContext(syncSource + "\nsyncPanelGroupState(fakeGroup);", { fakeGroup });
+    return fakeState.textContent;
+  };
+  assert.equal(runSync([false, false, false, false, false]), "5 项全部收起");
+  assert.equal(runSync([true, false, false, false, false]), "已展开 1/5 项");
+  assert.equal(runSync([true, true, true, true, true]), "已展开 5/5 项");
   const globalConfigWriter = script.match(/function saveAiConfig\(\)[\s\S]*?function saveAiPrompt/)[0];
   assert.doesNotMatch(globalConfigWriter, /systemPrompt: aiIds\.prompt\.value/);
   assert.match(script, /localStorage\.setItem\(aiPromptStorageKey/);

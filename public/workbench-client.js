@@ -648,6 +648,26 @@
       });
     }
 
+    function syncPanelGroupState(group) {
+      const items = Array.from(group.querySelectorAll("details.panel-details"));
+      const state = group.querySelector("[data-panel-group-state]");
+      if (!state) return;
+      const openCount = items.filter((item) => item.open).length;
+      state.textContent = openCount === 0
+        ? items.length + " 项全部收起"
+        : "已展开 " + openCount + "/" + items.length + " 项";
+    }
+
+    function bindPanelGroups(scope = document) {
+      scope.querySelectorAll("[data-panel-group]").forEach((group) => {
+        if (group.dataset.panelGroupBound) return;
+        group.dataset.panelGroupBound = "1";
+        // toggle 事件不冒泡，用捕获阶段同步组内任意抽屉的展开状态
+        group.addEventListener("toggle", () => syncPanelGroupState(group), true);
+        syncPanelGroupState(group);
+      });
+    }
+
     function isStatusMessageLocked() {
       return Date.now() < statusMessageLockedUntil;
     }
@@ -2803,6 +2823,7 @@
     renderNotesSpaces();
 
     bindDetailsToggle();
+    bindPanelGroups();
     document.querySelectorAll("select").forEach(enhanceSelect);
     restoreAiConfig();
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
