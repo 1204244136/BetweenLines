@@ -1,0 +1,444 @@
+/**
+ * 特化侧的第三类内容：说话习惯层（角色口癖与说话特色）。
+ *
+ * 为什么不做逐行判断：一行台词往往看不出说话人，而说话特色（第一人称、句尾语气词、
+ * 句式、称谓）是“整章/整卷”的属性。因此这一层按 **章**（行数据的 chapter 字段）
+ * 判断——先在该章全文里用说话人关键词确定出现的角色，再据此给模型规则与补回线索。
+ *
+ * 表结构（按表头识别，大小写与空白不敏感）：
+ * - 角色：人物名（必填）
+ * - 口癖：日文原词（如「オレ」「なの」），可为空（此时只有备注描述，如“句尾最后一个假名变为片假名”）
+ * - 类型：第一人称 / 句末语气词 / 句首语气词 / 接续词 / 谓语形式 / 句式 / 称谓 / 名词前缀 / 名词后缀 / 短句
+ * - x版：本项目（成品）的写法，作为“补回”的标准
+ * - 网翻 / 台版（转简中）：其他版本写法，用于提醒模型不要按旧译名回改
+ * - 备注：说明
+ * - 小说首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
+ */
+const path = require("path");
+const { readRecords } = require("../../../core/spreadsheet");
+
+const COLUMN_CANDIDATES = {
+  character: ["角色", "人物", "character", "name"],
+  habit: ["口癖", "habit", "特徴", "特征"],
+  type: ["类型", "type"],
+  xVersion: ["x版", "x版本", "本项目", "成品"],
+  netVersion: ["网翻", "网络翻译", "网译"],
+  twVersion: ["台版（转简中）", "台版", "繁中"],
+  memo: ["备注", "说明", "memo"],
+  firstWork: ["小说首次出现", "首次出现", "登场", "初登场"],
+};
+
+const EMPTY_VALUES = new Set(["", "-", "—", "－", "/", "无", "n/a", "na", "none"]);
+const NAME_SEPARATORS = /[·・\s]/;
+// 只有这些类型的口癖适合做字面“流失”检测：它们是与具体词绑定的用法。
+// 句式、称谓、名词前缀/后缀等是结构性特征（如「〜然」「ちゃん」「XX力」），只能靠提示词说明，
+// 逐字比对会大量误报。
+const DETECTABLE_TYPES = new Set(["第一人称", "接续词", "句首语气词", "句末语气词", "谓语形式"]);
+const KANA = /[\u3040-\u309f\u30a0-\u30ff\u30fc]/;
+const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t";
+
+function firstColumn(record, keys) {
+  for (const key of keys) {
+    const value = record[key];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function isPlaceholder(value) {
+  return EMPTY_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function cleanVersion(value) {
+  return isPlaceholder(value) ? "" : String(value).trim();
+}
+
+/** 卷号（如 S3_01）→ 可比较的序号；只认 S<系列>_<卷序> 形式。 */
+function volumeKey(code) {
+  const match = String(code || "").match(/S(\d+)_(\d+(?:\.\d+)?)/i);
+  if (!match) return null;
+  return { series: Number(match[1]), volume: Number(match[2]), code: `S${match[1]}_${match[2]}` };
+}
+
+function compareVolume(left, right) {
+  if (!left || !right) return 0;
+  if (left.series !== right.series) return left.series - right.series;
+  return left.volume - right.volume;
+}
+
+/** 从输入文件路径里提取当前卷号：`[S3_01]創約 …` → S3_01。 */
+function volumeKeyFromFiles(files = {}) {
+  for (const value of Object.values(files || {})) {
+    const match = String(value || "").match(/\[(S\d+_\d+(?:\.\d+)?)\]/i);
+    if (match) return volumeKey(match[1]);
+  }
+  return null;
+}
+
+/**
+ * 说话人关键词：全名（强证据）+ 名字片段（弱证据）。
+ * 片段只用于“补强”，不能单独判定角色出现——否则「佐藤」会命中任何提到该姓氏的章。
+ */
+function characterAliases(character) {
+  const name = String(character || "").trim();
+  const strong = new Set([name]);
+  const withoutSeparator = name.replace(/[·・\s]/g, "");
+  if (withoutSeparator !== name) strong.add(withoutSeparator);
+
+  const weak = new Set();
+  const parts = name.split(NAME_SEPARATORS).map((part) => part.trim()).filter(Boolean);
+  if (parts.length > 1) {
+    for (const part of parts) if (part.length >= 2) weak.add(part);
+  } else if (name.length >= 3) {
+    // 中文名：姓氏与名字部分各取 2 字，仅作弱证据。
+    weak.add(name.slice(0, 2));
+    weak.add(name.slice(-2));
+  }
+  for (const value of strong) weak.delete(value);
+  return { strong: [...strong], weak: [...weak] };
+}
+
+function normalizeSpeechEntry(record) {
+  const character = firstColumn(record, COLUMN_CANDIDATES.character);
+  if (!character) return null;
+  const habit = cleanVersion(firstColumn(record, COLUMN_CANDIDATES.habit));
+  const entry = {
+    character,
+    habit,
+    type: firstColumn(record, COLUMN_CANDIDATES.type),
+    versions: {
+      x: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.xVersion)),
+      net: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.netVersion)),
+      tw: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.twVersion)),
+    },
+    memo: firstColumn(record, COLUMN_CANDIDATES.memo),
+    firstWork: firstColumn(record, COLUMN_CANDIDATES.firstWork),
+  };
+  entry.firstWorkKey = volumeKey(entry.firstWork);
+  entry.aliases = characterAliases(character);
+  // 补回时优先使用本项目的写法；没有 x版 时退到其他版本写法作为线索（同值只留一份）。
+  entry.expectedWritings = [...new Set([entry.versions.x, entry.versions.net, entry.versions.tw].filter(Boolean))];
+  entry.hasLiteralHabit = Boolean(entry.habit) && !isPlaceholder(entry.habit);
+  return entry;
+}
+
+function loadSpeechTable(file) {
+  const { sheet, records } = readRecords(file);
+  const entries = records.map(normalizeSpeechEntry).filter(Boolean);
+  if (!entries.length) throw new Error(`说话习惯表没有可用条目（需要“角色”列）：${file}`);
+  return { file, sheet, entries };
+}
+
+function normalizeSpeechTablePaths(paths = []) {
+  const result = [];
+  const seen = new Set();
+  for (const item of paths) {
+    const value = String(item || "").trim();
+    if (!value) continue;
+    const resolved = path.resolve(value);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(resolved);
+  }
+  return result;
+}
+
+function loadSpeechTables(files = []) {
+  const unique = normalizeSpeechTablePaths(files);
+  const entries = [];
+  const sheetNames = [];
+  const errors = [];
+  for (const file of unique) {
+    try {
+      const table = loadSpeechTable(file);
+      entries.push(...table.entries);
+      sheetNames.push(table.sheet || path.basename(file));
+    } catch (error) {
+      errors.push(`${file}：${error.message}`);
+    }
+  }
+  return { files: unique, sheetNames, entries, errors };
+}
+
+function speechTableSummary(tables) {
+  return `说话习惯：${tables.files.length} 张表 / ${tables.entries.length} 条`;
+}
+
+/**
+ * 按章分组：行数据自带 chapter，按内容顺序切段，章名相同的连续行归为一章。
+ * 没有 chapter（或为空）时整卷视作一章。
+ */
+function groupRowsByChapter(rows = []) {
+  const groups = [];
+  for (const row of rows) {
+    const chapter = String(row.chapter || "").trim() || "（未标注章节）";
+    const last = groups.at(-1);
+    if (last && last.chapter === chapter) {
+      last.rows.push(row);
+    } else {
+      groups.push({ chapter, rows: [row] });
+    }
+  }
+  return groups;
+}
+
+/**
+ * 章/卷内的角色判定：**名字命中**才算启用该角色的说话习惯（全名或去分隔符全名）。
+ * 名字片段（姓、名、西式名的局部）只作为“可能提及”的线索进报告，不启用习惯规则——
+ * 否则「佐藤」会因为「佐藤一郎」登场而把「佐藤花子」也算成本章登场。
+ * 先按卷过滤：卷号晚于当前卷的“首次出现”角色不可能在本卷登场。
+ */
+function detectCharacters({ rows = [], tables, volume = null, weakThreshold = 3 } = {}) {
+  const detected = [];
+  for (const entry of tables?.entries || []) {
+    if (volume && entry.firstWorkKey && compareVolume(entry.firstWorkKey, volume) > 0) continue;
+    let strongRows = 0;
+    let weakRows = 0;
+    const rowsHit = [];
+    for (const row of rows) {
+      const text = `${row.jp || ""}\n${row.cn || ""}`;
+      const strong = entry.aliases.strong.some((alias) => text.includes(alias));
+      const weak = !strong && entry.aliases.weak.some((alias) => text.includes(alias));
+      if (!strong && !weak) continue;
+      if (strong) strongRows += 1;
+      else weakRows += 1;
+      if (!rowsHit.includes(row.index)) rowsHit.push(row.index);
+    }
+    if (!strongRows && weakRows < weakThreshold) continue;
+    detected.push({
+      entry,
+      strongRows,
+      weakRows,
+      rows: rowsHit,
+      // 只有名字命中才启用该角色的习惯规则；纯片段命中只报告。
+      activated: strongRows > 0,
+      detectedBy: strongRows ? "名字命中" : "名字片段",
+    });
+  }
+  return detected.sort((a, b) => Number(b.activated) - Number(a.activated) || b.strongRows - a.strongRows || b.weakRows - a.weakRows);
+}
+
+function describeHabit(entry) {
+  const parts = [];
+  if (entry.type) parts.push(entry.type);
+  if (entry.habit) parts.push(`「${entry.habit}」`);
+  const head = parts.length ? parts.join(" ") : "说话特色";
+  const writings = [];
+  if (entry.versions.x) writings.push(`本项目写作「${entry.versions.x}」`);
+  const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
+  if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
+  if (!writings.length && entry.memo) writings.push(entry.memo);
+  return `${entry.character}：${head}${writings.length ? ` → ${writings.join("；")}` : ""}`;
+}
+
+/**
+ * 章级提示块：只含本章“名字命中”的角色，作为“刻意特色”的判据注入提示词。
+ */
+function chapterHabitBlock({ chapter, characters = [] } = {}) {
+  const activated = characters.filter((item) => item.activated !== false);
+  if (!activated.length) return "";
+  const lines = activated.map((item) => `- ${describeHabit(item.entry)}`);
+  return [
+    `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征，不得判为翻译腔、病句或误译；也不要按通顺中文的标准改写。`,
+    "原文出现口癖而译文完全没有对应写法时，可以给出把该特色补回的最小改动（revisedText），并在 summary 说明依据；没有把握就只提示待人工确认。",
+    ...lines,
+  ].join("\n");
+}
+
+/**
+ * 卷级提示块：整卷命中人名的角色（章级没命中时的兜底，规则集更宽、token 更多）。
+ */
+function volumeHabitBlock({ volume, characters = [] } = {}) {
+  const activated = characters.filter((item) => item.activated !== false);
+  if (!activated.length) return "";
+  const label = volume?.code ? `本卷 ${volume.code}` : "本卷";
+  return [
+    `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征，不得判为翻译腔、病句或误译；也不要按通顺中文的标准改写。`,
+    "原文出现口癖而译文完全没有对应写法时，可以给出把该特色补回的最小改动（revisedText），并在 summary 说明依据；没有把握就只提示待人工确认。",
+    ...activated.map((item) => `- ${describeHabit(item.entry)}`),
+  ].join("\n");
+}
+
+/**
+ * 行级说话人候选：本行原文里出现了哪些「说话习惯特征」。
+ *
+ * 用途是“先让模型判断说话人，再据此处理”：只有命中特征的行才需要判断说话人，
+ * 且候选来自本章/本卷已按人名命中的角色（activated），避免把习惯按到没登场的角色身上。
+ * 弱证据（只命中名字片段）的角色只作为低置信候选附带给出。
+ */
+function habitCandidatesForRow({ row, characters = [] } = {}) {
+  const jp = String(row?.jp || "");
+  if (!jp) return [];
+  const candidates = [];
+  for (const item of characters) {
+    const entry = item.entry;
+    if (!entry.hasLiteralHabit) continue;
+    if (!hasHabitOccurrence(jp, entry)) continue;
+    candidates.push({
+      character: entry.character,
+      type: entry.type,
+      habit: entry.habit,
+      expected: entry.versions.x || entry.versions.net || entry.versions.tw || "",
+      confidence: item.activated === false ? "low" : "high",
+      detectable: isHabitDetectable(entry),
+    });
+  }
+  return candidates;
+}
+
+/**
+ * 说话人判断与习惯处理的提示块：附在章级习惯之后，只在有候选时出现。
+ */
+function speakerCheckBlock({ chapter, candidates = [] } = {}) {
+  if (!candidates.length) return "";
+  const names = [...new Set(candidates.map((candidate) => candidate.character))];
+  return [
+    `【说话人判断（本章）】本行原文出现了说话习惯特征，候选说话人：${names.join("、")}（本章/本卷出现过该角色）。`,
+    "先判断这一行到底是谁在说话，再据此处理：确认是某个候选角色时，按他的说话习惯判断译文是否流失了特色；确认不了或明显是别人时，不要以说话习惯为由判定缺陷，也不要按候选角色的口癖去改写。",
+    `判断结果填在 speaker 字段（填角色名；确认不了留空字符串）；候选习惯：${candidates.map((candidate) => `${candidate.character}「${candidate.habit}」`).join("、")}。`,
+  ].join("\n");
+}
+/**
+ * 该条目是否适合做字面“流失”检测：
+ * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
+ * - 单字口癖（力、超、訳）会撞普通词，不检测；
+ * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测。
+ */
+function isHabitDetectable(entry) {
+  if (!entry || !entry.hasLiteralHabit) return false;
+  if (!DETECTABLE_TYPES.has(entry.type)) return false;
+  if (String(entry.habit).length < 2) return false;
+  if (entry.versions.x && entry.versions.x === entry.habit) return false;
+  return true;
+}
+
+/**
+ * 口癖在原文里的出现位置是否算“该用法的出现”：
+ * - 句末语气词 / 谓语形式：必须落在句末（后接标点或行尾），「じゃん」不会被「じゃんけん」命中；
+ * - 第一人称 / 接续词 / 句首语气词 / 未分类：前面不能是假名，避免落在更长的词中间。
+ */
+function hasHabitOccurrence(text, entry) {
+  const habit = String(entry.habit || "");
+  if (!habit) return false;
+  const sentenceEnd = entry.type === "句末语气词" || entry.type === "谓语形式";
+  let from = 0;
+  while (from <= text.length) {
+    const at = text.indexOf(habit, from);
+    if (at < 0) return false;
+    from = at + 1;
+    const before = text[at - 1] || "";
+    const after = text[at + habit.length] || "";
+    if (sentenceEnd) {
+      if (after === "" || SENTENCE_END_CHARS.includes(after)) return true;
+      continue;
+    }
+    if (before === "" || !KANA.test(before)) return true;
+  }
+  return false;
+}
+
+/**
+ * 行级“补回”线索：原文出现某个口癖、而译文里没有该角色任何版本的写法 → 疑似说话特色流失。
+ * 只在“本章/本卷已按人名命中该角色”的前提下检查，避免全表乱报。
+ */
+function findHabitMisses({ source, target, characters = [] } = {}) {
+  const jp = String(source || "");
+  const cn = String(target || "");
+  const misses = [];
+  for (const item of characters) {
+    if (item.activated === false) continue;
+    const entry = item.entry;
+    if (!isHabitDetectable(entry)) continue;
+    if (!hasHabitOccurrence(jp, entry)) continue;
+    if (entry.expectedWritings.some((writing) => cn.includes(writing))) continue;
+    misses.push({
+      character: entry.character,
+      habit: entry.habit,
+      type: entry.type,
+      expected: entry.versions.x || entry.versions.net || entry.versions.tw,
+      memo: entry.memo,
+    });
+  }
+  return misses;
+}
+
+/**
+ * 按章/按卷汇总（脚本用）：命中哪些角色、口癖在原文命中多少行、译文是否体现。
+ * scope=chapter（默认）逐章汇总；scope=volume 汇总整卷。
+ */
+function summarizeChapters({ rows = [], tables, volume = null, scope = "chapter" } = {}) {
+  if (scope === "volume") {
+    const characters = detectCharacters({ rows, tables, volume });
+    return [summarizeGroup({ name: volume?.code || "（整卷）", rows, tables, volume, characters })];
+  }
+  return groupRowsByChapter(rows).map((group) => summarizeGroup({
+    name: group.chapter,
+    rows: group.rows,
+    tables,
+    volume,
+  }));
+}
+
+function summarizeGroup({ name, rows = [], tables, volume = null, characters = null }) {
+  const detected = characters || detectCharacters({ rows, tables, volume });
+  let habitRows = 0;
+  const misses = [];
+  for (const row of rows) {
+    const found = findHabitMisses({ source: row.jp, target: row.cn, characters: detected });
+    if (!found.length) continue;
+    habitRows += 1;
+    misses.push({ index: row.index, items: found, source: String(row.jp || "").slice(0, 60), target: String(row.cn || "").slice(0, 60) });
+  }
+  return {
+    chapter: name,
+    rowCount: rows.length,
+    indexRange: [rows[0]?.index, rows.at(-1)?.index],
+    characters: detected.map((item) => ({
+      character: item.entry.character,
+      type: item.entry.type,
+      habit: item.entry.habit,
+      expected: item.entry.versions.x || item.entry.versions.net || item.entry.versions.tw,
+      // 三个写法槽位与备注：构建期落盘要原样带上，运行期才能还原出与现算完全一致的提示词块。
+      versions: {
+        x: item.entry.versions.x || "",
+        net: item.entry.versions.net || "",
+        tw: item.entry.versions.tw || "",
+      },
+      memo: item.entry.memo || "",
+      detectedBy: item.detectedBy,
+      activated: item.activated,
+      strongRows: item.strongRows,
+      weakRows: item.weakRows,
+    })),
+    habitRows,
+    misses,
+  };
+}
+
+module.exports = {
+  COLUMN_CANDIDATES,
+  DETECTABLE_TYPES,
+  chapterHabitBlock,
+  characterAliases,
+  compareVolume,
+  describeHabit,
+  detectCharacters,
+  detectChapterCharacters: detectCharacters,
+  findHabitMisses,
+  groupRowsByChapter,
+  habitCandidatesForRow,
+  hasHabitOccurrence,
+  isHabitDetectable,
+  loadSpeechTable,
+  loadSpeechTables,
+  normalizeSpeechEntry,
+  normalizeSpeechTablePaths,
+  speakerCheckBlock,
+  speechTableSummary,
+  summarizeChapters,
+  summarizeGroup,
+  volumeHabitBlock,
+  volumeKey,
+  volumeKeyFromFiles,
+};
