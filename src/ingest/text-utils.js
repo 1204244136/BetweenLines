@@ -1,5 +1,4 @@
 const fs = require("fs");
-const path = require("path");
 const OpenCC = require("opencc-js");
 const { readEpubText } = require("./epub-utils");
 const { isEpubInput } = require("./epub-container");
@@ -7,6 +6,9 @@ const { formatForFile, readWithPandoc, textLength } = require("./pandoc-utils");
 const { resolveBuildOutputDir } = require("../core/storage-layout");
 
 const outputDir = resolveBuildOutputDir();
+
+// 作品标题的通用形态：系列前缀 + 「某X的Y」或「とあるXのY」+ 可选卷号。
+const genericWorkTitleLine = /^(?:(?:旧约|舊約|新约|新約|创约|創約)\s*)?(?:某[^\s]{1,12}(?:的|之)[^\s]{1,12}|とある[^\s]{1,14}の[^\s]{1,14})\s*\d*$/i;
 
 const startMarkers = {
   tw: "",
@@ -134,6 +136,9 @@ function isFrontMatterBlock(block, lang) {
   if (normalizeTitle(normalized, lang)) return true;
   if (/^(contents|目錄|目录|ＣＯＮＴＥＮＴＳ|navigation)$/i.test(normalized)) return true;
   if (/^(制作信息|製作信息|网翻|翻译|翻譯|校对|校對|美工|录入|錄入|简介|簡介|彩页|插图|插圖)(?:\s|：|:|$)/i.test(normalized)) return true;
+  // 作品标题行：下面这份清单是本项目实际使用的规则，同时作为示范；同一形态的通用写法
+  // （系列前缀 + 「某X的Y」/「とあるXのY」+ 可选卷号）由 genericWorkTitleLine 兜住，接别的作品时改这里即可。
+  if (genericWorkTitleLine.test(normalized)) return true;
   if (/^(暗部共生少女|某暗部的少女共栖|とある暗部的少女共棲|某魔法的禁书目录|新约\s*某魔法的禁书目录|创约\s*某魔法的禁书目录|とある魔術の禁書目録|新約\s*とある魔術の禁書目録|創約\s*とある魔術の禁書目録)\s*\d*$/i.test(normalized)) return true;
   if (/^(鎌池和馬|镰池和马|鎌池和馬かまちかずま|はいむらきよたか|灰村清孝|近木野中哉|冬川基|乃木康仁|山路新)$/.test(normalized)) return true;
   if (/^(Information|Special|Note|Introduction|Contents|Cover|Back_cover|Illustrations)$/i.test(normalized)) return true;
