@@ -789,7 +789,7 @@ function makeHtml(rows, selection, projectContext) {
     </header>
     <div class="control-stack">
       <details id="prefilterPanel" class="panel-details" aria-label="预筛选">
-        <summary class="panel-summary"><span>预筛选</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开预筛选"></button></summary>
+        <summary class="panel-summary"><span>预筛选 <span class="panel-summary-state" id="prefilterPanelState">尚未运行</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开预筛选"></button></summary>
         <div class="prefilter-body">
           <div class="prefilter-config">
             <div class="ai-field">
@@ -808,80 +808,8 @@ function makeHtml(rows, selection, projectContext) {
           </div>
         </div>
       </details>
-      <details id="notesPanel" class="panel-details" aria-label="备注空间与找回">
-        <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
-        <div class="notes-body">
-          <div class="notes-toolbar">
-            <p>找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
-            <div class="notes-actions">
-              <button id="exportAllNotes" class="btn" type="button">备份全部</button>
-              <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
-              <button id="clearCurrentNotes" class="btn btn--subtle" type="button">清空本页</button>
-              <button id="clearHistoryNotes" class="btn btn--subtle" type="button">清空历史</button>
-              <button id="refreshNotesSpaces" class="btn btn--ghost" type="button">刷新</button>
-            </div>
-          </div>
-          <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
-          <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
-          <div id="notesCurrentSpace"></div>
-          <div class="notes-history-heading"><strong>历史记录</strong><span id="notesSpaceSummary"></span></div>
-          <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
-          <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
-          <p class="notes-hint">优先按内容找回，保留本页已有记录。仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
-        </div>
-      </details>
-      <dialog id="notesRecoveryDialog" class="notes-recovery-dialog" aria-labelledby="notesRecoveryTitle">
-        <h2 id="notesRecoveryTitle">预览备注找回</h2>
-        <div id="notesRecoveryPreview"></div>
-        <div class="notes-dialog-actions"><button id="cancelNotesRecovery" class="btn btn--ghost" type="button" autofocus>取消</button><button id="applyNotesRecovery" class="btn btn--primary" type="button">找回记录</button></div>
-      </dialog>
-      <div class="filter-bar" aria-label="筛选">
-        <input id="query" class="filter-search" type="search" placeholder="搜索原文、译文、备注">
-        <div class="filter-groups">
-          <div class="segmented" role="group" aria-label="相似度状态">
-            <span class="segmented__label">相似度</span>
-            <button type="button" class="segmented__btn is-active" data-severity="all">全部</button>
-            <button type="button" class="segmented__btn" data-severity="review" title="相似度低于 18%">较低</button>
-            <button type="button" class="segmented__btn" data-severity="watch" title="相似度为 18% 至 35%">中等</button>
-            <button type="button" class="segmented__btn" data-severity="ok" title="相似度不低于 35%">较高</button>
-          </div>
-          <div class="segmented" role="group" aria-label="自动分析结果">
-            <span class="segmented__label">自动</span>
-            <button type="button" class="segmented__btn is-active" data-ai-result="all">全部</button>
-            <button type="button" class="segmented__btn" data-ai-result="modify">需改</button>
-            <button type="button" class="segmented__btn" data-ai-result="same">不改</button>
-            <button type="button" class="segmented__btn" data-ai-result="unclear">待判</button>
-          </div>
-          <div class="segmented" role="group" aria-label="AI 翻译质量评分分级">
-            <span class="segmented__label" title="按扣分制（满分100）质量分级筛选">评分</span>
-            <button type="button" class="segmented__btn is-active" data-issue-severity="all">全部</button>
-            <button type="button" class="segmented__btn" data-issue-severity="excellent" title="优等 (90~100分)：极佳，无缺陷或仅个别微瑕">优等</button>
-            <button type="button" class="segmented__btn" data-issue-severity="good" title="良好 (75~89分)：总体良好，有个别轻微缺陷">良好</button>
-            <button type="button" class="segmented__btn" data-issue-severity="fair" title="一般 (60~74分)：存在较明显缺陷，需重点修改">一般</button>
-            <button type="button" class="segmented__btn" data-issue-severity="poor" title="较差 (<60分)：存在致命错译或严重缺陷，不及格">较差</button>
-          </div>
-          <button id="prefilterResultFilter" class="chip" type="button" aria-pressed="false" disabled>预筛结果</button>
-          <button id="noteFilter" class="chip" type="button" aria-pressed="false">有备注</button>
-          <button id="doneFilter" class="chip" type="button" data-mode="open" aria-pressed="false">未人工确认</button>
-        </div>
-        <button id="clearFilter" class="btn btn--ghost" type="button">清筛选</button>
-      </div>
-      <div class="action-bar">
-        <div class="action-group" aria-label="显示设置">
-          <span class="action-group__label">显示</span>
-          <label class="toggle-inline"><input id="showSource" type="checkbox" checked>原文</label>
-          ${bilingual ? "" : '<label class="toggle-inline"><input id="showTranslationDiff" type="checkbox" checked>译文差异</label>'}
-          <label class="toggle-inline"><input id="showRevisionDiff" type="checkbox" checked>修改差异</label>
-        </div>
-        <div class="action-group" aria-label="修改结果操作">
-          <span class="action-group__label">修改结果</span>
-          <button id="acceptAiSame" class="btn btn--success" type="button">确认自动不改</button>
-          <button id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回</button>
-          <button id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认</button>
-        </div>
-      </div>
       <details id="aiPanel" class="panel-details ai-panel" aria-label="AI 校对">
-        <summary class="ai-panel-title"><span>AI 辅助校对</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
+        <summary class="ai-panel-title"><span>AI 辅助校对 <span id="aiPanelState" class="ai-panel-state">尚未启动</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
         <details id="aiConfigSection" class="ai-config-details" open><summary class="ai-section-summary">服务与任务设置</summary><div class="ai-config-stack">
           <section class="ai-config-band ai-service-band" aria-labelledby="aiServiceLabel">
             <div id="aiServiceLabel" class="ai-config-label">AI 服务</div>
@@ -988,6 +916,86 @@ function makeHtml(rows, selection, projectContext) {
           </div>
         </details>
       </details>
+      <details id="filterPanel" class="panel-details" aria-label="筛选与显示">
+        <summary class="panel-summary"><span>筛选与显示 <span class="panel-summary-state" id="filterPanelState">未筛选</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开筛选与显示"></button></summary>
+        <div class="filter-bar" aria-label="筛选">
+          <input id="query" class="filter-search" type="search" placeholder="搜索原文、译文、备注">
+          <div class="filter-groups">
+            <div class="segmented" role="group" aria-label="相似度状态">
+              <span class="segmented__label">相似度</span>
+              <button type="button" class="segmented__btn is-active" data-severity="all">全部</button>
+              <button type="button" class="segmented__btn" data-severity="review" title="相似度低于 18%">较低</button>
+              <button type="button" class="segmented__btn" data-severity="watch" title="相似度为 18% 至 35%">中等</button>
+              <button type="button" class="segmented__btn" data-severity="ok" title="相似度不低于 35%">较高</button>
+            </div>
+            <div class="segmented" role="group" aria-label="自动分析结果">
+              <span class="segmented__label">自动</span>
+              <button type="button" class="segmented__btn is-active" data-ai-result="all">全部</button>
+              <button type="button" class="segmented__btn" data-ai-result="modify">需改</button>
+              <button type="button" class="segmented__btn" data-ai-result="same">不改</button>
+              <button type="button" class="segmented__btn" data-ai-result="unclear">待判</button>
+            </div>
+            <div class="segmented" role="group" aria-label="AI 翻译质量评分分级">
+              <span class="segmented__label" title="按扣分制（满分100）质量分级筛选">评分</span>
+              <button type="button" class="segmented__btn is-active" data-issue-severity="all">全部</button>
+              <button type="button" class="segmented__btn" data-issue-severity="excellent" title="优等 (90~100分)：极佳，无缺陷或仅个别微瑕">优等</button>
+              <button type="button" class="segmented__btn" data-issue-severity="good" title="良好 (75~89分)：总体良好，有个别轻微缺陷">良好</button>
+              <button type="button" class="segmented__btn" data-issue-severity="fair" title="一般 (60~74分)：存在较明显缺陷，需重点修改">一般</button>
+              <button type="button" class="segmented__btn" data-issue-severity="poor" title="较差 (<60分)：存在致命错译或严重缺陷，不及格">较差</button>
+            </div>
+            <button id="prefilterResultFilter" class="chip" type="button" aria-pressed="false" disabled>预筛结果</button>
+            <button id="noteFilter" class="chip" type="button" aria-pressed="false">有备注</button>
+            <button id="doneFilter" class="chip" type="button" data-mode="open" aria-pressed="false">未人工确认</button>
+          </div>
+          <button id="clearFilter" class="btn btn--ghost" type="button">清筛选</button>
+        </div>
+        <div class="action-bar">
+          <div class="action-group" aria-label="显示设置">
+            <span class="action-group__label">显示</span>
+            <label class="toggle-inline"><input id="showSource" type="checkbox" checked>原文</label>
+            ${bilingual ? "" : '<label class="toggle-inline"><input id="showTranslationDiff" type="checkbox" checked>译文差异</label>'}
+            <label class="toggle-inline"><input id="showRevisionDiff" type="checkbox" checked>修改差异</label>
+          </div>
+        </div>
+      </details>
+      <details id="batchPanel" class="panel-details" aria-label="批量操作">
+        <summary class="panel-summary"><span>批量操作 <span class="panel-summary-state" id="batchPanelState">当前筛选 0 行</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开批量操作"></button></summary>
+        <div class="action-bar">
+          <div class="action-group" aria-label="修改结果操作">
+            <span class="action-group__label">修改结果</span>
+            <button id="acceptAiSame" class="btn btn--success" type="button">确认自动不改</button>
+            <button id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回</button>
+            <button id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认</button>
+          </div>
+        </div>
+      </details>
+      <details id="notesPanel" class="panel-details" aria-label="备注空间与找回">
+        <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
+        <div class="notes-body">
+          <div class="notes-toolbar">
+            <p>找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
+            <div class="notes-actions">
+              <button id="exportAllNotes" class="btn" type="button">备份全部</button>
+              <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
+              <button id="clearCurrentNotes" class="btn btn--subtle" type="button">清空本页</button>
+              <button id="clearHistoryNotes" class="btn btn--subtle" type="button">清空历史</button>
+              <button id="refreshNotesSpaces" class="btn btn--ghost" type="button">刷新</button>
+            </div>
+          </div>
+          <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
+          <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
+          <div id="notesCurrentSpace"></div>
+          <div class="notes-history-heading"><strong>历史记录</strong><span id="notesSpaceSummary"></span></div>
+          <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
+          <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
+          <p class="notes-hint">优先按内容找回，保留本页已有记录。仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
+        </div>
+      </details>
+      <dialog id="notesRecoveryDialog" class="notes-recovery-dialog" aria-labelledby="notesRecoveryTitle">
+        <h2 id="notesRecoveryTitle">预览备注找回</h2>
+        <div id="notesRecoveryPreview"></div>
+        <div class="notes-dialog-actions"><button id="cancelNotesRecovery" class="btn btn--ghost" type="button" autofocus>取消</button><button id="applyNotesRecovery" class="btn btn--primary" type="button">找回记录</button></div>
+      </dialog>
     </div>
     <main class="wrap">
       <div class="table-frame">

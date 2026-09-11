@@ -86,6 +86,7 @@ index-X 结构与命名规范契约：
    - 按技术 pivot interval 合并不同方向的对齐组。
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`，页面也不渲染不属于该模式的控件（不是 `hidden`）。裁剪只删字段，不改变 `signature`/`rowsSignature` 的取值。
    - 输出 HTML、CSV、JSON。
+   - 生成页面的控制栈是五个 `<details class="panel-details">` 抽屉：预筛选、AI 辅助校对、筛选与显示、批量操作、备注空间与找回；按数据流方向自上而下排列（机器加工→人工检索→批量落盘→数据保全）。每个抽屉的 `<summary>` 含 `.panel-summary-state` 摘要行展示实时状态。`筛选与显示` 收纳原 filter-bar 与显示开关；`批量操作` 只放会改源文件的批量按钮。默认全部折叠（不带 `open` 属性），避免机器任务被覆盖式展开。`rowFieldsFor(mode)` 等模式裁剪规则不受重排影响。
    - `notes-spaces.js` 为翻译备注的纯函数辅助模块，注入生成页面并由 Node 测试复用；备注空间键与行内容签名保持原契约。备份保留原始数据，导入同名空间只创建副本；找回保留当前行已有记录，不能通过释放来源空间应对配额不足。
    - `recoveredUnverified` 记录不能携带当前行的 `rowSig` 或计入人工确认；文本锚点与按行号找回都必须保持此标记，只有逐行核验可解除。页面必须提供清空当前空间和清空历史空间的显式操作，均需确认且不能误删另一类空间。验证执行 `node --test scripts/notes-spaces.test.js scripts/build-compare.test.js`，其中使用生成页面的 VM 交互回归，不使用浏览器截图。
 
