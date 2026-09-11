@@ -57,7 +57,7 @@
       position: sticky;
       top: 0;
       z-index: 5;
-      padding: var(--space-3) var(--space-4) var(--space-2);
+      padding: var(--space-2) var(--space-4);
       border-bottom: 1px solid var(--line);
       background: var(--surface);
     }
@@ -67,56 +67,59 @@
       gap: var(--space-4);
       align-items: center;
     }
+    .topbar-text {
+      min-width: 0;
+    }
     h1 {
-      margin: 0 0 var(--space-1);
+      margin: 0;
       font-size: var(--fs-page);
-      line-height: 1.3;
+      line-height: 1.25;
       letter-spacing: 0;
     }
-    .subtle {
+    .topbar-meta {
+      display: flex;
+      align-items: baseline;
+      margin-top: 2px;
       color: var(--muted);
-      font-size: var(--fs-section);
-    }
-    .files {
-      margin-top: var(--space-1);
-      color: var(--muted-2);
       font-size: var(--fs-caption);
+      line-height: 1.5;
       white-space: nowrap;
       overflow: hidden;
+    }
+    .topbar-meta > * + *::before {
+      content: "·";
+      margin: 0 var(--space-1);
+      color: var(--muted-2);
+    }
+    .files {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted-2);
       text-overflow: ellipsis;
-      max-width: 760px;
     }
     .stats {
       display: flex;
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: var(--space-2);
-      max-width: 540px;
+      max-width: 420px;
     }
     .stat {
-      min-width: 78px;
-      padding: var(--space-2) var(--space-2);
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-1);
+      padding: var(--space-1) var(--space-2);
       border: 1px solid var(--line);
       border-radius: var(--radius-sm);
       background: var(--surface);
       font-size: var(--fs-caption);
-      line-height: 1.25;
+      line-height: 1.3;
       box-shadow: var(--shadow-panel);
     }
     .stat strong {
-      display: block;
       color: var(--text);
-      font-size: 16px;
-      line-height: 1.2;
-    }
-    .stat.review { background: var(--review); border-color: #f0b8b3; }
-    .stat.watch { background: var(--watch); border-color: #e6cd86; }
-    .stat.ok { background: var(--ok); border-color: #b3d9bf; }
-    .stat-divider {
-      align-self: stretch;
-      width: 1px;
-      margin: 2px 2px;
-      background: var(--line-strong);
+      font-size: 15px;
+      line-height: 1.3;
     }
     .control-stack {
       display: grid;
@@ -1121,6 +1124,7 @@
       th, td { padding: 8px; }
       .topbar { grid-template-columns: 1fr; }
       .stats { justify-content: flex-start; max-width: none; }
+      .topbar-meta { flex-wrap: wrap; white-space: normal; }
       .filter-bar,
       .action-bar,
       .prefilter-runbar {

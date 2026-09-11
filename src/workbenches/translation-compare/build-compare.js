@@ -729,16 +729,16 @@ function makeHtml(rows, selection, projectContext) {
   const similarityLabel = bilingual ? `${labels.jp}-${labels.cn}` : `${labels.cn}-${labels.tw}`;
   const semanticLabel = `${labels.jp}-${pivotLabel(pivotLang, labels)}`;
   const stats = rows.reduce((acc, row) => {
-    const cls = rowClass(row.score);
-    acc[cls] += 1;
     acc.total += 1;
     acc.emptySource += row.jp ? 0 : 1;
     acc.scoreSum += row.score || 0;
     return acc;
-  }, { total: 0, review: 0, watch: 0, ok: 0, emptySource: 0, scoreSum: 0 });
+  }, { total: 0, emptySource: 0, scoreSum: 0 });
   const avgScore = stats.total ? stats.scoreSum / stats.total : 0;
   const fileNames = Object.fromEntries(Object.entries(selection.files || {})
     .map(([lang, file]) => [lang, path.basename(file)]));
+  // 文件行与顶部元信息合并为一行，标题区只占两行，降低顶部区域整体高度。
+  const fileSummary = `原文 A ${fileNames.jp || ""} · ${bilingual ? "译文 B" : "非原文 B"} ${fileNames.cn || ""}${bilingual ? "" : ` · 非原文 C ${fileNames.tw || ""}`}`;
   const rowsSignature = projectContext.rowsSignature;
   const storageKey = projectContext.notesStorage.key;
   const clientMeta = {
@@ -769,19 +769,17 @@ function makeHtml(rows, selection, projectContext) {
   <div class="app-shell mode-${comparisonMode}">
     <header>
       <div class="topbar">
-        <div>
+        <div class="topbar-text">
           <h1>${bilingual ? "双语" : "三语"}翻译对比校对工作台</h1>
-          <div class="subtle">生成时间 ${escapeHtml(generatedAt)} · 平均相似 ${(avgScore * 100).toFixed(0)}% · 空原文 ${stats.emptySource}</div>
-          <div class="files" title="原文 A ${escapeHtml(fileNames.jp || "")} · ${bilingual ? "译文 B" : "非原文 B"} ${escapeHtml(fileNames.cn || "")}${bilingual ? "" : ` · 非原文 C ${escapeHtml(fileNames.tw || "")}`} ">
-            原文 A ${escapeHtml(fileNames.jp || "")} · ${bilingual ? "译文 B" : "非原文 B"} ${escapeHtml(fileNames.cn || "")}${bilingual ? "" : ` · 非原文 C ${escapeHtml(fileNames.tw || "")}`}
+          <div class="topbar-meta">
+            <span>生成时间 ${escapeHtml(generatedAt)}</span>
+            <span>平均相似 ${(avgScore * 100).toFixed(0)}%</span>
+            <span>空原文 ${stats.emptySource}</span>
+            <span class="files" title="${escapeHtml(fileSummary)}">${escapeHtml(fileSummary)}</span>
           </div>
         </div>
         <div class="stats" aria-label="校对统计">
           <div class="stat"><strong>${stats.total}</strong>总行</div>
-          <div class="stat review" title="相似度低于 18%"><strong>${stats.review}</strong>较低相似度</div>
-          <div class="stat watch" title="相似度为 18% 至 35%"><strong>${stats.watch}</strong>中等相似度</div>
-          <div class="stat ok" title="相似度不低于 35%"><strong>${stats.ok}</strong>较高相似度</div>
-          <div class="stat-divider" aria-hidden="true"></div>
           <div class="stat"><strong id="doneCount">0</strong>人工确认</div>
           <div class="stat"><strong id="aiDoneCount">0</strong>自动结果</div>
         </div>
