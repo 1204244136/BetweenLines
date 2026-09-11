@@ -36,12 +36,12 @@ test("共享 LLM 传输层：buildProviderHeaders 与 cleanJsonPayload", () => {
   assert.equal(openaiHeaders.authorization, "Bearer sk-test");
 
   // 代码块 JSON 清洗
-  const parsed1 = cleanJsonPayload('```json\n{"speaker": "上条当麻", "confidence": 0.95}\n```');
-  assert.deepEqual(parsed1, { speaker: "上条当麻", confidence: 0.95 });
+  const parsed1 = cleanJsonPayload('```json\n{"speaker": "山田太郎", "confidence": 0.95}\n```');
+  assert.deepEqual(parsed1, { speaker: "山田太郎", confidence: 0.95 });
 
   // 裸文本 JSON
-  const parsed2 = cleanJsonPayload('前后有废话 {"speaker": "御坂美琴", "status": "confirmed"} 结尾也有');
-  assert.deepEqual(parsed2, { speaker: "御坂美琴", status: "confirmed" });
+  const parsed2 = cleanJsonPayload('前后有废话 {"speaker": "佐藤花子", "status": "confirmed"} 结尾也有');
+  assert.deepEqual(parsed2, { speaker: "佐藤花子", status: "confirmed" });
 });
 
 test("非推理模型文本化强度档位映射：low 到 max 正确映射温度并向下兼容数值", () => {
@@ -95,13 +95,13 @@ test("共享 TaskQueue：控制有界并发与 AbortSignal 取消", async () => 
 
 test("说话人推断：validateSpeakerOutput 规范化校验与容错", () => {
   const valid = validateSpeakerOutput({
-    speaker: "茵蒂克丝",
+    speaker: "艾莉丝",
     status: "confirmed",
     confidence: 0.88,
     evidence: "说了「当麻」",
     needsContext: false,
   });
-  assert.equal(valid.speaker, "茵蒂克丝");
+  assert.equal(valid.speaker, "艾莉丝");
   assert.equal(valid.status, "confirmed");
   assert.equal(valid.confidence, 0.88);
   assert.equal(valid.needsContext, false);
@@ -131,7 +131,7 @@ test("说话人推断：缓存键稳定性与批量推断挂载", async () => {
       version: "evidence-attention-v2",
       score: 0.8,
       level: "high",
-      candidates: [{ name: "御坂美琴", score: 0.9 }],
+      candidates: [{ name: "佐藤花子", score: 0.9 }],
       focus: [],
       needsMoreContext: false,
     },
@@ -146,7 +146,7 @@ test("说话人推断：缓存键稳定性与批量推断挂载", async () => {
 
   // clientRowsFor 透传 prediction
   row.prediction = {
-    speaker: "御坂美琴",
+    speaker: "佐藤花子",
     status: "confirmed",
     confidence: 0.9,
     evidence: "「ふん」傲娇语气与邻近动作",
@@ -155,7 +155,7 @@ test("说话人推断：缓存键稳定性与批量推断挂载", async () => {
 
   const clientRows = clientRowsFor({ rows: [row] });
   assert.equal(clientRows.length, 1);
-  assert.equal(clientRows[0].prediction.speaker, "御坂美琴");
+  assert.equal(clientRows[0].prediction.speaker, "佐藤花子");
   assert.equal(clientRows[0].prediction.confidence, 0.9);
 });
 
@@ -202,7 +202,7 @@ test("说话人归属 Prompt 契约：单语与双语模式模块化适配与输
 
   // 输出契约校验：非 confirmed 强制清空 speaker，并补充默认 evidence
   const unconfirmed = validateSpeakerOutput({
-    speaker: "御坂美琴",
+    speaker: "佐藤花子",
     status: "unknown",
   });
   assert.equal(unconfirmed.speaker, "");

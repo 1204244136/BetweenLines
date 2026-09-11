@@ -42,13 +42,13 @@ test("quoted dialogue mode omits narration and keeps separate utterances separat
 });
 
 test("inline quoted terms stay in narration instead of becoming speaker rows", () => {
-  const text = "如果能把不良少年的「集团」彻底甩开，追丢上条的那群不良少年可能会打手机找人增援，也可能会骑摩托过来。所以为了让他们「筋疲力尽」，上条必须拿自己当「诱饵」，吸引他们不断地跑。";
+  const text = "如果能把不良少年的「集团」彻底甩开，追丢山田的那群不良少年可能会打手机找人增援，也可能会骑摩托过来。所以为了让他们「筋疲力尽」，山田必须拿自己当「诱饵」，吸引他们不断地跑。";
   const units = deriveLineUnits([{ sourceIndex: 9, lang: "cn", text }], { quotedOnly: true });
   assert.deepEqual(units, []);
 });
 
 test("interrupted dialogue separated by narration in same paragraph retains both utterances", () => {
-  const text = "「ううん、大丈夫だよ？」インデックスは、息を吐きながら、「大丈夫に、決まってるよ」";
+  const text = "「ううん、大丈夫だよ？」ユキは、息を吐きながら、「大丈夫に、決まってるよ」";
   const units = deriveLineUnits([{ sourceIndex: 12, lang: "jp", text }], { quotedOnly: true });
   assert.deepEqual(units.map((u) => u.text), [
     "「ううん、大丈夫だよ？」",
@@ -57,12 +57,12 @@ test("interrupted dialogue separated by narration in same paragraph retains both
 });
 
 test("dialogue after a speech cue remains a complete unit", () => {
-  const units = deriveLineUnits([{ sourceIndex: 10, lang: "cn", text: "上条说：「快跑！再坚持一下。」" }], { quotedOnly: true });
+  const units = deriveLineUnits([{ sourceIndex: 10, lang: "cn", text: "山田说：「快跑！再坚持一下。」" }], { quotedOnly: true });
   assert.deepEqual(units.map((unit) => unit.text), ["「快跑！再坚持一下。」"]);
 });
 
 test("a mid-sentence quoted utterance is accepted only with dialogue punctuation", () => {
-  const units = deriveLineUnits([{ sourceIndex: 11, lang: "cn", text: "上条转身，『快跑！』。" }], { quotedOnly: true });
+  const units = deriveLineUnits([{ sourceIndex: 11, lang: "cn", text: "山田转身，『快跑！』。" }], { quotedOnly: true });
   assert.deepEqual(units.map((unit) => unit.text), ["『快跑！』"]);
 });
 

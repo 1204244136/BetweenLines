@@ -342,8 +342,8 @@ test("speaker attention prioritizes attribution cues and compresses context", ()
   assert.equal(attention.candidates[0].name, "张三");
   assert.ok(attention.budget.selectedItems < attention.budget.inputItems);
   assert.deepEqual(extractCandidateNames("Alice said: \"Hello\""), ["Alice"]);
-  assert.deepEqual(extractCandidateNames("上条当麻は『無理』と言った。"), ["上条当麻"]);
-  const quotedContext = buildSpeakerAttention({ context: [{ id: "q", text: "『上条当麻』", relation: "context", isQuotedDialogue: true }, { id: "target", text: "「你好」", relation: "target" }] });
+  assert.deepEqual(extractCandidateNames("山田太郎は『無理』と言った。"), ["山田太郎"]);
+  const quotedContext = buildSpeakerAttention({ context: [{ id: "q", text: "『山田太郎』", relation: "context", isQuotedDialogue: true }, { id: "target", text: "「你好」", relation: "target" }] });
   assert.deepEqual(quotedContext.candidates, []);
 });
 
