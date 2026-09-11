@@ -103,6 +103,28 @@ index-X 结构与命名规范契约：
    - 说话人归属的待判断行只抽取完整的 `「…」`、`『…』` 发话；不得按引号内部的句末标点拆行。叙述句仅用于上下文，不得生成说话人判断行。
    - 翻译比较与说话人推断必须使用独立的工作台数据模型、结果和备注空间。
    - `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；未来共享 AI 传输能力放在 `src/ai/`，不要反向污染领域模型。
+   - 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。
+   - 提示词分两层并在组装时合并注入：通用侧（`proofread-contract.js` 的 `sharedInstructions`、模式契约、schema，标 `【通用校对规则】`）只放与作品无关的任务契约；特化侧是 `ai/profiles/` 下的可替换档案（每项 `{ id, name, summary, sections }`，标 `【成品校对规范：<name>】`），只放工作阶段规范（什么不算缺陷、什么才算缺陷、证据边界）。合并顺序固定为通用侧 → 当前模式 → 特化侧 → noteref 硬性约束 → 术语表 → JSON 输出约定。
+   - 特化档案通过 `profiles/index.js` 注册（`listProfiles`/`resolveProfile`，未注册的 `profileId` 一律回落 `DEFAULT_PROFILE_ID`），可选值随配置 `profileId` 下发，界面「校对设置 → 特化规范」按注册表渲染并嵌每个档案的默认提示词。仓库内档案为 `profiles/novel.js`（与作品无关的通用规范）与 `profiles/demo.js`（作品专有档案，兼公开示范）；用户自己的档案走被忽略的 `profiles/local/*.js` 或环境变量 `TRANSCOMPARATOR_PROFILE_FILES` 指向的仓库外文件，加载失败只告警并跳过，不得让坏档案拖垮服务。
+   - 作品相关的具体内容集中在 `profiles/demo.js` 一处（示范档案）与 `src/ingest/text-utils.js` 的正文边界清单；文档、测试与其它模块不必重复展开作品名，测试夹具优先使用中性人名（山田太郎/佐藤花子…）。
+   - 特化侧不只放提示词，也可以声明**辅助判断数据**：档案的 `termTables`（译名对照表路径，本机路径只写在被忽略的 `profiles/local/` 或环境变量 `TRANSCOMPARATOR_TERM_TABLES`）。对照表不进提示词，由 `ai/term-table.js` 在确定性预处理阶段查表：命中行直接出结果、不调用模型（`applyTermTable`，AI 校对与预筛选共用）。
+   - 对照表判定的保守规则（改动前先看 `scripts/term-table.test.js`）：只有 3 字及以上的基文别名可以判“译名不一致”（strong）；2 字词、读音别名、分段别名只能确认一致，不能指控译名错误；译文已使用译名（含只写姓或名的分段写法、括号与字形差异）判一致；命中其他译法/英文写法/字形差异时只给“替换术语”的最小修改；定位不到可替换旧译名时不编造 `revisedText`，转人工确认；一行若没有任何确认一致或强证据不一致，就不由对照表处理，继续走 AI。匹配前必须剥掉内联标记与 `<rt>` 注音内容，片假名别名不得落在更长片假名词内部。
+   - 对照表结果用备注标记 `[对照表]`（与 `[AI校对]`/`[规则预筛]`/`[相似度预筛]` 同级，客户端 `automatedNoteMarkers`、`prefilterResultKind`、徽标与统计都要同步），`status` 用 `term-prefilter`（一致、done）或 `suggestion`（需确认）；计数走 `status.termPrefiltered`/`termConflicts`/`termTables`，不要另开数据通道。
+   - 界面上要能看到对照表是否生效：`clientStatus()` 返回 `termTableStatus`（`{files, sheets, entries, errors}`，按 `<profileId>` 解析档案 + 环境变量声明，走 `loadTermTablesCached` 的 mtime 缓存，不写日志）；状态接口接受 `profileId` 查询参数，客户端「校对设置 → 特化规范」下方的 `#aiTermTableHint` 按 `entries`/`errors` 显示“未声明 / N 条术语 / 加载失败”，并追加构建期预筛数字。路径必须先经 `normalizeTermTablePaths` 归一（相对路径、重复分隔符、大小写差异只算一张表），否则同一张表会被重复加载。
+   - 对照表层的**分工**（`term-layer.js`）与说话习惯层不同，原因是它产出的是**行级结果**而不是提示词上下文：结果（备注文本、`status`、跳过模型的依据）必须由运行期生成——它要带当次任务的标签、目标列与「已人工确认」过滤，构建期不能替用户写备注空间。但「哪些行会被命中、是一致还是冲突」只依赖「整卷行数据 + 对照表」，与模型无关，因此**构建期算一次并落盘**到 `translation-compare.json` 顶层 `termPrefilter`，同时嵌进 `pageMeta.termPrefilter`：页面在跑任务之前就能标出「术语需改」的行（以及低噪声的「术语一致」）并给出预筛数字，离线脚本与 AI 拿同一份结论对照。块同样写在行数据之外，不得给行加字段。
+   - 落盘块结构：`{ version, generatedAt, byProfile: { <profileId>: { files, fingerprint, entries, defaultVariant, variants: { "<mode>:<targetKey>": { proofreadMode, targetKey, hits, consistent[], conflicts[], chapters[{chapter,hits}], summary } }, summary } }, errors[] }`。判定与「校对模式 + 目标列」绑定，构建期按项目模式把该模式可能用到的变体都算好（双语只有 `bilingual:cn`，三语是 `trilingual:cn` 与 `trilingual:tw`），运行期无论用户选哪一列都能命中同一份结论；只存行号，不存行文本、不存备注（备注由运行期按当前标签生成）。
+   - 运行期不重复「复用判定」而是做**交叉校验**：`applyTermTable` 仍逐行判定（实测整卷 3119 行约 190ms，且结果必须带当次标签），算完用 `termLayerFor` 取构建期结论比对命中行集合，一致就 `pushLog`「与构建期预筛一致」，指纹过期就提示对照表被改过、需重新构建工作台，集合不一致则如实报告分叉（页面徽标可能过期）。判定函数是唯一的，两条路径不一致只可能是表改了或页面过期。
+   - 「译名一致」的行不需要任何操作却常命中多条术语，备注按**分组摘要**写（`formatTermHitGroups`：按证据类型分组列出 `原文→译名（类型）`），冲突行保留逐条 `describeTermHit` 说明（要指出该改哪一处）。分组只压缩措辞、不丢信息，改前先看 `scripts/term-table.test.js` 的备注断言。
+   - 指纹口径由 `src/core/table-fingerprint.js` 统一提供（`<版本>|文件名:mtime:size#条目数`，多张表以 `|` 连接），说话习惯层与对照表层共用，避免两处口径漂移；文件名只取 basename，完整本机路径不进产物。
+   - 说话习惯层的**分工**（`speech-habit-layer.js`）：章级判定（本章命中哪些角色、哪些行疑似特色流失）与模型无关，因此**构建期算一次并落盘**到 `translation-compare.json` 的顶层 `speechHabits` 块，同时嵌进 `pageMeta.speechHabits` 供页面显示概览与「特色流失」行标记；运行期（AI 校对）优先复用该块，指纹过期才回退现算。块必须写在**行数据之外**（顶层 + 按章引用），不得给行加字段：行已带显式 `signature`，但保持"只加顶层结构"这条纪律可以避免任何签名/写回定位风险。
+   - 落盘块结构：`{ version, generatedAt, byProfile: { <profileId>: { files, fingerprint, entries, volume, scope, characterRecords[], chapters[{chapter,rowCount,indexRange,characters[{ref,character,activated,detectedBy,strongRows,weakRows}],misses[{index,items}]}], volumeCharacters[], missIndexes[], summary } } }`。角色条目按「条目签名」索引（同一角色可能有多条习惯，如「力」与「ダゾ」），章级只存 `ref` 下标；运行期用 `characterDescriptor(item, records)` 还原出与现算完全一致的 `versions{x,net,tw}` 与 `memo`，再交给 `chapterHabitBlock`/`volumeHabitBlock` 拼块——**两条路径产出的提示词必须逐字相同**（`scripts/speech-habit-layer.test.js` 有等价性断言，改任一侧都要先跑它）。
+   - 指纹由 `speechTablesFingerprint(files)` 生成（`LAYER_VERSION|文件名:mtime:size#条目数`，多张表以 `|` 连接）：不一致时运行期重算并 `pushLog` 提示重新构建工作台；脚本 `scripts/speech-habit.js` 默认消费落盘结果（与页面/AI 同源），`--live` 才现算。
+   - 行级只有两种情况要处理：本行原文命中说话习惯特征时，注入 `【说话人判断（本章）】` 段并要求模型先判断说话人（结果填 `speaker` 字段、写进备注的「说话人：」行），确认是候选角色才按他的习惯判断；原文有口癖而译文没体现时，判为说话特色流失并给最小补回。补回检测只在类型可靠（`DETECTABLE_TYPES`）且位置正确（句末语气词/谓语形式必须落在句末，其他类型前面不能是假名）时提示，单字口癖与中译同形的条目不参与。
+   - 说话习惯段与说话人判断段都是按章/按行动态生成的：`stripSpeechHabitBlock` 会反复剥掉自定义提示词里的旧段（`【说话习惯（`、`【说话人判断（` 前缀），与档案正文里提到的「【说话习惯】」不冲突；任何路径都不得出现两段习惯规则或两段说话人判断。
+   - 对齐产物可用 index-X 缓存的日文原文校验（`verify-source.js`，`scripts/speech-habit.js --verify-source`）：卷目录与正文文件、章节结构标记（中日章名是翻译关系，只对比「序章/行间N/第N章/终章」这类标记，`chapterMarkerKey`）、角色口癖在原文与快照 `jp` 列的出现次数（`countInSource` 只在简繁写法不同时才各数一次，避免重复计数）。正文 XHTML 可能在包根、`item/` 或 `item/xhtml/` 下，三种布局都要支持；目录缺省按同级 `../index-X` 探测，可用 `INDEX_X_DIR` 覆盖。
+   - 表格读取统一走 `src/core/spreadsheet.js`（xlsx/csv/tsv/json，纯 Node、无外部命令）：xlsx 必须按单元格引用 `r="D2"` 定位列，xlsx 会省略空单元格，按出现顺序取值会让稀疏行错位。术语表、说话习惯表与术语表加载都复用同一读取器。
+   - 组装（`buildProofreadSystemPrompt`）必须先剥离自定义提示词里已有的 JSON 约定行（`stripJsonContract`，按行剥离以免删掉用户写在后面的补充规则）、noteref 硬性约束行（`stripNoterefConstraint`）与上一次的特化档案块（`stripProfileBlock`，从 `【成品校对规范：` 到下一个顶层小节或硬性约束为止），再统一追加一次，任何路径都不得出现两份 JSON 约定、两份硬性约束或两套档案规范。
+   - AI 校对的重试与终局：模型返回 `needsContext`/`unclear` 时按轮补充相邻行；对齐片段行（原文或译文以续接标点 `、，,：；` 结尾，或结尾本身是接续词）直接终局为待人工确认，不再扩展上下文——行边界属于对齐问题，补上下文解决不了它，也不得据此判定翻译缺陷。
 
 9. `src/workbenches/speaker-attribution/`
    - `speaker-selection.js` 支持单语 `--source` 和双语 `--source` + `--parallel` 输入。
@@ -182,7 +204,7 @@ Pandoc 会忠实输出完整 linear text；过滤职责属于共享 ingest 层�
 - 下载的 model caches
 - 本机安装脚本或临时环境文件
 
-源文件路径应集中维护在 `src/ingest/text-utils.js`。公开发布前不要写入个人目录、真实作品名或其他隐私信息。
+源文件路径应集中维护在 `src/ingest/text-utils.js`。公开发布前不要写入个人目录、绝对路径或其他隐私信息；作品相关的具体内容允许出现在示范档案 `profiles/demo.js` 与 `text-utils.js` 的正文边界清单里，但不要在其他位置重复展开。
 
 ## 修改纪律
 
@@ -203,7 +225,7 @@ Pandoc 会忠实输出完整 linear text；过滤职责属于共享 ingest 层�
 - 日文原文：日文侧对齐工作源目录。
 - 台版原文：台版出版物的单本解压目录。
 
-这些路径仅供本机测试输入定位。不要把源文件、绝对路径、样本目录名或生成物复制或写入仓库，也不要写进代码默认配置。公开发布前应确认 README、AGENTS、日志和提交内容没有泄露本机路径或作品信息。
+这些路径仅供本机测试输入定位。不要把源文件、绝对路径、样本目录名或生成物复制或写入仓库，也不要写进代码默认配置。公开发布前应确认 README、AGENTS 和日志没有泄露本机路径；作品相关的具体内容只保留在示范档案与正文边界清单里，不散落到其它文档。
 
 ## 验证清单
 
