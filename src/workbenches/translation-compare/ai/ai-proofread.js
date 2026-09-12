@@ -14,6 +14,7 @@ const {
   groupRowsByChapter,
   habitCandidatesForRow,
   speakerCheckBlock,
+  speechHabitBlockForRow,
   loadSpeechTables,
   normalizeSpeechTablePaths,
   speechTableSummary,
@@ -38,10 +39,13 @@ const {
   listProfiles,
   proofreadPromptFor,
   buildProofreadSystemPrompt,
+  profileEntities,
   profileLineStats,
   resolveProfile,
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
+// 实体闸门：只对某个角色/专有词成立的规则，按「本行有没有出现那个名字」注入。
+const { detectRowEntities, entityGateReport } = require("./name-entities");
 const { normalizeTargetPunctuation, restoreTerminalPunctuation } = require("./punctuation");
 const { formatFixDetail, formatFixNote, guardRowFormat } = require("./format-guard");
 const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
@@ -1482,6 +1486,7 @@ function buildSpeechHabitContext(config, rows, project, snapshotLayer = null) {
 function speechHabitFor(row, context) {
   if (!context) return null;
   const chapter = String(row.chapter || "").trim() || "（未标注章节）";
+  // 快照上下文把整章（或整卷）挂在同一个章名上；卷口径的行也要能按章名回退取到。
   const entry = context.blocks.get(chapter) || context.blocks.get(String(row.chapter || ""));
   if (!entry) return null;
   // 本行原文出现了说话习惯特征时，先让模型判断说话人是谁，再据此处理（防误报 + 补回）。
@@ -1489,8 +1494,18 @@ function speechHabitFor(row, context) {
   const speakerCheck = candidates.length
     ? { chapter, candidates, block: speakerCheckBlock({ chapter, candidates }) }
     : null;
-  if (!entry.block && !speakerCheck) return null;
-  return { chapter, block: entry.block, characters: entry.characters, speakerCheck };
+  // 行级收窄：章级块里的角色收窄到「本行提到他」或「本行原文出现了他的口癖」的那些。
+  // 两条路径（落盘块还原 / 现算）都经同一函数，因此提示词逐字一致；
+  // 收窄后没有任何角色时整段不注入（而不是留一段空标题）。
+  const block = speechHabitBlockForRow({
+    chapter,
+    row,
+    characters: entry.characters_raw || [],
+    volume: entry.volume || context.volume || null,
+  });
+  if (!block && !speakerCheck) return null;
+  // `chapterBlock` 只用于审计（章级口径 vs 行级收窄省了多少），不进请求：`block` 才是要注入的那一份。
+  return { chapter, block, chapterBlock: entry.block || "", characters: entry.characters, speakerCheck };
 }
 
 // 对齐片段行：行边界由上游对齐切出（以续接标点结尾，或结尾本身就是一个接续词）。
@@ -1765,25 +1780,61 @@ function diffSummary(fromText, toText, labels) {
 /**
  * 按行裁剪的审计计数（每次任务重置；只记数字与特征分布，不落盘、不进产物）。
  * 目的是让人能看到“这一批请求到底省掉了什么”，而不是只能相信裁剪逻辑。
+ * `entitySkipped` 是实体闸门的反向计数：本行没出现那个角色/专有词、因而被省掉的专属条目条数
+ * （少了它，闸门静默失效时没人看得出来）。
  */
-const promptTrim = { rows: 0, omittedLines: 0, omittedChars: 0, featureHits: new Map() };
+const promptTrim = {
+  rows: 0,
+  omittedLines: 0,
+  omittedChars: 0,
+  entitySkipped: 0,
+  habitRows: 0,
+  habitChars: 0,
+  habitDroppedRows: 0,
+  featureHits: new Map(),
+  entityHits: new Map(),
+};
 
 function resetPromptTrim() {
   promptTrim.rows = 0;
   promptTrim.omittedLines = 0;
   promptTrim.omittedChars = 0;
+  promptTrim.entitySkipped = 0;
+  promptTrim.habitRows = 0;
+  promptTrim.habitChars = 0;
+  promptTrim.habitDroppedRows = 0;
   promptTrim.featureHits = new Map();
+  promptTrim.entityHits = new Map();
 }
 
-function recordPromptTrim(config, rowFeatures, fullPrompt = false) {
+/**
+ * 说话习惯段的按行收窄计数（第 4 层的裁剪，与特化侧的条目裁剪分开记）：
+ * 章级口径会把整章命中的角色规则发给该章每一行，行级收窄后只发给「提到该角色」或
+ * 「原文出现了他的口癖」的行。这里记的是收窄前后实际注入的块大小与被整段省掉的行数，
+ * 用来回答「这一段到底省了多少」——没有它，收窄失效时没人看得出来。
+ */
+function recordSpeechHabitTrim(chapterBlock = "", rowBlock = "") {
+  const chapter = String(chapterBlock || "").length;
+  const row = String(rowBlock || "").length;
+  promptTrim.habitRows += 1;
+  promptTrim.habitChars += row;
+  if (chapter > 0 && row === 0) promptTrim.habitDroppedRows += 1;
+}
+
+function recordPromptTrim(config, rowFeatures, rowEntities, fullPrompt = false) {
   promptTrim.rows += 1;
   for (const id of rowFeatures) {
     promptTrim.featureHits.set(id, (promptTrim.featureHits.get(id) || 0) + 1);
   }
   if (fullPrompt) return;
-  const stats = profileLineStats(resolveProfile(config.profileId), rowFeatures);
+  const profile = resolveProfile(config.profileId);
+  const stats = profileLineStats(profile, { features: rowFeatures, entities: rowEntities });
   promptTrim.omittedLines += stats.omitted;
   promptTrim.omittedChars += stats.omittedChars;
+  for (const id of entityGateReport(profile, rowEntities).hit) {
+    promptTrim.entityHits.set(id, (promptTrim.entityHits.get(id) || 0) + 1);
+  }
+  promptTrim.entitySkipped += stats.entitySkipped;
 }
 
 function promptTrimSummary() {
@@ -1794,7 +1845,18 @@ function promptTrimSummary() {
     .slice(0, 6)
     .map(([id, count]) => `${id} ${count} 行`)
     .join("、");
-  return `提示词按行裁剪：${promptTrim.rows} 行共省略 ${promptTrim.omittedLines} 条只在特定版式/文字现象下才需要的特化规范（平均每行省约 ${average} 字符）；命中特征：${top || "（无）"}。`;
+  const entities = [...promptTrim.entityHits.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, count]) => `${id} ${count} 行`)
+    .join("、");
+  const entityPart = promptTrim.entitySkipped
+    ? `；其中角色/专有词专属条目因本行未出现该名字而省掉 ${promptTrim.entitySkipped} 次`
+      + `（出现过的：${entities || "（无）"}）`
+    : "";
+  const habitPart = promptTrim.habitDroppedRows
+    ? `；说话习惯段按行收窄：${promptTrim.habitDroppedRows} 行因本行没提到本章任何角色而整段未注入（收窄后共注入 ${promptTrim.habitChars} 字符）`
+    : "";
+  return `提示词按行裁剪：${promptTrim.rows} 行共省略 ${promptTrim.omittedLines} 条只在特定版式/文字现象或特定角色下才需要的特化规范（平均每行省约 ${average} 字符）${entityPart}${habitPart}；命中特征：${top || "（无）"}。`;
 }
 
 /**
@@ -1925,20 +1987,30 @@ function buildMessages(payload, config = {}) {
   const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : "";
   // 按行裁剪：从本行原文与目标列文本探测特征（注音、加粗、译注标记、分页、省略号、引号、
   // 连接词、数字单位……），特化档案里声明了 features 的条目只在这时注入。探测与纪律见 row-features.js。
-  const rowFeatures = detectRowFeatures({
-    source: payload.row.jp || payload.row.source || "",
-    target: payload.targetText || "",
+  const rowSource = payload.row.jp || payload.row.source || "";
+  const rowTarget = payload.targetText || "";
+  const rowFeatures = detectRowFeatures({ source: rowSource, target: rowTarget });
+  // 实体闸门：档案里声明了 characters 的条目（只对某个角色/专有词成立的规则）只在本行真的出现
+  // 那个名字时注入。判定与纪律见 name-entities.js；声明名单由档案给出，不在这一层猜作品设定。
+  const rowEntities = detectRowEntities({
+    source: rowSource,
+    target: rowTarget,
+    entities: profileEntities(resolveProfile(profileId)),
   });
-  // 排查用：TRANSCOMPARATOR_FULL_PROMPT=1 时不做按行裁剪，等价于裁剪前的行为。
+  // 排查用：TRANSCOMPARATOR_FULL_PROMPT=1 时不做按行裁剪（特征与实体闸门一起退回全量）。
   const fullPrompt = process.env.TRANSCOMPARATOR_FULL_PROMPT === "1";
-  recordPromptTrim(config, rowFeatures, fullPrompt);
+  recordPromptTrim(config, rowFeatures, rowEntities, fullPrompt);
+  // 第 4 层的说话习惯段：`payload.speechHabit.block` 已经是**按行收窄**过的（见 speechHabitFor），
+  // 这里记一次「章级块 vs 本行块」的对比供审计（`TRANSCOMPARATOR_FULL_PROMPT=1` 时两者相同，数字自然显示为“没有省”）。
+  const habitBlock = [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n");
+  recordSpeechHabitTrim(payload.speechHabit?.chapterBlock || payload.speechHabit?.block || "", habitBlock);
   return [
     { role: "system", content: buildProofreadSystemPrompt({
       mode: proofreadMode,
       profileId,
       customSystem: config.systemPrompt,
       glossary,
-      speechHabitBlock: [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n"),
+      speechHabitBlock: habitBlock,
       termBlock: payload.termGuidance?.block || "",
       // 低分归因段：只在因极低分转入复核的那些轮次注入（段内自带归因口径与“保持原文行序”的修法）。
       lowScoreBlock: payload.lowScore
@@ -1950,6 +2022,9 @@ function buildMessages(payload, config = {}) {
         : "",
       webLookupBlock: webLookupBlock(payload.webLookup || {}),
       rowFeatures,
+      rowEntities,
+      sourceText: rowSource,
+      targetText: rowTarget,
       fullPrompt,
     }) },
     { role: "user", content: JSON.stringify(user, null, 2) },

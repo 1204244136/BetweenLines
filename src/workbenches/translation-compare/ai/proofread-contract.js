@@ -2,6 +2,8 @@ const { JSON_ONLY_INSTRUCTION, promptSections, withJsonOnly } = require("../../.
 const { DEFAULT_PROFILE_ID, listProfiles, resolveProfile } = require("./profiles");
 // 按行裁剪的依据与特征注册表都在 row-features；这里只用它做“该条目是否注入”的判断。
 const { FEATURE_IDS, unknownFeatureIds } = require("./row-features");
+// 实体闸门（只对某个角色/专有词成立的规则按行注入）：声明名单由档案给出，判定在 name-entities。
+const { detectRowEntities, entityGateReport, profileEntities } = require("./name-entities");
 // 段首标记的唯一定义在注入层（term-prefilter）：这里只借用前缀做剥离，不复制字面量。
 const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
 // 线上查证段的段首标记同样只在注入层定义一次。
@@ -11,34 +13,41 @@ const { LOW_SCORE_PREFIX } = require("./low-score");
 
 // 每种模式一段说明，只有当前模式需要担心的字段语义才出现在该模式的契约里。
 // 双语没有 counterpart 列：对外只问“保持还是替换”，不再问“谁更好”，避免模型臆想“另一份译文”。
+//
+// **形态纪律：这里只声明「键名 + 取值」，字段怎么判断一律写在系统提示词里（通用侧/模式层/动态段）。**
+// 理由有两条：① 用户载荷里的这个对象是**每一行**都要重发一份的，而它的旧版把档位定义、片段口径、
+// 说话人判断与低分归因口径都抄了一遍（单行 1159 字符），等于把系统提示词里的规则再买一次单；
+// ② 同一件事写成两份必然漂移（改了一处另一处没过期）。所以：
+// 档位与分数口径 → 通用侧；decision/better 的语义 → 模式层；speaker → 说话人判断段；
+// cause 取值 → 低分归因段；revisedText 的结构、语言与标记边界 → 通用侧与固定尾巴。
 const modeSchemas = Object.freeze({
   bilingual: Object.freeze({
-    semanticSame: "boolean（B 是否完整、准确地传达 A 的核心语义）",
-    needsEdit: "boolean（B 是否需要修改；与 semanticSame 分开判断）",
-    needsContext: "boolean（仅当判断确实依赖当前行之外的证据时为 true）",
-    decision: "keep | replace | unclear（keep=保持 B 现状，无需修改；replace=用 revisedText 整体替换 B 当前行；unclear=依据不足，转人工确认，不要用它表达“不确定要不要改”）",
-    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算）",
-    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算）",
-    grade: "excellent | good | fair | poor（档位定义见 system 提示词的通用规则：poor=致命缺陷、fair=严重缺陷、good=轻微缺陷、excellent=无缺陷；needsEdit=false 时为 excellent）",
-    severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
-    summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
-    speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
-    cause: "order-shift-prev | order-shift-next | order-shift | boundary | context | meaning | content | term | wording | source-style | none | unclear（仅当本次提供了【低分归因与修复（本行）】段落时填写：本行极低分的主要原因，取值的含义与对应修法都写在该段落里；未提供该段落时留空）",
-    revisedText: "需要修改时输出目标列当前行可直接整体替换的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空",
+    semanticSame: "boolean",
+    needsEdit: "boolean",
+    needsContext: "boolean",
+    decision: "keep | replace | unclear",
+    score: "number|null（0~100 整数，score = 100 - penalty；拿不准填 null，系统按 grade 折算）",
+    penalty: "number|null（0~100 整数；拿不准填 null，系统按 grade 折算）",
+    grade: "excellent | good | fair | poor",
+    severity: "none | minor | major | critical（grade 的兼容映射）",
+    summary: "string（一到两句：结论、扣分项与最关键证据）",
+    speaker: "string（仅在本次给出【说话人判断（…）】段落时需要：该角色名；确认不了填空字符串）",
+    cause: "string（仅在本次给出【低分归因与修复（本行）】段落时需要：取值见该段落；未给出时留空）",
+    revisedText: "string（需要修改时给出可整体替换目标列当前行的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空）",
   }),
   trilingual: Object.freeze({
-    semanticSame: "boolean（目标列与另一非原文列的核心语义是否相同）",
-    needsEdit: "boolean（目标列结合 A 判断后是否需要修改；与 semanticSame 分开判断）",
-    needsContext: "boolean（仅当判断确实依赖当前行之外的证据时为 true）",
-    better: "target | counterpart | neither | unclear（target=保持目标列；counterpart=另一非原文更好；neither=两份都不如按 A 修订；unclear=无法判断，转人工确认）",
-    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算）",
-    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算）",
-    grade: "excellent | good | fair | poor（档位定义见 system 提示词的通用规则：poor=致命缺陷、fair=严重缺陷、good=轻微缺陷、excellent=无缺陷；needsEdit=false 时为 excellent）",
-    severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
-    summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
-    speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
-    cause: "order-shift-prev | order-shift-next | order-shift | boundary | context | meaning | content | term | wording | source-style | none | unclear（仅当本次提供了【低分归因与修复（本行）】段落时填写：目标列极低分的主要原因，取值的含义与对应修法都写在该段落里；未提供该段落时留空）",
-    revisedText: "需要修改时输出目标列当前行可直接整体替换的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空",
+    semanticSame: "boolean",
+    needsEdit: "boolean",
+    needsContext: "boolean",
+    better: "target | counterpart | neither | unclear",
+    score: "number|null（0~100 整数，score = 100 - penalty；拿不准填 null，系统按 grade 折算）",
+    penalty: "number|null（0~100 整数；拿不准填 null，系统按 grade 折算）",
+    grade: "excellent | good | fair | poor",
+    severity: "none | minor | major | critical（grade 的兼容映射）",
+    summary: "string（一到两句：结论、扣分项与最关键证据）",
+    speaker: "string（仅在本次给出【说话人判断（…）】段落时需要：该角色名；确认不了填空字符串）",
+    cause: "string（仅在本次给出【低分归因与修复（本行）】段落时需要：取值见该段落；未给出时留空）",
+    revisedText: "string（需要修改时给出可整体替换目标列当前行的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空）",
   }),
 });
 
@@ -60,7 +69,9 @@ const modeMarkers = Object.freeze({
 const sharedInstructions = [
   "你是严谨的翻译校对助手，用于辅助人工校对，不替代人工最终判断。按固定顺序在内部完成判断，不要输出推理过程：先确认原文边界和目标列，再核对事实与语义完整性，最后才判断语言质量；不要把表达偏好当成错误。",
   "证据优先级：原文中的人物、数字、否定、时态、因果和动作关系 > 目标列是否完整准确 > 术语和语体一致性 > 局部措辞偏好；无法由输入证明的内容不要猜测。",
-  "semanticSame 与 needsEdit 必须分别判断；语义相同但表达生硬、翻译腔、遗漏语气或存在其他明确问题时，可以 semanticSame=true、needsEdit=true。",
+  // 通用侧只写“怎么判断”，字段取值（键名 + 枚举）在 modeSchemas 里声明一次：
+  // 用户载荷里那份 outputSchema 每一行都要重发，两边都抄口径等于把同一件事买两次单。
+  "semanticSame = 目标列与原文（双语）或另一非原文列（三语）的核心语义是否相同；needsEdit = 结合原文判断后目标列是否需要改动。两者各自独立：语义相通但表达生硬、翻译腔或存在其他明确问题时，可以 semanticSame=true、needsEdit=true。",
   "除非存在明确的意义、完整性、语法或可用性问题，否则不要建议修改；需要修改时只做能被证据支持的最小改动，不要整段重译。",
   "需要修改时，revisedText 必须是目标列当前行的完整替换文本，保留目标列的语言、字形和文体习惯，不能只描述改法；不得把相邻行内容合并进来，也不得拆分行边界——当前行到哪里结束由对齐决定，不属于语言质量问题。行与行之间的对应关系同样由对齐决定：不得建议交换、重排、合并或拆分相邻行，也不得把相邻行的内容当作本行应有的译文——改写行内语序是正常翻译工序，整行内容与相邻行互换则是译文自身的错位缺陷，只能按本行原文重写本行。",
   // revisedText 的结构口径：一行就是一个成品段落，段数由目标列当前行给定。原文那一侧的分行、空行
@@ -118,7 +129,7 @@ const genericHeader = "【通用校对规则】";
  * |----|------|------|----------|
  * | 1 通用侧 | 与作品、模式无关的任务契约：证据优先级、片段口径、needsContext、档位与字段约定 | 本文件 `sharedInstructions` | 每行 |
  * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
- * | 3 特化档案 | 作品/阶段规范，分两种条目：**常驻条目**（关系、作品专有、说话特色、证据边界）与 **按行条目**（排版层、文本层规范，声明 `features`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`） |
+ * | 3 特化档案 | 作品/阶段规范，分三种条目：**常驻条目**（关系、作品专有、说话特色、证据边界）、**按行条目**（排版层、文本层规范，声明 `features`）与**实体条目**（只对某个角色/专有词成立的规范，声明 `characters`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`）、实体条目只在该行真的出现那个名字时（`name-entities.js`） |
  * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、低分归因段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`low-score.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
  * | 5 固定尾巴 | noteref 硬性约束、术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行（刻意保守：宁可重复也不丢） |
  *
@@ -135,39 +146,76 @@ const genericHeader = "【通用校对规则】";
  *   任何路径都不得出现两段同类动态段——**新增动态段时必须同时登记到那张前缀表**（段首标记由注入层
  *   自己定义并导出，这里只借用，不复制字面量）。
  * - 第 4 层内部按“由内到外补充资料”排列：术语命中 → 说话习惯 → 低分归因（相邻行）→ 线上查证（外部资料最后注入）。
- * - 裁剪只发生在第 3 层的按行条目与第 4 层：第 1、2、5 层永远全量，避免“省了 token 丢了契约”。
+ * - 裁剪只发生在第 3 层的条件条目（按行条目与实体条目）与第 4 层：第 1、2、5 层永远全量，避免“省了 token 丢了契约”。
  * - 页面里预填的默认提示词始终是**全量**（第 3 层不裁剪），人工读得到完整规范；
- *   真正发给模型的请求才按 `rowFeatures` 裁剪。
+ *   真正发给模型的请求才按 `rowFeatures`（版式/文字现象）与 `rowEntities`（本行出现了哪些角色/专有词）裁剪。
+ * - 用户载荷里的 `modeSchemas`（`outputSchema`）**每一行都要重发一份**，所以它只声明“键名 + 取值”；
+ *   字段怎么判断一律写在系统提示词里（通用侧 `sharedInstructions`、模式层、动态段），不要在那边抄第二遍。
  */
 
-/** 档案条目支持两种形态：字符串＝常驻；`{ text, features }`＝只在该行命中这些特征时注入。 */
+/** 档案条目支持三种形态：字符串＝常驻；`{ text, features }`＝按行命中版式/文字现象；
+ *  `{ text, characters }`＝实体条目，只在该行真的出现该角色/专有词时注入。 */
 function lineText(line) {
   if (typeof line === "string") return line;
   return String(line?.text || "");
 }
 
+/** 条目声明的实体名（`characters`）：为空表示不是实体条目。 */
+function lineEntities(line) {
+  if (typeof line === "string") return [];
+  return Array.isArray(line?.characters) ? line.characters : [];
+}
+
+/** 条目声明的已注册特征（认不出的特征 id 由调用方决定如何处置）。 */
+function lineFeatureIds(line) {
+  if (typeof line === "string") return [];
+  const raw = Array.isArray(line?.features) ? line.features : [];
+  return raw.map((id) => String(id || "").trim()).filter(Boolean);
+}
+
+/** 实体条目的 id（`御坂妹妹|御坂` 的 id 是 `御坂妹妹`）。 */
+function declaredEntityId(raw) {
+  const [name] = String(raw || "").split("|").map((item) => item.trim());
+  return name || "";
+}
+
 /**
  * 条目是否该注入。
- * - `features` 为空（全量模式：页面默认提示词、审计、脚本）→ 全部注入；
- * - 没声明 `features` 或声明为空数组 → 常驻；
- * - 声明了未注册的特征 id（笔误）→ 按常驻处理，宁可多注入（见 row-features 的纪律）。
+ * `scope` 形如 `{ features, entities, declaredEntities, textMissing }`（由 `bindScope` 归一化）。
+ * - `scope` 为 null（全量模式：页面默认提示词、审计、脚本）→ 全部注入；
+ * - 没声明 `features`/`characters` 或声明为空 → 常驻；
+ * - 声明了未注册的特征 id（笔误）→ 按常驻处理，宁可多注入（见 row-features 的纪律）；
+ * - 两条声明都存在时是**与**关系：版式现象与角色都得对上；
+ * - 实体 id 不在档案声明名单里（认不出）→ 按命中处理，宁可多注入；
+ * - `textMissing`（两侧文本都没有）→ 按命中处理：此时连特征也探测不出来，条目不该因此消失
+ *   （与 `detectRowFeatures` 的兜底同口径）。
  */
-function lineIncluded(line, features) {
-  if (!features) return true;
+function lineIncluded(line, scope = null) {
+  if (!scope) return true;
   if (typeof line === "string") return true;
-  const need = Array.isArray(line?.features) ? line.features.filter((id) => FEATURE_IDS.includes(id)) : [];
-  if (!need.length) return true;
-  return need.some((id) => features.has(id));
+  const need = lineFeatureIds(line).filter((id) => FEATURE_IDS.includes(id));
+  if (need.length && !scope.textMissing && !need.some((id) => scope.features.has(id))) return false;
+  const entities = lineEntities(line);
+  if (entities.length && !scope.textMissing) {
+    const hit = entities.some((raw) => {
+      const id = declaredEntityId(raw);
+      if (!id || !scope.declaredEntities.has(id)) return true;
+      return scope.entities.has(id);
+    });
+    if (!hit) return false;
+  }
+  return true;
 }
 
 // 特化侧正文：只由 profiles/ 里的可替换档案生成，通用侧不认识它的内容。
-// features = null 时输出全量（页面/审计）；给了特征集合时按行裁剪，整节被裁空则连标题一起省掉。
-function profileSystemFor(profile, features = null) {
+// scope = null 时输出全量（页面/审计）；给了特征/实体集合时按行裁剪，整节被裁空则连标题一起省掉。
+function profileSystemFor(profile, scope = null) {
   if (!profile) return "";
+  const bound = bindScope(scope, profile);
   const sections = profile.sections
     .map((section) => {
       const lines = (section.lines || [])
-        .filter((line) => lineIncluded(line, features))
+        .filter((line) => lineIncluded(line, bound))
         .map(lineText)
         .filter(Boolean);
       return lines.length ? promptSections(`— ${section.title}`, lines) : "";
@@ -179,26 +227,58 @@ function profileSystemFor(profile, features = null) {
   );
 }
 
-/** 按行裁剪的审计数字：条目总数、注入/省略条数与被省掉的字符数。 */
-function profileLineStats(profile, features = null) {
+/**
+ * 裁剪依据归一化。两种入参形态都接受：
+ * - `Set`（旧口径）= 只给行特征，等价于 `{ features }`；
+ * - `{ features?, entities?, sourceText?, targetText? }`（实体闸门加入后的口径）。
+ * `features`/`entities` 都是 null 时按全量处理——没给依据就等于判断不出这一行需要什么，宁可全注入。
+ * profile 绑上去是为了让实体判定能取到档案声明的名单（名字写错/认不出的声明按命中处理）。
+ */
+function bindScope(scope, profile) {
+  if (!scope) return null;
+  const raw = scope instanceof Set ? { features: scope } : scope;
+  if (raw.features == null && raw.entities == null) return null;
+  const src = String(raw.sourceText ?? "").trim();
+  const dst = String(raw.targetText ?? "").trim();
+  return {
+    features: raw.features || new Set(),
+    entities: raw.entities || new Set(),
+    declaredEntities: new Set(profileEntities(profile).map((entity) => entity.id)),
+    // 两侧文本都没有、又没有给出任何判定依据时，不做裁剪：特征与实体都判断不了，条目不该因此消失。
+    // 反过来，调用方给了 features/entities 就说明它已经判定过了（旧调用点只给 features 也走这一支），
+    // 缺文本不再当借口——否则「只给特征」的老口径会静默变成全量。
+    textMissing: !src && !dst && raw.features == null && raw.entities == null,
+  };
+}
+
+/**
+ * 按行裁剪的审计数字：条目总数、注入/省略条数、被省掉的字符数，以及实体闸门的两类计数
+ * （`entityGated` = 声明了实体的条目总数；`entitySkipped` = 其中因本行没出现该名字而被省掉的条数，
+ * 它是「闸门到底有没有生效」的唯一凭据——少了它，名字写错或别名写窄导致的静默失效没人看得出来）。
+ */
+function profileLineStats(profile, scope = null) {
   let injected = 0;
   let omitted = 0;
   let omittedChars = 0;
   let conditional = 0;
+  let entityGated = 0;
+  let entitySkipped = 0;
+  const bound = bindScope(scope, profile);
   for (const section of profile?.sections || []) {
     for (const line of section.lines || []) {
-      const isConditional = typeof line !== "string"
-        && Array.isArray(line?.features)
-        && line.features.some((id) => FEATURE_IDS.includes(id));
+      const gated = lineEntities(line).length > 0;
+      const isConditional = gated || lineFeatureIds(line).some((id) => FEATURE_IDS.includes(id));
       if (isConditional) conditional += 1;
-      if (lineIncluded(line, features)) injected += 1;
+      if (gated) entityGated += 1;
+      if (lineIncluded(line, bound)) injected += 1;
       else {
         omitted += 1;
         omittedChars += lineText(line).length;
+        if (gated) entitySkipped += 1;
       }
     }
   }
-  return { injected, omitted, omittedChars, conditional };
+  return { injected, omitted, omittedChars, conditional, entityGated, entitySkipped };
 }
 
 function proofreadPromptFor(mode = "bilingual", profileId = DEFAULT_PROFILE_ID) {
@@ -301,12 +381,21 @@ function buildProofreadSystemPrompt({
   lowScoreBlock = "",
   webLookupBlock = "",
   rowFeatures = null,
+  sourceText = "",
+  targetText = "",
+  rowEntities = null,
   fullPrompt = false,
 } = {}) {
   const contract = proofreadPromptFor(mode, profileId);
-  // 按行裁剪只作用于特化档案的按行条目：`fullPrompt`（排查/对比用）与没给 rowFeatures 时输出全量。
+  const profile = resolveProfile(profileId);
+  // 按行裁剪只作用于特化档案的按行条目与实体条目：`fullPrompt`（排查/对比用）时两者都退回全量。
   const features = fullPrompt ? null : rowFeatures;
-  const profileSystem = profileSystemFor(resolveProfile(profileId), features);
+  // 实体命中：给了本行文本就现算（角色名只在真的出现在这一行时才注入那条规则），
+  // 显式传了 rowEntities 就以它为准（便于调用方复用同一次判定）。
+  const entities = fullPrompt
+    ? null
+    : (rowEntities || detectRowEntities({ source: sourceText, target: targetText, entities: profileEntities(profile) }));
+  const profileSystem = profileSystemFor(profile, { features, entities, sourceText, targetText });
   const trimmedBody = promptSections(contract.genericSystem, contract.instructions, profileSystem);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
   // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段、上一行的术语段与
@@ -332,21 +421,33 @@ function buildProofreadSystemPrompt({
 }
 
 /**
- * 本次注入的构成（审计用）：各层字符数 + 特化侧按行裁剪的条目数。
+ * 本次注入的构成（审计用）：各层字符数 + 特化侧按行裁剪的条目数 + 实体闸门命中了哪些声明。
  * 供日志汇总与测试断言，不参与提示词文本本身。
+ * 入参与 `buildProofreadSystemPrompt` 一致：`rowFeatures`/`rowEntities` 为 null 表示全量。
  */
-function promptLayerReport({ mode = "bilingual", profileId = DEFAULT_PROFILE_ID, rowFeatures = null } = {}) {
+function promptLayerReport({
+  mode = "bilingual",
+  profileId = DEFAULT_PROFILE_ID,
+  rowFeatures = null,
+  rowEntities = null,
+  sourceText = "",
+  targetText = "",
+} = {}) {
   const contract = proofreadPromptFor(mode, profileId);
   const profile = resolveProfile(profileId);
+  const entities = rowEntities
+    || detectRowEntities({ source: sourceText, target: targetText, entities: profileEntities(profile) });
+  const scope = { features: rowFeatures, entities, sourceText, targetText };
   return {
     profileId: profile.id,
     layers: {
       generic: contract.genericSystem.length,
       mode: contract.modeSystem.length,
-      profile: profileSystemFor(profile, rowFeatures).length,
+      profile: profileSystemFor(profile, scope).length,
     },
-    profileLines: profileLineStats(profile, rowFeatures),
+    profileLines: profileLineStats(profile, scope),
     unknownFeatures: unknownFeatureIds(profile),
+    entities: entityGateReport(profile, entities),
   };
 }
 
@@ -365,4 +466,7 @@ module.exports = {
   buildProofreadSystemPrompt,
   modeContracts,
   resolveProfile,
+  detectRowEntities,
+  entityGateReport,
+  profileEntities,
 };

@@ -31,9 +31,11 @@ const DEFAULT_PROFILE_ID = "novel";
 const warnedFeatureIds = new Set();
 
 /**
- * 规则条目归一化。条目支持两种形态（写法与选择标准见 `./novel.js` 的文件头说明）：
+ * 规则条目归一化。条目支持三种形态（写法与选择标准见 `./novel.js` 的文件头说明）：
  * - 字符串：常驻条目，每一行都注入；
- * - `{ text, features: [...] }`：按行条目，只在当前行命中这些特征时才注入。
+ * - `{ text, features: [...] }`：按行条目，只在当前行命中这些**版式/文字现象**时才注入；
+ * - `{ text, characters: [...] }`：实体条目，只在当前行真的出现该角色/专有词时才注入
+ *   （判定见 `../name-entities.js`，实体名单只能由档案声明）。
  *
  * 这里**不能**把对象压成字符串（旧版 `String(line)` 会让对象条目变成 "[object Object]"，
  * 按行裁剪随之静默失效）。`features` 声明了未注册的 id 时按常驻处理并告警一次：
@@ -53,7 +55,16 @@ function normalizeLine(line) {
       console.warn(`[ai] 特化档案声明了未注册的行特征「${id}」，该条目按常驻处理（注册表见 ai/row-features.js）。`);
     }
   }
-  return features.length ? Object.freeze({ text, features: Object.freeze(features) }) : text;
+  // 实体声明只做去空与保序；名字与别名的解析统一交给 name-entities（页面审计与运行期判定共用一份）。
+  const characters = (Array.isArray(line.characters) ? line.characters : [line.characters])
+    .map((name) => String(name || "").trim())
+    .filter(Boolean);
+  if (!features.length && !characters.length) return text;
+  return Object.freeze({
+    text,
+    ...(features.length ? { features: Object.freeze(features) } : {}),
+    ...(characters.length ? { characters: Object.freeze(characters) } : {}),
+  });
 }
 
 function externalProfileFiles() {

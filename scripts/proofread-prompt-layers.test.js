@@ -33,10 +33,15 @@ process.env.TRANSCOMPARATOR_PROFILE_FILES = probeFile;
 const {
   buildProofreadSystemPrompt,
   proofreadPromptFor,
+  profileEntities,
   profileLineStats,
   promptLayerReport,
   resolveProfile,
 } = require("../src/workbenches/translation-compare/ai/proofread-contract");
+const {
+  detectRowEntities,
+  matchEntityIds,
+} = require("../src/workbenches/translation-compare/ai/name-entities");
 const {
   FEATURE_IDS,
   FEATURE_RULES,
@@ -334,6 +339,139 @@ test("裁剪可审计：报告给出各层长度与被省略的条目数", () =>
   assert.equal(report.profileLines.omittedChars > 500, true, "被省略的规范应当有可观字符量");
   assert.equal(report.layers.generic > 0 && report.layers.mode > 0 && report.layers.profile > 0, true);
   assert.deepEqual(report.unknownFeatures, []);
+});
+
+// 实体闸门：只对某个角色成立的规则，按「本行有没有出现那个名字」注入。
+// 为什么单列一组断言：这类规则以前只能写成常驻条目，于是整卷每一行都背着它
+// （示范卷实测：「安娜·金斯福德」一行都没出现、「御坂妹妹」也不在多数行里），
+// 既花 token 又把注意力从「这一行到底哪里有问题」上稀释掉。
+const ENTITY_PROBES = [
+  { label: "安娜·金斯福德", marker: "安娜·金斯福德把部分假名改写为片假名" },
+  { label: "御坂妹妹", marker: "御坂妹妹的编号在正文写阿拉伯数字" },
+];
+
+test("实体闸门：角色专属条目只在真的出现那个名字时注入", () => {
+  const silent = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "「……うそ……？」", target: "「……骗人……？」" }),
+    sourceText: "「……うそ……？」",
+    targetText: "「……骗人……？」",
+  });
+  for (const { label, marker } of ENTITY_PROBES) {
+    assert.equal(silent.includes(marker), false, `本行没有「${label}」时不该注入这条专属规范`);
+  }
+  // 常驻条目照旧每行都在（实体闸门只影响声明了 characters 的条目）。
+  assert.equal(silent.includes("系列名写作「某魔法的禁书目录」"), true);
+  assert.equal(silent.includes("咒语与咏唱为了中文语感可以调整句式"), true);
+
+  // 名字出现在任一侧（原文或译文）都算命中：译者按译名写了中文名、原文只写了日文名时都要注入。
+  const named = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "アンナ＝キングスフォードは笑った。", target: "安娜·金斯福德笑了。" }),
+    sourceText: "アンナ＝キングスフォードは笑った。",
+    targetText: "安娜·金斯福德笑了。",
+  });
+  assert.equal(named.includes(ENTITY_PROBES[0].marker), true, "出现该角色时必须注入她的专属规范");
+  assert.equal(named.includes(ENTITY_PROBES[1].marker), false, "别的角色的专属规范不该连带注入");
+  // 目标列侧单独命中（原文是假名写法、译文用了译名）同样算命中：判定看两侧文本。
+  const targetOnly = detectRowEntities({
+    source: "アンナ＝キングスフォード。",
+    target: "安娜·金斯福德。",
+    entities: profileEntities(resolveProfile("demo")),
+  });
+  assert.equal(targetOnly.has("安娜·金斯福德"), true);
+  assert.equal(targetOnly.has("御坂妹妹"), false);
+
+  // 实体与版式现象同时声明时是**与**关系：没有数字的行不注入编号写法这条。
+  const nameOnly = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "御坂妹妹は歩いていた。", target: "御坂妹妹走着。" }),
+    sourceText: "御坂妹妹は歩いていた。",
+    targetText: "御坂妹妹走着。",
+  });
+  assert.equal(nameOnly.includes(ENTITY_PROBES[1].marker), false, "只有名字、没有编号的行不该注入编号写法规范");
+  const nameAndNumber = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "御坂妹妹10032号だ。", target: "是御坂妹妹10032号。" }),
+    sourceText: "御坂妹妹10032号だ。",
+    targetText: "是御坂妹妹10032号。",
+  });
+  assert.equal(nameAndNumber.includes(ENTITY_PROBES[1].marker), true, "名字与编号同时出现时必须注入");
+
+  // 页面预填的默认提示词（全量）仍然包含全部条目：人工读得到完整规范。
+  const full = proofreadPromptFor("bilingual", "demo").system;
+  for (const { marker } of ENTITY_PROBES) assert.equal(full.includes(marker), true);
+});
+
+test("实体闸门：行数据缺失或只给特征时不裁剪（宁可多注入）", () => {
+  // 两侧都没有文本、也没给任何判定依据 → 与全量一致（沿用 row-features 的兜底口径）。
+  const missing = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "", target: "" }),
+    sourceText: "",
+    targetText: "",
+  });
+  assert.equal(missing, proofreadPromptFor("bilingual", "demo").system);
+
+  // 只给特征（旧调用点）时的口径：**判定依据以调用方给的为准**。
+  // 有文本 → 特征的判定照旧生效（命中省略号就注入省略号条目、其余按特征裁剪），实体不再被当成
+  // 「命中」（没有文本就没有实体证据）；没有文本 → 连特征也探测不出来，整份退回全量。
+  const featuresOnly = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "そう……。", target: "这样......。" }),
+    sourceText: "そう……。",
+    targetText: "这样......。",
+  });
+  assert.equal(featuresOnly.includes("省略号被写成连续句号"), true, "特征裁剪必须照旧生效");
+  for (const { marker } of ENTITY_PROBES) assert.equal(featuresOnly.includes(marker), false);
+
+  // TRANSCOMPARATOR_FULL_PROMPT=1 时实体闸门与特征裁剪一起退回全量。
+  process.env.TRANSCOMPARATOR_FULL_PROMPT = "1";
+  try {
+    const full = buildMessages(payload(), { proofreadMode: "bilingual", profileId: "demo" })[0].content;
+    for (const { marker } of ENTITY_PROBES) assert.equal(full.includes(marker), true);
+  } finally {
+    delete process.env.TRANSCOMPARATOR_FULL_PROMPT;
+  }
+});
+
+test("实体闸门的审计：报告命中了哪些声明、省掉了哪些，并在任务结束时汇报", () => {
+  const entities = profileEntities(resolveProfile("demo"));
+  assert.deepEqual(entities.map((entity) => entity.id), ["安娜·金斯福德", "御坂妹妹"]);
+  // 别名口径：全名与去分隔符写法都算命中（「御坂妹妹|御坂」这种显式片段别名由档案自己声明）。
+  assert.equal(matchEntityIds("安娜金斯福德笑了。", entities).has("安娜·金斯福德"), true);
+  assert.equal(matchEntityIds("御坂妹妹10032号", entities).has("御坂妹妹"), true);
+  assert.equal(matchEntityIds("御坂美琴走在路上。", entities).has("御坂妹妹"), false, "片段命中不得放宽到同姓的别的角色");
+
+  const report = promptLayerReport({
+    mode: "bilingual",
+    profileId: "demo",
+    rowFeatures: detectRowFeatures({ source: "アンナ＝キングスフォード。", target: "安娜·金斯福德。" }),
+    sourceText: "アンナ＝キングスフォード。",
+    targetText: "安娜·金斯福德。",
+  });
+  assert.equal(report.profileLines.entityGated, 2, "档案里的实体条目数应能被点出来");
+  assert.deepEqual(report.entities.hit, ["安娜·金斯福德"]);
+  assert.deepEqual(report.entities.skipped, ["御坂妹妹"]);
+
+  const config = { proofreadMode: "bilingual", profileId: "demo" };
+  resetPromptTrim();
+  buildMessages(payload(), config);
+  buildMessages(payload({
+    row: { index: 2, jp: "御坂妹妹10032号だ。", cn: "是御坂妹妹10032号。" },
+    targetText: "是御坂妹妹10032号。",
+  }), config);
+  const summary = promptTrimSummary();
+  assert.match(summary, /2 行/);
+  assert.match(summary, /角色\/专有词专属条目因本行未出现该名字而省掉 \d+ 次/);
+  assert.match(summary, /御坂妹妹 1 行/);
+  resetPromptTrim();
 });
 
 test("任务结束时汇报本次裁剪省了多少条规范", () => {

@@ -35,6 +35,11 @@ const NAME_SEPARATORS = /[·・\s]/;
 // 逐字比对会大量误报。
 const DETECTABLE_TYPES = new Set(["第一人称", "接续词", "句首语气词", "句末语气词", "谓语形式"]);
 const KANA = /[\u3040-\u309f\u30a0-\u30ff\u30fc]/;
+// 汉字（含 CJK 扩展 A 与兼容区）：单字汉字口癖（「力」这类名词后缀）的定位判据要用它。
+const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+// 「词首」的判据：行首、空白、中日文标点与成对标记（「」『』（）《》【】〔〕…—～・等）。
+// 反过来，前一个字是汉字/假名/字母数字时都算“落在更长的词里”，不算该用法的出现。
+const WORD_BOUNDARY = /[\s\u3000、。，．！？：；「」『』（）〈〉《》【】〔〕・…—～＝＠＃＄％＆＊＋／]/;
 const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t";
 
 function firstColumn(record, keys) {
@@ -43,6 +48,15 @@ function firstColumn(record, keys) {
     if (value != null && String(value).trim()) return String(value).trim();
   }
   return "";
+}
+
+/**
+ * 角色条目的两种包装形态统一取值：现算路径给 `{ entry, activated }`，落盘块还原路径给
+ * `{ ...entry 字段..., activated }`（见 `speech-habit-layer.js` 的 `characterDescriptor`）。
+ * 行级判据（候选、行级收窄）两条路径都用同一份实现，所以这一步必须只在这里做一次。
+ */
+function entryOf(item) {
+  return item?.entry || item || {};
 }
 
 function isPlaceholder(value) {
@@ -122,8 +136,40 @@ function normalizeSpeechEntry(record) {
   return entry;
 }
 
+/**
+ * 内化的说话习惯表：一个被 require 的模块，直接给出条目数组（见 `profiles/demo-speech-habits.js`）。
+ * 与表格路径共用同一条消费链——指纹照旧按该文件的 mtime/size 算，因此改条目后运行期会判过期并提示重建。
+ * 形态判定：导出对象带 `entries` 数组即视为内化表；带路径的表格仍走 `readRecords`。
+ */
+function loadSpeechModule(file) {
+  const resolved = path.resolve(file);
+  // 先清掉本模块的缓存再 require：同一进程里表被改过时（运行期按指纹发现过期后重算）能读到新内容。
+  delete require.cache[resolved];
+  const module = require(resolved);
+  if (!module || !Array.isArray(module.entries)) {
+    throw new Error(`内化的说话习惯表必须导出 { entries: [...] }：${file}`);
+  }
+  const entries = module.entries.map((item) => normalizeSpeechEntry({
+    ...item,
+    // 内化表用的是字段名而不是表头，这里转成 readRecords 的记录形态，保证两条路径的归一化只有一份实现。
+    角色: item.character,
+    口癖: item.habit,
+    类型: item.type,
+    x版: item.versions?.x,
+    网翻: item.versions?.net,
+    "台版（转简中）": item.versions?.tw,
+    备注: item.memo,
+    小说首次出现: item.firstWork,
+  })).filter(Boolean);
+  if (!entries.length) throw new Error(`内化的说话习惯表没有可用条目（需要 entries[].character）：${file}`);
+  return { file: resolved, sheet: module.sheet || module.name || path.basename(resolved), entries };
+}
+
 function loadSpeechTable(file) {
-  const { sheet, records } = readRecords(file);
+  const text = String(file || "").trim();
+  if (!text) throw new Error("说话习惯表路径为空。");
+  if (/\.(js|cjs|mjs)$/i.test(text)) return loadSpeechModule(text);
+  const { sheet, records } = readRecords(text);
   const entries = records.map(normalizeSpeechEntry).filter(Boolean);
   if (!entries.length) throw new Error(`说话习惯表没有可用条目（需要“角色”列）：${file}`);
   return { file, sheet, entries };
@@ -302,7 +348,7 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
   if (!jp) return [];
   const candidates = [];
   for (const item of characters) {
-    const entry = item.entry;
+    const entry = entryOf(item);
     if (!entry.hasLiteralHabit) continue;
     if (!hasHabitOccurrence(jp, entry)) continue;
     candidates.push({
@@ -315,6 +361,48 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
     });
   }
   return candidates;
+}
+
+/**
+ * 本行该拿到哪些角色的说话习惯规则（**行级收窄**）。
+ *
+ * 章级判定回答的是“这一章出现了哪些角色”，但一行台词里通常只有一个角色在场：把整章的规则
+ * 全塞进每一行，等于让 90% 的行背着与它无关的角色规则（本层是第 3 层之外唯一按章注入的段，
+ * 也正是“无脑加进每一个句子”的第二个来源）。收窄判据两条，满足任一即保留：
+ * 1. **本行文本提到了该角色**——原文或译文里出现该角色的全名别名（与对照表/译名表口径一致）；
+ * 2. **本行原文出现了该角色的口癖**——说话人可能没被点名，规则必须留着，否则“特色流失”判不出来。
+ *
+ * 兜底与其它裁剪同口径：**本行两侧都没有文本时全部保留**（判断不了就不裁剪）。
+ * 收窄只影响这一行的注入内容：章级判定、页面徽标与落盘块（`speechHabits`）都不受影响，
+ * 因此人工从页面上看到的“本章命中了哪些角色”与收窄前完全一致。
+ */
+function habitCharactersForRow({ row, characters = [] } = {}) {
+  const list = Array.isArray(characters) ? characters : [];
+  if (!list.length) return list;
+  const jp = String(row?.jp || "");
+  const cn = String(row?.cn || row?.target || "");
+  if (!jp.trim() && !cn.trim()) return list;
+  const text = `${jp}\n${cn}`;
+  return list.filter((item) => {
+    const entry = entryOf(item);
+    const aliases = entry.aliases?.strong || characterAliases(entry.character).strong;
+    if (aliases.some((alias) => alias && text.includes(alias))) return true;
+    return hasHabitOccurrence(jp, entry);
+  });
+}
+
+/**
+ * 行级说话习惯块：先按章定位（章级判定不变），再把角色收窄到本行（`habitCharactersForRow`），
+ * 最后用与章级同一个 `chapterHabitBlock` 拼块——两条路径（落盘块还原 / 现算）都走这里，
+ * 因此产出的提示词必然逐字一致（`scripts/speech-habit-layer.test.js` 有等价性断言）。
+ */
+function speechHabitBlockForRow({ chapter = "", row = null, characters = [], volume = null, fallbackBlock = "" } = {}) {
+  const matched = habitCharactersForRow({ row, characters });
+  if (!matched.length) return "";
+  const block = volume
+    ? volumeHabitBlock({ volume, characters: matched })
+    : chapterHabitBlock({ chapter, characters: matched });
+  return block || fallbackBlock;
 }
 
 /**
@@ -361,26 +449,53 @@ function isHabitDetectable(entry) {
 }
 
 /**
+ * 剥掉行内注音标记，只留基文：`<ruby>基文<rt>读音</rt></ruby>` 与稿件形态 `|基文[读音]` 都要处理。
+ *
+ * 为什么口癖定位必须用剥过标记的文本：位置判据看的是「口癖前面那个字是什么」，
+ * 而带标记时紧挨着的是标签的收尾符——`…<ruby>魔<rt>ま</rt></ruby>力` 会被判成“前面是 `>`”
+ * （即词首），于是「魔力」也算成单字口癖「力」的命中。注音标记本身不参与语义判断。
+ */
+function plainInlineText(text) {
+  return String(text || "")
+    .replace(/<\s*(?:ruby|rb)\s*>([\s\S]*?)<\s*\/\s*(?:ruby|rb)\s*>/gi, "$1")
+    .replace(/<\s*(?:rt|rp)\s*>[\s\S]*?<\s*\/\s*(?:rt|rp)\s*>/gi, "")
+    .replace(/\|[^\s|\]]{0,30}\[([^\]\n]{1,40})\]/gu, "$1")
+    .replace(/<[^>]*>/g, "");
+}
+
+/**
  * 口癖在原文里的出现位置是否算“该用法的出现”：
  * - 句末语气词 / 谓语形式：必须落在句末（后接标点或行尾），「じゃん」不会被「じゃんけん」命中；
- * - 第一人称 / 接续词 / 句首语气词 / 未分类：前面不能是假名，避免落在更长的词中间。
+ * - 单字汉字口癖（名词后缀「力」= XX力）：必须落在**词首**（前面是行首、空白、标点或成对标记）——
+ *   这类后缀型口癖在正文里到处撞普通词（風力/火力/磁力/能力/压力…），只按“前面不是假名”判断会让
+ *   整章叙述行都命中（实测某卷 37 个说话人候选行里 32 行是「力」撞普通词），说话人判断与特色流失
+ *   都成了误报。代价是「超能力」这类汉字连写的真用法也放过——宁可漏判，也不给整章塞错角色；
+ * - 其余类型（第一人称 / 接续词 / 句首语气词 / 未分类）：前面不能是假名或汉字，避免落在更长的词中间。
+ * 判定前先剥掉注音标记（`plainInlineText`），否则紧挨着的标签收尾符会被误当成词首。
  */
 function hasHabitOccurrence(text, entry) {
   const habit = String(entry.habit || "");
   if (!habit) return false;
+  const plain = plainInlineText(text);
   const sentenceEnd = entry.type === "句末语气词" || entry.type === "谓语形式";
+  const kanjiHabit = habit.length === 1 && KANJI.test(habit);
   let from = 0;
-  while (from <= text.length) {
-    const at = text.indexOf(habit, from);
+  while (from <= plain.length) {
+    const at = plain.indexOf(habit, from);
     if (at < 0) return false;
     from = at + 1;
-    const before = text[at - 1] || "";
-    const after = text[at + habit.length] || "";
+    const before = plain[at - 1] || "";
+    const after = plain[at + habit.length] || "";
     if (sentenceEnd) {
       if (after === "" || SENTENCE_END_CHARS.includes(after)) return true;
       continue;
     }
-    if (before === "" || !KANA.test(before)) return true;
+    if (kanjiHabit) {
+      if (before === "" || WORD_BOUNDARY.test(before)) return true;
+      continue;
+    }
+    if (before && (KANA.test(before) || KANJI.test(before))) continue;
+    return true;
   }
   return false;
 }
@@ -473,9 +588,11 @@ module.exports = {
   describeHabit,
   detectCharacters,
   detectChapterCharacters: detectCharacters,
+  entryOf,
   findHabitMisses,
   groupRowsByChapter,
   habitCandidatesForRow,
+  habitCharactersForRow,
   hasHabitOccurrence,
   isHabitDetectable,
   loadSpeechTable,
@@ -483,6 +600,7 @@ module.exports = {
   normalizeSpeechEntry,
   normalizeSpeechTablePaths,
   speakerCheckBlock,
+  speechHabitBlockForRow,
   speechTableSummary,
   summarizeChapters,
   summarizeGroup,

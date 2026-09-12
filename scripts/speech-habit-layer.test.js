@@ -16,6 +16,7 @@ const {
   findHabitMisses,
   groupRowsByChapter,
   loadSpeechTables,
+  speechHabitBlockForRow,
   volumeKeyFromFiles,
 } = require("../src/workbenches/translation-compare/ai/speech-habit");
 
@@ -104,6 +105,49 @@ test("运行期复用的上下文与现算结果完全一致", () => {
     const layerMisses = match.entry.chapters.find((item) => item.chapter === group.chapter).misses.map((miss) => miss.index);
     assert.deepEqual([...new Set(liveMisses)], layerMisses);
   }
+});
+
+test("行级收窄：角色规则只进到提到他、或出现他口癖的那些行", () => {
+  const file = writeTable();
+  const rows = fixtureRows();
+  const layer = buildSpeechHabitLayer({ rows, projectFiles: {}, profiles: [profile(file)] });
+  const context = contextFromLayerEntry(layer.byProfile.unit);
+  const entry = context.blocks.get("行间 一");
+  const liveTables = loadSpeechTables([file]);
+  const liveCharacters = detectCharacters({
+    rows: rows.filter((row) => row.chapter === "行间 一"),
+    tables: liveTables,
+    volume: volumeKeyFromFiles({}),
+  });
+
+  const blockFor = (row) => speechHabitBlockForRow({
+    chapter: "行间 一",
+    row,
+    characters: entry.characters_raw,
+    volume: entry.volume,
+  });
+
+  // ① 本行点名了该角色 → 规则进这一行
+  const named = blockFor({ jp: "「ですの」と乙川次郎。", cn: "「的说」乙川次郎说。" });
+  assert.match(named, /乙川次郎/);
+  assert.match(named, /^【说话习惯（本章）】/);
+  // ② 本行只有台词、没点名，但原文出现了他的口癖 → 规则必须留着，否则“特色流失”判不出来
+  const habitOnly = blockFor({ jp: "「ですの」と彼女は言った。", cn: "「的说」她说道。" });
+  assert.match(habitOnly, /乙川次郎/);
+  // ③ 本行既没提他、也没有他的口癖 → 不注入（章级判定里本章有他，但这一行与他无关）
+  assert.equal(blockFor({ jp: "「オレは行く」と甲野一郎。", cn: "「我要去」甲野一郎说。" }), "");
+  // ④ 行数据缺失（两侧都没有文本）→ 不裁剪，保留整章规则（与其它裁剪同一兜底口径）
+  assert.match(blockFor({}), /乙川次郎/);
+  // ⑤ 收窄后的块用同一个 chapterHabitBlock 拼装；整章都没提到任何角色时整段不注入
+  assert.equal(blockFor({ jp: "窓の外は雨だった。", cn: "窗外下着雨。" }), "");
+
+  // 现算路径与落盘块还原路径逐字一致（同一函数 + 同一角色集合）
+  const live = speechHabitBlockForRow({
+    chapter: "行间 一",
+    row: { jp: "「ですの」と乙川次郎。", cn: "「的说」乙川次郎说。" },
+    characters: liveCharacters,
+  });
+  assert.equal(live, named, "现算与落盘块还原必须产出逐字相同的行级块");
 });
 
 test("表被改过时指纹失效，运行期应回退现算", () => {

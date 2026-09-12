@@ -13,6 +13,7 @@ const {
   detectCharacters,
   findHabitMisses,
   groupRowsByChapter,
+  hasHabitOccurrence,
   isHabitDetectable,
   loadSpeechTables,
   normalizeSpeechEntry,
@@ -167,6 +168,17 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(sentenceEnd.length, 1);
   assert.equal(sentenceEnd[0].character, "丙山三郎");
 
+  // 单字汉字口癖（名词后缀「力」= XX力）必须落在**词首**：否则「風力/火力/磁力/能力」都会被当成
+  // 该角色的口癖（实测某卷 37 个说话人候选行里 32 行是这种误报，说话人判断与特色流失全线跑偏）。
+  const chikjo = { entry: { character: "己田六郎", habit: "力", type: "名词后缀", hasLiteralHabit: true, versions: { x: "", net: "", tw: "" }, expectedWritings: ["力"] }, activated: true };
+  assert.equal(hasHabitOccurrence("風力発電のものである。", chikjo.entry), false, "風力 不是她的口癖");
+  assert.equal(hasHabitOccurrence("艦砲クラスの火力を持った。", chikjo.entry), false, "火力 不是她的口癖");
+  assert.equal(hasHabitOccurrence("磁力でビルを縫って飛ぶ。", chikjo.entry), false, "磁力 不是她的口癖");
+  assert.equal(hasHabitOccurrence("<ruby>超能力<rt>ちょうのうりょく</rt></ruby>者だ。", chikjo.entry), false, "汉字连写的 能力 也不算");
+  assert.equal(hasHabitOccurrence("力のゴリ押しが通じる。", chikjo.entry), true, "独立使用的「力」仍然算命中");
+  assert.equal(hasHabitOccurrence("「力！」と叫んだ。", chikjo.entry), true, "引号后的独立用法算命中");
+  assert.equal(hasHabitOccurrence("すごい力だ。", chikjo.entry), false, "前面是假名的「力」不算（属于普通词的一部分）");
+  assert.equal(hasHabitOccurrence("彼女は<ruby>魔<rt>ま</rt></ruby>力を使った。", chikjo.entry), false, "注音标记不改变前一个字是汉字的事实");
   // 译文已使用本项目写法（或任一版本写法）就不算流失。
   assert.deepEqual(findHabitMisses({ source: "オレは行く。", target: "本大爷要去。", characters }), []);
   assert.deepEqual(findHabitMisses({ source: "オレは行く。", target: "俺要去。", characters }), []);

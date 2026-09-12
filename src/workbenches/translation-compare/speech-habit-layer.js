@@ -224,28 +224,30 @@ function speechHabitLayerFor(layer, profileId, { files = null } = {}) {
 
 /**
  * 把落盘块还原成运行期上下文：章 → { block, characters, characters_raw }。
- * 与现算路径共用 chapterHabitBlock / volumeHabitBlock，保证两条路径产出的提示词一致。
+ * - `block` 是**章级**块（按章命中全部角色），页面/审计与现算路径的章级判定一致；
+ * - 行级注入不直接用 `block`：运行期统一走 `speechHabitBlockForRow`，把角色收窄到本行
+ *   （本行提到该角色、或原文出现了他的口癖），与现算路径共用同一函数，因此逐字一致。
+ * - `volume` 带上卷号，供运行期为卷口径重建整卷块（`volumeHabitBlock` 需要 `{ code }`）。
  */
 function contextFromLayerEntry(entry) {
   const blocks = new Map();
   const records = entry.characterRecords || [];
   const descriptorOf = (item) => ({ entry: characterDescriptor(item, records), activated: item.activated !== false });
+  const volume = entry.volume ? { code: entry.volume } : null;
 
   if (entry.scope === "volume" && (entry.volumeCharacters || []).length) {
     const activated = entry.volumeCharacters.filter((item) => item.activated);
-    const block = volumeHabitBlock({
-      volume: entry.volume ? { code: entry.volume } : null,
-      characters: activated.map(descriptorOf),
-    });
+    const block = volumeHabitBlock({ volume, characters: activated.map(descriptorOf) });
     const names = activatedCharacterNames(activated);
     for (const chapter of entry.chapters || []) {
-      blocks.set(chapter.chapter, { block, characters: names, characters_raw: activated.map(descriptorOf) });
+      blocks.set(chapter.chapter, { block, volume, characters: names, characters_raw: activated.map(descriptorOf) });
     }
   } else {
     for (const chapter of entry.chapters || []) {
       const activated = chapter.characters.filter((item) => item.activated);
       blocks.set(chapter.chapter, {
         block: chapterHabitBlock({ chapter: chapter.chapter, characters: activated.map(descriptorOf) }),
+        volume,
         characters: activatedCharacterNames(activated),
         characters_raw: chapter.characters.map(descriptorOf),
       });
