@@ -532,13 +532,13 @@
     }
 
     /**
-     * 备注里“只作说明、不是成品文本”的行（标点自动规范化、低分归因、线上查证）：它们属于分析栏。
+     * 备注里“只作说明、不是成品文本”的行（格式自动规范化、标点自动规范化、低分归因、线上查证）：它们属于分析栏。
      * 备注是按行取值的，认不出的行会并进上一段字段——跟在「修改结果：」后面时，
      * 那等于把说明当成译文，页面会把它当可写回文本，甚至写进成品。
      */
     function isNoteProseLine(line) {
       const text = String(line || "").trim();
-      return text.startsWith("低分归因：") || text.startsWith("线上查证：") || text.startsWith("标点自动规范化：");
+      return text.startsWith("格式自动规范化：") || text.startsWith("低分归因：") || text.startsWith("线上查证：") || text.startsWith("标点自动规范化：");
     }
 
     function normalizeStoredNote(value) {

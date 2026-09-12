@@ -43,6 +43,7 @@ const {
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
 const { normalizeTargetPunctuation, restoreTerminalPunctuation } = require("./punctuation");
+const { formatFixDetail, formatFixNote, guardRowFormat } = require("./format-guard");
 const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
 const {
   DEFAULT_LOW_SCORE_PENALTY,
@@ -165,6 +166,14 @@ const status = {
   termRubyDemoted: 0,
   // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、转人工确认的行数（见 guardTargetScript）。
   scriptLeaks: 0,
+  // 成品格式门禁：多少行的修订结果被确定性修正过格式（换行/多余段落/首尾空白），各多少处；
+  // 以及多少行因格式无法确定性还原（段结构不一致、noteref 标记增减）被作废转人工（见 format-guard.js）。
+  formatEnabled: true,
+  formatFixes: 0,
+  formatLineBreaks: 0,
+  formatParagraphs: 0,
+  formatNoteFields: 0,
+  formatVoids: 0,
   // 标点规范化：多少行的修改结果被统一过标点宽度/补回过句末点号、各多少处（见 punctuation.js）。
   punctEnabled: true,
   punctFixes: 0,
@@ -259,6 +268,14 @@ function clientStatus(options = {}) {
     termRubyDemoted: status.termRubyDemoted,
     // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
     scriptLeaks: status.scriptLeaks,
+    // 成品格式门禁：这一层是否启用、多少行的修订结果被修正过格式（换行/多余段落/说明字段各多少处）、
+    // 多少行因格式无法确定性还原被作废（作废行同样已转人工确认）。
+    formatEnabled: status.formatEnabled,
+    formatFixes: status.formatFixes,
+    formatLineBreaks: status.formatLineBreaks,
+    formatParagraphs: status.formatParagraphs,
+    formatNoteFields: status.formatNoteFields,
+    formatVoids: status.formatVoids,
     // 标点规范化：这一层是否启用、多少行的修改结果被改过、宽度两个方向与补回句末点号各多少处。
     punctEnabled: status.punctEnabled,
     punctFixes: status.punctFixes,
@@ -398,6 +415,9 @@ function cleanConfig(input = {}) {
     // 标点规范化（确定性工序，排在输出侧护栏之前）：中文语境用全角、英文句子保持半角，
     // 只动标点宽度，并把改了几处如实写进备注与日志（提示词侧的对应要求写在排版层里）。
     punctNormalize: input.punctNormalize !== false && process.env.TRANSCOMPARATOR_PUNCT !== "0",
+    // 成品格式门禁（确定性工序，排在标点规范化之前）：revisedText 必须是一整行/与目标列同段数，
+    // 模型插入的换行与 `<br>` 一并并回本行；段数与 noteref 标记对不上时作废转人工（见 format-guard.js）。
+    formatGuard: input.formatGuard !== false && process.env.TRANSCOMPARATOR_FORMAT !== "0",
     concurrency,
     similarityThreshold,
     circuitBreakerErrorRate,
@@ -470,6 +490,13 @@ function resetStatus(config, rowsLength) {
   status.termInjected = 0;
   // 输出侧护栏：多少行的 revisedText 混进了原文（日文）文字而被作废转人工（提示词约束之外的确定性闸门）。
   status.scriptLeaks = 0;
+  // 成品格式门禁：把修订结果的格式按成品结构确定性修正（单行/同段数/去首尾空白），修不了就作废转人工。
+  status.formatEnabled = config.formatGuard !== false;
+  status.formatFixes = 0;
+  status.formatLineBreaks = 0;
+  status.formatParagraphs = 0;
+  status.formatNoteFields = 0;
+  status.formatVoids = 0;
   // 标点规范化：把修改结果里的标点宽度按语境统一（中文全角、英文半角），并补回被删掉的句末点号。
   status.punctEnabled = config.punctNormalize !== false;
   status.punctFixes = 0;
@@ -921,6 +948,15 @@ function finish() {
     if (status.scriptLeaks) {
       pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废并转人工确认。`);
     }
+    if (status.formatFixes) {
+      pushLog(`成品格式门禁：${status.formatFixes} 行的修改结果按成品结构修正了格式（删除换行 ${status.formatLineBreaks} 处、并回段落 ${status.formatParagraphs} 处、说明字段换行 ${status.formatNoteFields} 处）。`);
+    }
+    if (status.formatVoids) {
+      pushLog(`成品格式门禁：${status.formatVoids} 行的修改结果因格式无法确定性还原（段落结构不一致或内联标记增减）被作废并转人工确认。`);
+    }
+    if (!status.formatFixes && !status.formatVoids && status.formatEnabled === false) {
+      pushLog("成品格式门禁：已关闭。");
+    }
     if (status.punctFixes) {
       pushLog(`标点规范化：${status.punctFixes} 行的修改结果统一了标点宽度（半角→全角 ${status.punctToFull} 处，全角→半角 ${status.punctToHalf} 处）；英文句子保持半角。`);
     }
@@ -1095,6 +1131,10 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
+  // 成品格式门禁（确定性工序，输出侧的第一关）：revisedText 必须与目标列同段数、不带模型自己插入的
+  // 换行/`<br>`，段结构或 noteref 标记对不上就作废转人工。放在标点规范化之前，因为它会改变文本结构
+  // （标点工序的内联标记“先摘后还原”也要求标记结构已经稳定）。
+  decision = applyFormatGuard(decision, row, config, targetText);
   // 标点规范化（确定性工序）：中文语境的标点统一成全角、英文句子保持半角，并补回被删掉的
   // 成对标记内侧句末点号。放在护栏之前，因为它只动标点、不改字符集；
   // 改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
@@ -1586,6 +1626,59 @@ function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
     revisedText: terminal.text,
     punctFix: { toFull: width.toFull, toHalf: width.toHalf, restored: terminal.restored },
   };
+}
+
+/**
+ * 成品格式门禁（确定性工序，输出侧的第一关，排在标点规范化与语言护栏之前）。
+ *
+ * 为什么要有这一层：`revisedText` 会被人工直接写回成品，而提示词只能“要求”，做不到“保证”。
+ * 真实回归（第 1166 行）：原文那一行是两段（`…刺さったままだった。\n\n今のまま地面に…`），
+ * 目标列只有一段，模型据此判定「译文把原文换行丢了」，把 `\n` 写进了修订结果——
+ * 页面上修改结果被切成两行，写回时按 `\n{2,}` 分段的 `alignParts` 随之错位。行边界由对齐决定，
+ * 不属于语言质量问题（通用侧提示词与低分归因层都写了这条，这里做确定性兜底）。
+ *
+ * 三档处置：
+ * - **能确定性还原就修**：并回模型插入的换行/`<br>`/空行、去掉首尾空白，并把改了什么写进备注分析栏；
+ * - **同一个行里的结构性事实对不上就作废转人工**：段数与目标列不一致（写回按段一一对应，猜错会
+ *   静默删改源文件）、noteref 标记比目标列少或多（少是丢注释，多是从原文补入）；
+ * - **永远顺手做的一件防呆**：`summary`/`suggestion` 里的换行折叠成空格——备注按行取值，
+ *   说明字段里换行后若出现一行以「修改结果：」起头，解析层会把它当成成品文本覆盖真正的修订结果。
+ *
+ * 开关 `formatGuard:false` / `TRANSCOMPARATOR_FORMAT=0`；计数走 `status.formatFixes`/`formatVoids`/
+ * `formatLineBreaks`/`formatParagraphs`/`formatNoteFields`，`finish()` 汇报一次。
+ */
+function applyFormatGuard(decision, row, config, targetText) {
+  if (!config?.formatGuard || !decision) return decision;
+  const result = guardRowFormat({
+    revisedText: decision.revisedText,
+    targetText,
+    summary: decision.summary,
+    suggestion: decision.suggestion,
+  });
+  const next = { ...decision, summary: result.summary, suggestion: result.suggestion };
+  if (result.voided) {
+    status.formatVoids += 1;
+    pushLog(`第 ${row.index} 行：${result.detail}`);
+    return {
+      ...next,
+      revisedText: "",
+      suggestion: "",
+      // 修订结果都作废了，标点规范化也就不存在了：一并抹掉，备注里不会留下空的「标点自动规范化」口径。
+      punctFix: null,
+      formatVoid: result.reason,
+      needsContext: true,
+      better: "unclear",
+      severity: "none",
+      summary: [String(next.summary || "").trim(), result.detail].filter(Boolean).join(" "),
+    };
+  }
+  if (!result.changed) return next;
+  status.formatFixes += 1;
+  status.formatLineBreaks += result.fixes.lineBreaks;
+  status.formatParagraphs += result.fixes.paragraphs;
+  status.formatNoteFields += result.fixes.noteFields;
+  pushLog(`第 ${row.index} 行：修改结果的格式已按成品结构规范化（${formatFixDetail(result.fixes)}）。`);
+  return { ...next, revisedText: result.revisedText, formatFix: result.fixes };
 }
 
 /**
@@ -2361,18 +2454,28 @@ function webLookupLine(decision) {
 
 /**
  * 分析栏的那几行：模型给的 summary / fallback，加上**确定性层**留在分析里的痕迹
- * （标点自动规范化、低分归因、线上查证）。它们必须排在「修改结果：」**之前**：备注是按行取值的
- * （`public/workbench-client.js` 的 `parseAutomatedNote`），跟在「修改结果：」后面的
+ * （格式自动规范化、标点自动规范化、低分归因、线上查证）。它们必须排在「修改结果：」**之前**：
+ * 备注是按行取值的（`public/workbench-client.js` 的 `parseAutomatedNote`），跟在「修改结果：」后面的
  * 未识别行会被并进修改结果，而修改结果在页面上就是可写回文本——那等于把说明写进成品。
  */
 function analysisLines(decision, fallback = "") {
   const text = [decision.summary, fallback].filter(Boolean).join(" ");
   return [
     text ? `分析：${text}` : "",
+    formatFixLine(decision),
     punctFixLine(decision),
     lowScoreLine(decision),
     webLookupLine(decision),
   ].filter(Boolean);
+}
+
+/**
+ * 成品格式门禁在备注里的那一行：程序并回了模型插入的换行/段落时如实留痕（它不是模型写的措辞）。
+ * 只有真的改过格式才留痕（`decision.formatFix` 只在 `applyFormatGuard` 里挂上）；
+ * 因格式无法确定性还原而**作废**的行不写这一行——原因已经并进 `summary`，写在「分析：」里。
+ */
+function formatFixLine(decision) {
+  return formatFixNote(decision?.formatFix);
 }
 
 /**

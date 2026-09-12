@@ -214,6 +214,7 @@ test("低分归因与线上查证属于分析栏，不会被并进可写回的�
     "低分归因：本行译文实际写的是**下一行**的内容（跨行错位），已保持原文行序、按本行原文重写",
     "线上查证：日文（atwiki）查到依据（结论见上方分析）",
     "标点自动规范化：半角→全角 3 处（中文标点全角、英文句子半角）",
+    "格式自动规范化：删除模型插入的换行 1 处（一行就是一个成品段落；行边界由对齐决定，不属于翻译缺陷）",
   ];
   const note = [
     "[AI校对]",
@@ -224,7 +225,7 @@ test("低分归因与线上查证属于分析栏，不会被并进可写回的�
     ...prose,
   ].join("\n");
   // 修复前的备注就是这个形状：说明行跟在「修改结果：」后面，解析时会被并进修改结果。
-  const legacyRevision = `不如说越来越大了。\n${prose[1]}\n${prose[2]}\n${prose[3]}`;
+  const legacyRevision = `不如说越来越大了。\n${prose.slice(1).join("\n")}`;
   const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note, revisionText: legacyRevision } }) }));
 
   const parsed = ui.run('parseAutomatedNote(notes["1"].note)');
@@ -233,6 +234,7 @@ test("低分归因与线上查证属于分析栏，不会被并进可写回的�
   assert.match(parsed.analysis, /低分归因：本行译文实际写的是\*\*下一行\*\*的内容/);
   assert.match(parsed.analysis, /线上查证：日文（atwiki）查到依据/);
   assert.match(parsed.analysis, /标点自动规范化：半角→全角 3 处/);
+  assert.match(parsed.analysis, /格式自动规范化：删除模型插入的换行 1 处/);
 
   assert.equal(
     ui.run('revisionTextFor(notes["1"])'),
@@ -241,5 +243,6 @@ test("低分归因与线上查证属于分析栏，不会被并进可写回的�
   );
   assert.equal(ui.run('isNoteProseLine("低分归因：跨行错位")'), true);
   assert.equal(ui.run('isNoteProseLine("标点自动规范化：半角→全角 3 处")'), true);
+  assert.equal(ui.run('isNoteProseLine("格式自动规范化：删除模型插入的换行 1 处")'), true);
   assert.equal(ui.run('isNoteProseLine("修改结果：不如说越来越大了。")'), false);
 });

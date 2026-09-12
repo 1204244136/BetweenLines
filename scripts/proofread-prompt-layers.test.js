@@ -258,6 +258,12 @@ test("输出语言约束与标记范围：修订结果不得写入原文文字�
     assert.equal(text.includes("不得照抄原文读音"), true);
     assert.equal(text.includes("只保留目标列自身已有的内联标记"), true);
     assert.equal(text.includes("目标列里没有的标记不得从原文补进 revisedText"), true);
+    // 结构口径（一条 = 一个成品段落）同样是通用侧的常驻契约：它对应输出侧的成品格式门禁
+    // （`ai/format-guard.js`）。提示词只能“要求”，所以两条必须成对存在，缺一条就等于只剩兜底、
+    // 或者只剩要求（真实回归：原文那行是两段、目标列一段，模型判「译文丢了原文换行」并插入 `\n`）。
+    assert.equal(text.includes("revisedText 只能是**一整行文本**"), true);
+    assert.equal(text.includes("一个行就是一个成品段落"), true);
+    assert.equal(text.includes("原文那一侧的分行、空行、行首缩进都是版式事实"), true);
   }
 });
 
