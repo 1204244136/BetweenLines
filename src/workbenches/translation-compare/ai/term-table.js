@@ -451,22 +451,30 @@ function evaluateTermRow({ source, target, tables }) {
     const decidable = scope === "term" && strong;
     const via = checkTargetConsistency(entry, targetKey);
     if (!decidable) {
-      return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : null, via, variant: null };
+      return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : null, via, variant: null, advisory: false };
     }
     const variant = via ? null : findWrongVariant(plainTarget, entry);
-    return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: Boolean(via), via, variant };
+    // **存疑（advisory）**：命中的基文别名全是假名（グループ、メンバー、トリック…）时，对照表不足以定论。
+    // 这类写法在正文里常常就是普通词，而术语表里它可能只是某个组织名/招式名的写法之一；译文没用该译名，
+    // 既可能是译名没统一，也可能这里本来就是普通词义——只有结合上下文的模型（与最终的人工）能判断。
+    // 因此标为 advisory：不写对照表结论、不跳过模型，改为把该术语注入提示词后照常交给模型判断。
+    const advisory = Boolean(variant === null && !via && KANA_ONLY_BASE.test(String(alias || "")));
+    return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : false, via, variant, advisory };
   });
-  const conflicts = results.filter((result) => result.consistent === false);
+  const advisory = results.filter((result) => result.advisory === true);
+  const conflicts = results.filter((result) => result.consistent === false && !result.advisory);
   // 只命中分段写法的行不算「确认一致」：分段别名只能记录，不能证明本行用的是这个术语。
   const confirmed = results.some((result) => result.scope !== "part" && result.consistent === true);
-  if (!conflicts.length && !confirmed) return null;
+  if (!conflicts.length && !advisory.length && !confirmed) return null;
   if (!conflicts.length) {
     // 覆盖率只在“术语都一致”的前提下有意义：有冲突时整行本来就要处理，不必再算。
     const coverage = measureTermCoverage(plainSource, results);
     return {
-      kind: coverage.skip ? "term-only" : "consistent",
+      // 有存疑命中时不能判 term-only：这一行还要由模型看“这个术语到底适不适用”，跳过模型就没机会看。
+      kind: advisory.length ? "advisory" : (coverage.skip ? "term-only" : "consistent"),
       hits: results,
       coverage,
+      advisory,
       revisedText: "",
     };
   }
@@ -480,7 +488,7 @@ function evaluateTermRow({ source, target, tables }) {
     }
     revisedText = text.trim();
   }
-  return { kind: "conflict", hits: results, revisedText };
+  return { kind: "conflict", hits: results, advisory, revisedText };
 }
 
 /**
@@ -494,8 +502,15 @@ function displayTermPair(entry = {}) {
   return `${source} → ${target}${entry.type ? `（${entry.type}）` : ""}`;
 }
 
+/**
+ * 基文别名全是假名（グループ、メンバー、トリック、チャネル…）的情形：这类别名常常只是普通词或
+ * 音译名，而术语表里它可能只是某个组织名/招式名的写法之一。判定仍在（strong 由长度决定），
+ * 但措辞不能写成“请确认是否需要替换”那种指令口吻——没有证据表明这处不是普通词义。
+ */
+const KANA_ONLY_BASE = /^[\u3041-\u3096\u30a1-\u30f6\u30fc\u30fb]+$/u;
+
 function describeTermHit(result) {
-  const { entry, consistent, variant, scope, via, strong } = result;
+  const { entry, alias, consistent, variant, scope, via, strong } = result;
   const pair = displayTermPair(entry);
   if (scope === "part") {
     return `${pair}：原文只出现了分段写法，未参与译名一致性判定。`;
@@ -514,6 +529,10 @@ function describeTermHit(result) {
       : `${pair}：译文已使用该译名。`;
   }
   if (variant) return `${pair}：译文里的「${variant.from}」属${variant.kind}，应替换为本项目译名。`;
+  if (KANA_ONLY_BASE.test(String(alias || entry.plainSource || entry.source || ""))) {
+    // 存疑项：不写成“必须替换”的指控，而是把判断权交回上下文（模型负责判断，人工核对结论）。
+    return `${pair}：原文命中的是假名写法（可能是普通词或音译名），译文未使用该译名——请结合上下文判断：此处确指该术语时改用该译名，只是普通词义时按普通词处理，不要强改。`;
+  }
   return `${pair}：译文未出现该译名，请人工确认是否需要替换。`;
 }
 

@@ -25,6 +25,14 @@ module.exports = {
   id: "demo",
   name: "某系列成品（示范档案）",
   summary: "示范作品专有档案的写法：在通用小说成品规范之上，只补本作品的译名口径与语言特征。",
+  // 线上查证用的官方站点入口，**按声明顺序**依次查（拿到关键信息就停），都不行才让模型自行检索。
+  // 只给站点入口、不给直达词条链接：条目名一旦猜错就是打不开的地址，模型只会照着瞎猜；
+  // 给入口 + 要查的词条，让它站内搜索，找得到才有依据。未声明该字段的档案这一层不启用。
+  wikiSites: [
+    { label: "中文（灰机）", url: "https://toaru.huijiwiki.com/wiki/%E9%A6%96%E9%A1%B5" },
+    { label: "日文（atwiki）", url: "https://w.atwiki.jp/index-index" },
+    { label: "英文（Fandom）", url: "https://toarumajutsunoindex.fandom.com/wiki/Toaru_Majutsu_no_Index_Wiki" },
+  ],
   sections: [
     ...novel.sections,
     {

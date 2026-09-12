@@ -20,12 +20,13 @@ test.after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-function writeTermTable(label) {
+function writeTermTable(label, extraRows = []) {
   const file = path.join(dataDir, `${label}-terms.csv`);
   fs.writeFileSync(file, [
     "Base_Ori,Ruby_Ori,Base_Trans,Ruby_Trans,Other_Fandom,Type",
     "【発信機】,はっしんき,【发信器】,,发射机,科技/装备",
     "【東雲】【太郎】,\"しののめ,たろう\",東雲太郎,Shinonome Taro,,人名/日式全名",
+    ...extraRows,
   ].join("\n"), "utf8");
   return file;
 }
@@ -65,6 +66,8 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     { index: 2, jp: "東雲太郎は言った。", cn: "東雲太郎说道。", tw: "", twCn: "", score: 0 },
     { index: 3, jp: "【発信機】", cn: "【发信器】", tw: "", twCn: "", score: 0 },
     { index: 4, jp: "今日はいい天気だ。", cn: "今天天气不错。", tw: "", twCn: "", score: 0 },
+    // 命中的是假名写法（グループ）：可能只是普通词，对照表不得定论，必须交给模型判断。
+    { index: 5, jp: "街の八割を分類する六段階評価の、まさに頂点グループ。", cn: "在把都市居民分成六级的评价系统中，处于顶级位置的一类人。", tw: "", twCn: "", score: 0 },
   ];
   const project = publishRows("term-resolved", rows);
 
@@ -101,7 +104,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
       model: "test-model",
       proofreadMode: "bilingual",
       concurrency: 1,
-      termTables: [writeTermTable("resolved")],
+      termTables: [writeTermTable("resolved", ["グループ,,GROUP,,,组织/暗部"])],
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -126,18 +129,25 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     assert.equal(byIndex.get(3).done, true);
     // 第 4 行：没命中对照表，仍然交给模型。
     assert.match(byIndex.get(4).note, /^\[AI校对\]/);
+    // 第 5 行：命中的是假名写法（可能只是普通词）→ 对照表不得出结论，照常交给模型判断。
+    assert.match(byIndex.get(5).note, /^\[AI校对\]/, "存疑行不该写对照表结论");
+    assert.equal(byIndex.get(5).done, true);
 
-    assert.equal(requestCount, 2, "第 2 行（术语+别的词）和第 4 行（未命中）都要调用模型");
+    assert.equal(requestCount, 3, "第 2 行（术语+别的词）、第 4 行（未命中）、第 5 行（存疑）都要调用模型");
     const injectedSystem = sentSystems.find((system) => system.includes("【术语（对照表命中）】"));
     assert.ok(injectedSystem, "命中术语但整行不止术语时，标签与术语要作为提示词注入");
     assert.match(injectedSystem, /- 東雲太郎 → 東雲太郎（人名\/日式全名）/);
     assert.match(injectedSystem, /对照表只能证明术语译名对不对，不能证明整句翻译没有问题/);
+    // 存疑项同样注入，但标签上写明需要结合上下文判断，避免模型机械替换普通词。
+    const advisorySystem = sentSystems.find((system) => system.includes("グループ → GROUP"));
+    assert.ok(advisorySystem, "存疑术语必须注入提示词，由模型判断此处是否确指该术语");
+    assert.match(advisorySystem, /グループ → GROUP（组织\/暗部）（可能为普通词，需结合上下文判断）/);
     assert.equal(finished.termPrefiltered, 2, "跳过模型的只有冲突行与纯术语行");
-    assert.equal(finished.termInjected, 1, "注入提示词的行要单独计数");
+    assert.equal(finished.termInjected, 2, "注入提示词的行要单独计数（含存疑行）");
     assert.equal(finished.termConflicts, 1);
-    assert.deepEqual(finished.termTables.entries, 2);
-    assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 2 条术语：命中 3 行（整行只有术语、跳过模型 1，需人工确认 1）/);
-    assert.match(finished.logs.join("\n"), /另有 1 行的术语一致但句中还有别的词，按提示词注入后照常交给模型/);
+    assert.deepEqual(finished.termTables.entries, 3);
+    assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 3 条术语：命中 4 行（整行只有术语、跳过模型 1，需人工确认 1，存疑交模型判断 1）/);
+    assert.match(finished.logs.join("\n"), /另有 2 行的术语按提示词注入后照常交给模型/);
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

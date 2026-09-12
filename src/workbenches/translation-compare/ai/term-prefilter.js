@@ -14,12 +14,41 @@ const TERM_MARKER = "[对照表]";
 // 注入的术语提示段落的段首标记：自定义提示词里若残留上一次的段落，组装阶段按此前缀剥离。
 const TERM_BLOCK_PREFIX = "【术语（对照表命中）】";
 
+/**
+ * 冲突行的“分析”首段：明细**只列真正存在译名差异**的条目。
+ *
+ * `evaluation.hits` 是“对照表在本行匹配到的全部条目”，里面混着三类东西：真差异
+ * （`consistent === false`）、已确认一致、以及只命中分段或读音写法因而**明确未参与判定**的条目。
+ * 旧版把三类一起挂在「存在译名差异 N 条」标题下，于是同一句里既有“译文已使用该译名”，
+ * 又有“原文只出现了分段写法，未参与译名一致性判定”，人工得读完整串才能找到那一条真差异；
+ * 同姓角色的分段命中（原文一个「上条」会带出上条当麻/刀夜/诗菜）还会成串混进来。
+ * 实测整卷 40 个冲突行里有 28 行被这样污染（额外列出 50 条分段命中、43 条已一致项），
+ * 所以这里改成“差异明细 + 其余只给计数”：信息不丢，噪音不刷屏。
+ */
+function conflictAnalysisHead(hits = []) {
+  // 存疑项（命中的是假名写法，可能只是普通词）不算差异：它已由对照表注明“交上下文/模型判断”，
+  // 混进差异明细会让人以为这里已经确定译名错了。
+  const conflicts = hits.filter((hit) => hit.consistent === false && !hit.advisory);
+  const advisory = hits.filter((hit) => hit.advisory === true);
+  const unjudged = hits.filter((hit) => !hit.advisory
+    && (hit.scope === "part" || (hit.scope === "ruby" && hit.consistent !== true)));
+  const agreed = hits.filter((hit) => !conflicts.includes(hit) && !advisory.includes(hit) && !unjudged.includes(hit));
+  const detail = conflicts.map((hit) => describeTermHit(hit)).join(" ");
+  const rest = [];
+  if (agreed.length) rest.push(`${agreed.length} 条已确认一致`);
+  if (advisory.length) rest.push(`${advisory.length} 条命中的是假名写法、可能为普通词，需结合上下文判断`);
+  if (unjudged.length) rest.push(`${unjudged.length} 条原文只有分段或读音写法，未参与差异判定`);
+  const head = `命中对照表 ${hits.length} 条，其中 ${conflicts.length} 条存在译名差异：${detail}`;
+  return rest.length ? `${head}（另有 ${rest.join("、")}）` : head;
+}
+
 function makeTermResult(row, labels, evaluation, comparisonMode = "trilingual", targetKey = "cn") {
   const targetLabel = targetKey === "tw" ? (labels.tw || "非原文 C") : (labels.cn || "译文 B");
   const termOnly = evaluation.kind === "term-only";
   const hasRevision = Boolean(evaluation.revisedText);
   // 只有这两种结论会写备注：整行就是术语（跳过模型），或译名冲突（最小替换 / 转人工确认）。
-  // 「术语一致但整行不止术语」不写备注，那一行照常交给模型。
+  // 「术语一致但整行不止术语」不写备注，那一行照常交给模型；「存疑（advisory）」更不该写：
+  // 命中的是假名写法、可能只是普通词，判断权在模型与人工，对照表只负责把术语提示注入进去。
   if (!termOnly && evaluation.kind !== "conflict") {
     throw new Error(`对照表结果只能写纯术语行或冲突行，收到：${evaluation.kind}`);
   }
@@ -27,7 +56,7 @@ function makeTermResult(row, labels, evaluation, comparisonMode = "trilingual", 
   // 冲突行要指出到底该改哪一处，保留逐条说明。
   const head = termOnly
     ? `分析：命中对照表 ${evaluation.hits.length} 条（译名一致）：${formatTermHitGroups(evaluation.hits)}`
-    : `分析：命中对照表 ${evaluation.hits.length} 条（存在译名差异）：${evaluation.hits.map((hit) => describeTermHit(hit)).join(" ")}`;
+    : `分析：${conflictAnalysisHead(evaluation.hits)}`;
   const tail = hasRevision
     ? `只替换术语，未改动句子的其余部分。目标列：${targetLabel}。`
     : (termOnly
@@ -105,7 +134,7 @@ function hitsUsedInRow(sourceText, hits = []) {
 function termGuidanceFor(row, { evaluation = null, targetKey = "cn", targetLabel = "" } = {}) {
   if (!evaluation || !evaluation.hits || !evaluation.hits.length) return null;
   const terms = hitsUsedInRow(row?.jp || "", evaluation.hits).map((hit) => {
-    const { entry, consistent, variant, scope, via, strong } = hit;
+    const { entry, consistent, variant, scope, via, strong, advisory } = hit;
     const note = describeTermHit(hit);
     const explanation = note.slice(note.indexOf("：") + 1);
     // 术语一律用去方括号的形态显示：表里的【】只是给注音标记位置，正文里不出现。
@@ -118,11 +147,14 @@ function termGuidanceFor(row, { evaluation = null, targetKey = "cn", targetLabel
       scope,
       strong: Boolean(strong),
       consistent: consistent === true,
+      // 存疑项：命中的是假名写法（可能只是普通词），由模型结合上下文判断此处是否确指该术语。
+      advisory: advisory === true,
       variant: variant ? { from: variant.from, kind: variant.kind } : null,
       note,
     };
     line.text = displayTermPair(entry);
     if (variant) line.text += `（译文现用「${variant.from}」，属${variant.kind}）`;
+    else if (advisory) line.text += "（可能为普通词，需结合上下文判断）";
     else if (!consistent) line.text += `（${explanation}）`;
     else if (via === "part") line.text += "（译文用了分段写法）";
     return line;

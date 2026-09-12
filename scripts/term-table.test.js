@@ -253,3 +253,92 @@ test("对照表结果写成可解析的备注，并区分一致与待确认", ()
   assert.match(replaced.note, /是否需要修改：是/);
   assert.match(replaced.note, /修改结果：使用【结界装置】。/);
 });
+
+test("冲突备注只列真正的译名差异，一致项与分段命中只给计数", () => {
+  const tables = loadFixtureTables();
+  const labels = { jp: "原文 A", cn: "主文本（待修改文本）", tw: "非原文 C" };
+
+  // 一行里同时有三种命中：真差异（発信機 没译成「发信器」）、已确认一致（東雲寺）、
+  // 以及只出现姓氏「東雲」而带出的分段命中（東雲太郎，本行并没有写全名）。
+  const evaluation = evaluateTermRow({
+    source: "東雲は発信機を東雲寺に置いた。",
+    target: "东云把发射机放在了东云寺。",
+    tables,
+  });
+  assert.equal(evaluation.kind, "conflict");
+  assert.equal(evaluation.hits.length, 3);
+  const note = makeTermResult({ index: 842 }, labels, evaluation, "bilingual", "cn").note;
+
+  // 明细只列差异项；标题的条数口径与明细一致。
+  assert.match(note, /命中对照表 3 条，其中 1 条存在译名差异：/);
+  assert.match(note, /発信機 → 发信器/);
+  assert.match(note, /（另有 1 条已确认一致、1 条原文只有分段或读音写法，未参与差异判定）/);
+  // 一致项与分段命中的条目名不再进明细：旧版把它们贴在「存在译名差异」标题下，
+  // 同一句里既有「译文已使用该译名」又有「未参与译名一致性判定」，人工要读完整串才找到真差异。
+  assert.equal(/東雲寺 → 东云寺/.test(note), false, "已确认一致的条目不该列进差异明细");
+  assert.equal(/東雲太郎 → 東雲太郎/.test(note), false, "只命中分段写法的同姓角色不该列进差异明细");
+  assert.equal(/未参与译名一致性判定/.test(note), false);
+  assert.equal(/译文已使用该译名/.test(note), false);
+});
+
+test("假名写法的术语不由对照表定论，改为注入提示交给模型判断", () => {
+  const file = path.join(tempDir, "kana-terms.csv");
+  fs.writeFileSync(file, [
+    "Base_Ori,Ruby_Ori,Base_Trans,Type",
+    "グループ,,GROUP,组织/暗部",
+  ].join("\n"), "utf8");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+
+  // 原文「頂点グループ」是普通名词用法，译文写成“一类人”是对的；但同一写法在别的场景确实指那个组织，
+  // 所以既不粗暴删条目、也不由对照表定论：标成 advisory，把判断权交给模型（人工核对模型结论）。
+  const source = "街の八割、実に一八〇万人を一律で分類する六段階評価の、まさに頂点グループ。";
+  const evaluation = evaluateTermRow({
+    source,
+    target: "在将都市居民的八成、实际总共180万人进行统一分类的六级评价系统中，处于顶级位置的一类人。",
+    tables,
+  });
+  assert.equal(evaluation.kind, "advisory");
+  assert.equal(evaluation.advisory.length, 1);
+  assert.equal(evaluation.advisory[0].entry.plainSource, "グループ");
+  assert.equal(evaluation.advisory[0].variant, null);
+
+  // 对照表不给结论：advisory 行不许走 makeTermResult（它只处理纯术语行与冲突行）。
+  assert.throws(
+    () => makeTermResult({ index: 843 }, { jp: "原文 A", cn: "主文本（待修改文本）", tw: "" }, evaluation, "bilingual", "cn"),
+    /只能写纯术语行或冲突行/,
+  );
+
+  // 改为注入提示词：模型必须结合上下文判断此处是否确指该术语，而不是机械替换。
+  const guidance = termGuidanceFor({ index: 843, jp: source }, { evaluation, targetKey: "cn", targetLabel: "主文本（待修改文本）" });
+  assert.equal(guidance.terms.length, 1);
+  assert.equal(guidance.terms[0].advisory, true);
+  assert.equal(guidance.terms[0].source, "グループ");
+  assert.match(guidance.terms[0].note, /原文命中的是假名写法（可能是普通词或音译名），译文未使用该译名——请结合上下文判断/);
+  assert.match(guidance.terms[0].note, /只是普通词义时按普通词处理，不要强改/);
+  assert.match(guidance.terms[0].text, /（可能为普通词，需结合上下文判断）/);
+  assert.equal(/请人工确认是否需要替换/.test(guidance.terms[0].note), false, "存疑项不得写成必须替换的指控");
+});
+
+test("真差异与假名存疑同时命中时，备注只列真差异、存疑项只给计数", () => {
+  const file = path.join(tempDir, "mixed-terms.csv");
+  fs.writeFileSync(file, [
+    "Base_Ori,Ruby_Ori,Base_Trans,Type",
+    "グループ,,GROUP,组织/暗部",
+    "【発信機】,はっしんき,【发信器】,科技/装备",
+  ].join("\n"), "utf8");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+
+  const evaluation = evaluateTermRow({
+    source: "頂点グループをＧＰＳ発信機で探す。",
+    target: "用GPS信号发射机寻找顶点集团。",
+    tables,
+  });
+  // 有强证据差异时整行仍由对照表出结论（最小替换或转人工），但存疑项不能被写成差异。
+  assert.equal(evaluation.kind, "conflict");
+  const note = makeTermResult({ index: 844 }, { jp: "原文 A", cn: "主文本（待修改文本）", tw: "" }, evaluation, "bilingual", "cn").note;
+  assert.match(note, /命中对照表 2 条，其中 1 条存在译名差异：発信機 → 发信器/);
+  assert.match(note, /（另有 1 条命中的是假名写法、可能为普通词，需结合上下文判断）/);
+  assert.equal(/グループ → GROUP（组织\/暗部）：译文未出现该译名/.test(note), false, "存疑项不得写成译名差异");
+});

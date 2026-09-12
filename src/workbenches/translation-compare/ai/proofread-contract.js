@@ -4,6 +4,8 @@ const { DEFAULT_PROFILE_ID, listProfiles, resolveProfile } = require("./profiles
 const { FEATURE_IDS, unknownFeatureIds } = require("./row-features");
 // 段首标记的唯一定义在注入层（term-prefilter）：这里只借用前缀做剥离，不复制字面量。
 const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
+// 线上查证段的段首标记同样只在注入层定义一次。
+const { WEB_LOOKUP_PREFIX } = require("./web-lookup");
 
 // 每种模式一段说明，只有当前模式需要担心的字段语义才出现在该模式的契约里。
 // 双语没有 counterpart 列：对外只问“保持还是替换”，不再问“谁更好”，避免模型臆想“另一份译文”。
@@ -102,13 +104,22 @@ const genericHeader = "【通用校对规则】";
  * | 1 通用侧 | 与作品、模式无关的任务契约：证据优先级、片段口径、needsContext、档位与字段约定 | 本文件 `sharedInstructions` | 每行 |
  * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
  * | 3 特化档案 | 作品/阶段规范，分两种条目：**常驻条目**（关系、作品专有、说话特色、证据边界）与 **按行条目**（排版层、文本层规范，声明 `features`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`） |
- * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段 | `term-prefilter.js`、`speech-habit.js` | 命中该行/该章才注入 |
+ * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
  * | 5 固定尾巴 | noteref 硬性约束、术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行（刻意保守：宁可重复也不丢） |
+ *
+ * **分层（请求里注入了什么）与判定链（结论怎么一步步来的）是两个视角，别混为一谈**：
+ *
+ * 判定链：对照表（离线四类结论）→ 模型（基础轮 + 上下文轮）→ 线上查证（按站点顺序 + 自行检索）→ 待人工
+ * 对应层：第 4 层的术语段 ──── 第 1/2/3/5 层（+ 相邻行）── 第 4 层的线上查证段 ──── 无（终局）
  *
  * 约束：
  * - **顺序不得调整**，测试按分区顺序断言（通用侧 → 模式 → 特化侧 → 动态段 → 约束 → 输出约定）。
  * - 判据**只写一层**：字段默认值、档位定义、needsContext 口径在通用侧写一次；`modeSchemas`
  *   只负责“键名 + 取值”；特化档案只写工作阶段规范，不复述任务契约。
+ * - 第 4 层的四个段一律经 `dynamicBlockPrefixes` 剥离后再注入：自定义提示词里残留的旧段会先被剥掉，
+ *   任何路径都不得出现两段同类动态段——**新增动态段时必须同时登记到那张前缀表**（段首标记由注入层
+ *   自己定义并导出，这里只借用，不复制字面量）。
+ * - 第 4 层内部按“由内到外补充资料”排列：术语命中 → 说话习惯 → 线上查证（外部资料最后注入）。
  * - 裁剪只发生在第 3 层的按行条目与第 4 层：第 1、2、5 层永远全量，避免“省了 token 丢了契约”。
  * - 页面里预填的默认提示词始终是**全量**（第 3 层不裁剪），人工读得到完整规范；
  *   真正发给模型的请求才按 `rowFeatures` 裁剪。
@@ -242,7 +253,7 @@ function stripProfileBlock(text) {
 // 说话习惯段与说话人判断段都是动态生成的（按章、按行）：自定义提示词里可能留着上一次的，
 // 先剥掉再注入本次的。段首标记用前缀匹配，避免与档案正文里提到的「【说话习惯】」混淆。
 // 对照表命中段同理（按行生成，只会出现在被注入的那一行）。
-const dynamicBlockPrefixes = [speechHabitPrefix, "【说话人判断（", TERM_BLOCK_PREFIX];
+const dynamicBlockPrefixes = [speechHabitPrefix, "【说话人判断（", TERM_BLOCK_PREFIX, WEB_LOOKUP_PREFIX];
 
 function stripSpeechHabitBlock(text) {
   let value = String(text || "");
@@ -266,6 +277,7 @@ function buildProofreadSystemPrompt({
   glossary = "",
   speechHabitBlock = "",
   termBlock = "",
+  webLookupBlock = "",
   rowFeatures = null,
   fullPrompt = false,
 } = {}) {
@@ -278,7 +290,12 @@ function buildProofreadSystemPrompt({
   // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段与上一行的术语段，
   // 再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层与对照表命中段总是按本次上下文重新注入。
   const custom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(customSystem))));
-  const dynamicBlocks = [String(termBlock || "").trim(), String(speechHabitBlock || "").trim()];
+  // 动态段按“由内到外补充资料”的顺序排列：术语命中 → 说话习惯 → 线上查证（最后一层，最靠近输出约定）。
+  const dynamicBlocks = [
+    String(termBlock || "").trim(),
+    String(speechHabitBlock || "").trim(),
+    String(webLookupBlock || "").trim(),
+  ];
   const body = !custom || custom === contract.body
     ? promptSections(trimmedBody, ...dynamicBlocks)
     : promptSections(

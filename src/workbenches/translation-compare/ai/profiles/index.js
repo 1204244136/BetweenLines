@@ -94,6 +94,12 @@ function normalizeProfile(profile) {
       .filter(Boolean),
     // 说话习惯的作用范围：chapter（默认，按章命中人名）或 volume（整卷）。
     speechHabitScope: profile.speechHabitScope === "volume" ? "volume" : "chapter",
+    // 线上查证用的官方站点入口（有序：声明顺序就是查询顺序）。作品专有信息，所以由档案声明；
+    // 未声明时线上查询层整体不启用。这里只做形态归一化（字符串/对象都接受、去重、保持顺序）。
+    wikiSites: (Array.isArray(profile.wikiSites) ? profile.wikiSites : [profile.wikiSites])
+      .map((item) => (typeof item === "string" ? { url: item } : (item || {})))
+      .map((item) => ({ label: String(item.label || "").trim(), url: String(item.url || "").trim() }))
+      .filter((item) => item.url),
     sections: Object.freeze(sections.map((section) => Object.freeze(section))),
     // 合并注入时的去重标记：自定义提示词里已经有这段标题就不再追加。
     marker: `【成品校对规范：${name}】`,
@@ -105,7 +111,7 @@ function normalizeProfile(profile) {
  *
  * 只认差异是这套语义的关键——叠加档案不该复制基底的规范正文，否则基底一改，
  * 本机副本就悄悄过期，两份内容也再次分叉成"该选哪个"的问题。
- * - `name`/`summary`/`speechHabitScope`：声明即覆盖，未声明沿用基底。
+ * - `name`/`summary`/`speechHabitScope`/`wikiSites`：声明即覆盖，未声明沿用基底。
  * - `sections`：声明即在基底之后追加；同名小节视为修正，替换基底的那一节。
  * - `termTables`/`speechTables`：按"再补一层"理解，与基底合并去重（基底的表继续生效）。
  */

@@ -42,6 +42,7 @@ const {
   resolveProfile,
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
+const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
 
 const providerDefaults = {
   claude: {
@@ -222,6 +223,10 @@ function clientStatus(options = {}) {
     termPrefiltered: status.termPrefiltered,
     termConflicts: status.termConflicts,
     termInjected: status.termInjected,
+    webLookups: status.webLookups,
+    webLookupResolved: status.webLookupResolved,
+    webLookupAttempts: status.webLookupAttempts,
+    webLookupSites: status.webLookupSites || [],
     termTables: status.termTables,
     termTableStatus: options.includeTermTables === false ? null : termTableStatusFor(options.profileId || status.profileId),
     speechHabitStatus: options.includeTermTables === false ? null : speechHabitStatusFor(options.profileId || status.profileId),
@@ -300,6 +305,10 @@ function cleanConfig(input = {}) {
   // 档案决定默认提示词与两类辅助数据表，这里只解析一次。
   const profile = resolveProfile(input.profileId);
   const profileId = profile.id;
+  // 线上查证的官方站点：显式传入（测试/临时）> 环境变量（换站点）> 档案声明；顺序就是查询顺序。
+  // 字符串形式按 `;` 与换行拆分（环境变量友好），对象形式 `{ label, url }` 原样使用。
+  const inputSites = Array.isArray(input.wikiSites) ? input.wikiSites : toPathList(input.wikiSites);
+  const envSites = toPathList(process.env.TRANSCOMPARATOR_WIKI_SITES);
   return {
     provider,
     target,
@@ -318,6 +327,15 @@ function cleanConfig(input = {}) {
       ...toPathList(process.env.TRANSCOMPARATOR_SPEECH_TABLES),
     ]),
     speechHabitScope: (input.speechHabitScope || profile.speechHabitScope) === "volume" ? "volume" : "chapter",
+    // 线上查询层（最后一层）：官方站点入口由档案声明，**按声明顺序**依次查证（拿到关键信息就停），
+    // 三个站点都不行再让模型自行检索，仍不行才转人工。本机不抓网页（实测这些站点对本机一律 403 风控挑战），
+    // 这一层只把「去哪个站点、查哪些词、问什么、什么时候停」交给模型。站点为空时整层不启用。
+    wikiSites: webLookupSites(
+      inputSites.length
+        ? inputSites
+        : (envSites.length ? envSites : (Array.isArray(profile.wikiSites) ? profile.wikiSites : [])),
+    ),
+    webLookup: input.webLookup !== false && process.env.TRANSCOMPARATOR_WEB_LOOKUP !== "0",
     concurrency,
     similarityThreshold,
     circuitBreakerErrorRate,
@@ -386,6 +404,10 @@ function resetStatus(config, rowsLength) {
   status.termPrefiltered = 0;
   status.termConflicts = 0;
   status.termInjected = 0;
+  // 线上查询层：多少行模型判断不了而进入查证、一共问了几轮、其中多少行据此得出结论。
+  status.webLookups = 0;
+  status.webLookupResolved = 0;
+  status.webLookupAttempts = 0;
   status.skippedDone = 0;
   status.modelProcessed = 0;
   status.modelHandled = 0;
@@ -531,6 +553,8 @@ async function startProofread(input) {
   resetStatus(config, rows.length);
   // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
   resetPromptTrim();
+  // 状态接口如实显示本次任务用的查证站点顺序（未声明/已关闭时为空数组，前端据此说明这一层未启用）。
+  status.webLookupSites = config.webLookup ? config.wikiSites.map((site) => site.label) : [];
   const labels = {
     jp: "原文 A",
     cn: "非原文 B",
@@ -732,6 +756,9 @@ function clearProofreadCache() {
   status.termPrefiltered = 0;
   status.termConflicts = 0;
   status.termInjected = 0;
+  status.webLookups = 0;
+  status.webLookupResolved = 0;
+  status.webLookupAttempts = 0;
   status.termTables = { files: [], entries: 0 };
   status.speechHabitChapters = 0;
   status.speechHabitCharacters = [];
@@ -796,6 +823,8 @@ function finish() {
   if (!isPrefilter) {
     const summary = promptTrimSummary();
     if (summary) pushLog(summary);
+    const lookup = webLookupSummary();
+    if (lookup) pushLog(lookup);
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
@@ -883,6 +912,53 @@ async function proofreadRow(row, allRows, config, labels) {
     const added = expandContextRing(contextState);
     if (!added.length) break;
   }
+  // 线上查询层（最后一层，排在“转人工”之前）：模型明确判断不了、相邻行也补过之后，按顺序去官方站点查证。
+  // 一轮只给**一个**站点入口（不给直达词条链接——猜条目名容易错），拿到能定论的关键信息立即停止，
+  // 后面的站点与“自行检索”一轮都不再发；官方站点都试完仍无结果，才让模型自行检索；再不行转人工。
+  // 只有 advisory（假名写法存疑）行会走到这里：conflict 由对照表直接给结论、consistent/term-only 没进这一轮。
+  if (config.webLookup && config.wikiSites.length && shouldRetryWithContext(decision)) {
+    const entries = webLookupEntries({
+      termGuidance: basePayload.termGuidance,
+      jp: row.jp || "",
+      targetText,
+    });
+    if (entries.length) {
+      status.webLookups += 1;
+      const queries = entries.flatMap((item) => item.terms).join("、");
+      const triedLabels = [];
+      // round 0..sites.length-1 依次走官方站点；round === sites.length 是“自行检索”那一轮。
+      const lastRound = config.wikiSites.length;
+      for (let round = 0; round <= lastRound; round += 1) {
+        const site = config.wikiSites[round];
+        const label = site ? site.label : "自行检索";
+        // 分母只数“站点”：自行检索不是第 4 个站点，单独措辞（与提示词里的“第 N/M 站”保持一致）。
+        const stageLabel = site
+          ? `线上查证 ${round + 1}/${config.wikiSites.length}（${label}）`
+          : "线上查证（自行检索）";
+        pushLog(`第 ${row.index} 行：查询「${queries}」→ ${stageLabel}。`);
+        const messages = buildMessages({
+          ...basePayload,
+          context: contextState.items,
+          contextMode: contextState.items.length ? "requested" : "none",
+          webLookup: { entries, sites: config.wikiSites, round },
+        }, config);
+        const content = await trackedCallModel(row, `web-lookup-${round + 1}`, stageLabel, messages, config);
+        const next = parseDecision(content, { proofreadMode: config.proofreadMode });
+        status.webLookupAttempts += 1;
+        if (!shouldRetryWithContext(next)) {
+          // 拿到关键信息：立即定稿，不再查剩下的站点（这正是“按顺序、拿到就停”的落点）。
+          decision = { ...next, webLookup: { concluded: true, siteLabel: site ? site.label : "", triedLabels: [...triedLabels] } };
+          status.webLookupResolved += 1;
+          pushLog(`第 ${row.index} 行：${label} 获得依据并给出结论（依据已写入备注）。`);
+          break;
+        }
+        triedLabels.push(label);
+        decision = { ...next, webLookup: { concluded: false, triedLabels: [...triedLabels] } };
+        if (status.stopRequested) break;
+        pushLog(`第 ${row.index} 行：${label} 未获得有效信息，${round < lastRound ? "换下一个来源" : "转人工确认"}。`);
+      }
+    }
+  }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
   return decisionToResult(row, decision, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
 }
@@ -962,7 +1038,9 @@ function shouldRetryWithContext(decision) {
  * 对照表预处理：命中行按「整行是否只有术语」分流，并返回被它直接处理掉的行号集合。
  * - `term-only`：整行有效内容就是术语，直接写成结果，不调用模型；
  * - `consistent`：术语一致但句中还有别的内容——照常交给模型，只把术语当提示词注入；
- * - `conflict`：译名不一致，给出最小替换或转人工确认（与过去一致）。
+ * - `advisory`：命中的是假名写法（グループ、メンバー…），可能只是普通词——**不由对照表定论**，
+ *   注入术语提示后照常交给模型，由模型结合上下文判断此处是否确指该术语（与人工核对模型结论）；
+ * - `conflict`：译名不一致（强证据且非假名写法），给出最小替换或转人工确认。
  * AI 校对与预筛选共用这条路径——它不调用模型，只做确定性查表。
  */
 function applyTermTable(config, rows, labels) {
@@ -972,6 +1050,7 @@ function applyTermTable(config, rows, labels) {
   status.termTables = { files: termTables.files, entries: termTables.entries.length };
   let consistentRows = 0;
   let conflictRows = 0;
+  let advisoryRows = 0;
   const resolvedByTable = [];
   const skippedByTable = [];
   const targetKey = termTargetKeyFor(config.proofreadMode, config.target);
@@ -983,20 +1062,22 @@ function applyTermTable(config, rows, labels) {
       tables: termTables,
     });
     if (!evaluation) continue;
+    // advisory 与 consistent 都只覆盖术语：整行是否还有问题由模型判定，这里只登记术语提示。
+    const injectOnly = evaluation.kind === "consistent" || evaluation.kind === "advisory";
     if (evaluation.kind === "conflict") {
       // 译名冲突由对照表直接给结论（最小替换或转人工确认），这一行不会走到模型。
       conflictRows += 1;
     } else {
-      // 「术语一致」只覆盖术语：整行是否还有问题由模型判定，这里只登记术语提示。
-      consistentRows += 1;
+      if (evaluation.kind === "advisory") advisoryRows += 1;
+      else consistentRows += 1;
       resolvedByTable.push(Number(row.index));
-      // 已人工确认的行本来就不会再跑：不必为它们准备提示词。
-      if (evaluation.kind === "consistent" && !config.completedIndexes.has(Number(row.index))) {
+      // 只有真正交给模型的行才需要术语提示词：已人工确认的行不会再跑，整行只有术语的行不进模型。
+      if (injectOnly && !config.completedIndexes.has(Number(row.index))) {
         config.termContext.set(Number(row.index), termGuidanceFor(row, { evaluation, targetKey, targetLabel }));
       }
     }
     if (config.completedIndexes.has(Number(row.index))) continue;
-    if (evaluation.kind === "consistent") continue;
+    if (injectOnly) continue;
     if (evaluation.kind === "term-only") {
       skippedByTable.push(Number(row.index));
     }
@@ -1008,7 +1089,7 @@ function applyTermTable(config, rows, labels) {
   }
   status.termConflicts = conflictRows;
   status.termInjected = resolvedByTable.filter((index) => config.termContext.has(index)).length;
-  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，需人工确认 ${conflictRows}），另有 ${status.termInjected} 行的术语一致但句中还有别的词，按提示词注入后照常交给模型。`);
+  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows + advisoryRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，需人工确认 ${conflictRows}，存疑交模型判断 ${advisoryRows}），另有 ${status.termInjected} 行的术语按提示词注入后照常交给模型。`);
   compareWithTermLayer(config, { resolved, targetKey, skippedByTable });
   return resolved;
 }
@@ -1359,6 +1440,13 @@ function promptTrimSummary() {
   return `提示词按行裁剪：${promptTrim.rows} 行共省略 ${promptTrim.omittedLines} 条只在特定版式/文字现象下才需要的特化规范（平均每行省约 ${average} 字符）；命中特征：${top || "（无）"}。`;
 }
 
+/** 线上查询层的一次任务汇总：只有真的用过才汇报，避免每次任务都刷一行“没用上”。 */
+function webLookupSummary() {
+  if (!status.webLookups) return "";
+  const order = (status.webLookupSites || []).join(" → ") || "（未声明站点）";
+  return `线上查证：${status.webLookups} 行模型判断不了，已按顺序查证 ${order} → 自行检索（共 ${status.webLookupAttempts} 轮，其中 ${status.webLookupResolved} 行据此得出结论，其余仍转人工）。`;
+}
+
 function buildMessages(payload, config = {}) {
   const bilingualMode = config.proofreadMode === "bilingual";
   const proofreadMode = bilingualMode ? "bilingual" : "trilingual";
@@ -1407,6 +1495,26 @@ function buildMessages(payload, config = {}) {
         note: "译文出现这些概念时必须使用对照表给出的标准译名；一致性只覆盖术语，句子的其余部分仍按常规规则逐项核对。",
       },
     } : {}),
+    // 线上查询层：把「去哪个站点入口、查哪些词、问什么」给模型，由它自己站内查找（本机不抓网页）。
+    // 一轮只给一个站点，程序按声明顺序推进，模型给出能定论的结论就停——后面的站点不再发。
+    ...(payload.webLookup?.entries?.length ? (() => {
+      const site = payload.webLookup.sites[payload.webLookup.round] || null;
+      return {
+        webLookup: {
+          source: site ? `作品维基（第 ${payload.webLookup.round + 1} 站）` : "作品维基（官方站点均无结果，改为自行检索）",
+          site: site ? { label: site.label, entry: site.url } : null,
+          terms: payload.webLookup.entries.map((item) => ({
+            terms: item.terms,
+            excerpt: item.excerpt,
+            target: item.targetText,
+            type: item.type,
+          })),
+          note: site
+            ? "请访问这个站点入口并在站内查找上面的词条；只依据实际查到的内容判断，打不开或搜不到就返回 needsContext=true / decision=unclear（程序会接着给下一个站点）；拿到能定论的关键信息就立即给结论，不要继续查别的来源。"
+            : "官方站点都没有查到能用的信息。请用你自己的能力（浏览器、搜索引擎，或你确实掌握的可信资料）再找一次；取不到内容时不要用记忆顶替，照常返回 unable 判断。",
+        },
+      };
+    })() : {}),
     modePolicy: bilingualMode
       ? "以原文 A 与译文 B 的语义对应为主要判断对象；只能修改 B，原文 A 用于确认语义边界、遗漏和误译。"
       : "同时参考原文、目标列和另一非原文列，判断目标列是否准确、通顺并符合原文语义；两份非原文仍是同级材料。",
@@ -1454,6 +1562,7 @@ function buildMessages(payload, config = {}) {
       glossary,
       speechHabitBlock: [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n"),
       termBlock: payload.termGuidance?.block || "",
+      webLookupBlock: webLookupBlock(payload.webLookup || {}),
       rowFeatures,
       fullPrompt,
     }) },
@@ -1853,6 +1962,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         "是否需要修改：待人工确认",
         speakerLine(decision),
         analysisLine(decision),
+        webLookupLine(decision),
       ].filter(Boolean).join("\n"),
     };
   }
@@ -1873,6 +1983,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         "是否需要修改：否",
         speakerLine(decision),
         analysisLine(decision),
+        webLookupLine(decision),
       ].filter(Boolean).join("\n"),
     };
   }
@@ -1894,6 +2005,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
     lines.push("是否需要修改：待人工确认");
     lines.push(analysisLine(decision));
   }
+  if (webLookupLine(decision)) lines.push(webLookupLine(decision));
 
   return {
     runId: status.runId,
@@ -1924,6 +2036,19 @@ function scoreAndGradeLines(decision) {
 
 function speakerLine(decision) {
   return decision.speaker ? `说话人：${decision.speaker}（据说话习惯特征判断）` : "";
+}
+
+/**
+ * 线上查证在备注里的那一行：人工只读结果，也必须能看出结论的依据来自哪里。
+ * 没有进入线上查询层的行走不到这里（`decision.webLookup` 只在那一轮才挂上）。
+ */
+function webLookupLine(decision) {
+  if (!decision?.webLookup) return "";
+  return webLookupNote({
+    concluded: decision.webLookup.concluded === true,
+    siteLabel: decision.webLookup.siteLabel || "",
+    triedLabels: decision.webLookup.triedLabels || [],
+  });
 }
 
 function analysisLine(decision, fallback = "") {

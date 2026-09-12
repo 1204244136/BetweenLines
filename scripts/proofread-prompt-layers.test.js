@@ -218,3 +218,48 @@ test("任务结束时汇报本次裁剪省了多少条规范", () => {
   assert.match(summary, /ruby 1 行/);
   resetPromptTrim();
 });
+
+test("第 4 层的动态段：术语 → 说话习惯 → 线上查证，各只出现一次且顺序固定", () => {
+  // 四个段的段首标记都必须登记在 dynamicBlockPrefixes 里：自定义提示词残留的旧段先被剥掉，
+  // 再按“由内到外补充资料”的顺序统一注入（新增动态段时若漏登记，这条测试会立刻失败）。
+  const termBlock = "【术语（对照表命中）】\n本行原文命中了本项目译名对照表的下列条目：\n- グループ → GROUP（组织/暗部）";
+  const habitBlock = "【说话习惯（本章）】本章「第一章」出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征。\n- 山田太郎：第一人称 「オレ」 → 本项目写作「本大爷」";
+  const lookupBlock = "【线上查证（作品维基）】 第 1/3 站：中文（灰机）\n站点入口：https://example.com/wiki/";
+  const counts = (text, needle) => text.split(needle).length - 1;
+
+  const system = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    termBlock,
+    speechHabitBlock: habitBlock,
+    webLookupBlock: lookupBlock,
+  });
+  for (const needle of ["【术语（对照表命中）】", "【说话习惯（本章）】", "【线上查证（作品维基）】"]) {
+    assert.equal(counts(system, needle), 1, `动态段只能出现一次：${needle}`);
+  }
+  const order = ["【术语（对照表命中）】", "【说话习惯（本章）】", "【线上查证（作品维基）】", "只返回一个 JSON 对象"]
+    .map((needle) => system.indexOf(needle));
+  assert.equal(order.every((index) => index >= 0), true, "动态段与固定尾巴都应在最终提示词里");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "顺序必须是 术语 → 说话习惯 → 线上查证 → JSON 约定");
+
+  // 自定义提示词里残留的旧动态段要被剥掉（用户可能直接沿用上一次的整段文本）。
+  // 注意动态段的边界是“到下一个【或硬性约束为止”，所以用户追加的规则要写在段**之前**才不会被吞掉
+  // （这条纪律在 term-prefilter.test.js 里已有专门断言，这里只验剥离后不出现两份）。
+  const stale = `${system}\n${lookupBlock}`;
+  const rebuilt = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    customSystem: stale,
+    termBlock,
+    speechHabitBlock: habitBlock,
+    webLookupBlock: lookupBlock,
+  });
+  for (const needle of ["【术语（对照表命中）】", "【说话习惯（本章）】", "【线上查证（作品维基）】"]) {
+    assert.equal(counts(rebuilt, needle), 1, `残留的旧动态段没被剥干净：${needle}`);
+  }
+  // 没有命中任何动态段的行：四段都不出现（不能留空段或标题）。
+  const plain = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel" });
+  for (const needle of ["【术语（对照表命中）】", "【说话习惯（", "【说话人判断（", "【线上查证（作品维基）】"]) {
+    assert.equal(plain.includes(needle), false, `没有命中时不该出现动态段：${needle}`);
+  }
+});

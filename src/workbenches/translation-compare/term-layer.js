@@ -63,6 +63,9 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
   // 整行有效内容就是术语：对照表能给出完整结论，跳过模型。
   const termOnly = [];
   const conflicts = [];
+  // 其中「存疑」的那部分：命中的是假名写法（グループ、メンバー…），可能只是普通词。
+  // 它们同样交给模型判断，单独计数是为了让人一眼看出“有多少行是拿不准才交给 AI 的”。
+  let advisoryRows = 0;
   // 行号 → 该行命中的术语对（去方括号的「原文 → 译名（类型）」）：页面在跑任务前就能显示命中了什么。
   const terms = {};
   const chapters = new Map();
@@ -75,7 +78,10 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
     if (!evaluation) continue;
     if (evaluation.kind === "term-only") termOnly.push(Number(row.index));
     else if (evaluation.kind === "conflict") conflicts.push(Number(row.index));
-    else injected.push(Number(row.index));
+    else {
+      injected.push(Number(row.index));
+      if (evaluation.kind === "advisory") advisoryRows += 1;
+    }
     // 页面上的术语块只列本行**确实用到**的术语（与注入给模型的同一批，见 hitsUsedInRow）。
     const pairs = [...new Set(hitsUsedInRow(row.jp || "", evaluation.hits).map((hit) => displayTermPair(hit.entry)))];
     if (pairs.length) terms[Number(row.index)] = pairs.slice(0, TERMS_PER_ROW_CAP);
@@ -101,6 +107,7 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
       consistent: consistent.length,
       termOnly: termOnly.length,
       injected: injected.length,
+      advisory: advisoryRows,
       conflicts: conflicts.length,
       // 对照表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
       removedFromModel: termOnly.length,
