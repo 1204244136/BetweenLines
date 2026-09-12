@@ -165,6 +165,8 @@
         .sort((a, b) => b.plan.verified - a.plan.verified);
       const best = candidates.find(({ plan }) => plan.verified);
       if (best) {
+        // 逐「目标行」收集各历史空间的版本：只有全部历史空间的并集才是完整的候选集，
+        // 只看基准空间（verified 最多的那份）会漏掉「只出现在别处的记录」——那种记录同样带人工确认。
         const variants = new Map();
         for (const candidate of candidates) {
           for (const pair of candidate.plan.pairs.filter((pair) => pair.verified)) {
@@ -178,16 +180,16 @@
         // 而不是像以前那样整条丢弃——那会把「确认预筛」的人工确认一并丢掉。
         let mergedVariants = 0;
         const pairs = [];
-        for (const pair of best.plan.pairs.filter((pair) => pair.verified)) {
-          const entries = [...(variants.get(pair.to)?.values() || [])];
+        for (const [to, byVariant] of variants) {
+          const entries = [...byVariant.values()];
           if (!entries.length) continue;
           if (entries.length === 1) {
-            pairs.push({ ...pair, item: entries[0] });
+            pairs.push({ from: to, to, verified: true, item: entries[0] });
             continue;
           }
           const item = mergeRecoveredVariants(entries);
           if (item.mergedFromSpaces) mergedVariants += 1;
-          pairs.push({ ...pair, item });
+          pairs.push({ from: to, to, verified: true, item });
         }
         if (pairs.length) {
           for (const pair of pairs) notes[String(pair.to)] = pair.item;
@@ -196,7 +198,7 @@
           notesRecovery = `已按行内容找回 ${pairs.length} 条记录${mergedNote}；其余或相互冲突的历史记录可在「备注空间与找回」中预览。`;
         }
       } else if (candidates.length) {
-        notesRecovery = "发现历史备注。请展开「备注空间与找回」，预览匹配结果后找回。";
+        notesRecovery = "发现历史备注，但没有任何一条能按行内容对上本页——历史记录仍保留在「备注空间与找回」中，可用「按行号找回」逐行核验。";
       }
     }
 
@@ -282,7 +284,10 @@
     let currentPage = 1;
     let activeRowId = "";
     let lastAiRunId = "";
-    let latestPrefilterRunId = "";
+    // 本页「预筛结果集」对应的运行号：不只由本页启动的那一轮设置，页面重开后由状态轮询
+    // 从服务端上一轮预筛结果里认领（服务端会整轮返回结果），否则 resultIds 为空、
+    // 「确认预筛」永久锁死，用户点「开始预筛」就会把同一批行重新筛一遍。
+    let prefilterRunId = "";
     let prefilterResultFilterActive = false;
     let prefilterResultsCatchingUp = false;
     let lastAiResultRevision = 0;
@@ -901,7 +906,7 @@
       aiMonitorRenderKey = "";
       aiActiveIds.clear();
       prefilterResultIds.clear();
-      latestPrefilterRunId = "";
+      prefilterRunId = "";
       prefilterResultFilterActive = false;
       prefilterResultsCatchingUp = false;
       prefilterResultFilter.disabled = true;
@@ -1665,7 +1670,7 @@
       if (
         ai &&
         ai.kind === "prefilter" &&
-        ai.runId === latestPrefilterRunId
+        ai.runId === prefilterRunId
       ) {
         prefilterResultsCatchingUp = Boolean(ai.running || ai.hasMoreResults);
       }
@@ -2532,11 +2537,15 @@
           appliedResult = true;
           pendingResults.push(result);
           const isRuleOrSimilarityPrefilter = result.status === "rule-prefilter" || result.status === "similarity-prefilter";
-          if (
-            isPrefilter &&
-            aiRunId === latestPrefilterRunId &&
-            (isRuleOrSimilarityPrefilter || result.status === "term-prefilter")
-          ) {
+          // 预筛结果集不只是「本次运行」的状态：它是重新打开页面后「哪些行已经筛过」的依据。
+          // 服务端会整轮返回上一轮预筛的结果，所以这里以运行号为准登记（不要求本页启动过这一轮）——
+          // 否则重开后 resultIds 为空、「确认预筛」永久锁死，用户一点「开始预筛」就会重新筛出同一批行。
+          if (isPrefilter && aiRunId && (isRuleOrSimilarityPrefilter || result.status === "term-prefilter")) {
+            if (prefilterRunId !== aiRunId) {
+              // 首次认领或换了新一轮预筛：旧一轮的结果不再代表「已经筛过什么」，整体替换。
+              prefilterResultIds.clear();
+              prefilterRunId = aiRunId;
+            }
             prefilterResultIds.add(String(result.index));
           }
         }
@@ -2800,7 +2809,7 @@
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
-        latestPrefilterRunId = data.ai?.runId || "";
+        prefilterRunId = data.ai?.runId || "";
         prefilterResultIds.clear();
         prefilterResultFilterActive = true;
         prefilterResultsCatchingUp = true;

@@ -51,7 +51,7 @@ function createWorkbench(storage = storageFixture()) {
       createElement: () => element(Symbol()), createElementNS: () => element(Symbol()),
       documentElement: element("html"), addEventListener() {},
     },
-    localStorage: storage, console, URL, Blob,
+    localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
     window: { addEventListener() {}, requestAnimationFrame() {}, setTimeout() {}, clearTimeout() {} },
     navigator: {}, location: { protocol: "file:" },
     fetch: () => new Promise(() => {}), setTimeout() {}, clearTimeout() {}, setInterval() {},
