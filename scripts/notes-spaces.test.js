@@ -192,3 +192,39 @@ test("clear current notes keeps history, and clear history keeps the current spa
   assert.notEqual(ui.storage.getItem(key), null);
   assert.equal(ui.storage.getItem(historyKey), null);
 });
+
+test("低分归因与线上查证属于分析栏，不会被并进可写回的修改结果", () => {
+  const prose = [
+    "修改结果：不如说越来越大了。",
+    "低分归因：本行译文实际写的是**下一行**的内容（跨行错位），已保持原文行序、按本行原文重写",
+    "线上查证：日文（atwiki）查到依据（结论见上方分析）",
+    "标点自动规范化：半角→全角 3 处（中文标点全角、英文句子半角）",
+  ];
+  const note = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：是",
+    "质量评分：20分（扣80分）",
+    "分析：需要修改，存在严重的跨行错位与语义脱落。",
+    ...prose,
+  ].join("\n");
+  // 修复前的备注就是这个形状：说明行跟在「修改结果：」后面，解析时会被并进修改结果。
+  const legacyRevision = `不如说越来越大了。\n${prose[1]}\n${prose[2]}\n${prose[3]}`;
+  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note, revisionText: legacyRevision } }) }));
+
+  const parsed = ui.run('parseAutomatedNote(notes["1"].note)');
+  assert.equal(parsed.revision, "不如说越来越大了。", "修改结果只能是本行成品文本");
+  assert.match(parsed.analysis, /^需要修改，存在严重的跨行错位与语义脱落。\n/);
+  assert.match(parsed.analysis, /低分归因：本行译文实际写的是\*\*下一行\*\*的内容/);
+  assert.match(parsed.analysis, /线上查证：日文（atwiki）查到依据/);
+  assert.match(parsed.analysis, /标点自动规范化：半角→全角 3 处/);
+
+  assert.equal(
+    ui.run('revisionTextFor(notes["1"])'),
+    "不如说越来越大了。",
+    "载入旧备注时要把并进修改结果的说明行剥掉，否则「写回」会把归因说明写进成品",
+  );
+  assert.equal(ui.run('isNoteProseLine("低分归因：跨行错位")'), true);
+  assert.equal(ui.run('isNoteProseLine("标点自动规范化：半角→全角 3 处")'), true);
+  assert.equal(ui.run('isNoteProseLine("修改结果：不如说越来越大了。")'), false);
+});

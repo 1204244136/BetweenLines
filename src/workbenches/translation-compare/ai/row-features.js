@@ -57,8 +57,11 @@ const RULES = {
   page: ({ source, target }) =>
     /class\s*=\s*["']?[^"'>]*\bpb\b|<img|\[图片\]|\[插图\]|\[p\d+\]|<!--\s*page/iu.test(`${source}\n${target}`),
   blank: ({ source, target }) => /(\n[ \t\r]*){2,}/u.test(source) || /(\n[ \t\r]*){2,}/u.test(target),
+  // 省略号现象：原文的「…」「。。。」，以及**目标列里已经写歪的**连续英文句点（「..」「...」「......」）。
+  // 门槛取**两个**点：与规范化层（`punctuation.js` 的 `\.{2,}` → 「……」）保持同一口径，
+  // 否则「..」这种写法进不了这一层，模型拿不到省略号规范，规范化层也不会去动它。
   ellipsis: ({ source, target }) =>
-    /。。。|\.{4,}|…|‥/u.test(`${source}\n${target}`),
+    /。。。|\.{2,}|…|‥/u.test(`${source}\n${target}`),
   interrobang: ({ source, target }) =>
     /！？|？！|！\?|\?！|!\?|\?!/u.test(`${source}\n${target}`),
   quote: ({ source, target }) =>

@@ -274,6 +274,13 @@ test("极低分先归因：转到归因轮、补相邻行、按原因修，结�
   const result = status.results.find((item) => item.index === 2);
   assert.match(result.note, /低分归因：本行译文实际写的是\*\*下一行\*\*的内容（跨行错位），已保持原文行序、按本行原文重写/);
   assert.match(result.note, /修改结果：两位少女甚至天真无邪地问了过来。/);
+  // 备注按行取值：「修改结果：」必须是最后一段且只放本行成品文本，说明行跟在它后面
+  // 会被并进修改结果（页面上就是可写回文本），所以低分归因写在分析栏里。
+  const noteLines = result.note.split("\n");
+  assert.equal(noteLines.at(-1), "修改结果：两位少女甚至天真无邪地问了过来。");
+  const analysisIndex = noteLines.findIndex((line) => line.startsWith("分析："));
+  const attributionIndex = noteLines.findIndex((line) => line.startsWith("低分归因："));
+  assert.equal(attributionIndex > analysisIndex && attributionIndex < noteLines.length - 1, true, "低分归因写在分析栏里（分析之后、修改结果之前）");
   assert.equal(status.lowScoreChecks, 1);
   assert.equal(status.lowScoreShifted, 1);
   assert.deepEqual(status.lowScoreCauses, { "order-shift-next": 1 });

@@ -107,6 +107,11 @@ const ROW_LINE_MARKERS = {
 const QUOTE_PUNCT_MARKER = "引号内句末点号按 B 的中文规范定位置";
 // 注音条目同样补了一句证据边界：只能评价 B 里实际出现的注音。
 const RUBY_EVIDENCE_MARKER = "判断只能针对 B 里实际出现的注音";
+// 标点写法既约束判断也约束**改写**：真实回归是模型在 revisedText 里把「……」打成「......」，
+// 而旧规范只写成“判 B 的缺陷”，模型便不拿它约束自己写出的文本。
+const PUNCT_FULLWIDTH_MARKER = "中文正文里的标点一律用全角字形";
+const PUNCT_REVISION_MARKER = "这一条同时约束你自己写出的 revisedText";
+const ELLIPSIS_REWRITE_MARKER = "你的 revisedText 同样必须用「……」";
 
 test("注册特征与实现一一对应，且每个特征都有可达的样例行", () => {
   assert.deepEqual(Object.keys(FEATURE_RULES).sort(), [...FEATURE_IDS].sort(), "每个注册特征都必须有实现");
@@ -133,6 +138,10 @@ test("按行裁剪：只在当前行命中特征时才注入对应的特化规�
     "行边界由上游对齐决定",
     "系列名、专有名词与术语以本项目译名表为准",
     "角色口癖、第一人称、句尾语气词",
+    // 标点全角化是每行都要看的排版底线：任何一行都可能被改写，规范漏注入就等于模型
+    // 只在“恰好出现连点”的行才受约束，其余行的改写可以随便打半角标点。
+    PUNCT_FULLWIDTH_MARKER,
+    PUNCT_REVISION_MARKER,
   ]) {
     assert.equal(trimmed.includes(marker), true, `常驻条目被误裁：${marker}`);
   }
@@ -204,6 +213,28 @@ test("注音规范只评价 B 里实际出现的注音：不得凭 A 里普通�
   assert.equal(trimmed.includes(RUBY_EVIDENCE_MARKER), false);
 });
 
+test("半角标点：连点行必须拿到省略号写法，且规范明确约束模型自己写出的修订结果", () => {
+  // 真实回归（第 1040 行）：B 与 A 里都是省略号，模型却在 revisedText 里打出「......」，
+  // 判定与改写用的是同一套规范，规范必须对自己的输出也生效。
+  const row = {
+    source: "という床全体を震わせるほど太い音の塊の正体は……。",
+    target: "震撼整块地面的声音到底是......",
+  };
+  const hit = detectRowFeatures(row);
+  assert.equal(hit.has("ellipsis"), true, "目标列里的连续半角点必须命中省略号特征");
+  // 两个点与三个点是同一类缺陷：门槛与规范化层（punctuation.js 的 `\.{2,}`）必须一致。
+  assert.equal(detectRowFeatures({ source: "そうだ。", target: "这样.." }).has("ellipsis"), true);
+  const system = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: hit });
+  assert.equal(system.includes(ELLIPSIS_REWRITE_MARKER), true, "省略号条目必须写明 revisedText 也要用「……」");
+  assert.equal(system.includes("不要原样保留"), true);
+  // 常驻的全角条款对任何行都在（模型可能在毫无连点的行里自行引入半角标点）。
+  assert.equal(system.includes(PUNCT_REVISION_MARKER), true);
+  const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+  const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
+  assert.equal(trimmed.includes(ELLIPSIS_REWRITE_MARKER), false, "没有连点现象的行不背省略号条目");
+  assert.equal(trimmed.includes(PUNCT_REVISION_MARKER), true, "但全角标点的底线每行都在");
+});
+
 test("输出语言约束与标记范围：修订结果不得写入原文文字，标记只留目标列自身已有的", () => {
   const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
   const full = proofreadPromptFor("bilingual", "novel").system;
@@ -219,7 +250,14 @@ test("输出语言约束与标记范围：修订结果不得写入原文文字�
 
 test("页面默认提示词保持全量：裁剪只发生在真正发请求时", () => {
   const full = proofreadPromptFor("bilingual", "novel").system;
-  for (const marker of [...Object.values(ROW_LINE_MARKERS), QUOTE_PUNCT_MARKER, RUBY_EVIDENCE_MARKER]) {
+  for (const marker of [
+    ...Object.values(ROW_LINE_MARKERS),
+    QUOTE_PUNCT_MARKER,
+    RUBY_EVIDENCE_MARKER,
+    PUNCT_FULLWIDTH_MARKER,
+    PUNCT_REVISION_MARKER,
+    ELLIPSIS_REWRITE_MARKER,
+  ]) {
     assert.equal(full.includes(marker), true, `默认提示词（人工阅读/编辑用）必须是全量，缺：${marker}`);
   }
   const stats = profileLineStats(resolveProfile("novel"), null);

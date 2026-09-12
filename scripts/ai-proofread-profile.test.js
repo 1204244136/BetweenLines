@@ -142,6 +142,14 @@ test("规范要点确实进入了特化侧提示词", () => {
   // 规范里的具体条款
   assert.match(novel, /省略号被写成连续句号或连续英文句点/);
   assert.match(novel, /「！？」按规范统一写成「？！」/);
+  // 标点全角化既约束判断也约束改写（真实回归：模型在 revisedText 里打出「......」）：
+  // 半角只在 ASCII 数字/英文/URL/代码里合法，从 B 保留的不合规写法要在 revisedText 里一并改掉。
+  assert.match(novel, /中文正文里的标点一律用全角字形/);
+  assert.match(novel, /半角标点只允许出现在 ASCII 数字、英文缩写、URL 与代码里/);
+  assert.match(novel, /这一条同时约束你自己写出的 revisedText/);
+  assert.match(novel, /你的 revisedText 同样必须用「……」/);
+  // 英文句子反过来必须用半角：否则“标点全角化”这条要求会把整段英文写坏（确定性规范化层同理）。
+  assert.match(novel, /整段英文句子反过来必须用半角/);
   // 引号内句末点号的位置按目标列（中文）规范判断，不以原文标点为判据；
   // 注音条例只能评价 B 里实际出现的注音（两条都是真实假阳性的回归断言）。
   assert.match(novel, /引号内句末点号按 B 的中文规范定位置/);

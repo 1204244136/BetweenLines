@@ -42,6 +42,7 @@ const {
   resolveProfile,
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
+const { normalizeTargetPunctuation } = require("./punctuation");
 const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
 const {
   DEFAULT_LOW_SCORE_PENALTY,
@@ -164,6 +165,11 @@ const status = {
   termRubyDemoted: 0,
   // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、转人工确认的行数（见 guardTargetScript）。
   scriptLeaks: 0,
+  // 标点规范化：多少行的修改结果被统一过标点宽度、半角→全角与全角→半角各多少处（见 punctuation.js）。
+  punctEnabled: true,
+  punctFixes: 0,
+  punctToFull: 0,
+  punctToHalf: 0,
   termTables: { files: [], entries: 0 },
   // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
   lowScoreEnabled: true,
@@ -251,6 +257,11 @@ function clientStatus(options = {}) {
     termRubyDemoted: status.termRubyDemoted,
     // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
     scriptLeaks: status.scriptLeaks,
+    // 标点规范化：这一层是否启用、多少行的修改结果被统一过标点宽度、两个方向各多少处。
+    punctEnabled: status.punctEnabled,
+    punctFixes: status.punctFixes,
+    punctToFull: status.punctToFull,
+    punctToHalf: status.punctToHalf,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
@@ -381,6 +392,9 @@ function cleanConfig(input = {}) {
       DEFAULT_LOW_SCORE_PENALTY,
     ),
     lowScoreRows: clampInteger(input.lowScoreRows, 1, 4, DEFAULT_LOW_SCORE_ROWS),
+    // 标点规范化（确定性工序，排在输出侧护栏之前）：中文语境用全角、英文句子保持半角，
+    // 只动标点宽度，并把改了几处如实写进备注与日志（提示词侧的对应要求写在排版层里）。
+    punctNormalize: input.punctNormalize !== false && process.env.TRANSCOMPARATOR_PUNCT !== "0",
     concurrency,
     similarityThreshold,
     circuitBreakerErrorRate,
@@ -453,6 +467,11 @@ function resetStatus(config, rowsLength) {
   status.termInjected = 0;
   // 输出侧护栏：多少行的 revisedText 混进了原文（日文）文字而被作废转人工（提示词约束之外的确定性闸门）。
   status.scriptLeaks = 0;
+  // 标点规范化：把修改结果里的标点宽度按语境统一（中文全角、英文半角），计数如实上报。
+  status.punctEnabled = config.punctNormalize !== false;
+  status.punctFixes = 0;
+  status.punctToFull = 0;
+  status.punctToHalf = 0;
   // 线上查询层：多少行模型判断不了而进入查证、一共问了几轮、其中多少行据此得出结论。
   status.webLookups = 0;
   status.webLookupResolved = 0;
@@ -898,6 +917,11 @@ function finish() {
     if (status.scriptLeaks) {
       pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废并转人工确认。`);
     }
+    if (status.punctFixes) {
+      pushLog(`标点规范化：${status.punctFixes} 行的修改结果统一了标点宽度（半角→全角 ${status.punctToFull} 处，全角→半角 ${status.punctToHalf} 处）；英文句子保持半角。`);
+    } else if (status.punctEnabled === false) {
+      pushLog("标点规范化：已关闭。");
+    }
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
@@ -1063,6 +1087,9 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
+  // 标点规范化（确定性工序）：中文语境的标点统一成全角，英文句子保持半角。放在护栏之前，
+  // 因为它只改宽度、不改字符集；改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
+  decision = normalizeDecisionPunctuation(decision, row, config);
   // 输出侧兜底（最后一关）：模型把原文文字写进修订结果时作废它——这种文本会被人工直接写回成品。
   const guarded = guardTargetScript(decision, targetText);
   if (guarded !== decision) {
@@ -1518,6 +1545,29 @@ function contextItemChars(item) {
 }
 
 /**
+ * 标点规范化层：把模型给出的修订结果按语境统一标点宽度（中文全角、英文半角），见 `punctuation.js`。
+ *
+ * 为什么要有这一层：成品规范要求中文正文全角标点，而提示词只能“要求”做不到“保证”——
+ * 实测模型会在自己的 revisedText 里打出「......」，也会把英文句子里的标点写成全角；
+ * 备注里的「修改结果：」会被人工直接写回成品，所以这里做一次确定性统一。
+ *
+ * 三条纪律：**只动标点**（不动任何其他字符，也不重排语序）；**英文句子保持半角**
+ * （反向还原要求正向 ASCII 证据，见 `punctuation.js` 的 `isLatinContext`）；**改了什么必须留痕**——计数走
+ * `status.punctFixes`/`punctToFull`/`punctToHalf`，备注的分析栏里写一行「标点自动规范化：…」
+ * （说明行必须排在「修改结果：」之前，见 `analysisLines`）。
+ */
+function normalizeDecisionPunctuation(decision, row, config) {
+  if (!config?.punctNormalize || !decision?.revisedText) return decision;
+  const result = normalizeTargetPunctuation(decision.revisedText);
+  if (!result.changed) return decision;
+  status.punctFixes += 1;
+  status.punctToFull += result.toFull;
+  status.punctToHalf += result.toHalf;
+  pushLog(`第 ${row.index} 行：修改结果的标点已按成品写法统一（半角→全角 ${result.toFull} 处，全角→半角 ${result.toHalf} 处）。`);
+  return { ...decision, revisedText: result.text, punctFix: { toFull: result.toFull, toHalf: result.toHalf } };
+}
+
+/**
  * 目标列语言护栏：修订结果里混进原文（日文）文字时一律作废并转人工。
  *
  * 为什么需要：提示词只能“要求”模型，做不到“保证”。模型有两种情况下会写出带原文文字的修订结果——
@@ -1544,6 +1594,8 @@ function guardTargetScript(decision, targetText) {
     ...decision,
     revisedText: "",
     suggestion: "",
+    // 修订结果都作废了，标点规范化也就不存在了：一并抹掉，备注里不会出现「标点自动规范化」的空口径。
+    punctFix: null,
     needsContext: true,
     better: "unclear",
     severity: "none",
@@ -2184,9 +2236,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：待人工确认",
         speakerLine(decision),
-        analysisLine(decision),
-        lowScoreLine(decision),
-        webLookupLine(decision),
+        ...analysisLines(decision),
       ].filter(Boolean).join("\n"),
     };
   }
@@ -2206,9 +2256,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：否",
         speakerLine(decision),
-        analysisLine(decision),
-        lowScoreLine(decision),
-        webLookupLine(decision),
+        ...analysisLines(decision),
       ].filter(Boolean).join("\n"),
     };
   }
@@ -2216,22 +2264,22 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
   const lines = ["[AI校对]"];
   lines.push(`语义是否相同：${decision.semanticSame ? "相同" : "不同"}`);
   if (decision.speaker) lines.push(speakerLine(decision));
+  // 低分归因与线上查证都写在分析栏里（`analysisLines`），**不**跟在「修改结果：」后面——
+  // 备注按行取值，放在后面的说明行会被并进修改结果，再被人工写回成品。
   if (better === "counterpart") {
     lines.push("是否需要修改：是");
     lines.push(...scoreAndGradeLines(decision));
-    lines.push(analysisLine(decision, decision.revisedText ? "" : decision.suggestion || `参考${counterpartLabel}修订${targetLabel}。`));
+    lines.push(...analysisLines(decision, decision.revisedText ? "" : decision.suggestion || `参考${counterpartLabel}修订${targetLabel}。`));
     if (decision.revisedText) lines.push(`修改结果：${decision.revisedText}`);
   } else if (better === "neither") {
     lines.push("是否需要修改：是");
     lines.push(...scoreAndGradeLines(decision));
-    lines.push(analysisLine(decision, decision.revisedText ? "" : decision.suggestion || "按原文重新整理译文。"));
+    lines.push(...analysisLines(decision, decision.revisedText ? "" : decision.suggestion || "按原文重新整理译文。"));
     if (decision.revisedText) lines.push(`修改结果：${decision.revisedText}`);
   } else {
     lines.push("是否需要修改：待人工确认");
-    lines.push(analysisLine(decision));
+    lines.push(...analysisLines(decision));
   }
-  if (lowScoreLine(decision)) lines.push(lowScoreLine(decision));
-  if (webLookupLine(decision)) lines.push(webLookupLine(decision));
 
   return {
     runId: status.runId,
@@ -2290,9 +2338,33 @@ function webLookupLine(decision) {
   });
 }
 
-function analysisLine(decision, fallback = "") {
+/**
+ * 分析栏的那几行：模型给的 summary / fallback，加上**确定性层**留在分析里的痕迹
+ * （标点自动规范化、低分归因、线上查证）。它们必须排在「修改结果：」**之前**：备注是按行取值的
+ * （`public/workbench-client.js` 的 `parseAutomatedNote`），跟在「修改结果：」后面的
+ * 未识别行会被并进修改结果，而修改结果在页面上就是可写回文本——那等于把说明写进成品。
+ */
+function analysisLines(decision, fallback = "") {
   const text = [decision.summary, fallback].filter(Boolean).join(" ");
-  return text ? `分析：${text}` : "";
+  return [
+    text ? `分析：${text}` : "",
+    punctFixLine(decision),
+    lowScoreLine(decision),
+    webLookupLine(decision),
+  ].filter(Boolean);
+}
+
+/**
+ * 标点规范化在备注里的那一行：程序改过模型输出就必须让人工看见（它不是模型写的措辞）。
+ * 只有真的改过才留痕（`decision.punctFix` 只在 `normalizeDecisionPunctuation` 里挂上）。
+ */
+function punctFixLine(decision) {
+  const fix = decision?.punctFix;
+  if (!fix) return "";
+  const parts = [];
+  if (fix.toFull) parts.push(`半角→全角 ${fix.toFull} 处`);
+  if (fix.toHalf) parts.push(`全角→半角 ${fix.toHalf} 处`);
+  return parts.length ? `标点自动规范化：${parts.join("、")}（中文标点全角、英文句子半角）` : "";
 }
 
 module.exports = {

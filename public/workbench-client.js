@@ -428,6 +428,16 @@
       return changed;
     }
 
+    /**
+     * 备注里“只作说明、不是成品文本”的行（标点自动规范化、低分归因、线上查证）：它们属于分析栏。
+     * 备注是按行取值的，认不出的行会并进上一段字段——跟在「修改结果：」后面时，
+     * 那等于把说明当成译文，页面会把它当可写回文本，甚至写进成品。
+     */
+    function isNoteProseLine(line) {
+      const text = String(line || "").trim();
+      return text.startsWith("低分归因：") || text.startsWith("线上查证：") || text.startsWith("标点自动规范化：");
+    }
+
     function normalizeStoredNote(value) {
       const note = String(value?.note || "");
       const manualDone = !value?.recoveredUnverified && Boolean(value?.manualDone);
@@ -438,9 +448,15 @@
         aiDone: Boolean(value?.aiDone || hasAutomatedDecisionNote(note)),
       };
       const parsedRevision = parseAutomatedNote(item.note)?.revision || "";
-      item.revisionText = Object.prototype.hasOwnProperty.call(value || {}, "revisionText")
+      // 修复前的备注把归因/查证说明写在了「修改结果：」后面，解析时会并进修改结果；
+      // 载入时按行剥掉，避免人工点「写回」把说明写进成品。
+      item.revisionText = (Object.prototype.hasOwnProperty.call(value || {}, "revisionText")
         ? String(value.revisionText || "")
-        : parsedRevision;
+        : parsedRevision)
+        .split("\n")
+        .filter((line) => !isNoteProseLine(line))
+        .join("\n")
+        .replace(/\s+$/, "");
       item.revisionTarget = normalizeRevisionTarget(value?.revisionTarget);
       if (value?.recoveredUnverified) item.recoveredUnverified = true;
       else if (value?.rowSig) item.rowSig = String(value.rowSig);
@@ -1110,6 +1126,11 @@
         } else if (line.startsWith("修改结果：") || line.startsWith("修改后：") || line.startsWith("修改后文本：")) {
           data.revision = line.replace(/^(修改结果|修改后|修改后文本)：/, "").trim();
           currentField = "revision";
+        } else if (isNoteProseLine(line)) {
+          // 标点自动规范化、低分归因、线上查证都写在分析栏里：它们不是成品文本，
+          // 绝不能并进修改结果（旧备注就是这么被污染的，normalizeStoredNote 载入时会把它们剥出来）。
+          data.analysis = [data.analysis, line].filter(Boolean).join("\n");
+          currentField = "analysis";
         } else if (line.startsWith("建议改法：")) {
           data.analysis = [data.analysis, "建议改法：" + line.slice("建议改法：".length).trim()].filter(Boolean).join("\n");
           currentField = "analysis";

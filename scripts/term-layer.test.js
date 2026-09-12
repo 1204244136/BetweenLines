@@ -246,7 +246,7 @@ test("页面在跑任务之前就显示本行命中了哪些术语", () => {
   };
   const source = [
     "termVariantKeyForPage", "currentTermVariant", "refreshTermVerdicts",
-    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "automatedNoteMarker", "parseAutomatedNote",
+    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "automatedNoteMarker", "isNoteProseLine", "parseAutomatedNote",
   ].map(grab).join("\n");
   const sandbox = {
     pageMeta, Map, Set, String, Number, Boolean, Object, Array, Math, JSON, Date, RegExp,

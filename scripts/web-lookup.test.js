@@ -245,6 +245,12 @@ test("按顺序查：第 1 站拿到关键信息就停，后面的站点与自�
 
   const result = status.results.find((item) => item.index === 218);
   assert.match(result.note, /线上查证：中文（灰机）查到依据/);
+  // 备注按行取值：查证说明属于分析栏，必须排在「修改结果：」之前（跟在它后面会被并进修改结果）。
+  const noteLines = result.note.split("\n");
+  const revisionIndex = noteLines.findIndex((line) => line.startsWith("修改结果："));
+  const lookupIndex = noteLines.findIndex((line) => line.startsWith("线上查证："));
+  assert.equal(lookupIndex > noteLines.findIndex((line) => line.startsWith("分析：")), true, "查证说明跟在分析后面");
+  assert.equal(revisionIndex === -1 || lookupIndex < revisionIndex, true, "查证说明不得跟在修改结果后面");
   assert.equal(result.done, true, "拿到依据后这一行就算完成，人工只接受结果");
   assert.equal(status.webLookups, 1);
   assert.equal(status.webLookupAttempts, 1);

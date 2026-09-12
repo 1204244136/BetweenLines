@@ -576,6 +576,68 @@ test("修订结果混入原文（日文）文字时作废并转人工，不允�
   }
 });
 
+test("修订结果的标点按语境自动规范化：中文全角、英文半角，并在备注与统计里留痕", async () => {
+  const decide = (revisedText) => JSON.stringify({
+    semanticSame: false,
+    needsEdit: true,
+    needsContext: false,
+    decision: "replace",
+    score: 70,
+    penalty: 30,
+    grade: "good",
+    severity: "minor",
+    summary: "需要修改：标点不符合成品规范。",
+    revisedText,
+  });
+  // 行号决定模型给出哪一段：奇数行是中文句子（半角 → 全角），偶数行是英文句子（半角必须原样保留）。
+  const { finished, rows } = await runProofreadAgainst({
+    label: "punct-normalize",
+    rowCount: 2,
+    respond: (count, response) => {
+      let raw = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { raw += chunk; });
+      request.on("end", () => {
+        const user = JSON.parse(JSON.parse(raw).messages[1].content);
+        const index = Number(user.row.index);
+        const revised = index % 2 === 1
+          ? "他来了,真的!!声音到底是......"
+          : "Wait, this is a test. Really? Yes, it is.";
+        response.end(JSON.stringify({ choices: [{ message: { content: decide(revised) } }] }));
+      });
+    },
+  });
+
+  assert.equal(finished.running, false);
+  assert.equal(finished.errors, 0);
+  assert.equal(finished.punctEnabled, true);
+  assert.equal(finished.punctFixes, 1, "只有中文句子那一行被改过");
+  assert.equal(finished.punctToFull, 3);
+  assert.equal(finished.punctToHalf, 0);
+  assert.match(finished.logs.join("\n"), /第 1 行：修改结果的标点已按成品写法统一（半角→全角 3 处，全角→半角 0 处）/);
+  assert.match(finished.logs.join("\n"), /标点规范化：1 行的修改结果统一了标点宽度/);
+
+  const results = clientStatus().results.filter((item) => item.status !== "error");
+  assert.equal(results.length, rows.length);
+  const chinese = results.find((item) => item.index === 1);
+  assert.match(chinese.note, /修改结果：他来了，真的！！声音到底是……/);
+  // 说明行写在分析栏里（分析之后、「修改结果：」之前）——备注按行取值，跟在修改结果后面会被并进去。
+  const noteLines = chinese.note.split("\n");
+  assert.equal(noteLines.at(-1), "修改结果：他来了，真的！！声音到底是……");
+  const fixLine = noteLines.find((line) => line.startsWith("标点自动规范化："));
+  assert.equal(fixLine, "标点自动规范化：半角→全角 3 处（中文标点全角、英文句子半角）");
+  assert.equal(
+    noteLines.indexOf(fixLine) > noteLines.findIndex((line) => line.startsWith("分析：")),
+    true,
+    "说明行写在分析栏里（分析之后、「修改结果：」之前）",
+  );
+
+  const english = results.find((item) => item.index === 2);
+  assert.match(english.note, /修改结果：Wait, this is a test\. Really\? Yes, it is\./, "英文句子保持半角");
+  assert.equal(/标点自动规范化/.test(english.note), false, "没改动就不留痕");
+});
+
 test("目标列本来就有刻意的假名写法时不拦；纯目标列语言的修订结果照常通过", () => {
   const leaked = { needsEdit: true, revisedText: "「なべつか」", summary: "需要修改。" };
   assert.equal(hasTargetScriptLeak("「手部跟なべつか一样」", "手部跟隔热手套一样。"), true);
@@ -583,6 +645,8 @@ test("目标列本来就有刻意的假名写法时不拦；纯目标列语言�
   assert.equal(hasTargetScriptLeak("", "手部跟隔热手套一样。"), false);
   // 目标列自己就带假名（作品允许的刻意写法）时，不因为“出现假名”就作废模型给的最小改动。
   assert.equal(guardTargetScript(leaked, "「ビリビリ来たわね」").revisedText, "「なべつか」");
+  // 作废时连标点规范化的痕迹一起抹掉：修订结果都不存在了，备注里不该再留「标点自动规范化」。
+  assert.equal(guardTargetScript({ ...leaked, punctFix: { toFull: 2, toHalf: 0 } }, "手部跟隔热手套一样。").punctFix, null);
   const guarded = guardTargetScript(leaked, "手部跟隔热手套一样。");
   assert.equal(guarded.revisedText, "");
   assert.equal(guarded.needsContext, true);
