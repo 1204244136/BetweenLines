@@ -6,6 +6,8 @@ const { FEATURE_IDS, unknownFeatureIds } = require("./row-features");
 const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
 // 线上查证段的段首标记同样只在注入层定义一次。
 const { WEB_LOOKUP_PREFIX } = require("./web-lookup");
+// 低分归因段的段首标记同样只在注入层定义一次。
+const { LOW_SCORE_PREFIX } = require("./low-score");
 
 // 每种模式一段说明，只有当前模式需要担心的字段语义才出现在该模式的契约里。
 // 双语没有 counterpart 列：对外只问“保持还是替换”，不再问“谁更好”，避免模型臆想“另一份译文”。
@@ -21,6 +23,7 @@ const modeSchemas = Object.freeze({
     severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
     summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
     speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
+    cause: "order-shift-prev | order-shift-next | order-shift | boundary | context | meaning | content | term | wording | source-style | none | unclear（仅当本次提供了【低分归因与修复（本行）】段落时填写：本行极低分的主要原因，取值的含义与对应修法都写在该段落里；未提供该段落时留空）",
     revisedText: "需要修改时输出目标列当前行可直接整体替换的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空",
   }),
   trilingual: Object.freeze({
@@ -34,6 +37,7 @@ const modeSchemas = Object.freeze({
     severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
     summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
     speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
+    cause: "order-shift-prev | order-shift-next | order-shift | boundary | context | meaning | content | term | wording | source-style | none | unclear（仅当本次提供了【低分归因与修复（本行）】段落时填写：目标列极低分的主要原因，取值的含义与对应修法都写在该段落里；未提供该段落时留空）",
     revisedText: "需要修改时输出目标列当前行可直接整体替换的完整文本，并原样保留目标列的 EPUB 注释标记；needsEdit=false 时留空",
   }),
 });
@@ -55,7 +59,7 @@ const sharedInstructions = [
   "证据优先级：原文中的人物、数字、否定、时态、因果和动作关系 > 目标列是否完整准确 > 术语和语体一致性 > 局部措辞偏好；无法由输入证明的内容不要猜测。",
   "semanticSame 与 needsEdit 必须分别判断；语义相同但表达生硬、翻译腔、遗漏语气或存在其他明确问题时，可以 semanticSame=true、needsEdit=true。",
   "除非存在明确的意义、完整性、语法或可用性问题，否则不要建议修改；需要修改时只做能被证据支持的最小改动，不要整段重译。",
-  "需要修改时，revisedText 必须是目标列当前行的完整替换文本，保留目标列的语言、字形和文体习惯，不能只描述改法；不得把相邻行内容合并进来，也不得拆分行边界——当前行到哪里结束由对齐决定，不属于语言质量问题。",
+  "需要修改时，revisedText 必须是目标列当前行的完整替换文本，保留目标列的语言、字形和文体习惯，不能只描述改法；不得把相邻行内容合并进来，也不得拆分行边界——当前行到哪里结束由对齐决定，不属于语言质量问题。行与行之间的对应关系同样由对齐决定：不得建议交换、重排、合并或拆分相邻行，也不得把相邻行的内容当作本行应有的译文——改写行内语序是正常翻译工序，整行内容与相邻行互换则是译文自身的错位缺陷，只能按本行原文重写本行。",
   "当原文或目标列任一侧是不完整片段（以接续词、助词、标点结尾，缺少谓语，或明显只是上下句的一半）时：不得据该片段的句读、标点收尾或语气判定 needsEdit；若片段范围内两侧内容互相对应、差异只是断句位置或片段长度，判定 semanticSame=true、needsEdit=false；若片段范围内无法判断语义对应，返回 needsContext=true；确实需要修改时，revisedText 仍须限制在该片段范围内，不得补全成完整句或改写上下句。",
   "形如 <a ... epub:type=\"noteref\" ...><sup>㊟</sup></a> 的内容是 EPUB 注释标记，不属于正文语义；不得因其标签、属性、数量或位置差异判定翻译问题。",
   "目标列中原文没有的内容（特典、后记、译注、制作信息等）不是翻译缺陷：不得据此判定 needsEdit=true，也不得在 revisedText 中删除、改写或补写这类内容。",
@@ -104,22 +108,22 @@ const genericHeader = "【通用校对规则】";
  * | 1 通用侧 | 与作品、模式无关的任务契约：证据优先级、片段口径、needsContext、档位与字段约定 | 本文件 `sharedInstructions` | 每行 |
  * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
  * | 3 特化档案 | 作品/阶段规范，分两种条目：**常驻条目**（关系、作品专有、说话特色、证据边界）与 **按行条目**（排版层、文本层规范，声明 `features`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`） |
- * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
+ * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、低分归因段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`low-score.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
  * | 5 固定尾巴 | noteref 硬性约束、术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行（刻意保守：宁可重复也不丢） |
  *
  * **分层（请求里注入了什么）与判定链（结论怎么一步步来的）是两个视角，别混为一谈**：
  *
- * 判定链：对照表（离线四类结论）→ 模型（基础轮 + 上下文轮）→ 线上查证（按站点顺序 + 自行检索）→ 待人工
- * 对应层：第 4 层的术语段 ──── 第 1/2/3/5 层（+ 相邻行）── 第 4 层的线上查证段 ──── 无（终局）
+ * 判定链：对照表（离线四类结论）→ 模型（基础轮 + 上下文轮）→ 低分归因与修复（极低分行的相邻行）→ 线上查证（按站点顺序 + 自行检索）→ 待人工
+ * 对应层：第 4 层的术语段 ──── 第 1/2/3/5 层（+ 相邻行）── 第 4 层的低分归因段 ──── 第 4 层的线上查证段 ──── 无（终局）
  *
  * 约束：
  * - **顺序不得调整**，测试按分区顺序断言（通用侧 → 模式 → 特化侧 → 动态段 → 约束 → 输出约定）。
  * - 判据**只写一层**：字段默认值、档位定义、needsContext 口径在通用侧写一次；`modeSchemas`
  *   只负责“键名 + 取值”；特化档案只写工作阶段规范，不复述任务契约。
- * - 第 4 层的四个段一律经 `dynamicBlockPrefixes` 剥离后再注入：自定义提示词里残留的旧段会先被剥掉，
+ * - 第 4 层的动态段一律经 `dynamicBlockPrefixes` 剥离后再注入：自定义提示词里残留的旧段会先被剥掉，
  *   任何路径都不得出现两段同类动态段——**新增动态段时必须同时登记到那张前缀表**（段首标记由注入层
  *   自己定义并导出，这里只借用，不复制字面量）。
- * - 第 4 层内部按“由内到外补充资料”排列：术语命中 → 说话习惯 → 线上查证（外部资料最后注入）。
+ * - 第 4 层内部按“由内到外补充资料”排列：术语命中 → 说话习惯 → 低分归因（相邻行）→ 线上查证（外部资料最后注入）。
  * - 裁剪只发生在第 3 层的按行条目与第 4 层：第 1、2、5 层永远全量，避免“省了 token 丢了契约”。
  * - 页面里预填的默认提示词始终是**全量**（第 3 层不裁剪），人工读得到完整规范；
  *   真正发给模型的请求才按 `rowFeatures` 裁剪。
@@ -252,8 +256,14 @@ function stripProfileBlock(text) {
 
 // 说话习惯段与说话人判断段都是动态生成的（按章、按行）：自定义提示词里可能留着上一次的，
 // 先剥掉再注入本次的。段首标记用前缀匹配，避免与档案正文里提到的「【说话习惯】」混淆。
-// 对照表命中段同理（按行生成，只会出现在被注入的那一行）。
-const dynamicBlockPrefixes = [speechHabitPrefix, "【说话人判断（", TERM_BLOCK_PREFIX, WEB_LOOKUP_PREFIX];
+// 对照表命中段、低分归因段与线上查证段同理（按行/按轮生成，只会出现在命中的那一次请求里）。
+const dynamicBlockPrefixes = [
+  speechHabitPrefix,
+  "【说话人判断（",
+  TERM_BLOCK_PREFIX,
+  LOW_SCORE_PREFIX,
+  WEB_LOOKUP_PREFIX,
+];
 
 function stripSpeechHabitBlock(text) {
   let value = String(text || "");
@@ -277,6 +287,7 @@ function buildProofreadSystemPrompt({
   glossary = "",
   speechHabitBlock = "",
   termBlock = "",
+  lowScoreBlock = "",
   webLookupBlock = "",
   rowFeatures = null,
   fullPrompt = false,
@@ -287,13 +298,15 @@ function buildProofreadSystemPrompt({
   const profileSystem = profileSystemFor(resolveProfile(profileId), features);
   const trimmedBody = promptSections(contract.genericSystem, contract.instructions, profileSystem);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
-  // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段与上一行的术语段，
-  // 再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层与对照表命中段总是按本次上下文重新注入。
+  // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段、上一行的术语段与
+  // 低分归因段，再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层、对照表命中段与
+  // 低分归因段总是按本次上下文重新注入。
   const custom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(customSystem))));
-  // 动态段按“由内到外补充资料”的顺序排列：术语命中 → 说话习惯 → 线上查证（最后一层，最靠近输出约定）。
+  // 动态段按“由内到外补充资料”的顺序排列：术语命中 → 说话习惯 → 低分归因（相邻行）→ 线上查证（最外层）。
   const dynamicBlocks = [
     String(termBlock || "").trim(),
     String(speechHabitBlock || "").trim(),
+    String(lowScoreBlock || "").trim(),
     String(webLookupBlock || "").trim(),
   ];
   const body = !custom || custom === contract.body

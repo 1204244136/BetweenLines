@@ -43,6 +43,16 @@ const {
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
 const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
+const {
+  DEFAULT_LOW_SCORE_PENALTY,
+  DEFAULT_LOW_SCORE_ROWS,
+  causeLabel,
+  isShiftCause,
+  lowScoreBlock,
+  lowScoreNote,
+  normalizeCause,
+  shouldCheckLowScore,
+} = require("./low-score");
 
 const providerDefaults = {
   claude: {
@@ -148,6 +158,13 @@ const status = {
   termConflicts: 0,
   termInjected: 0,
   termTables: { files: [], entries: 0 },
+  // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
+  lowScoreEnabled: true,
+  lowScorePenalty: DEFAULT_LOW_SCORE_PENALTY,
+  lowScoreRows: DEFAULT_LOW_SCORE_ROWS,
+  lowScoreChecks: 0,
+  lowScoreCauses: {},
+  lowScoreShifted: 0,
   speechHabitChapters: 0,
   speechHabitCharacters: [],
   skippedDone: 0,
@@ -227,6 +244,13 @@ function clientStatus(options = {}) {
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
     webLookupSites: status.webLookupSites || [],
+    // 低分归因层：这一层是否启用、阈值与窗口、复核了多少行、各归因各多少行（跨行错位单列）。
+    lowScoreEnabled: status.lowScoreEnabled,
+    lowScorePenalty: status.lowScorePenalty,
+    lowScoreRows: status.lowScoreRows,
+    lowScoreChecks: status.lowScoreChecks,
+    lowScoreShifted: status.lowScoreShifted,
+    lowScoreCauses: status.lowScoreCauses,
     termTables: status.termTables,
     termTableStatus: options.includeTermTables === false ? null : termTableStatusFor(options.profileId || status.profileId),
     speechHabitStatus: options.includeTermTables === false ? null : speechHabitStatusFor(options.profileId || status.profileId),
@@ -327,7 +351,7 @@ function cleanConfig(input = {}) {
       ...toPathList(process.env.TRANSCOMPARATOR_SPEECH_TABLES),
     ]),
     speechHabitScope: (input.speechHabitScope || profile.speechHabitScope) === "volume" ? "volume" : "chapter",
-    // 线上查询层（最后一层）：官方站点入口由档案声明，**按声明顺序**依次查证（拿到关键信息就停），
+    // 线上查询层（判定链的最后一层，排在低分归因层之后）：官方站点入口由档案声明，**按声明顺序**依次查证（拿到关键信息就停），
     // 三个站点都不行再让模型自行检索，仍不行才转人工。本机不抓网页（实测这些站点对本机一律 403 风控挑战），
     // 这一层只把「去哪个站点、查哪些词、问什么、什么时候停」交给模型。站点为空时整层不启用。
     wikiSites: webLookupSites(
@@ -336,6 +360,16 @@ function cleanConfig(input = {}) {
         : (envSites.length ? envSites : (Array.isArray(profile.wikiSites) ? profile.wikiSites : [])),
     ),
     webLookup: input.webLookup !== false && process.env.TRANSCOMPARATOR_WEB_LOOKUP !== "0",
+    // 低分归因层：极低分（扣分达到阈值，或档位为 poor）的行先让模型解释低分原因、再按原因修，
+    // 而不是把“与原文毫无关系”直接当逐句误译处理。跨行错位是归因里的必查项。
+    lowScoreCheck: input.lowScoreCheck !== false && process.env.TRANSCOMPARATOR_LOW_SCORE !== "0",
+    lowScorePenalty: clampInteger(
+      input.lowScorePenalty ?? process.env.TRANSCOMPARATOR_LOW_SCORE_PENALTY,
+      0,
+      100,
+      DEFAULT_LOW_SCORE_PENALTY,
+    ),
+    lowScoreRows: clampInteger(input.lowScoreRows, 1, 4, DEFAULT_LOW_SCORE_ROWS),
     concurrency,
     similarityThreshold,
     circuitBreakerErrorRate,
@@ -408,6 +442,13 @@ function resetStatus(config, rowsLength) {
   status.webLookups = 0;
   status.webLookupResolved = 0;
   status.webLookupAttempts = 0;
+  // 低分归因层：本次任务的开关、阈值、窗口与计数（状态接口据此如实显示这一层有没有生效）。
+  status.lowScoreEnabled = config.lowScoreCheck !== false;
+  status.lowScorePenalty = config.lowScorePenalty;
+  status.lowScoreRows = config.lowScoreRows;
+  status.lowScoreChecks = 0;
+  status.lowScoreShifted = 0;
+  status.lowScoreCauses = {};
   status.skippedDone = 0;
   status.modelProcessed = 0;
   status.modelHandled = 0;
@@ -759,6 +800,9 @@ function clearProofreadCache() {
   status.webLookups = 0;
   status.webLookupResolved = 0;
   status.webLookupAttempts = 0;
+  status.lowScoreChecks = 0;
+  status.lowScoreShifted = 0;
+  status.lowScoreCauses = {};
   status.termTables = { files: [], entries: 0 };
   status.speechHabitChapters = 0;
   status.speechHabitCharacters = [];
@@ -823,6 +867,8 @@ function finish() {
   if (!isPrefilter) {
     const summary = promptTrimSummary();
     if (summary) pushLog(summary);
+    const lowScore = lowScoreSummary();
+    if (lowScore) pushLog(lowScore);
     const lookup = webLookupSummary();
     if (lookup) pushLog(lookup);
   }
@@ -891,6 +937,11 @@ async function proofreadRow(row, allRows, config, labels) {
     contextMode: "none",
   };
   const contextState = createContextState(row.index, allRows, targetKey, counterpartKey, config.proofreadMode);
+  // 低分归因层：极低分的行不能直接当“逐句误译”处理。基础轮一旦判出极低分，本轮起就按归因口径继续问，
+  // 并把窗口一次扩到本行前后各 N 行（前后都没有行的行无从复核，自动跳过）。一旦触发就持续生效，
+  // 保证同一行的判断口径前后一致。触发判断放在**拿到结论之后**：模型给出定论时主循环本来就要 break，
+  // 只有在这里拦一下，低分才有机会被归因复核。
+  const lowScore = { active: false };
   let decision = null;
   for (let round = 0; round <= contextBudget.maxRounds; round += 1) {
     const hasContext = contextState.items.length > 0;
@@ -898,19 +949,44 @@ async function proofreadRow(row, allRows, config, labels) {
       ...basePayload,
       context: contextState.items,
       contextMode: hasContext ? "requested" : "none",
+      lowScore: lowScore.active ? { rows: config.lowScoreRows } : null,
     }, config);
-    const stage = round === 0 ? "base" : `context-${round}`;
-    const stageLabel = round === 0 ? "当前行判断" : `扩展上下文 ${round}`;
+    const stage = round === 0 ? "base" : (lowScore.active ? `low-score-${round}` : `context-${round}`);
+    const stageLabel = round === 0
+      ? "当前行判断"
+      : (lowScore.active ? `低分归因与修复 ${round}` : `扩展上下文 ${round}`);
     const content = await trackedCallModel(row, stage, stageLabel, messages, config);
     decision = parseDecision(content, { proofreadMode: config.proofreadMode });
-    if (!shouldRetryWithContext(decision)) break;
+    const entersLowScore = !lowScore.active && config.lowScoreCheck && hasNeighborRow(contextState)
+      && shouldCheckLowScore({ decision, minPenalty: config.lowScorePenalty });
+    if (!shouldRetryWithContext(decision) && !entersLowScore) break;
     if (round >= contextBudget.maxRounds) break;
+    if (entersLowScore) {
+      lowScore.active = true;
+      ensureContextRadius(contextState, config.lowScoreRows);
+      pushLog(`第 ${row.index} 行：扣分达到阈值（≥${config.lowScorePenalty} 分），转入低分归因复核（先解释低分原因再修，跨行错位为必查项，窗口 ±${config.lowScoreRows} 行）。`);
+      continue;
+    }
     if (isAlignFragmentRow(row, targetKey)) {
       pushLog(`第 ${row.index} 行：判定为对齐片段行，不再扩展上下文，直接转人工确认。`);
       break;
     }
     const added = expandContextRing(contextState);
     if (!added.length) break;
+  }
+  // 归因结果落进备注与统计：人工只读结果，也要能看出这行为什么低分、按哪一类原因修的。
+  if (lowScore.active) {
+    const cause = decision?.cause || "";
+    status.lowScoreChecks += 1;
+    if (cause) {
+      status.lowScoreCauses[cause] = (status.lowScoreCauses[cause] || 0) + 1;
+    }
+    if (isShiftCause(cause)) status.lowScoreShifted += 1;
+    pushLog(`第 ${row.index} 行：低分归因 → ${cause || "未给出明确归因（结论见备注）"}。`);
+    decision = {
+      ...decision,
+      lowScore: { checked: true, cause, window: contextState.radius, neighbors: contextState.items.length },
+    };
   }
   // 线上查询层（最后一层，排在“转人工”之前）：模型明确判断不了、相邻行也补过之后，按顺序去官方站点查证。
   // 一轮只给**一个**站点入口（不给直达词条链接——猜条目名容易错），拿到能定论的关键信息立即停止，
@@ -1340,6 +1416,24 @@ function expandContextRing(state) {
   return added;
 }
 
+/**
+ * 低分归因层要把窗口一次扩到前后各 `radius` 行（比按 needsContext 一轮一轮扩更省请求），
+ * 同时仍受 `contextBudget` 的行数/字符上限约束：行用尽时 expandContextRing 返回空，循环即停。
+ */
+function ensureContextRadius(state, radius) {
+  if (state.position < 0) return;
+  const target = Math.max(1, Math.round(Number(radius) || 1));
+  while (state.radius < target) {
+    if (!expandContextRing(state).length) break;
+  }
+}
+
+/** 本行前后至少还有一行时才谈得上“跨行错位”：首行/末行无从复核，直接跳过归因层。 */
+function hasNeighborRow(state) {
+  if (state.position < 0) return false;
+  return Boolean(state.rows[state.position - 1] || state.rows[state.position + 1]);
+}
+
 function contextRow(row, relative, targetKey, counterpartKey, proofreadMode = "trilingual") {
   const item = {
     index: row.index,
@@ -1440,6 +1534,20 @@ function promptTrimSummary() {
   return `提示词按行裁剪：${promptTrim.rows} 行共省略 ${promptTrim.omittedLines} 条只在特定版式/文字现象下才需要的特化规范（平均每行省约 ${average} 字符）；命中特征：${top || "（无）"}。`;
 }
 
+/**
+ * 低分归因层的一次任务汇总：只有真的复核过才汇报。
+ * 汇报的是“这一层到底做了什么”：复核了几行、其中多少行归到跨行错位、原因分布如何——
+ * 人工据此判断是模型判分过狠（大量 none/source-style）还是译文真有大问题。
+ */
+function lowScoreSummary() {
+  if (!status.lowScoreChecks) return "";
+  const causes = Object.entries(status.lowScoreCauses || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([cause, count]) => `${causeLabel(cause) || cause} ${count} 行`)
+    .join("、");
+  return `低分归因：${status.lowScoreChecks} 行因扣分达到阈值转入复核（先解释低分原因再修，跨行错位为必查项），其中跨行错位 ${status.lowScoreShifted} 行${causes ? `；原因分布：${causes}` : ""}。`;
+}
+
 /** 线上查询层的一次任务汇总：只有真的用过才汇报，避免每次任务都刷一行“没用上”。 */
 function webLookupSummary() {
   if (!status.webLookups) return "";
@@ -1515,6 +1623,13 @@ function buildMessages(payload, config = {}) {
         },
       };
     })() : {}),
+    // 低分归因层：只告诉模型“这一行的分数低到需要先归因”，阈值与窗口是程序参数，不写进请求。
+    ...(payload.lowScore ? {
+      lowScore: {
+        reason: "本行初判为极低分（严重缺陷）。请按系统提示词的【低分归因与修复（本行）】段落，先给出低分原因（cause）再按原因修；跨行错位是必查项。",
+        window: payload.lowScore.rows,
+      },
+    } : {}),
     modePolicy: bilingualMode
       ? "以原文 A 与译文 B 的语义对应为主要判断对象；只能修改 B，原文 A 用于确认语义边界、遗漏和误译。"
       : "同时参考原文、目标列和另一非原文列，判断目标列是否准确、通顺并符合原文语义；两份非原文仍是同级材料。",
@@ -1562,6 +1677,14 @@ function buildMessages(payload, config = {}) {
       glossary,
       speechHabitBlock: [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n"),
       termBlock: payload.termGuidance?.block || "",
+      // 低分归因段：只在因极低分转入复核的那些轮次注入（段内自带归因口径与“保持原文行序”的修法）。
+      lowScoreBlock: payload.lowScore
+        ? lowScoreBlock({
+          targetLabel: payload.targetLabel,
+          sourceLabel: bilingualMode ? payload.counterpartLabel : "原文 A",
+          rows: payload.lowScore.rows,
+        })
+        : "",
       webLookupBlock: webLookupBlock(payload.webLookup || {}),
       rowFeatures,
       fullPrompt,
@@ -1727,6 +1850,8 @@ function parseDecision(content, options = {}) {
   const rawSeverity = firstString(data.severity, data.issueSeverity, data["严重程度"], data["严重性"]);
   // 说话人判断：只有提示词给出【说话人判断】时模型才会填；不确定时为空。
   const speaker = firstString(data.speaker, data["说话人"], data["说话者"], data.speakerName);
+  // 低分归因：只有提示词给出【低分归因与修复（本行）】时才会填；认不出的取值按“未归因”处理。
+  const cause = normalizeCause(firstString(data.cause, data["低分原因"], data["原因"], data["归因"], data.causeType));
 
   return normalizeDecision({
     semanticSame,
@@ -1742,6 +1867,7 @@ function parseDecision(content, options = {}) {
     }),
     summary,
     speaker,
+    cause,
     suggestion: String(data.suggestion || "").trim(),
     replacement: String(data.replacement || "").trim(),
     revisedText,
@@ -1962,6 +2088,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         "是否需要修改：待人工确认",
         speakerLine(decision),
         analysisLine(decision),
+        lowScoreLine(decision),
         webLookupLine(decision),
       ].filter(Boolean).join("\n"),
     };
@@ -1983,6 +2110,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         "是否需要修改：否",
         speakerLine(decision),
         analysisLine(decision),
+        lowScoreLine(decision),
         webLookupLine(decision),
       ].filter(Boolean).join("\n"),
     };
@@ -2005,6 +2133,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
     lines.push("是否需要修改：待人工确认");
     lines.push(analysisLine(decision));
   }
+  if (lowScoreLine(decision)) lines.push(lowScoreLine(decision));
   if (webLookupLine(decision)) lines.push(webLookupLine(decision));
 
   return {
@@ -2036,6 +2165,19 @@ function scoreAndGradeLines(decision) {
 
 function speakerLine(decision) {
   return decision.speaker ? `说话人：${decision.speaker}（据说话习惯特征判断）` : "";
+}
+
+/**
+ * 低分归因在备注里的那一行：人工只读结果，也要能一眼看出“这行为什么低分、按哪一类原因修的”。
+ * 没有进入归因层的行走不到这里（`decision.lowScore` 只在那一层才挂上）。
+ */
+function lowScoreLine(decision) {
+  if (!decision?.lowScore) return "";
+  return lowScoreNote({
+    checked: decision.lowScore.checked === true,
+    cause: decision.lowScore.cause || "",
+    neighbors: decision.lowScore.neighbors || 0,
+  });
 }
 
 /**
