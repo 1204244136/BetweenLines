@@ -8,7 +8,9 @@
  * `TRANSCOMPARATOR_TERM_TABLES` 追加；表本身属于本机数据，不写进仓库。
  *
  * 表结构（按表头识别，大小写与空格不敏感）：
- * - base_ori / original / 原文：日文原词（可含【】分段，如「【山田】【太郎】」）
+ * - base_ori / original / 原文：日文原词。原文里的【】只是**给注音标记位置**（注音按逗号顺序
+ *   加进各个方括号里的文本），正文里几乎不会出现方括号，所以匹配一律用去掉方括号后的原文；
+ *   形如「【山田】【太郎】」表示该词由两段组成，注音列写「やまだ,たろう」按顺序与它们对应。
  * - ruby_ori：假名或原文注音（如「やまだ,たろう」），作为别名参与匹配
  * - base_trans / target / 译名：本项目中文译名
  * - type：条目类型（人名/术语/地名…），只用于说明
@@ -41,6 +43,20 @@ const BRACKET_PAIRS = [
 const DECORATION = /[【】〖〗［］[\]（）()「」『』\s,，、.。·・:：;；'"“”‘’]/g;
 const KANA_ONLY = /^[\u3040-\u309f\u30a0-\u30ff\u30fc\u30fb]+$/;
 const KATAKANA = /[\u30a0-\u30ff\u30fc]/;
+// 「有效字符」= 既不是空白也不是标点/符号的字符：残留判定只看它，
+// 这样「…を外す。」这类句读与助词之外的差异不会被算成“术语之外的内容”。
+const EFFECTIVE_CHAR = /[^\s\p{P}\p{S}]/u;
+const HAS_EFFECTIVE_CHAR = /[^\p{P}\p{S}]/u;
+
+/**
+ * 纯术语行的判定阈值。
+ *
+ * 对照表只能证明「术语用对了」，证明不了「整行的其余部分翻译没问题」。所以一行只有在
+ * **有效内容本身就是术语**（术语之外只剩句读之类的一两个字符）时才允许跳过模型；
+ * 只要句中还有别的词，就必须把术语当提示词注入、照常交给模型。
+ */
+const TERM_ONLY_FREE_CHARS = 2;
+const TERM_ONLY_FREE_RATIO = 0.2;
 
 // 行文本里带内联标记（ruby/rt/b/sup）：注音 rt 是读音，不算正文，先剥掉再匹配，
 // 否则「ときわだい」这类读音会命中「ときわだいちゆうがく」之类的长读音串。
@@ -121,7 +137,7 @@ function termAliases(entry) {
   // scope 说明这个别名能用来做什么：
   // - term：别名就是术语本身（基文/写法），可以用整条译名判定一致性；
   // - part：只是术语的一个分段（姓、名），译文里对应的中文无法可靠切分，只记录不判定；
-  // - ruby：只是读音（基文与读音可能对应不同中文，例如「【発信機】」读作「はっしんき」），
+  // - ruby：只是读音（基文与读音可能对应不同中文，例如「【発信器】」读作「はっしんき」），
   //         拿基文译名去判定会误报，因此同样只记录不判定。
   const add = (alias, scope, weight) => {
     const value = String(alias || "").trim();
@@ -131,26 +147,37 @@ function termAliases(entry) {
     if (!existing || existing.weight < weight) {
       // strong：3 字及以上的基文别名才够格判定“不一致”。2 字词（時代、部屋、階層）在
       // 正文里常以普通词义出现，只能用来确认一致，不能用来指控译名错误。
-      aliases.set(value, { alias: value, scope, weight, strong: scope === "term" && value.replace(/[【】]/g, "").length >= 3 });
+      // 读音别名永不算 strong：它只是发音证据。
+      aliases.set(value, { alias: value, scope, weight, strong: scope === "term" && value.length >= 3 });
     }
   };
 
+  // 原文去方括号后的整条写法才是正文里真正会出现的形态（方括号只标记注音位置），权重最高。
   add(stripMarks(entry.source), "term", 5);
-  add(entry.source, "term", 4);
   const sourceParts = entry.sourceParts || [];
   if (sourceParts.length === 1) {
+    // 单段条目：方括号只是包裹，去掉后与整体一致。
     add(sourceParts[0], "term", 4);
   } else {
     for (const part of sourceParts) add(part, "part", 3);
   }
+
+  // 注音：逗号分隔的多段读音**按顺序**对应原文的各个方括号分段（「【御坂】【美琴】」+「みさか,みこと」）。
+  // 因此不能把各段读音当成互相独立的别名（那会把「美琴」的读音挂到别的名字上），
+  // 而是整串读音连同每个分段各自的读音一起收录。
   const ruby = String(entry.ruby || "").trim();
   if (ruby) {
+    const plainRuby = stripMarks(ruby);
     const rubyParts = ruby.split(/[,，、]/).map((item) => item.trim()).filter(Boolean);
-    add(stripMarks(ruby), "ruby", 2);
-    if (rubyParts.length > 1) {
-      for (const part of rubyParts) add(part, "ruby", 2);
-    } else if (rubyParts.length === 1) {
+    add(plainRuby, "ruby", 2);
+    if (rubyParts.length === 1) {
       add(rubyParts[0], "ruby", 2);
+    } else if (rubyParts.length === sourceParts.length) {
+      sourceParts.forEach((part, index) => {
+        add(rubyParts[index], "ruby", 2);
+        // 「御坂（みさか）」这种“分段基文 + 它的读音”组合写法，比只写假名更不容易撞车。
+        add(`${stripMarks(part)}（${rubyParts[index]}）`, "ruby", 2);
+      });
     }
   }
   return [...aliases.values()];
@@ -184,6 +211,9 @@ function normalizeTermEntry(record) {
   const entry = {
     source: source.trim(),
     sourceParts: splitBracketed(source),
+    // 展示与匹配都用去方括号的原文：正文里几乎不出现方括号（它只标记注音位置）。
+    plainSource: stripMarks(source) || source.trim(),
+    plainTarget: stripMarks(target) || target.trim(),
     ruby: firstColumn(record, COLUMN_CANDIDATES.ruby).trim(),
     target: target.trim(),
     targetText: stripMarks(target),
@@ -299,7 +329,109 @@ function findWrongVariant(targetText, entry) {
 }
 
 /**
+ * 把一组别名在正文里**真正用到的那些**标出来（长别名优先、互不重叠），返回实际标出的别名。
+ *
+ * 匹配口径与 findTermHits 一致（去方括号、片假名不落在更长片假名词内部），只是这里要一并处理
+ * 同一条目的多种写法（「東雲太郎」与读音「しののめ」）。语料级保守：短假名的字面包含不算使用，
+ * 否则「みさか」会因为在「みさかみこと」里出现，把无关的名字也算成命中。
+ *
+ * 覆盖率与提示词共用这一个函数，避免两处对“这个别名算不算被用到”给出不同答案。
+ */
+function markUsedTermAliases(plainText, aliases = [], { includeParts = true } = {}) {
+  const plain = String(plainText || "");
+  const occupied = new Array(plain.length).fill(false);
+  const used = [];
+  // 调用方可能直接给别名对象（`entry.aliases` 的元素），也可能给字符串：两种都接受。
+  // `includeParts: false` 时忽略分段别名（只写姓或名）：分段写法能“确认一致”，但不能反过来说明
+  // 本行用的是这个整条术语——「御坂」单独出现时既可能指美琴，也可能指美铃或旅挂。
+  const candidates = [...new Set((aliases || [])
+    .filter((item) => includeParts || !(item && typeof item === "object" && item.scope === "part"))
+    .map((item) => stripMarks(item && typeof item === "object" ? item.alias : item))
+    .filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+  for (const alias of candidates) {
+    const starts = [];
+    let from = 0;
+    while (from <= plain.length) {
+      const at = plain.indexOf(alias, from);
+      if (at < 0) break;
+      from = at + 1;
+      const end = at + alias.length;
+      // 与已占用区间重叠（例如「東雲寺」占掉后，其中的「東雲」不再计入）：跳过这一次出现。
+      if (occupied.slice(at, end).some(Boolean)) continue;
+      if (!hasUsableMatch(plain, alias)) continue;
+      starts.push(at);
+    }
+    let usedHere = false;
+    for (const at of starts) {
+      const end = at + alias.length;
+      if (occupied.slice(at, end).some(Boolean)) continue;
+      occupied.fill(true, at, end);
+      usedHere = true;
+    }
+    // 该别名的每次出现都被更长的别名占掉了（例如「太郎」落在「東雲太郎」里）：不算它被用到。
+    if (usedHere) used.push({ alias, length: alias.length });
+  }
+  return { plain, occupied, used };
+}
+
+/** 有效字符统计：既不是空白也不是标点/符号的字符才算内容，句读不参与残留判定。 */
+function countEffectiveChars(plain, occupied = []) {
+  let chars = 0;
+  let residue = 0;
+  let residueText = "";
+  for (let index = 0; index < plain.length; index += 1) {
+    if (!EFFECTIVE_CHAR.test(plain[index])) continue;
+    chars += 1;
+    if (!occupied[index]) {
+      residue += 1;
+      residueText += plain[index];
+    }
+  }
+  return { chars, residue, residueText };
+}
+
+/**
+ * 术语覆盖率：把条目可用别名（长别名优先、互不重叠）从原文里划掉，看还剩多少有效内容。
+ *
+ * 这是「整句话是否只有术语」的唯一度量，只测原文侧——译文侧的一致性由 checkTargetConsistency 判定。
+ * 同一条目可能有多条可用别名（「東雲太郎」与读音「しののめ」），都要参与划除：
+ * 只按命中时选中的那一条算，会把同一行里另一种写法算成“术语之外的内容”。
+ * @returns {{ chars: number, matched: number, residue: number, residueText: string, ratio: number, skip: boolean }}
+ */
+function measureTermCoverage(sourceText, hits) {
+  const plain = stripInlineMarkup(sourceText);
+  const aliases = [];
+  for (const hit of hits || []) {
+    // 同一别名可能由多个条目共有（例如两个同姓角色）：只要有一个条目也算命中，就按占用算。
+    for (const alias of (hit.aliases && hit.aliases.length ? hit.aliases : [{ alias: hit.alias }])) {
+      aliases.push(alias);
+    }
+  }
+  const { occupied, used } = markUsedTermAliases(plain, aliases, { includeParts: false });
+  const matched = used.reduce((sum, item) => sum + item.length, 0);
+  const { chars, residue, residueText } = countEffectiveChars(plain, occupied);
+  const ratio = chars ? residue / chars : 1;
+  const skip = HAS_EFFECTIVE_CHAR.test(plain)
+    && Boolean(hits && hits.length)
+    && residue <= TERM_ONLY_FREE_CHARS
+    && ratio <= TERM_ONLY_FREE_RATIO;
+  return { chars, matched, residue, residueText, ratio, skip };
+}
+
+/**
  * 判定一行：命中对照表则返回 { kind, hits, revisedText? }；证据不足时返回 null（交回后续流程）。
+ *
+ * kind 的三种取值说明这行接下来怎么走：
+ * - `term-only`：命中一致，且原文的有效内容本身就是这些术语（术语之外只剩句读），
+ *   整行没有别的可校内容，可以直接出结论、不调用模型；
+ * - `consistent`：命中一致，但句中还有术语之外的内容——一致性只覆盖术语，
+ *   这一行必须照常交给模型，术语只作为提示词注入；
+ * - `conflict`：命中强证据的译名不一致，给出最小替换或转人工确认。
+ *
+ * 覆盖率与“确认一致”的证据都要求**整条术语或它的读音**在本行出现：只命中分段（只写姓或名，
+ * 例如单独一个「御坂」）不足以说明本行用的是这个术语——同姓的其他角色同样会被它命中——
+ * 所以分段命中只被记录、不参与判定，也不参与覆盖率。
  *
  * 保守判定规则：
  * 1. 只有“强证据”（3 字及以上的基文别名）才能判“译名不一致”，并给出最小替换；
@@ -312,19 +444,31 @@ function evaluateTermRow({ source, target, tables }) {
   const hits = findTermHits(plainSource, tables);
   if (!hits.length) return null;
   const targetKey = normalizeForCompare(plainTarget);
+  // 每条命中都带上该条目**全部**可用别名：覆盖率要按全部写法划除，提示词也要据此判断
+  // “这个术语本行到底用到了没有”（只留命中时选中的那一条会漏掉同一术语的另一种写法）。
+  const usableAliases = (entry) => entry.aliases || [];
   const results = hits.map(({ entry, alias, scope, strong }) => {
     const decidable = scope === "term" && strong;
     const via = checkTargetConsistency(entry, targetKey);
     if (!decidable) {
-      return { entry, alias, scope, strong, consistent: via ? true : null, via, variant: null };
+      return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : null, via, variant: null };
     }
     const variant = via ? null : findWrongVariant(plainTarget, entry);
-    return { entry, alias, scope, strong, consistent: Boolean(via), via, variant };
+    return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: Boolean(via), via, variant };
   });
   const conflicts = results.filter((result) => result.consistent === false);
+  // 只命中分段写法的行不算「确认一致」：分段别名只能记录，不能证明本行用的是这个术语。
+  const confirmed = results.some((result) => result.scope !== "part" && result.consistent === true);
+  if (!conflicts.length && !confirmed) return null;
   if (!conflicts.length) {
-    const confirmed = results.some((result) => result.consistent === true);
-    return confirmed ? { kind: "consistent", hits: results, revisedText: "" } : null;
+    // 覆盖率只在“术语都一致”的前提下有意义：有冲突时整行本来就要处理，不必再算。
+    const coverage = measureTermCoverage(plainSource, results);
+    return {
+      kind: coverage.skip ? "term-only" : "consistent",
+      hits: results,
+      coverage,
+      revisedText: "",
+    };
   }
 
   let revisedText = "";
@@ -339,27 +483,38 @@ function evaluateTermRow({ source, target, tables }) {
   return { kind: "conflict", hits: results, revisedText };
 }
 
+/**
+ * 备注与提示词里显示的术语形态：一律用**去方括号**的原文与译名。
+ * 表里的【】只是给注音标记位置，正文与成品里都不出现，显示成「【山田】【太郎】」会让人
+ * 以为正文里真的有这些方括号。
+ */
+function displayTermPair(entry = {}) {
+  const source = entry.plainSource || stripMarks(entry.source) || String(entry.source || "");
+  const target = entry.plainTarget || stripMarks(entry.target) || String(entry.target || "");
+  return `${source} → ${target}${entry.type ? `（${entry.type}）` : ""}`;
+}
+
 function describeTermHit(result) {
   const { entry, consistent, variant, scope, via, strong } = result;
-  const type = entry.type ? `（${entry.type}）` : "";
+  const pair = displayTermPair(entry);
   if (scope === "part") {
-    return `${entry.source} → ${entry.target}${type}：原文只出现了分段写法，未参与译名一致性判定。`;
+    return `${pair}：原文只出现了分段写法，未参与译名一致性判定。`;
   }
   if (scope === "ruby") {
-    return `${entry.source} → ${entry.target}${type}：原文只出现了读音写法，基文与读音可能对应不同中文，未参与判定。`;
+    return `${pair}：原文只出现了读音写法，基文与读音可能对应不同中文，未参与判定。`;
   }
   if (!strong) {
     return consistent
-      ? `${entry.source} → ${entry.target}${type}：译文已使用该译名（短词，只作为一致性证据）。`
-      : `${entry.source} → ${entry.target}${type}：原文命中的是短词，不足以判定译名错误，交由后续判断。`;
+      ? `${pair}：译文已使用该译名（短词，只作为一致性证据）。`
+      : `${pair}：原文命中的是短词，不足以判定译名错误，交由后续判断。`;
   }
   if (consistent === true) {
     return via === "part"
-      ? `${entry.source} → ${entry.target}${type}：译文使用了该译名的分段写法（如只写姓或名）。`
-      : `${entry.source} → ${entry.target}${type}：译文已使用该译名。`;
+      ? `${pair}：译文使用了该译名的分段写法（如只写姓或名）。`
+      : `${pair}：译文已使用该译名。`;
   }
-  if (variant) return `${entry.source} → ${entry.target}${type}：译文里的「${variant.from}」属${variant.kind}，应替换为本项目译名。`;
-  return `${entry.source} → ${entry.target}${type}：译文未出现该译名，请人工确认是否需要替换。`;
+  if (variant) return `${pair}：译文里的「${variant.from}」属${variant.kind}，应替换为本项目译名。`;
+  return `${pair}：译文未出现该译名，请人工确认是否需要替换。`;
 }
 
 /**
@@ -381,8 +536,7 @@ function formatTermHitGroups(hits = []) {
   for (const hit of hits) {
     const label = termHitGroupLabel(hit);
     if (!groups.has(label)) groups.set(label, []);
-    const type = hit.entry.type ? `（${hit.entry.type}）` : "";
-    groups.get(label).push(`${hit.entry.source}→${hit.entry.target}${type}`);
+    groups.get(label).push(displayTermPair(hit.entry));
   }
   return [...groups.entries()]
     .map(([label, items]) => `${label} ${items.join("、")}`)
@@ -414,7 +568,10 @@ function normalizeTermTablePaths(paths = []) {
 
 module.exports = {
   COLUMN_CANDIDATES,
+  TERM_ONLY_FREE_CHARS,
+  TERM_ONLY_FREE_RATIO,
   describeTermHit,
+  displayTermPair,
   evaluateTermRow,
   findTermHits,
   findWrongVariant,
@@ -423,6 +580,8 @@ module.exports = {
   isAliasUsable,
   loadTermTable,
   loadTermTables,
+  markUsedTermAliases,
+  measureTermCoverage,
   normalizeForCompare,
   normalizeTermEntry,
   normalizeTermTablePaths,
