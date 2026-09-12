@@ -137,7 +137,9 @@ function normalizeSpeechEntry(record) {
 }
 
 /**
- * 内化的说话习惯表：一个被 require 的模块，直接给出条目数组（见 `profiles/demo-speech-habits.js`）。
+ * 内化的说话习惯表：一个被 require 的模块，直接给出条目数组。
+ * 表可以长在自己的档案文件里（示范档案就是这么做的：`speechTables: [require.resolve(__filename)]`
+ * ——角色数据与规范正文收在同一个文件，不再为数据另开文件），也可以是仓库内单独的数据模块。
  * 与表格路径共用同一条消费链——指纹照旧按该文件的 mtime/size 算，因此改条目后运行期会判过期并提示重建。
  * 形态判定：导出对象带 `entries` 数组即视为内化表；带路径的表格仍走 `readRecords`。
  */
@@ -162,7 +164,10 @@ function loadSpeechModule(file) {
     小说首次出现: item.firstWork,
   })).filter(Boolean);
   if (!entries.length) throw new Error(`内化的说话习惯表没有可用条目（需要 entries[].character）：${file}`);
-  return { file: resolved, sheet: module.sheet || module.name || path.basename(resolved), entries };
+  // 内化表可以直接长在档案文件里（示范档案就是这么做的：`speechTables: [require.resolve(__filename)]`），
+  // 那种情况下没有 `sheet`/`name` 可借，退回文件名——它只用于状态显示与日志，不参与判定。
+  const sheet = module.sheet || module.tableName || path.basename(resolved);
+  return { file: resolved, sheet, entries };
 }
 
 function loadSpeechTable(file) {

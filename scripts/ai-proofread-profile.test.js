@@ -37,6 +37,7 @@ const {
   buildProofreadSystemPrompt,
   genericHeader,
   listProfiles,
+  profileEntities,
   proofreadPromptFor,
   resolveProfile,
 } = require("../src/workbenches/translation-compare/ai/proofread-contract");
@@ -44,6 +45,7 @@ const { buildMessages, clientStatus } = require("./ai-proofread");
 const { makeHtml } = require("./build-compare");
 const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
 const { TERM_BLOCK_PREFIX, termGuidanceFor } = require("../src/workbenches/translation-compare/ai/term-prefilter");
+const { loadSpeechTables } = require("../src/workbenches/translation-compare/ai/speech-habit");
 
 const testProfileName = "作品专有档案（测试）";
 const testProfileMarker = `【成品校对规范：${testProfileName}】`;
@@ -185,15 +187,21 @@ test("仓库自带的示范档案展示作品专有档案的写法", () => {
   }
   const ownSections = demo.sections.filter((section) => !novel.sections.some((item) => item.title === section.title));
   assert.equal(ownSections.length, 1);
-  assert.match(ownSections[0].title, /示范/);
+  assert.equal(ownSections[0].title, "本作品专有事实");
 
   const demoPrompt = proofreadPromptFor("bilingual", "demo").profileSystem;
-  assert.match(demoPrompt, /本作品专有事实（示范）/);
+  assert.match(demoPrompt, /本作品专有事实/);
   // 通用规范里已经写过的规则不在示范档案里重复。
   assert.equal(countOf(demoPrompt, /以译名表\/口癖表为准/g), 1);
   // 作品相关的具体内容只集中在示范档案里，通用档案不出现。
-  assert.doesNotMatch(proofreadPromptFor("bilingual", "novel").profileSystem, /金斯福德|御坂/);
-  assert.match(demoPrompt, /金斯福德/);
+  assert.doesNotMatch(proofreadPromptFor("bilingual", "novel").profileSystem, /某魔法的禁书目录/);
+  assert.match(demoPrompt, /某魔法的禁书目录/);
+  // 示范档案不再为单个角色开 `characters` 例外：角色规则走说话习惯表（表就内化在该档案自己身上），
+  // 实体闸门只留给「离开那个名字就无从谈起的专有规则」，由探针档案覆盖（proofread-prompt-layers.test.js）。
+  assert.deepEqual(profileEntities(demo), []);
+  const demoTable = loadSpeechTables(demo.speechTables);
+  assert.deepEqual(demoTable.errors, []);
+  assert.equal(demoTable.entries.length > 0, true, "示范档案的说话习惯表内化在档案文件里");
 });
 
 test("自定义提示词与特化档案合并时不会出现两套规范或两份输出约定", () => {
