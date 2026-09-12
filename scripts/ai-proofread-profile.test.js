@@ -142,6 +142,11 @@ test("规范要点确实进入了特化侧提示词", () => {
   // 规范里的具体条款
   assert.match(novel, /省略号被写成连续句号或连续英文句点/);
   assert.match(novel, /「！？」按规范统一写成「？！」/);
+  // 引号内句末点号的位置按目标列（中文）规范判断，不以原文标点为判据；
+  // 注音条例只能评价 B 里实际出现的注音（两条都是真实假阳性的回归断言）。
+  assert.match(novel, /引号内句末点号按 B 的中文规范定位置/);
+  assert.match(novel, /句末点号与句内点号之间的取舍/);
+  assert.match(novel, /判断只能针对 B 里实际出现的注音/);
   assert.match(novel, /原文右侧傍点/);
   assert.match(novel, /该注音的术语没有注音/);
   assert.match(novel, /|基文\[注文\]/);
