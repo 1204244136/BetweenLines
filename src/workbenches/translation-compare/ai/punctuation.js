@@ -14,14 +14,18 @@
  *   （`「……」`、`「～～～！！！」`、整行的 `……`）当成英文，把标准省略号改坏（3119 行里 50 行误判）。
  * - **只认语境，不认语义**：判据只有一条——标点紧邻的左右字符（跳过空白与引号）是什么。
  *   数字、版本号、缩写（`3.5`、`v1.2`、`e.g.`）、URL（`http://a.b/c?x=1`）之所以安全，
- *   正是因为它们的标点两侧都是 ASCII，不需要任何词语级判断。
+ *   正是因为它们的标点两侧都是 ASCII，不需要任何词语级判断。`restoreTerminalPunctuation`
+ *   同样只按位置判断（被删的是不是一个单独的点号、它后面在不在成对标记的收尾符号前），
+ *   不判断“这句话该不该有点号”这种语义问题。
  * - **内联标记整段跳过**：`<ruby>基文<rt>注文</rt></ruby>`、`<a epub:type="noteref">` 这类标签
  *   先摘出来再按序还原，标签内部的标点（属性里的 `:`、`"`）不会被改写；引号本身
  *   （`"` `'` → 「」『』）也不在这里处理——配对与撇号判断交给提示词，硬转换会改坏英文缩写。
  *
- * 计数口径：`toFull`/`toHalf` 是**处**（一次规范化动作：连续同类标点算一处、成对括号算一处），
- * 不是字符数。
+ * 计数口径：`toFull`/`toHalf`/`restored` 都是**处**（一次规范化动作：连续同类标点算一处、
+ * 成对括号算一处、补回一个句末点号算一处），不是字符数。
  */
+const { diffChars } = require("diff");
+
 
 // 内联标记先摘出来，用私用区字符占位：它同时充当“文档上下文里的一侧”，
 // 这样 `<b>你好</b>，` 这种跨标签的语境判断与中文语境一致。
@@ -40,6 +44,8 @@ const HALF_TO_FULL = Object.freeze({ ",": "，", ".": "。", "!": "！", "?": "�
 const FULL_TO_HALF = Object.freeze({ "，": ",", "。": ".", "！": "!", "？": "?", "；": ";", "：": ":" });
 const OPENERS = "（(";
 const CLOSERS = "）)";
+// 成对标记的收尾符号：句末点号落在它们**之前**才是中文规范要求的写法（restoreTerminalPunctuation 用）。
+const CLOSING_TERMINALS = "」』）】〕";
 const ELLIPSIS = "……";
 
 /** 左侧最近的、不在跳过表里的字符（`index` 是区间的**起始**下标）。 */
@@ -200,12 +206,82 @@ function normalizeSingleMarks(text, stats) {
 }
 
 /**
+ * 补回被删掉的句末点号（纯函数，只按位置判断，不做任何语义判断）。
+ *
+ * 为什么需要：中文规范要求完整句的点号落在引号/括号**内侧**，而原文（日文）常在这个收尾符号前
+ * 省略句末点号；模型据此把目标列本来就合规的点号判成「多出句号」并在 revisedText 里删掉它
+ * （真实回归：第 898 行 `…报告道。」`、第 1087 行 `（……变成那样。）`，两次都是同一个形状）。
+ * 提示词侧的口径写在 `profiles/novel.js` 的按行条目里，但提示词只能“要求”，做不到“保证”；
+ * 而「修改结果：」会被人工直接写回成品，所以删除这类点号必须在这里被拦住。
+ *
+ * 判据（四条同时成立才补，宁可漏补也不误补）：
+ * - 差集里被删掉的那一段**整体是单独一个**句末点号（`。！？`）：`「。。」` 这种成对多余点号
+ *   本身就是缺陷，删掉它属于修正，不能补回来；
+ * - 该点号在**目标列**里紧跟着成对标记的收尾符号（`」』）】〕`）：行尾或句中的点号不在这一层管；
+ * - 同一个收尾符号在修订结果里**仍在原位**（没被一起删掉、中间也没插入别的文字），
+ *   否则补回去等于自己造一个没有收尾符号的句末点号；
+ * - 补回去之后不会与前一个字符连成「。。」（修订结果那里已经有点号了）。
+ *
+ * **省略号不在其中**：`……` 带语气与信息内容，删它属于语义判断（是不是漏译），不由标点工序代劳。
+ *
+ * @param {string} target 目标列当前行文本
+ * @param {string} revised 模型给出的修订结果（通常已经过宽度规范化）
+ * @returns {{text: string, changed: boolean, restored: number}} `restored` 是补回的**处**数
+ */
+function restoreTerminalPunctuation(target, revised) {
+  const before = String(target == null ? "" : target);
+  const after = String(revised == null ? "" : revised);
+  if (!before || !after || before === after) return { text: after, changed: false, restored: 0 };
+
+  const parts = diffChars(before, after);
+  let out = "";
+  let restored = 0;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (!part.removed) {
+      out += part.value;
+      continue;
+    }
+    if (!/^[。！？]$/u.test(part.value)) continue;
+    // 注意空串：`"...".includes("")` 恒为 true，行尾被删的点号必须在这里被挡掉。
+    const closer = neighbourInTarget(parts, i);
+    if (!closer || !CLOSING_TERMINALS.includes(closer) || neighbourInRevised(parts, i) !== closer) continue;
+    if (out.endsWith("。") || out.endsWith("！") || out.endsWith("？")) continue;
+    out += part.value;
+    restored += 1;
+  }
+  return { text: out, changed: restored > 0, restored };
+}
+
+/**
+ * diff 片段序列里，`index` 这个「被删掉」的片段之后的下一个字符。
+ * `inTarget` 为 true 时在目标列序列里找（跳过 added），否则在修订结果序列里找（跳过 removed）。
+ */
+function neighbourInSequence(parts, index, inTarget) {
+  for (let i = index + 1; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (inTarget ? part.added : part.removed) continue;
+    if (part.value) return part.value[0];
+  }
+  return "";
+}
+
+function neighbourInTarget(parts, index) {
+  return neighbourInSequence(parts, index, true);
+}
+
+function neighbourInRevised(parts, index) {
+  return neighbourInSequence(parts, index, false);
+}
+
+/**
  * 目标列文本的标点宽度规范化（纯函数，不读配置、不写日志）。
  *
  * @param {string} value 模型给出的 revisedText（或任何要写回成品的文本）
  * @returns {{text: string, changed: boolean, toFull: number, toHalf: number}}
  *   `toFull`/`toHalf` 是半角→全角、全角→半角的**处**数；`changed` 为 false 时 text 与入参逐字相同。
  */
+
 function normalizeTargetPunctuation(value) {
   const original = String(value == null ? "" : value);
   const stats = { toFull: 0, toHalf: 0 };
@@ -228,4 +304,5 @@ function normalizeTargetPunctuation(value) {
 module.exports = {
   ELLIPSIS,
   normalizeTargetPunctuation,
+  restoreTerminalPunctuation,
 };

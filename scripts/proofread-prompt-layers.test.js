@@ -62,6 +62,7 @@ const FEATURE_SAMPLES = {
   ellipsis: { source: "そう……。", target: "这样......。" },
   interrobang: { source: "本当に！？", target: "真的？！" },
   quote: { source: "「そうか」と彼は言った。", target: "「是吗」他说。" },
+  parenthesis: { source: "（ふうん。……）", target: "（嗯。……）" },
   conjunction: { source: "しかし、", target: "然而——" },
   repeat: { source: "あああ、そうか。", target: "啊啊啊，是吗。" },
   speechEffect: { source: "ドキドキした。", target: "心跳不已。" },
@@ -83,6 +84,18 @@ function payload(overrides = {}) {
   };
 }
 
+// 同一批按行规范里的第二条：与「引号用途」共用 quote 特征、与「括号」共用 parenthesis 特征，
+// 但各自独立裁剪与断言。成对标记（引号/括号）内侧句末点号的位置是中文规范问题，
+// 不能用 A（日文）的标点当判据——见下面的假阳性回归（第 898 行的引号、第 1087 行的括号）。
+const PAIR_PUNCT_MARKER = "内侧的句末点号按 B 的中文规范定位置";
+// 注音条目同样补了一句证据边界：只能评价 B 里实际出现的注音。
+const RUBY_EVIDENCE_MARKER = "判断只能针对 B 里实际出现的注音";
+// 标点写法既约束判断也约束**改写**：真实回归是模型在 revisedText 里把「……」打成「......」，
+// 而旧规范只写成“判 B 的缺陷”，模型便不拿它约束自己写出的文本。
+const PUNCT_FULLWIDTH_MARKER = "中文正文里的标点一律用全角字形";
+const PUNCT_REVISION_MARKER = "这一条同时约束你自己写出的 revisedText";
+const ELLIPSIS_REWRITE_MARKER = "你的 revisedText 同样必须用「……」";
+
 // 每条按行规范的辨识短语：出现在提示词里就说明该条被注入了。
 // 注意 ruby 的辨识短语不能选「基文[注文]」这类字样：通用侧的输出语言约束里也会提到注音写法，
 // 那样连纯叙述行都能匹配上，断言就失去意义了。
@@ -95,23 +108,14 @@ const ROW_LINE_MARKERS = {
   ellipsis: "省略号被写成连续句号",
   interrobang: "按规范统一写成「？！」",
   quote: "引号用途：背景音与非人声",
+  // 括号与引号共用那条「成对标记内侧的句末点号」规范，所以这里的辨识短语与 quote 的不同。
+  parenthesis: PAIR_PUNCT_MARKER,
   conjunction: "连接词独立成段",
   repeat: "重复出现的字或符号",
   speechEffect: "拟声词后的「と」不译",
   particle: "语气词与拟声词按中文语境选词",
   numeric: "小数用阿拉伯数字",
 };
-
-// 同一特征下的第二条按行规范：与「引号用途」共用 quote 特征，但各自独立裁剪与断言。
-// 引号内句末点号的位置是中文规范问题，不能用 A（日文）的标点当判据——见下面的假阳性回归。
-const QUOTE_PUNCT_MARKER = "引号内句末点号按 B 的中文规范定位置";
-// 注音条目同样补了一句证据边界：只能评价 B 里实际出现的注音。
-const RUBY_EVIDENCE_MARKER = "判断只能针对 B 里实际出现的注音";
-// 标点写法既约束判断也约束**改写**：真实回归是模型在 revisedText 里把「……」打成「......」，
-// 而旧规范只写成“判 B 的缺陷”，模型便不拿它约束自己写出的文本。
-const PUNCT_FULLWIDTH_MARKER = "中文正文里的标点一律用全角字形";
-const PUNCT_REVISION_MARKER = "这一条同时约束你自己写出的 revisedText";
-const ELLIPSIS_REWRITE_MARKER = "你的 revisedText 同样必须用「……」";
 
 test("注册特征与实现一一对应，且每个特征都有可达的样例行", () => {
   assert.deepEqual(Object.keys(FEATURE_RULES).sort(), [...FEATURE_IDS].sort(), "每个注册特征都必须有实现");
@@ -177,8 +181,8 @@ test("原文侧的 HTML 注音也算命中：不能漏掉“原文有注音、�
   assert.equal(detectRowFeatures({ source: "|鍋掴[なべつか]みたい", target: "跟隔热手套一样" }).has("ruby"), true);
 });
 
-test("引号内句末点号：A 在 」 前省略句末点号，不代表 B 多出句号是缺陷", () => {
-  // 真实假阳性：原文（日文）在 」 前省略句末点号，译文（中文）按规范在引号内补出，
+test("成对标记内侧的句末点号：A 在 」/） 前省略它，不代表 B 多出句号是缺陷", () => {
+  // 真实假阳性：原文（日文）在收尾符号前省略句末点号，译文（中文）按规范在标记内侧补出，
   // 模型据此判「对话尾部引号前多出句号」，扣分并在 revisedText 里删掉了这个点号。
   // 句末点号的位置是目标列语言的规范问题，A 的标点不是判据。
   const row = {
@@ -188,19 +192,28 @@ test("引号内句末点号：A 在 」 前省略句末点号，不代表 B 多�
   const hit = detectRowFeatures(row);
   assert.equal(hit.has("quote"), true, "带引号的行必须命中 quote 特征");
   const system = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: hit });
-  assert.equal(system.includes(QUOTE_PUNCT_MARKER), true, "引号内句末点号的规范必须注入到带引号的行");
+  assert.equal(system.includes(PAIR_PUNCT_MARKER), true, "成对标记内侧句末点号的规范必须注入到带引号的行");
   assert.equal(system.includes("不得据此判缺陷"), true);
   assert.equal(system.includes("也不得在 revisedText 里删掉它"), true);
   // 同一特征下的另一条规范（引号用途）仍按同一份裁剪结果注入，两条互不替代。
   assert.equal(system.includes(ROW_LINE_MARKERS.quote), true);
 
-  // 不带引号的叙述行不注入这条：按行裁剪照旧生效。
+  // 回归（第 1087 行）：收尾符号是**括号**时同样要拿到这条规范——只认引号的特征会让
+  // 整行括注的行拿不到它，模型便会再删一次句号。
+  const bracketRow = { source: "（……現実にはそうなっていない）", target: "（实际上并没有变成那样。）" };
+  const bracketHit = detectRowFeatures(bracketRow);
+  assert.equal(bracketHit.has("parenthesis"), true, "带全角括号的行必须命中 parenthesis 特征");
+  assert.equal(bracketHit.has("quote"), false, "整行括注的行没有引号");
+  const bracketSystem = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: bracketHit });
+  assert.equal(bracketSystem.includes(PAIR_PUNCT_MARKER), true, "整行括注的行必须拿到同一条点号规范");
+
+  // 不带任何成对标记的叙述行不注入这条：按行裁剪照旧生效。
   const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
   const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
-  assert.equal(trimmed.includes(QUOTE_PUNCT_MARKER), false, "叙述行不该背上引号点号规范");
+  assert.equal(trimmed.includes(PAIR_PUNCT_MARKER), false, "叙述行不该背上成对标记的点号规范");
 
   // 页面预填的默认提示词（全量）必须也带上它，人工读得到完整规范。
-  assert.equal(proofreadPromptFor("bilingual", "novel").system.includes(QUOTE_PUNCT_MARKER), true);
+  assert.equal(proofreadPromptFor("bilingual", "novel").system.includes(PAIR_PUNCT_MARKER), true);
 });
 
 test("注音规范只评价 B 里实际出现的注音：不得凭 A 里普通词的假名读音指控 B 保留注音", () => {
@@ -252,7 +265,7 @@ test("页面默认提示词保持全量：裁剪只发生在真正发请求时",
   const full = proofreadPromptFor("bilingual", "novel").system;
   for (const marker of [
     ...Object.values(ROW_LINE_MARKERS),
-    QUOTE_PUNCT_MARKER,
+    PAIR_PUNCT_MARKER,
     RUBY_EVIDENCE_MARKER,
     PUNCT_FULLWIDTH_MARKER,
     PUNCT_REVISION_MARKER,

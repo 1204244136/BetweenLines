@@ -329,7 +329,7 @@ test("AI queue trips when the recent error rate reaches the circuit-breaker thre
   }
 });
 
-async function publishModelRows(label, rowCount) {
+async function publishModelRows(label, rowCount, rowsFor) {
   const selection = {
     comparisonMode: "bilingual",
     inputMode: "txt",
@@ -344,6 +344,8 @@ async function publishModelRows(label, rowCount) {
     index: offset + 1,
     jp: `${label} source paragraph ${offset + 1} with unique content`,
     cn: `${label} 需要模型判断的不同译文段落 ${offset + 1}`,
+    // 需要特定目标列文本的用例（例如「成对标记内侧的句末点号」回归）走这里覆盖。
+    ...(rowsFor ? rowsFor(offset + 1) : null),
     tw: "",
     twCn: "",
     score: 0,
@@ -374,9 +376,9 @@ const passingDecisionBody = JSON.stringify({
   }) } }],
 });
 
-async function runProofreadAgainst({ label, rowCount, breaker, respond }) {
+async function runProofreadAgainst({ label, rowCount, breaker, respond, rowsFor }) {
   clearProofreadCache();
-  const { project, rows } = await publishModelRows(label, rowCount);
+  const { project, rows } = await publishModelRows(label, rowCount, rowsFor);
   let requestCount = 0;
   const server = http.createServer((request, response) => {
     requestCount += 1;
@@ -636,6 +638,62 @@ test("修订结果的标点按语境自动规范化：中文全角、英文半�
   const english = results.find((item) => item.index === 2);
   assert.match(english.note, /修改结果：Wait, this is a test\. Really\? Yes, it is\./, "英文句子保持半角");
   assert.equal(/标点自动规范化/.test(english.note), false, "没改动就不留痕");
+});
+
+test("模型删掉成对标记内侧的句末点号时按目标列规范补回，并在备注与统计里留痕", async () => {
+  // 真实回归（第 1087 行）：目标列整行括注，点号落在括号内，模型判「括号内句末添加了多余的句号」
+  // 并在改写里删掉了它。句末点号的位置是目标列语言的规范问题，原文省略不等于译文该省。
+  const decide = (revisedText) => JSON.stringify({
+    semanticSame: false,
+    needsEdit: true,
+    needsContext: false,
+    decision: "replace",
+    score: 70,
+    penalty: 30,
+    grade: "good",
+    severity: "minor",
+    summary: "需要修改：译文遗漏了开头的省略号。",
+    revisedText,
+  });
+  const { finished, rows } = await runProofreadAgainst({
+    label: "punct-restore",
+    rowCount: 2,
+    rowsFor: (index) => (index === 1
+      ? { jp: "（……現実にはそうなっていない）", cn: "（……现实中并没有变成那样。）" }
+      : { jp: "彼は来なかった。", cn: "他没有来。" }),
+    respond: (count, response) => {
+      let raw = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { raw += chunk; });
+      request.on("end", () => {
+        const user = JSON.parse(JSON.parse(raw).messages[1].content);
+        const index = Number(user.row.index);
+        // 第 1 行：模型既补了遗漏的省略号、又删掉了括号内的句号（要补回那一个点号）；
+        // 第 2 行：删的是行尾句号，不在这一层的处理范围（只按位置判断，不做语义判断）。
+        const revised = index === 1 ? "（……现实中并没有变成那样）" : "他没有来";
+        response.end(JSON.stringify({ choices: [{ message: { content: decide(revised) } }] }));
+      });
+    },
+  });
+
+  assert.equal(finished.running, false);
+  assert.equal(finished.errors, 0);
+  assert.equal(finished.punctRestored, 1, "只有括号内那一个点号被补回");
+  assert.match(finished.logs.join("\n"), /第 1 行：修改结果的标点已按成品写法统一（补回引号\/括号内的句末点号 1 处）/);
+  assert.match(finished.logs.join("\n"), /标点规范化：补回 1 处被删掉的句末点号/);
+
+  const results = clientStatus().results.filter((item) => item.status !== "error");
+  assert.equal(results.length, rows.length);
+  const bracket = results.find((item) => item.index === 1);
+  assert.match(bracket.note, /修改结果：（……现实中并没有变成那样。）/);
+  const fixLine = bracket.note.split("\n").find((line) => line.startsWith("标点自动规范化："));
+  assert.equal(fixLine, "标点自动规范化：补回引号/括号内的句末点号 1 处");
+  assert.equal(bracket.note.split("\n").indexOf(fixLine) > bracket.note.split("\n").findIndex((line) => line.startsWith("分析：")), true);
+
+  const plain = results.find((item) => item.index === 2);
+  assert.match(plain.note, /修改结果：他没有来$/m);
+  assert.equal(/标点自动规范化/.test(plain.note), false, "行尾句号被删不在标点这一层的处理范围，不留痕");
 });
 
 test("目标列本来就有刻意的假名写法时不拦；纯目标列语言的修订结果照常通过", () => {

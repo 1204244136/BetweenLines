@@ -1,11 +1,16 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { normalizeTargetPunctuation } = require("../src/workbenches/translation-compare/ai/punctuation");
+const { normalizeTargetPunctuation, restoreTerminalPunctuation } = require("../src/workbenches/translation-compare/ai/punctuation");
 
 /** 只取规范化后的文本，便于逐条断言。 */
 function fix(text) {
   return normalizeTargetPunctuation(text).text;
+}
+
+/** 只取补回句末点号后的文本。 */
+function restore(target, revised) {
+  return restoreTerminalPunctuation(target, revised).text;
 }
 
 test("中文语境里的半角标点整体转全角", () => {
@@ -88,4 +93,49 @@ test("空值与纯文本不受影响", () => {
     assert.equal(result.changed, false);
   }
   assert.deepEqual(normalizeTargetPunctuation(null), { text: "", changed: false, toFull: 0, toHalf: 0 });
+});
+
+test("被删掉的成对标记内侧句末点号要补回来", () => {
+  // 真实回归（第 1087 行）：目标列整行括注、点号落在括号内，模型判「括号内句末添加了多余的句号」
+  // 并在改写里删掉了它——这句话是中文规范写法，原文（日文）省略不等于译文该省。
+  const bracket = restoreTerminalPunctuation("（……现实中并没有变成那样。）", "（……现实中并没有变成那样）");
+  assert.equal(bracket.text, "（……现实中并没有变成那样。）");
+  assert.equal(bracket.restored, 1);
+  assert.equal(bracket.changed, true);
+  // 真实回归（第 898 行）：同一个形状出现在引号里，模型同时删了点号、改写了措辞。
+  const quote = restoreTerminalPunctuation("「……御坂老老实实地报告道。」", "「……御坂恭恭敬敬地报告道」");
+  assert.equal(quote.text, "「……御坂恭恭敬敬地报告道。」");
+  assert.equal(quote.restored, 1);
+  // 只删点号、没有别的改动时同样补回。
+  assert.equal(restore("（他说。）", "（他说）"), "（他说。）");
+  assert.equal(restore("「住手！」", "「住手」"), "「住手！」");
+});
+
+test("只补「单独一个、且后面确实还有收尾符号」的句末点号", () => {
+  // 成对的「。。」本身就是缺陷，删掉它属于修正，不能补回来。
+  assert.equal(restore("（混蛋。。）", "（混蛋。）"), "（混蛋。）");
+  // 收尾符号被一起删掉时不能补：补回去等于造一个没有收尾符号的句末点号。
+  assert.equal(restore("（他说。）", "（他说"), "（他说");
+  // 点号后面紧跟的不是成对标记的收尾符号（这里是行尾/句中的点号）→ 不在这一层的处理范围。
+  assert.equal(restore("他没有来。", "他没有来"), "他没有来");
+  assert.equal(restore("先走一步。然后回头。", "先走一步然后回头。"), "先走一步然后回头。");
+  // 顺手改了措辞不影响补回那一个点号（删的确实是单独一个、且收尾符号还在原位）。
+  assert.equal(restore("（他来了。）", "（他真的来了）"), "（他真的来了。）");
+  // 极端情形（模型把开头括号与部分正文一起删掉、只留下收尾符号）：这一个点号照样补回——
+  // 文本已经被那次改动改坏（括号不成对），人工在 diff 里一眼可见，不由标点这一层兜底。
+  assert.equal(restore("（他来了。）", "来了）"), "来了。）");
+  // 省略号带语气与信息内容，删它属于语义判断，不由标点工序代劳。
+  assert.equal(restore("（原来如此……）", "（原来如此）"), "（原来如此）");
+  // 修订结果已经在收尾符号前给了点号：不重复补。
+  assert.equal(restore("（他说。）", "（他说。）"), "（他说。）");
+});
+
+test("补回句末点号只在中文全角形态上生效，且不动其他字符", () => {
+  const result = restoreTerminalPunctuation("「そうか。」", "「そうか」");
+  assert.equal(result.text, "「そうか。」");
+  assert.equal(result.restored, 1);
+  // 空值与非中文收尾符号不受影响。
+  assert.deepEqual(restoreTerminalPunctuation("", ""), { text: "", changed: false, restored: 0 });
+  assert.deepEqual(restoreTerminalPunctuation(null, null), { text: "", changed: false, restored: 0 });
+  assert.equal(restore("(He said.)", "(He said)"), "(He said)");
 });

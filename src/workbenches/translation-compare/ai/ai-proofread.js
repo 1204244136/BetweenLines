@@ -42,7 +42,7 @@ const {
   resolveProfile,
 } = require("./proofread-contract");
 const { detectRowFeatures } = require("./row-features");
-const { normalizeTargetPunctuation } = require("./punctuation");
+const { normalizeTargetPunctuation, restoreTerminalPunctuation } = require("./punctuation");
 const { webLookupBlock, webLookupEntries, webLookupNote, webLookupSites } = require("./web-lookup");
 const {
   DEFAULT_LOW_SCORE_PENALTY,
@@ -165,11 +165,13 @@ const status = {
   termRubyDemoted: 0,
   // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、转人工确认的行数（见 guardTargetScript）。
   scriptLeaks: 0,
-  // 标点规范化：多少行的修改结果被统一过标点宽度、半角→全角与全角→半角各多少处（见 punctuation.js）。
+  // 标点规范化：多少行的修改结果被统一过标点宽度/补回过句末点号、各多少处（见 punctuation.js）。
   punctEnabled: true,
   punctFixes: 0,
   punctToFull: 0,
   punctToHalf: 0,
+  // 补回成对标记（引号/括号）内侧被模型删掉的句末点号的处数——原文省略不等于译文该省。
+  punctRestored: 0,
   termTables: { files: [], entries: 0 },
   // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
   lowScoreEnabled: true,
@@ -257,11 +259,12 @@ function clientStatus(options = {}) {
     termRubyDemoted: status.termRubyDemoted,
     // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
     scriptLeaks: status.scriptLeaks,
-    // 标点规范化：这一层是否启用、多少行的修改结果被统一过标点宽度、两个方向各多少处。
+    // 标点规范化：这一层是否启用、多少行的修改结果被改过、宽度两个方向与补回句末点号各多少处。
     punctEnabled: status.punctEnabled,
     punctFixes: status.punctFixes,
     punctToFull: status.punctToFull,
     punctToHalf: status.punctToHalf,
+    punctRestored: status.punctRestored,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
@@ -467,11 +470,12 @@ function resetStatus(config, rowsLength) {
   status.termInjected = 0;
   // 输出侧护栏：多少行的 revisedText 混进了原文（日文）文字而被作废转人工（提示词约束之外的确定性闸门）。
   status.scriptLeaks = 0;
-  // 标点规范化：把修改结果里的标点宽度按语境统一（中文全角、英文半角），计数如实上报。
+  // 标点规范化：把修改结果里的标点宽度按语境统一（中文全角、英文半角），并补回被删掉的句末点号。
   status.punctEnabled = config.punctNormalize !== false;
   status.punctFixes = 0;
   status.punctToFull = 0;
   status.punctToHalf = 0;
+  status.punctRestored = 0;
   // 线上查询层：多少行模型判断不了而进入查证、一共问了几轮、其中多少行据此得出结论。
   status.webLookups = 0;
   status.webLookupResolved = 0;
@@ -919,7 +923,11 @@ function finish() {
     }
     if (status.punctFixes) {
       pushLog(`标点规范化：${status.punctFixes} 行的修改结果统一了标点宽度（半角→全角 ${status.punctToFull} 处，全角→半角 ${status.punctToHalf} 处）；英文句子保持半角。`);
-    } else if (status.punctEnabled === false) {
+    }
+    if (status.punctRestored) {
+      pushLog(`标点规范化：补回 ${status.punctRestored} 处被删掉的句末点号（引号/括号内侧的句末点号是中文规范写法，原文省略不等于译文该省）。`);
+    }
+    if (!status.punctFixes && !status.punctRestored && status.punctEnabled === false) {
       pushLog("标点规范化：已关闭。");
     }
   }
@@ -1087,9 +1095,10 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
-  // 标点规范化（确定性工序）：中文语境的标点统一成全角，英文句子保持半角。放在护栏之前，
-  // 因为它只改宽度、不改字符集；改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
-  decision = normalizeDecisionPunctuation(decision, row, config);
+  // 标点规范化（确定性工序）：中文语境的标点统一成全角、英文句子保持半角，并补回被删掉的
+  // 成对标记内侧句末点号。放在护栏之前，因为它只动标点、不改字符集；
+  // 改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
+  decision = normalizeDecisionPunctuation(decision, row, config, targetText);
   // 输出侧兜底（最后一关）：模型把原文文字写进修订结果时作废它——这种文本会被人工直接写回成品。
   const guarded = guardTargetScript(decision, targetText);
   if (guarded !== decision) {
@@ -1545,26 +1554,38 @@ function contextItemChars(item) {
 }
 
 /**
- * 标点规范化层：把模型给出的修订结果按语境统一标点宽度（中文全角、英文半角），见 `punctuation.js`。
+ * 标点规范化层：把模型给出的修订结果按语境统一标点宽度（中文全角、英文半角），
+ * 并补回被模型删掉的成对标记内侧句末点号，见 `punctuation.js`。
  *
- * 为什么要有这一层：成品规范要求中文正文全角标点，而提示词只能“要求”做不到“保证”——
- * 实测模型会在自己的 revisedText 里打出「......」，也会把英文句子里的标点写成全角；
- * 备注里的「修改结果：」会被人工直接写回成品，所以这里做一次确定性统一。
+ * 为什么要有这一层：成品规范要求中文正文全角标点、完整句的句末点号落在引号/括号内侧，
+ * 而提示词只能“要求”做不到“保证”——实测模型会在自己的 revisedText 里打出「......」，
+ * 也会把英文句子里的标点写成全角，还会把目标列本来就合规的句末点号判成「多出句号」删掉
+ * （真实回归：第 898 行与第 1087 行）。备注里的「修改结果：」会被人工直接写回成品，
+ * 所以这里做一次确定性统一与补回。
  *
  * 三条纪律：**只动标点**（不动任何其他字符，也不重排语序）；**英文句子保持半角**
- * （反向还原要求正向 ASCII 证据，见 `punctuation.js` 的 `isLatinContext`）；**改了什么必须留痕**——计数走
- * `status.punctFixes`/`punctToFull`/`punctToHalf`，备注的分析栏里写一行「标点自动规范化：…」
- * （说明行必须排在「修改结果：」之前，见 `analysisLines`）。
+ * （反向还原要求正向 ASCII 证据，见 `punctuation.js` 的 `isLatinContext`）；
+ * **改了什么必须留痕**——计数走 `status.punctFixes`/`punctToFull`/`punctToHalf`/`punctRestored`，
+ * 备注的分析栏里写一行「标点自动规范化：…」（说明行必须排在「修改结果：」之前，见 `analysisLines`）。
  */
-function normalizeDecisionPunctuation(decision, row, config) {
+function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
   if (!config?.punctNormalize || !decision?.revisedText) return decision;
-  const result = normalizeTargetPunctuation(decision.revisedText);
-  if (!result.changed) return decision;
+  const width = normalizeTargetPunctuation(decision.revisedText);
+  const terminal = restoreTerminalPunctuation(targetText, width.text);
+  if (!width.changed && !terminal.changed) return decision;
   status.punctFixes += 1;
-  status.punctToFull += result.toFull;
-  status.punctToHalf += result.toHalf;
-  pushLog(`第 ${row.index} 行：修改结果的标点已按成品写法统一（半角→全角 ${result.toFull} 处，全角→半角 ${result.toHalf} 处）。`);
-  return { ...decision, revisedText: result.text, punctFix: { toFull: result.toFull, toHalf: result.toHalf } };
+  status.punctToFull += width.toFull;
+  status.punctToHalf += width.toHalf;
+  status.punctRestored += terminal.restored;
+  const detail = [];
+  if (width.toFull || width.toHalf) detail.push(`半角→全角 ${width.toFull} 处，全角→半角 ${width.toHalf} 处`);
+  if (terminal.restored) detail.push(`补回引号/括号内的句末点号 ${terminal.restored} 处`);
+  pushLog(`第 ${row.index} 行：修改结果的标点已按成品写法统一（${detail.join("；")}）。`);
+  return {
+    ...decision,
+    revisedText: terminal.text,
+    punctFix: { toFull: width.toFull, toHalf: width.toHalf, restored: terminal.restored },
+  };
 }
 
 /**
@@ -2364,7 +2385,11 @@ function punctFixLine(decision) {
   const parts = [];
   if (fix.toFull) parts.push(`半角→全角 ${fix.toFull} 处`);
   if (fix.toHalf) parts.push(`全角→半角 ${fix.toHalf} 处`);
-  return parts.length ? `标点自动规范化：${parts.join("、")}（中文标点全角、英文句子半角）` : "";
+  if (fix.restored) parts.push(`补回引号/括号内的句末点号 ${fix.restored} 处`);
+  if (!parts.length) return "";
+  // 宽度口径的括注只在真的动过宽度时才出现；只补回句末点号时那句话与它无关。
+  const suffix = (fix.toFull || fix.toHalf) ? "（中文标点全角、英文句子半角）" : "";
+  return `标点自动规范化：${parts.join("、")}${suffix}`;
 }
 
 module.exports = {
