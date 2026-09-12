@@ -3,7 +3,7 @@ const { diffWordsWithSpace } = require("diff");
 const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
-const { evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
+const { displayTermPair, evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
 const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-prefilter");
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
@@ -157,6 +157,8 @@ const status = {
   termPrefiltered: 0,
   termConflicts: 0,
   termInjected: 0,
+  // 基文命中、但注文没对上原文而被排除的候选条数（非人名条目带注音时的匹配口径，见 term-table.js）。
+  termRubySkipped: 0,
   termTables: { files: [], entries: 0 },
   // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
   lowScoreEnabled: true,
@@ -240,6 +242,7 @@ function clientStatus(options = {}) {
     termPrefiltered: status.termPrefiltered,
     termConflicts: status.termConflicts,
     termInjected: status.termInjected,
+    termRubySkipped: status.termRubySkipped,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
@@ -386,8 +389,10 @@ function cleanConfig(input = {}) {
     glossaryFile: String(input.glossaryFile || "").trim(),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
     monitorEnabled: Boolean(input.monitorEnabled),
-    // 本次任务里「术语一致但整行还有别的内容」的行：术语提示段落按行号在此登记，跑任务时注入提示词。
+    // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
+    // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
+    termConflictIndexes: new Set(),
   };
 }
 
@@ -540,7 +545,7 @@ async function startPrefilter(input) {
   };
 
   let pending = 0;
-  // 预筛选同样先过一遍对照表：命中行不调用模型即可落地。
+  // 预筛选同样先过一遍对照表：只有整行都是术语的行会落地，其余命中行留给模型（含术语冲突行）。
   const resolvedByTermTable = applyTermTable(config, rows, labels);
   for (const row of rows) {
     if (config.completedIndexes.has(Number(row.index))) {
@@ -548,6 +553,11 @@ async function startPrefilter(input) {
       continue;
     }
     if (resolvedByTermTable.has(Number(row.index))) continue;
+    // 术语冲突行不吃预筛：这类行必须由模型给出术语判断（术语判断是模型分析里的一环）。
+    if (isTermConflictRow(config, row.index)) {
+      pending += 1;
+      continue;
+    }
     const left = config.proofreadMode === "bilingual" ? (row.jp || "") : (row.cn || "");
     const right = config.proofreadMode === "bilingual" ? (row.cn || "") : (row.twCn || toCn(row.tw || ""));
     const classification = classifyPrefilter({
@@ -567,7 +577,7 @@ async function startPrefilter(input) {
   }
 
   status.queued = pending;
-  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${pending} 行需要 AI 校对。`);
+  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行；术语冲突 ${status.termConflicts} 行按口径留给 AI 判断（不吃预筛），剩余 ${pending} 行需要 AI 校对。`);
   finish();
   return clientStatus({ includeResults: false });
 }
@@ -621,26 +631,29 @@ async function startProofread(input) {
       continue;
     }
     if (resolvedByTermTable.has(Number(row.index))) continue;
-    const left = config.proofreadMode === "bilingual" ? (row.jp || "") : (row.cn || "");
-    const right = config.proofreadMode === "bilingual" ? (row.cn || "") : (row.twCn || toCn(row.tw || ""));
-    const classification = classifyPrefilter({
-      source: row.jp || "",
-      left,
-      right,
-      score: row.score,
-    }, config.similarityThreshold);
-    if (classification) {
-      const prefilterKind = classification.kind === "similarity"
-        ? "similarity"
-        : (classification.kind === "structured-conflict" ? "structured-conflict" : "rule");
-      addResult(makePrefilterResult(row, labels, classification, config.proofreadMode), { prefilterKind });
-      continue;
+    // 术语冲突行不吃规则/相似度预筛：这一行的术语判断必须由模型结合整句给出。
+    if (!isTermConflictRow(config, row.index)) {
+      const left = config.proofreadMode === "bilingual" ? (row.jp || "") : (row.cn || "");
+      const right = config.proofreadMode === "bilingual" ? (row.cn || "") : (row.twCn || toCn(row.tw || ""));
+      const classification = classifyPrefilter({
+        source: row.jp || "",
+        left,
+        right,
+        score: row.score,
+      }, config.similarityThreshold);
+      if (classification) {
+        const prefilterKind = classification.kind === "similarity"
+          ? "similarity"
+          : (classification.kind === "structured-conflict" ? "structured-conflict" : "rule");
+        addResult(makePrefilterResult(row, labels, classification, config.proofreadMode), { prefilterKind });
+        continue;
+      }
     }
     queue.push(row);
   }
 
   status.queued = queue.length;
-  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${queue.length} 行进入 AI 校对。`);
+  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对。`);
   pushLog(config.circuitBreakerEnabled
     ? `错误率熔断：最近 ${errorCircuitBreaker.windowSize} 次调用中失败占比达到 ${Math.round(config.circuitBreakerErrorRate * 100)}% 时自动终止。`
     : "错误率熔断：已关闭，调用失败不会自动终止任务。");
@@ -1111,13 +1124,24 @@ function shouldRetryWithContext(decision) {
 }
 
 /**
+ * 术语冲突行必须经过模型：对照表已经在这类行上给出强证据差异（译文现用别的写法、或整条没译出来），
+ * 若被规则/相似度预筛按“看起来差不多”挡掉，这一行的术语判断就没人做了——而术语判断正是模型分析的一环。
+ */
+function isTermConflictRow(config, index) {
+  const indexes = config && config.termConflictIndexes;
+  return Boolean(indexes && indexes.has(Number(index)));
+}
+
+/**
  * 对照表预处理：命中行按「整行是否只有术语」分流，并返回被它直接处理掉的行号集合。
  * - `term-only`：整行有效内容就是术语，直接写成结果，不调用模型；
  * - `consistent`：术语一致但句中还有别的内容——照常交给模型，只把术语当提示词注入；
  * - `advisory`：命中的是假名写法（グループ、メンバー…），可能只是普通词——**不由对照表定论**，
  *   注入术语提示后照常交给模型，由模型结合上下文判断此处是否确指该术语（与人工核对模型结论）；
- * - `conflict`：译名不一致（强证据且非假名写法），给出最小替换或转人工确认。
- * AI 校对与预筛选共用这条路径——它不调用模型，只做确定性查表。
+ * - `conflict`：译名不一致（强证据且非假名写法）——**同样交给模型**：对照表只提供证据与线索
+ *   （译文现用某个写法、或整条没译出来），要不要改由模型结合整句判断，「术语判断」是模型分析里
+ *   的一个环节。这些行还会登记进 `config.termConflictIndexes`，在预筛阶段豁免（不许被相似度挡掉）。
+ * 只有 `term-only` 会由对照表直接写结论、跳过模型；AI 校对与预筛选共用这条路径，它不调用模型。
  */
 function applyTermTable(config, rows, labels) {
   const resolved = new Set();
@@ -1127,45 +1151,49 @@ function applyTermTable(config, rows, labels) {
   let consistentRows = 0;
   let conflictRows = 0;
   let advisoryRows = 0;
-  const resolvedByTable = [];
   const skippedByTable = [];
   const targetKey = termTargetKeyFor(config.proofreadMode, config.target);
   const targetLabel = targetKey === "tw" ? (labels.tw || "非原文 C") : (labels.cn || "译文 B");
+  // 被注音口径排除的候选：非人名条目声明了注音时，基文命中还不够，注文也要在原文里对上。
+  // 这里只统计与提示，不改变结论——它回答的是“表里有这条、本行为什么没算命中”。
+  const rubySkippedCandidates = [];
   for (const row of rows) {
+    const index = Number(row.index);
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: textForKey(row, targetKey),
       tables: termTables,
+      rejected: rubySkippedCandidates,
     });
     if (!evaluation) continue;
-    // advisory 与 consistent 都只覆盖术语：整行是否还有问题由模型判定，这里只登记术语提示。
-    const injectOnly = evaluation.kind === "consistent" || evaluation.kind === "advisory";
     if (evaluation.kind === "conflict") {
-      // 译名冲突由对照表直接给结论（最小替换或转人工确认），这一行不会走到模型。
       conflictRows += 1;
-    } else {
-      if (evaluation.kind === "advisory") advisoryRows += 1;
-      else consistentRows += 1;
-      resolvedByTable.push(Number(row.index));
-      // 只有真正交给模型的行才需要术语提示词：已人工确认的行不会再跑，整行只有术语的行不进模型。
-      if (injectOnly && !config.completedIndexes.has(Number(row.index))) {
-        config.termContext.set(Number(row.index), termGuidanceFor(row, { evaluation, targetKey, targetLabel }));
-      }
+      config.termConflictIndexes.add(index);
+    } else if (evaluation.kind === "advisory") advisoryRows += 1;
+    else consistentRows += 1;
+    if (config.completedIndexes.has(index)) continue;
+    // 除「整行只有术语」外，命中的行都把术语当提示词注入、照常交给模型：
+    // 术语一致只能证明术语用对了，术语冲突则要由模型结合整句判断该不该改。
+    if (evaluation.kind !== "term-only") {
+      config.termContext.set(index, termGuidanceFor(row, { evaluation, targetKey, targetLabel }));
+      continue;
     }
-    if (config.completedIndexes.has(Number(row.index))) continue;
-    if (injectOnly) continue;
-    if (evaluation.kind === "term-only") {
-      skippedByTable.push(Number(row.index));
-    }
+    skippedByTable.push(index);
     const result = makeTermResult(row, labels, evaluation, config.proofreadMode, targetKey);
     result.runId = status.runId;
     result.signature = rowSignature(row);
     addResult(result, { prefilterKind: "term" });
-    resolved.add(Number(row.index));
+    resolved.add(index);
   }
   status.termConflicts = conflictRows;
-  status.termInjected = resolvedByTable.filter((index) => config.termContext.has(index)).length;
-  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows + advisoryRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，需人工确认 ${conflictRows}，存疑交模型判断 ${advisoryRows}），另有 ${status.termInjected} 行的术语按提示词注入后照常交给模型。`);
+  status.termInjected = [...config.termContext.keys()].length;
+  status.termRubySkipped = rubySkippedCandidates.length;
+  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows + advisoryRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，术语冲突 ${conflictRows}，存疑交模型判断 ${advisoryRows}），另有 ${status.termInjected} 行的术语作为提示词注入后照常交给模型（含术语冲突行：术语判断由模型结合整句给出，不再直接转人工）。`);
+  if (rubySkippedCandidates.length) {
+    // 如实说出来：这些候选是“表里有这条、原文却只对上了基文”——非人名条目带注音时的匹配口径。
+    const samples = [...new Set(rubySkippedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
+    pushLog(`对照表：${rubySkippedCandidates.length} 条候选因原文只对上基文、注文没对上而未参与判定（例：${samples.join("、")}）。`);
+  }
   compareWithTermLayer(config, { resolved, targetKey, skippedByTable });
   return resolved;
 }

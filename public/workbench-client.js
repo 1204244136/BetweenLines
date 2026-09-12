@@ -252,8 +252,10 @@
       const summary = variant.summary || {};
       const consistent = summary.consistent || 0;
       const termOnly = summary.termOnly === undefined ? consistent : summary.termOnly;
-      const injected = Math.max(0, consistent - termOnly);
-      return `构建期预筛 ${variant.hits} 行命中（术语一致 ${consistent}：整行只有术语 ${termOnly} / 需注入术语 ${injected}；需确认 ${summary.conflicts || 0}），预计 ${summary.aiRows} 行仍需 AI 判定`;
+      const conflicts = summary.conflicts || 0;
+      // 冲突行同样注入术语后交给模型，所以它们算在「其余交模型」里，单独再点出条数。
+      const injected = Math.max(0, consistent - termOnly) + conflicts;
+      return `构建期预筛 ${variant.hits} 行命中（整行只有术语、跳过模型 ${termOnly}；其余 ${injected} 行注入术语后交给模型，其中术语冲突 ${conflicts} 行），预计 ${summary.aiRows} 行仍需 AI 判定`;
     }
     // 每个特化档案在页面里自带默认提示词：切换下拉时不必等状态轮询就能替换未手改的提示词。
     function defaultPromptForProfile(profileId) {
@@ -1256,7 +1258,7 @@
       const lines = pairs.slice(0, cap).map((pair) => "- " + pair);
       if (pairs.length > cap) lines.push("- …（其余 " + (pairs.length - cap) + " 条见对照表）");
       const source = fromNote
-        ? "对照表结论（备注）：命中 " + pairs.length + " 条术语"
+        ? "备注已出（术语清单来自对照表）：命中 " + pairs.length + " 条术语"
         : "构建期判定：本行原文命中对照表 " + pairs.length + " 条术语";
       const title = [source, ...lines].join("\n");
       return '<details class="term-chip" data-term-chip="' + id + '" title="' + escapeHtml(title) + '">' +
@@ -1278,7 +1280,7 @@
       // 对照表的构建期判定只在「这一行还没跑过」时显示：跑过之后以备注里的真实结论为准。
       const termVerdict = note.note ? "" : (termVerdicts.get(id) || "");
       const termBadge = termVerdict === "conflict"
-        ? '<span class="ai-confirm-badge is-modify" title="构建期判定：本行原文命中对照表，译文里的译名与项目译名不一致；跑 AI 校对或预筛选时会先给出术语替换建议">术语需改</span>'
+        ? '<span class="ai-confirm-badge is-modify" title="构建期判定：本行原文命中的术语与译文写法不一致（或整条没译出来）。这一行照常交给 AI，术语冲突作为提示词注入，由模型结合整句判断并在结论里写明依据——术语判断是 AI 分析的一环，不直接转人工">术语冲突</span>'
         : (termVerdict === "term-only"
           // 只有整行有效内容都是术语时才跳过模型：这一行没有术语之外的内容可校。
           ? '<span class="ai-confirm-badge is-same" title="构建期判定：本行原文的有效内容全部是项目术语，对照表能给出完整结论；跑预筛选时这行不会调用模型">纯术语</span>'
@@ -2293,7 +2295,7 @@
         // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
         hint.dataset.state = built ? "ok" : "pending";
         hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
-        hint.title = "特化规范里声明的译名对照表：整行有效内容都是术语时才跳过模型，否则术语只作为提示词注入、整句仍由模型判定。";
+        hint.title = "特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。";
         return;
       }
       const files = status.files || [];

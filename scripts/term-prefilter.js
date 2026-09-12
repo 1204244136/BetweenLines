@@ -18,8 +18,8 @@ const fs = require("fs");
 const path = require("path");
 
 const { getActiveProject, resolveProjectArtifact } = require("./project-store");
-const { loadTermTables, evaluateTermRow, describeTermHit, termTableSummary, normalizeTermTablePaths } = require("../src/workbenches/translation-compare/ai/term-table");
-const { termTargetKeyFor } = require("../src/workbenches/translation-compare/ai/term-prefilter");
+const { loadTermTables, evaluateTermRow, describeTermHit, displayTermPair, termTableSummary, normalizeTermTablePaths } = require("../src/workbenches/translation-compare/ai/term-table");
+const { termTargetKeyFor, conflictAnalysisHead } = require("../src/workbenches/translation-compare/ai/term-prefilter");
 const { resolveProfile } = require("../src/workbenches/translation-compare/ai/proofread-contract");
 const { describeTermLayerEntry, termLayerFor, variantIndexSets } = require("../src/workbenches/translation-compare/term-layer");
 
@@ -133,13 +133,16 @@ function main() {
     return 1;
   }
 
-  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, termOnly: 0, injected: 0, conflicts: 0, total: rows.length };
+  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, termOnly: 0, injected: 0, advisory: 0, conflicts: 0, rubySkipped: 0, total: rows.length };
 
+  // 被注音口径排除的候选（非人名条目带注音时，基文不足以命中，注文也要在原文里对上）。
+  const rubySkippedCandidates = [];
   for (const row of rows) {
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: String(row[targetKey] ?? row.cn ?? ""),
       tables: loaded,
+      rejected: rubySkippedCandidates,
     });
     if (!evaluation) continue;
     const record = {
@@ -147,6 +150,10 @@ function main() {
       kind: evaluation.kind,
       // 整行有效内容都是术语时，覆盖率说明了“术语之外还剩什么”，便于人工核对跳过是否合理。
       coverage: evaluation.coverage || null,
+      // 术语冲突行由模型出结论（术语判断是模型分析的一环）：这里只给“差异明细 + 其余计数”，
+      // 供人工核对模型结论是否有依据，不做成面向人工的判定。
+      conflictHead: evaluation.kind === "conflict" ? conflictAnalysisHead(evaluation.hits) : "",
+      // 若只做术语替换、句子其余部分不动会是这个样子：仅作审计参考，不是结论。
       revisedText: evaluation.revisedText || "",
       terms: evaluation.hits.map((hit) => ({
         source: hit.entry.source,
@@ -166,11 +173,20 @@ function main() {
     } else if (evaluation.kind === "consistent") {
       report.injected += 1;
       report.consistent += 1;
+    } else if (evaluation.kind === "advisory") {
+      // 存疑（假名写法，可能只是普通词）：不由对照表定论，照常交给模型判断，不能算进“需人工确认”。
+      report.advisory += 1;
+      report.injected += 1;
+      report.consistent += 1;
     } else {
+      // 术语冲突：不由对照表出结论，注入提示词后交给模型（术语判断是模型分析的一环）。
+      // 它不算「译名一致」，所以只计入 injected，不计入 consistent。
       report.conflicts += 1;
+      report.injected += 1;
     }
   }
 
+  report.rubySkipped = rubySkippedCandidates.length;
   if (options.json) {
     const text = JSON.stringify(report, null, 2);
     console.log(text);
@@ -183,8 +199,12 @@ function main() {
   const limited = options.limit > 0 ? listed.slice(0, options.limit) : listed;
   console.log(termTableSummary(loaded));
   console.log(`特化档案：${profile.name}（${profile.id}）；目标列：${targetKey === "tw" ? "非原文 C" : "非原文 B"}`);
-  console.log(`扫描 ${report.total} 行，命中 ${report.hits.length} 行：译名一致 ${report.consistent}（整行只有术语 ${report.termOnly}，需注入术语 ${report.injected}），需人工确认 ${report.conflicts}`);
-  console.log("跳过模型的条件：整行有效内容本身就是术语；句中还有别的词时，术语只作为提示词注入，整行照常交给模型。");
+  console.log(`扫描 ${report.total} 行，命中 ${report.hits.length} 行：整行只有术语、跳过模型 ${report.termOnly} 行；其余 ${report.injected} 行把术语作为提示词注入后交给模型（其中术语冲突 ${report.conflicts} 行、假名存疑 ${report.advisory} 行）。`);
+  if (report.rubySkipped) {
+    const samples = [...new Set(rubySkippedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
+    console.log(`另有 ${report.rubySkipped} 条候选因原文只对上基文、注文没对上而未参与判定（例：${samples.join("、")}）。`);
+  }
+  console.log("跳过模型的条件：只有整行有效内容本身就是术语；其余命中行（含术语冲突）都把术语作为提示词注入，整行交给模型判断。");
   const layerNote = compareWithLayer({
     layer: termPrefilter,
     profileId: profile.id,
@@ -196,14 +216,14 @@ function main() {
   if (layerNote) console.log(layerNote);
   if (limited.length) {
     console.log("");
-    console.log(options.showAll ? "全部命中明细：" : "需人工确认的行：");
+    console.log(options.showAll ? "全部命中明细：" : "术语冲突的行（结论由 AI 给出）：");
     for (const hit of limited) {
-      const label = hit.kind === "conflict" ? "需确认" : (hit.kind === "term-only" ? "整行只有术语·跳过模型" : "术语一致·需注入提示词");
+      const label = hit.kind === "conflict" ? "术语冲突·交模型判断" : (hit.kind === "term-only" ? "整行只有术语·跳过模型" : "术语注入·照常交模型");
       console.log(`  #${hit.index} ${label}`);
       console.log(`    原文：${hit.source}`);
       console.log(`    译文：${hit.target}`);
-      for (const term of hit.terms) console.log(`    ${term.description}`);
-      if (hit.revisedText) console.log(`    建议：${hit.revisedText}`);
+      if (hit.conflictHead) console.log(`    差异：${hit.conflictHead}`);
+      else for (const term of hit.terms) console.log(`    ${term.description}`);
     }
     if (listed.length > limited.length) console.log(`  …（其余 ${listed.length - limited.length} 条已省略，用 --limit 调整）`);
   }

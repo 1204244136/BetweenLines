@@ -2,7 +2,8 @@
  * 特化侧的辅助判断数据：术语/译名对照表。
  *
  * 与提示词的分工：提示词只放“判断规则”，动辄上千行的对照表不进提示词，
- * 而是先做确定性预处理——命中的行直接用表里的内容判定与给出最小替换，不再交给模型。
+ * 而是先做确定性预处理——整行有效内容都是术语时直接出结论（跳过模型），其余命中行把术语与
+ * 冲突线索注入提示词后**照常交给模型**：术语判断是模型分析里的一个环节，不是面向人工的终局结果。
  *
  * 数据来源由特化档案声明（profile.termTables），也支持环境变量
  * `TRANSCOMPARATOR_TERM_TABLES` 追加；表本身属于本机数据，不写进仓库。
@@ -13,8 +14,20 @@
  *   形如「【山田】【太郎】」表示该词由两段组成，注音列写「やまだ,たろう」按顺序与它们对应。
  * - ruby_ori：假名或原文注音（如「やまだ,たろう」），作为别名参与匹配
  * - base_trans / target / 译名：本项目中文译名
- * - type：条目类型（人名/术语/地名…），只用于说明
+ * - type：条目类型（人名/术语/地名…），判定时只用于一件事：区分人名与非人名（见下）
  * - other_fandom / ruby_trans / memo1 / memo2：其他译法、英文、备注，用于冲突时给出线索
+ *
+ * **注音条目的匹配口径（非人名）**：`ruby_ori` 记的是这个词在原文里的注音写法/别名（如
+ * 「【発信機】」注「ナノデバイス」、「【表層融解】」注「フラックスコート」）。这类条目只靠基文
+ * 字面命中会误判：正文里的「ＧＰＳ発信機」是普通词义（发射机），与表里那个装备不是一回事。
+ * 所以非人名条目一旦声明了注音，就**必须基文与注文都在原文里对上**才进入翻译判断——
+ * 即本行存在注音对「基文含该条目写法 + 读音等于该注文」，或注文直接以正文形式出现在本行。
+ * 只有基文命中、注文对不上的候选**不算命中**（不判定、不计入覆盖率、不进提示词），
+ * 但会通过 `rejected` 回传计数，便于日志与页面区分“表里没这条”和“注音不符所以没算”。
+ *
+ * **人名条目豁免**：原文里的人名只在首次出现时注音，之后一律不带注音，若也要求注音对上，
+ * 人名条目会在绝大多数行里失效。因此人名（`type` 含人名/角色/姓名/名字/character/person 等）
+ * 仍按基文（含分段写法）判定，注音只作为别名参与匹配。`type` 为空按非人名处理（保守：宁可不判）。
  */
 const path = require("path");
 const { toCn } = require("../../../ingest/text-utils");
@@ -72,6 +85,88 @@ function isAliasUsable(alias) {
   if (alias.length < 2) return false;
   if (KANA_ONLY.test(alias)) return alias.length >= 4;
   return true;
+}
+
+// 人名类型：人名条目豁免「注音必须对上」（原文里的人名只在首次出现时注音）。
+// type 为空按非人名处理——宁可少判一条，也不要因为认不出人名而把普通词误判成译名差异。
+const PERSON_TYPE = /人名|名字|姓名|人物|角色|登場人物|登场人物|character|person|name/i;
+
+/**
+ * 原文里的注音对（基文 → 读音）。两种形态都认：
+ * - 成品的 `<ruby>基文<rt>读音</rt></ruby>`（基文可能还带 `<rb>`/`<rp>`，先剥掉）；
+ * - 稿件的 `|基文[读音]`。
+ */
+const RUBY_PAIR_PATTERN = /<ruby[^>]*>([\s\S]*?)<rt[^>]*>([\s\S]*?)<\/rt>/gi;
+const DRAFT_RUBY_PAIR_PATTERN = /\|([^|\s[\]]{1,30})\[([^\]\n]{1,40})\]/g;
+
+function rubyPairs(text) {
+  const raw = String(text || "");
+  const pairs = [];
+  const collect = (base, ruby) => {
+    const plainBase = stripMarks(stripInlineMarkup(base));
+    const plainRuby = stripMarks(ruby);
+    if (plainBase && plainRuby) pairs.push({ base: plainBase, ruby: plainRuby });
+  };
+  let match;
+  RUBY_PAIR_PATTERN.lastIndex = 0;
+  while ((match = RUBY_PAIR_PATTERN.exec(raw))) collect(match[1], match[2]);
+  DRAFT_RUBY_PAIR_PATTERN.lastIndex = 0;
+  while ((match = DRAFT_RUBY_PAIR_PATTERN.exec(raw))) collect(match[1], match[2]);
+  return pairs;
+}
+
+// 注音比对的归一：全角/半角（NFKC）、大小写、装饰符，以及**小写假名**。
+// 实测原文把「しょ」写成全尺寸的「しよ」（「しよくほう」＝しょくほう），
+// 所以 ぁぃぅぇぉゃゅょっ 一律折叠到对应的大写假名后比较，两种写法算同一个读音。
+const KANA_FOLD = {
+  "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お",
+  "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ", "ゎ": "わ", "ゕ": "か", "ゖ": "け",
+};
+
+function foldKana(value) {
+  return String(value || "").replace(/[\u3041-\u3096\u30a1-\u30f6]/g, (ch) => {
+    const code = ch.charCodeAt(0);
+    const hira = code >= 0x30a1 ? String.fromCharCode(code - 0x60) : ch;
+    return KANA_FOLD[hira] || hira;
+  });
+}
+
+function normalizeRubyText(value) {
+  return foldKana(stripMarks(String(value == null ? "" : value).normalize("NFKC"))).toLowerCase();
+}
+
+/** 开关：`TRANSCOMPARATOR_TERM_RUBY=0` 关闭「注音条目必须基文+注文对上」（仅用于对比排查）。 */
+function rubyStrictDefault(env = process.env) {
+  return String((env && env.TRANSCOMPARATOR_TERM_RUBY) ?? "1") !== "0";
+}
+
+/** 该条目是否受注音口径约束：非人名 + 声明了注音 + 注音能归一成可比对的读音。 */
+function entryNeedsRuby(entry) {
+  return Boolean(entry && entry.ruby && entry.rubyKeys && entry.rubyKeys.length
+    && !PERSON_TYPE.test(String(entry.type || "")));
+}
+
+/**
+ * 注文有没有在本行对上：
+ * 1. 本行存在注音对，其基文与该条目写法互相包含（原文常把长条目拆成「注音段 + 明文段」），
+ *    且读音等于该条目的注文（整串或其中一段）；
+ * 2. 或注文本身以正文形式出现在本行（原文直接写出了那个别名，不是用注音标注）。
+ * 两者都不成立时，这个候选**不算命中**：正文里的同一个汉字词可能只是普通词义。
+ */
+function rubyEvidenceMatches(entry, alias, pairs = [], plain = "") {
+  const expected = entry.rubyKeys || [];
+  if (!expected.length) return false;
+  const aliasKey = normalizeRubyText(alias);
+  if (!aliasKey) return false;
+  const matched = pairs.some((pair) => {
+    const base = normalizeRubyText(pair.base);
+    if (base.length < 2) return false;
+    if (!base.includes(aliasKey) && !aliasKey.includes(base)) return false;
+    return expected.includes(normalizeRubyText(pair.ruby));
+  });
+  if (matched) return true;
+  const plainKey = normalizeRubyText(plain);
+  return expected.some((key) => key.length >= 2 && plainKey.includes(key));
 }
 
 // 片假名别名不能落在更长的片假名词内部（サンタクロース 里的「タク」不是「巧」）。
@@ -223,6 +318,21 @@ function normalizeTermEntry(record) {
     memos: COLUMN_CANDIDATES.memo.map((key) => record[key]).filter(Boolean),
   };
   entry.aliases = termAliases(entry);
+  // 注文的可比对形态（整串 + 各段）：非人名条目要用它校验「注文有没有在原文里对上」。
+  const rubyParts = entry.ruby ? entry.ruby.split(/[,，、]/).map((item) => item.trim()).filter(Boolean) : [];
+  const rubyKeys = [];
+  if (entry.ruby) {
+    for (const value of [stripMarks(entry.ruby), rubyParts.join("")]) {
+      const key = normalizeRubyText(value);
+      if (key && !rubyKeys.includes(key)) rubyKeys.push(key);
+    }
+    for (const part of rubyParts) {
+      const key = normalizeRubyText(part);
+      if (key.length >= 2 && !rubyKeys.includes(key)) rubyKeys.push(key);
+    }
+  }
+  entry.rubyParts = rubyParts;
+  entry.rubyKeys = rubyKeys;
   entry.compareKey = normalizeForCompare(entry.target);
   entry.targetParts = alignTargetParts(entry.target, entry.sourceParts)
     .map((part) => ({ text: part, key: normalizeForCompare(part) }))
@@ -287,12 +397,22 @@ function buildTermBuckets(entries) {
 /**
  * 在原文里找命中的术语：按行内出现过的字符取桶，长别名优先，同一条目只算一次，
  * 且整条命中优先于分段命中。
+ *
+ * @param {string} sourceText 原文（**带内联标记的原始文本**：注音校验要看 `<ruby>/<rt>`，
+ *   调用方不要预先 strip——内部自己剥掉注音内容做字面匹配，再单独解析注音对）。
+ * @param {object} tables loadTermTables 的结果。
+ * @param {object} [options] `rubyStrict` 覆盖开关；`rejected` 传入数组时收集因注音不符而未算命中的候选。
  */
-function findTermHits(sourceText, tables) {
-  const text = String(sourceText || "");
+function findTermHits(sourceText, tables, options = {}) {
+  const raw = String(sourceText || "");
+  const text = stripInlineMarkup(raw);
   if (!text || !tables || !tables.entries || !tables.entries.length) return [];
+  const rubyStrict = options.rubyStrict === undefined ? rubyStrictDefault() : Boolean(options.rubyStrict);
+  const rejected = options.rejected || null;
+  const pairs = rubyStrict ? rubyPairs(raw) : [];
   const hits = new Map();
   const tried = new Set();
+  const rejectedEntries = new Set();
   for (const char of new Set(Array.from(text))) {
     const bucket = tables.buckets.get(char);
     if (!bucket) continue;
@@ -302,6 +422,15 @@ function findTermHits(sourceText, tables) {
       if (tried.has(key)) continue;
       tried.add(key);
       if (!hasUsableMatch(text, alias)) continue;
+      // 读音别名本身就是“原文只写了读音”的证据，不需要再要求注音形态；
+      // 基文/分段别名则要在带注音的条目上先过注音这一关。
+      if (rubyStrict && scope !== "ruby" && entryNeedsRuby(entry) && !rubyEvidenceMatches(entry, alias, pairs, text)) {
+        if (rejected && !rejectedEntries.has(entry.source)) {
+          rejectedEntries.add(entry.source);
+          rejected.push({ entry, alias, scope });
+        }
+        continue;
+      }
       const current = hits.get(entry.source);
       const better = !current
         || (!current.strong && strong)
@@ -427,21 +556,27 @@ function measureTermCoverage(sourceText, hits) {
  *   整行没有别的可校内容，可以直接出结论、不调用模型；
  * - `consistent`：命中一致，但句中还有术语之外的内容——一致性只覆盖术语，
  *   这一行必须照常交给模型，术语只作为提示词注入；
- * - `conflict`：命中强证据的译名不一致，给出最小替换或转人工确认。
+ * - `conflict`：命中强证据的译名不一致——**同样交给模型**（`applyTermTable` 把冲突线索写进提示词，
+ *   并让这些行豁免预筛）；这里算出的 `revisedText`（若只替换术语会是什么样）只作离线审计参考。
  *
  * 覆盖率与“确认一致”的证据都要求**整条术语或它的读音**在本行出现：只命中分段（只写姓或名，
  * 例如单独一个「御坂」）不足以说明本行用的是这个术语——同姓的其他角色同样会被它命中——
  * 所以分段命中只被记录、不参与判定，也不参与覆盖率。
  *
  * 保守判定规则：
- * 1. 只有“强证据”（3 字及以上的基文别名）才能判“译名不一致”，并给出最小替换；
+ * 1. 只有“强证据”（3 字及以上的基文别名）才能判“译名不一致”，并把线索写进提示词交给模型；
  * 2. 2 字词、读音别名、分段别名只能“确认一致”，不能指控译名错误——它们常以普通词义出现；
- * 3. 一行若既没有强证据、也没被确认一致，就不由对照表处理，继续走 AI。
+ * 3. 一行若既没有强证据、也没被确认一致，就不由对照表处理，继续走 AI；
+ * 4. 非人名条目声明了注音时，基文还必须与注文一起在原文里对上（见文件头）——只对上基文的
+ *    候选不算命中，`rubySkipped` 如实报出本行有几条这样被排除的候选。
  */
-function evaluateTermRow({ source, target, tables }) {
+function evaluateTermRow({ source, target, tables, rejected = null }) {
   const plainSource = stripInlineMarkup(source);
   const plainTarget = stripInlineMarkup(target);
-  const hits = findTermHits(plainSource, tables);
+  const collected = [];
+  const hits = findTermHits(source, tables, { rejected: collected });
+  const rubySkipped = collected.length;
+  if (rejected && collected.length) rejected.push(...collected);
   if (!hits.length) return null;
   const targetKey = normalizeForCompare(plainTarget);
   // 每条命中都带上该条目**全部**可用别名：覆盖率要按全部写法划除，提示词也要据此判断
@@ -476,6 +611,7 @@ function evaluateTermRow({ source, target, tables }) {
       coverage,
       advisory,
       revisedText: "",
+      rubySkipped,
     };
   }
 
@@ -488,7 +624,7 @@ function evaluateTermRow({ source, target, tables }) {
     }
     revisedText = text.trim();
   }
-  return { kind: "conflict", hits: results, advisory, revisedText };
+  return { kind: "conflict", hits: results, advisory, revisedText, rubySkipped };
 }
 
 /**
@@ -587,10 +723,12 @@ function normalizeTermTablePaths(paths = []) {
 
 module.exports = {
   COLUMN_CANDIDATES,
+  PERSON_TYPE,
   TERM_ONLY_FREE_CHARS,
   TERM_ONLY_FREE_RATIO,
   describeTermHit,
   displayTermPair,
+  entryNeedsRuby,
   evaluateTermRow,
   findTermHits,
   findWrongVariant,
@@ -602,8 +740,12 @@ module.exports = {
   markUsedTermAliases,
   measureTermCoverage,
   normalizeForCompare,
+  normalizeRubyText,
   normalizeTermEntry,
   normalizeTermTablePaths,
+  rubyEvidenceMatches,
+  rubyPairs,
+  rubyStrictDefault,
   splitBracketed,
   stripInlineMarkup,
   stripMarks,

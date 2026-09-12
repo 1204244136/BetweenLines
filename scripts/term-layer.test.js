@@ -81,7 +81,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 3);
+  assert.equal(layer.version, 4);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -98,7 +98,9 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   assert.equal(variant.summary.injected, 2);
   assert.equal(variant.summary.removedFromModel, 0);
   assert.equal(variant.summary.aiRows, 4);
-  assert.match(entry.fingerprint, /^3\|terms\.csv:\d+:\d+#2$/);
+  // 夹具里两条都是人名条目（豁免注音口径），没有候选被排除。
+  assert.equal(variant.summary.rubySkipped, 0);
+  assert.match(entry.fingerprint, /^4\|terms\.csv:\d+:\d+#2$/);
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["terms.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -162,7 +164,7 @@ test("摘要与缺表行为", () => {
   });
   assert.deepEqual(Object.keys(layer.byProfile), ["unit"]);
   const text = describeTermLayerEntry(layer.byProfile.unit);
-  assert.match(text, /对照表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2（整行只有术语 0，需注入术语 2），需人工确认 1，目标列 译文 B）/);
+  assert.match(text, /对照表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2（整行只有术语 0，需注入术语 2），术语冲突交 AI 判断 1，目标列 译文 B）/);
   assert.equal(describeTermLayerEntry(null), "");
 });
 
@@ -180,7 +182,7 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":3/);
+  assert.match(html, /"termPrefilter":\{"version":4/);
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
@@ -221,9 +223,9 @@ test("页面按构建期判定给未跑过的行标出术语徽标，并跟随�
 
   const own = run("unit");
   assert.equal(own.__verdicts.get("1"), "injected", "术语一致但整行不止术语：徽标必须说明仍会交给模型");
-  assert.equal(own.__verdicts.get("2"), "conflict");
+  assert.equal(own.__verdicts.get("2"), "conflict", "术语冲突行照样交给模型，构建期只标出冲突（徽标不是终局结论）");
   assert.equal(own.__verdicts.get("4"), undefined, "没命中的行不该有徽标");
-  assert.match(own.__summary, /构建期预筛 3 行命中（术语一致 2：整行只有术语 0 \/ 需注入术语 2；需确认 1），预计 4 行仍需 AI 判定/);
+  assert.match(own.__summary, /构建期预筛 3 行命中（整行只有术语、跳过模型 0；其余 3 行注入术语后交给模型，其中术语冲突 1 行），预计 4 行仍需 AI 判定/);
 
   // 换档案：该档案没有对照表 → 不发徽标；换成没算过的变体 → 回落到默认变体
   assert.equal(run("other").__verdicts.size, 0);

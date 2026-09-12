@@ -84,9 +84,10 @@ test("检索词条只来自假名存疑项：译名优先、原文备选，且�
   assert.equal(entries[0].targetText, "处于顶级位置的一类人。", "片段里的内联标记要剥掉");
 
   // 非存疑命中不给词条：conflict 由对照表直接给结论。
-  const conflictGuidance = guidanceFor("ＧＰＳ発信機を取り外す。", "取下GPS信号发射机。", tables);
+  const conflictJp = "ＧＰＳ<ruby>発信機<rt>はっしんき</rt></ruby>を取り外す。";
+  const conflictGuidance = guidanceFor(conflictJp, "取下GPS信号发射机。", tables);
   assert.equal(conflictGuidance.evaluation.kind, "conflict");
-  assert.deepEqual(webLookupEntries({ termGuidance: conflictGuidance, jp: "ＧＰＳ発信機。", targetText: "GPS发射机。" }), []);
+  assert.deepEqual(webLookupEntries({ termGuidance: conflictGuidance, jp: conflictJp, targetText: "GPS发射机。" }), []);
   assert.deepEqual(webLookupEntries({ termGuidance: { terms: [] }, jp, targetText }), []);
 });
 
@@ -314,7 +315,7 @@ test("关闭开关或档案没声明站点时这一层完全不动（不注入�
 
 test("非存疑行不进这一层：译名差异行由对照表直接给结论", async () => {
   const { tables } = writeTerms();
-  const jp = "ＧＰＳ発信機を取り外す。";
+  const jp = "ＧＰＳ<ruby>発信機<rt>はっしんき</rt></ruby>を取り外す。";
   const targetText = "取下GPS信号发射机。";
   const guidance = guidanceFor(jp, targetText, tables);
   assert.equal(guidance.evaluation.kind, "conflict");

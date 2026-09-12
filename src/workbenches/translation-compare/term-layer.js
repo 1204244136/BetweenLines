@@ -3,7 +3,7 @@
  *
  * 为什么和说话习惯层不一样：
  * - 说话习惯层产出的**提示词上下文**（章级命中角色），运行期复用它就等价于现算，所以直接复用；
- * - 对照表层产出的是**行级结果**（写进备注、作为「不调用模型」的依据），结果的生成必须留在运行期：
+ * - 对照表层产出的是**行级结果**（写进备注、作为「不调用模型」的唯一依据：整行只有术语），结果的生成必须留在运行期：
  *   它要带当次任务的标签、目标列与「已人工确认」的过滤，构建期不能替用户写备注空间。
  * - 但「哪些行会被对照表命中、命中是一致还是冲突、哪些行整行只有术语」只依赖「整卷行数据 + 对照表」，
  *   与模型无关，因此在构建期算一次落盘：页面在跑任务之前就能标出待处理的行、给出预筛数字，
@@ -34,7 +34,9 @@ const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerpr
 
 // 2：落盘块的 `files` 从「本机完整路径」改成「文件名」，运行期改为按当前档案重算指纹。
 // 3：每个变体多一份 `terms`（行号 → 命中的术语对），供页面在跑任务之前就显示“这行命中了哪些术语”。
-const TERM_LAYER_VERSION = 3;
+// 4：非人名条目声明注音时要求「基文 + 注文」都在原文里对上，命中集合随之变化；旧快照的判定口径不同，
+//    必须靠版本号判过期（否则运行期会拿新口径去对旧结论，报出一堆假分叉）。
+const TERM_LAYER_VERSION = 4;
 
 // 每行最多随页面带上这么多条术语：命中行平均 2~3 条，上限定得宽松但能挡住病态行（同一行命中几十条）。
 const TERMS_PER_ROW_CAP = 8;
@@ -60,8 +62,10 @@ function termVariantKey(proofreadMode, targetKey) {
 function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
   // 命中但整行还有术语之外的内容：一致性只覆盖术语，这些行仍要交给模型（术语只作提示词注入）。
   const injected = [];
-  // 整行有效内容就是术语：对照表能给出完整结论，跳过模型。
+  // 整行有效内容就是术语：对照表能给出完整结论，跳过模型（这是唯一跳过模型的情形）。
   const termOnly = [];
+  // 术语冲突行：对照表有强证据差异，但**结论仍由模型结合整句给出**（术语判断是模型分析的一环）。
+  // 这里单独列出是为了让页面标出“这行有术语冲突、注意模型怎么说”，不再表示“需人工确认”。
   const conflicts = [];
   // 其中「存疑」的那部分：命中的是假名写法（グループ、メンバー…），可能只是普通词。
   // 它们同样交给模型判断，单独计数是为了让人一眼看出“有多少行是拿不准才交给 AI 的”。
@@ -69,11 +73,15 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
   // 行号 → 该行命中的术语对（去方括号的「原文 → 译名（类型）」）：页面在跑任务前就能显示命中了什么。
   const terms = {};
   const chapters = new Map();
+  // 被注音口径排除的候选（基文命中、但注文没对上；详见 term-table.js 文件头）。
+  // 它不改变结论，只用于说明“表里有这条、本行却没算命中”的原因，方便核对规则是否过严。
+  const rubySkippedCandidates = [];
   for (const row of rows) {
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: String(row[targetKey] ?? ""),
       tables,
+      rejected: rubySkippedCandidates,
     });
     if (!evaluation) continue;
     if (evaluation.kind === "term-only") termOnly.push(Number(row.index));
@@ -109,6 +117,8 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
       injected: injected.length,
       advisory: advisoryRows,
       conflicts: conflicts.length,
+      // 基文命中、但注文没对上而被排除的候选条数（非人名条目带注音时的匹配口径，见 term-table.js）。
+      rubySkipped: rubySkippedCandidates.length,
       // 对照表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
       removedFromModel: termOnly.length,
       aiRows: Math.max(0, rows.length - termOnly.length),
@@ -229,7 +239,7 @@ function describeTermLayerEntry(entry, variantKey = "") {
   const detail = summary.termOnly === undefined
     ? `译名一致 ${summary.consistent}`
     : `译名一致 ${summary.consistent}（整行只有术语 ${summary.termOnly}，需注入术语 ${summary.injected}）`;
-  return `对照表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（${detail}，需人工确认 ${summary.conflicts}，目标列 ${targetLabel}）`;
+  return `对照表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（${detail}，术语冲突交 AI 判断 ${summary.conflicts}，目标列 ${targetLabel}）`;
 }
 
 module.exports = {
