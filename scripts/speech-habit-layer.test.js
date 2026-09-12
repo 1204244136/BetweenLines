@@ -62,7 +62,10 @@ test("构建期层记录章级命中、疑似流失行与表指纹", () => {
   assert.deepEqual(entry.summary.activatedCharacters.sort(), ["乙川次郎", "甲野一郎"]);
   // 第 1 行原文 オレ 未译出、第 2 行 ですの 未译出 → 两行疑似流失；第 3 行译出了「的说」。
   assert.deepEqual(entry.missIndexes, [1, 2]);
-  assert.match(entry.fingerprint, /^1\|habits\.csv:\d+:\d+#2$/);
+  assert.match(entry.fingerprint, /^2\|habits\.csv:\d+:\d+#2$/);
+  // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
+  assert.deepEqual(entry.files, ["habits.csv"]);
+  assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
 
   // 章级只存角色引用；口癖/写法/备注放角色字典，避免逐章重复。
   const chapter = entry.chapters.find((item) => item.chapter === "行间 一");
@@ -78,7 +81,8 @@ test("运行期复用的上下文与现算结果完全一致", () => {
   const file = writeTable();
   const rows = fixtureRows();
   const layer = buildSpeechHabitLayer({ rows, projectFiles: {}, profiles: [profile(file)] });
-  const match = speechHabitLayerFor(layer, "unit");
+  // 运行期用本次实际加载的表路径重算指纹（落盘块里只有文件名）。
+  const match = speechHabitLayerFor(layer, "unit", { files: [file] });
   assert.equal(match.stale, false);
 
   const context = contextFromLayerEntry(match.entry);
@@ -106,18 +110,23 @@ test("表被改过时指纹失效，运行期应回退现算", () => {
   const file = writeTable();
   const rows = fixtureRows();
   const layer = buildSpeechHabitLayer({ rows, projectFiles: {}, profiles: [profile(file)] });
-  assert.equal(speechHabitLayerFor(layer, "unit").stale, false);
+  assert.equal(speechHabitLayerFor(layer, "unit", { files: [file] }).stale, false);
 
   // 追加一个角色（内容与 mtime 都变）→ 指纹过期
   fs.appendFileSync(file, "\nS1_04,丙山三郎,じゃん,谓语形式,,,,\n", "utf8");
-  const stale = speechHabitLayerFor(layer, "unit");
+  const stale = speechHabitLayerFor(layer, "unit", { files: [file] });
   assert.equal(stale.stale, true);
   assert.notEqual(stale.currentFingerprint, layer.byProfile.unit.fingerprint);
   assert.equal(speechTablesFingerprint([file]) === layer.byProfile.unit.fingerprint, false);
 
   // 没有该档案时返回 null，让调用方决定现算
-  assert.equal(speechHabitLayerFor(layer, "does-not-exist"), null);
-  assert.equal(speechHabitLayerFor(null, "unit"), null);
+  assert.equal(speechHabitLayerFor(layer, "does-not-exist", { files: [file] }), null);
+  assert.equal(speechHabitLayerFor(null, "unit", { files: [file] }), null);
+
+  // 解析不出表（档案不在注册表且没给 files）时视为不可信，不能静默复用旧结论
+  const unverifiable = speechHabitLayerFor(layer, "unit");
+  assert.equal(unverifiable.stale, true);
+  assert.equal(unverifiable.currentFingerprint, "");
 });
 
 test("卷口径的落盘层还原成整卷块", () => {
@@ -196,8 +205,11 @@ test("从快照重建页面时沿用落盘的说话习惯层", () => {
 
   const rebuilt = rebuildCompareHtmlFromSnapshot(dir);
   const html = fs.readFileSync(rebuilt.htmlFile, "utf8");
-  assert.match(html, /"speechHabits":\{"version":1/);
+  assert.match(html, /"speechHabits":\{"version":2/);
   assert.match(html, /"missIndexes":\[1,2\]/);
+  // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
+  assert.match(html, /"files":\["habits\.csv"\]/);
+  assert.equal(html.includes(tempDir.replace(/\\/g, "\\\\")) || html.includes(tempDir), false, "页面不得出现本机完整路径");
   const pageMeta = JSON.parse(html.match(/const pageMeta = (\{[\s\S]*?\});\n/)[1]);
   assert.equal(pageMeta.speechHabits.byProfile.unit.summary.missRows, 2);
   assert.equal(pageMeta.speechHabits.byProfile.unit.summary.activatedCharacters.length, 2);

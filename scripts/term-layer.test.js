@@ -79,7 +79,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 1);
+  assert.equal(layer.version, 2);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -91,7 +91,10 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   assert.equal(variant.summary.hits, 3);
   assert.equal(variant.summary.removedFromModel, 2);
   assert.equal(variant.summary.aiRows, 2);
-  assert.match(entry.fingerprint, /^1\|terms\.csv:\d+:\d+#2$/);
+  assert.match(entry.fingerprint, /^2\|terms\.csv:\d+:\d+#2$/);
+  // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
+  assert.deepEqual(entry.files, ["terms.csv"]);
+  assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
 });
 
 test("三语模式算两个目标列变体，判定可以不同", () => {
@@ -114,7 +117,8 @@ test("运行期按档案 + 变体取用，指纹过期即视为不可信", () =>
   const rows = fixtureRows();
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
-  const match = termLayerFor(layer, "unit", { proofreadMode: "bilingual", targetKey: "tw" });
+  // 运行期用本次实际加载的表路径重算指纹（落盘块里只有文件名）。
+  const match = termLayerFor(layer, "unit", { proofreadMode: "bilingual", targetKey: "tw", files: [file] });
   assert.equal(match.stale, false);
   // 双语恒为目标列 cn：传 tw 也会归一到 cn
   assert.equal(match.variantKey, "bilingual:cn");
@@ -122,17 +126,22 @@ test("运行期按档案 + 变体取用，指纹过期即视为不可信", () =>
   assert.deepEqual([...variantIndexSets(match.variant).conflicts], [2]);
 
   // 该模式没算过的变体：指纹可信，但没有可复用的判定
-  const trilingual = termLayerFor(layer, "unit", { proofreadMode: "trilingual", targetKey: "cn" });
+  const trilingual = termLayerFor(layer, "unit", { proofreadMode: "trilingual", targetKey: "cn", files: [file] });
   assert.equal(trilingual.stale, false);
   assert.equal(trilingual.variant, null);
   assert.equal(trilingual.variantKey, "trilingual:cn");
 
-  assert.equal(termLayerFor(layer, "missing", { proofreadMode: "bilingual" }), null);
-  assert.equal(termLayerFor(null, "unit", { proofreadMode: "bilingual" }), null);
+  assert.equal(termLayerFor(layer, "missing", { proofreadMode: "bilingual", files: [file] }), null);
+  assert.equal(termLayerFor(null, "unit", { proofreadMode: "bilingual", files: [file] }), null);
+
+  // 解析不出表（档案不在注册表且没给 files）时视为不可信，不能静默复用旧结论
+  const unverifiable = termLayerFor(layer, "unit", { proofreadMode: "bilingual" });
+  assert.equal(unverifiable.stale, true);
+  assert.equal(unverifiable.currentFingerprint, "");
 
   // 表被改过（内容与 mtime 都变）→ 指纹过期，运行期必须回退现算
   fs.appendFileSync(file, "\n【鈴木】,すずき,铃木,人名\n", "utf8");
-  const stale = termLayerFor(layer, "unit", { proofreadMode: "bilingual", targetKey: "cn" });
+  const stale = termLayerFor(layer, "unit", { proofreadMode: "bilingual", targetKey: "cn", files: [file] });
   assert.equal(stale.stale, true);
   assert.notEqual(stale.currentFingerprint, layer.byProfile.unit.fingerprint);
 });
@@ -164,9 +173,12 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":1/);
+  assert.match(html, /"termPrefilter":\{"version":2/);
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
+  // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
+  assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.files, ["snapshot-terms.csv"]);
+  assert.equal(html.includes(tempDir), false, "页面不得出现本机完整路径");
 });
 
 test("页面按构建期判定给未跑过的行标出术语徽标，并跟随档案与目标列", () => {

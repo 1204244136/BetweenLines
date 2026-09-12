@@ -6,8 +6,10 @@
  *   与模型无关，因此放在**构建期**算一次，写进 `translation-compare.json` 的 `speechHabits` 顶层块
  *   并嵌进页面：可复现、可审计、人工能先看到结论，AI 任务重跑多次也不必重算。
  * - 行级说话人判断与提示词组装仍在**运行期**：它依赖当行文本与所选档案，且要跟随最新表。
- * - 表可能被改：落盘块带**指纹**（文件路径 + mtime + 大小 + 条目数）。运行期指纹一致就复用，
+ * - 表可能被改：落盘块带**指纹**（文件名 + mtime + 大小 + 条目数）。运行期指纹一致就复用，
  *   不一致就按最新表现算一次，并在日志里提示重新构建工作台。
+ * - 落盘块只存**表文件名**，本机完整路径不进产物（快照与页面都可能被分享）。运行期要重算指纹时，
+ *   按「当前档案声明 + 环境变量」重新解析路径（`currentSpeechFiles`），口径与构建期完全一致。
  *
  * 注意：块写在行数据之外（顶层 + 按章索引），不修改任何行字段，因此不改变
  * `rowsSignature`/`signature`，浏览器备注与写回定位不受影响。
@@ -23,10 +25,11 @@ const {
   volumeKeyFromFiles,
 } = require("./ai/speech-habit");
 const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
-const { tableSourceCandidates } = require("./layer-sources");
-const { tablesFingerprint } = require("../../core/table-fingerprint");
+const { tableFilesForProfile, tableSourceCandidates } = require("./layer-sources");
+const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
-const LAYER_VERSION = 1;
+// 2：落盘块的 `files` 从「本机完整路径」改成「文件名」，运行期改为按当前档案重算指纹。
+const LAYER_VERSION = 2;
 
 /**
  * 表指纹：文件状态 + 条目数，任一变化都视为过期。
@@ -166,7 +169,8 @@ function buildSpeechHabitLayer({ rows = [], projectFiles = {}, profiles = null, 
       id: entry.id,
       name: entry.name,
       scope: entry.scope,
-      files: tables.files,
+      // 只留文件名：这是要进快照与页面的，本机完整路径不该出现在产物里。
+      files: tableFileNames(entry.files),
       fingerprint: speechTablesFingerprint(entry.files, tables),
       entries: tables.entries.length,
       volume: volume?.code || "",
@@ -187,15 +191,34 @@ function buildSpeechHabitLayer({ rows = [], projectFiles = {}, profiles = null, 
 }
 
 /**
+ * 运行期：本次实际用到的说话习惯表路径（口径与构建期一致：档案声明 → 环境变量）。
+ * 落盘块里只有文件名，指纹要 stat 真实文件，所以路径必须在运行期重新解析。
+ */
+function currentSpeechFiles(profileId, envTables) {
+  return tableFilesForProfile(resolveProfile(profileId), {
+    tableKey: "speechTables",
+    envTables: envTables === undefined ? process.env.TRANSCOMPARATOR_SPEECH_TABLES : envTables,
+    normalize: normalizeSpeechTablePaths,
+  });
+}
+
+/**
  * 运行期：按 profileId 取落盘块。没有该档案或指纹过期（表被改过）时返回可判定的结果，
  * 由调用方决定是现算还是继续用旧的。
+ *
+ * @param {string[]} [files] 本次**实际加载**的表路径（含显式指定的表）。不传时按当前档案解析；
+ *   两种情况都解析不出表时视为不可信（stale），绝不静默复用旧结论。
  */
-function speechHabitLayerFor(layer, profileId) {
+function speechHabitLayerFor(layer, profileId, { files = null } = {}) {
   if (!layer || !layer.byProfile) return null;
   const entry = layer.byProfile[profileId] || null;
   if (!entry) return null;
-  const current = speechTablesFingerprint(entry.files || []);
-  return { stale: current !== entry.fingerprint, entry, currentFingerprint: current };
+  const currentFiles = files ? normalizeSpeechTablePaths(files) : currentSpeechFiles(profileId);
+  // 条目数取落盘的那份：与构建期同口径，也免得每次都重新解析整张表。
+  const current = currentFiles.length
+    ? tablesFingerprint(LAYER_VERSION, currentFiles, entry.entries || 0)
+    : "";
+  return { stale: !current || current !== entry.fingerprint, entry, currentFingerprint: current };
 }
 
 /**

@@ -8,7 +8,7 @@
  *
  * 用法：
  *   node scripts/speech-habit.js                          # 用默认特化档案声明的表，按章汇总
- *   node scripts/speech-habit.js --profile work --all      # 列出全部章与疑似流失行明细
+ *   node scripts/speech-habit.js --profile demo --all      # 列出全部章与疑似流失行明细
  *   node scripts/speech-habit.js --by volume               # 按整卷汇总
  *   node scripts/speech-habit.js --table D:\habits.xlsx --json --out report.json
  *
@@ -107,7 +107,8 @@ function main() {
   const { project, file, rows, speechHabits } = loadRows();
   const volume = volumeKeyFromFiles(project.files);
   // 默认消费构建期算好的结果：页面、AI 任务与这个脚本看到的是同一份结论，避免三处各算一遍。
-  const layerMatch = options.live ? null : speechHabitLayerFor(speechHabits, profile.id);
+  // 指纹按本次实际加载的表重算（落盘块里只有文件名，本机路径不回读产物）。
+  const layerMatch = options.live ? null : speechHabitLayerFor(speechHabits, profile.id, { files: loaded.files });
   let chapters;
   let layerInfo = "（现算）";
   if (layerMatch && !layerMatch.stale) {

@@ -12,6 +12,12 @@
  *
  * 新增档案：放一个导出 `{ id, name, summary, sections }` 的文件并在 `builtInProfiles`
  * 登记，界面下拉与默认值会自动带上它。档案可以继承（见 `./demo.js`），但必须保持该结构。
+ *
+ * 叠加（`extends`）：本机档案通常不是"另立一份"，而是给既有档案补本机专有的东西
+ * （表路径、名字、少量补充规则）。这类文件只写 `{ extends: "<既有 id>", ...差异字段 }`，
+ * 注册表把它合并进基底档案后**沿用基底的 id**——于是下拉里仍然只有一项，也不会出现
+ * 两份逐字相同的规范让人分不清该选哪个。只声明差异字段还顺带解决了"基底改了、
+ * 本机副本忘了同步"的问题：提示词永远跟着基底走。
  */
 const fs = require("fs");
 const path = require("path");
@@ -66,6 +72,42 @@ function normalizeProfile(profile) {
   });
 }
 
+/**
+ * 叠加合并：基底档案 + 叠加档案里**显式声明**的差异字段。
+ *
+ * 只认差异是这套语义的关键——叠加档案不该复制基底的规范正文，否则基底一改，
+ * 本机副本就悄悄过期，两份内容也再次分叉成"该选哪个"的问题。
+ * - `name`/`summary`/`speechHabitScope`：声明即覆盖，未声明沿用基底。
+ * - `sections`：声明即在基底之后追加；同名小节视为修正，替换基底的那一节。
+ * - `termTables`/`speechTables`：按"再补一层"理解，与基底合并去重（基底的表继续生效）。
+ */
+function applyOverlay(base, patch) {
+  const listOf = (value) => (Array.isArray(value) ? value : [value]).map((item) => String(item || "").trim()).filter(Boolean);
+  const patchSections = Array.isArray(patch.sections) ? patch.sections : [];
+  const sections = patchSections.reduce((acc, section) => {
+    const title = String(section?.title || "").trim();
+    const index = title ? acc.findIndex((item) => String(item?.title || "").trim() === title) : -1;
+    if (index >= 0) acc[index] = section;
+    else acc.push(section);
+    return acc;
+  }, [...(Array.isArray(base.sections) ? base.sections : [])]);
+  const patchFields = { ...patch };
+  // `extends` 只用于定位基底，不进档案本身。
+  delete patchFields.extends;
+  return {
+    ...base,
+    ...patchFields,
+    // id 与 marker 都跟着基底走：叠加档案不是一个新档案，只是这一份档案的本机版本。
+    id: base.id,
+    name: patch.name || base.name,
+    summary: patch.summary || base.summary,
+    sections,
+    termTables: [...new Set([...listOf(base.termTables), ...listOf(patch.termTables)])],
+    speechTables: [...new Set([...listOf(base.speechTables), ...listOf(patch.speechTables)])],
+    speechHabitScope: patch.speechHabitScope || base.speechHabitScope,
+  };
+}
+
 function loadProfiles() {
   const profiles = new Map();
   for (const profile of builtInProfiles) {
@@ -74,9 +116,21 @@ function loadProfiles() {
   }
   for (const file of externalProfileFiles()) {
     try {
-      const normalized = normalizeProfile(require(file));
-      if (profiles.has(normalized.id)) {
-        console.warn(`[ai] 特化档案 ${file} 的 id「${normalized.id}」覆盖了同名档案。`);
+      const raw = require(file);
+      const baseId = String(raw?.extends || "").trim();
+      const base = baseId ? profiles.get(baseId) : null;
+      // 叠加目标只能是已注册的档案（内置档案，或先加载的仓库外档案）。
+      if (baseId && !base) {
+        console.warn(`[ai] 特化档案 ${file} 声明叠加到「${baseId}」，但没有这个档案，已跳过。`);
+        continue;
+      }
+      const ownId = String(raw?.id || "").trim();
+      if (base && ownId && ownId !== base.id) {
+        console.warn(`[ai] 特化档案 ${file} 同时写了 extends 与 id「${ownId}」；叠加档案沿用基底 id「${base.id}」，该 id 已被忽略。`);
+      }
+      const normalized = normalizeProfile(base ? applyOverlay(base, raw) : raw);
+      if (!base && profiles.has(normalized.id)) {
+        console.warn(`[ai] 特化档案 ${file} 的 id「${normalized.id}」覆盖了同名档案；只想在既有档案上补本机内容，请改用 extends。`);
       }
       profiles.set(normalized.id, normalized);
     } catch (error) {

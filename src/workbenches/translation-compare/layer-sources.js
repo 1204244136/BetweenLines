@@ -7,7 +7,29 @@
  * - 档案没有声明该类型的表时直接跳过，不产生空条目。
  *
  * 各层只需给出表字段名、归一化函数与要附加的信息（例如说话习惯层的 scope）。
+ *
+ * 同一份口径在**运行期**也要用一次：落盘的层块只存表文件名（不进产物的是本机路径），
+ * 运行期要重算指纹就得重新解析「当前档案现在用哪些表」——用的就是这个函数。
  */
+
+/** 环境变量/命令行里的表路径写法：数组、`;` 与换行分隔都接受。 */
+function toPathList(value) {
+  const items = Array.isArray(value) ? value : [value];
+  return items
+    .flatMap((item) => String(item || "").split(/[;\n]/))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 按档案 + 环境变量解析当前该用哪些表（构建期与运行期同口径）。
+ * @param {object|null} profile 特化档案
+ * @param {object} options `tableKey` 表字段名、`envTables` 环境变量给的路径、`normalize` 归一化函数
+ */
+function tableFilesForProfile(profile, { tableKey, envTables = [], normalize = (list) => list } = {}) {
+  return normalize([...(profile?.[tableKey] || []), ...toPathList(envTables)]);
+}
+
 function tableSourceCandidates({
   profiles = null,
   envTables = [],
@@ -18,15 +40,15 @@ function tableSourceCandidates({
 } = {}) {
   const candidates = [];
   for (const profile of profiles) {
-    const files = normalize([...(profile[tableKey] || []), ...envTables]);
+    const files = tableFilesForProfile(profile, { tableKey, envTables, normalize });
     if (!files.length) continue;
     candidates.push({ id: profile.id, name: profile.name, files, ...decorate(profile) });
   }
-  const envFiles = normalize(envTables);
+  const envFiles = normalize(toPathList(envTables));
   if (envFiles.length && !candidates.some((item) => item.id === "env")) {
     candidates.push({ id: "env", name: envName, files: envFiles, ...decorate(null) });
   }
   return candidates;
 }
 
-module.exports = { tableSourceCandidates };
+module.exports = { tableFilesForProfile, tableSourceCandidates, toPathList };

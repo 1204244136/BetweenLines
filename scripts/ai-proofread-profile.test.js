@@ -162,8 +162,9 @@ test("仓库自带的示范档案展示作品专有档案的写法", () => {
   assert.equal(ids.includes("demo"), true);
 
   // 示范档案继承通用规范，只追加作品专有事实；两者都是内置档案。
+  // 注意 `demo` 是稳定的档案槽位：本机若在 profiles/local/ 里用 extends 叠加它，
+  // 名字会变成本机名（见 ai-profile-overlay.test.js），所以这里只断言与叠加无关的事实。
   assert.equal(demo.id, "demo");
-  assert.match(demo.name, /示范/);
   for (const section of novel.sections) {
     assert.equal(demo.sections.some((item) => item.title === section.title), true, `示范档案缺少通用小节：${section.title}`);
   }

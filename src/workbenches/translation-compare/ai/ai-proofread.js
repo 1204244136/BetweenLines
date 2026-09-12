@@ -20,6 +20,7 @@ const {
   volumeKeyFromFiles,
 } = require("./speech-habit");
 const { rowSignature, sameProjectSnapshot } = require("../../../core/project-context");
+const { toPathList } = require("../layer-sources");
 const { resolveProjectArtifact } = require("../../../storage/project-store");
 const {
   detectModelCapabilities,
@@ -980,9 +981,11 @@ function applyTermTable(config, rows, labels) {
  * 这里不改结论（运行期算的就是本次生效的判定），只把分叉显式说出来。
  */
 function compareWithTermLayer(config, { resolved, targetKey }) {
+  // 指纹按**本次实际加载的表**重算：落盘块里只有文件名，本机路径不回读产物。
   const match = termLayerFor(config.termLayer, config.profileId, {
     proofreadMode: config.proofreadMode,
     targetKey,
+    files: config.termTables,
   });
   if (!match) return;
   if (match.stale) {
@@ -1003,15 +1006,7 @@ function compareWithTermLayer(config, { resolved, targetKey }) {
   pushLog(`对照表：运行期判定与构建期预筛不一致（少 ${missing.length} 行 / 多 ${extra.length} 行）；重新构建工作台后再核对页面徽标。`);
 }
 
-function toPathList(value) {
-  const items = Array.isArray(value) ? value : [value];
-  return items
-    .flatMap((item) => String(item || "").split(/[;\n]/))
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-
+// 表路径写法（数组 / `;` / 换行）的解析与构建期共用同一实现，避免两处口径漂移。
 
 // 对照表按“文件 + 修改时间”缓存：一次任务内只解析一次，表格改动后自动重载。
 // 即使解析结果为空（坏文件）也缓存，避免每次状态轮询都重读整张表。
@@ -1103,7 +1098,8 @@ function speechHabitStatusFor(profileId) {
  */
 function buildSpeechHabitContext(config, rows, project, snapshotLayer = null) {
   // 构建期已经算过章级判定：指纹一致就直接复用，避免每次任务重算，也让页面/离线脚本/AI 看到同一份结论。
-  const layerMatch = speechHabitLayerFor(snapshotLayer, config.profileId);
+  // 指纹按本次实际加载的表重算（落盘块里只有文件名，本机路径不回读产物）。
+  const layerMatch = speechHabitLayerFor(snapshotLayer, config.profileId, { files: config.speechTables });
   if (layerMatch && !layerMatch.stale) {
     const context = contextFromLayerEntry(layerMatch.entry);
     pushLog(`说话习惯：复用构建期结果（${context.tables.entries} 条，按${context.scope === "volume" ? "卷" : "章"}命中 ${context.activatedChapters} ${context.scope === "volume" ? "卷" : "章"} / ${context.activatedCharacters.length} 个角色）${context.volume?.code ? `，本卷 ${context.volume.code}` : ""}。`);

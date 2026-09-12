@@ -6,7 +6,7 @@
  * 用法：
  *   node scripts/term-prefilter.js                        # 用默认特化档案声明的表
  *   node scripts/term-prefilter.js --table D:\t.xlsx      # 指定表（可重复）
- *   node scripts/term-prefilter.js --profile work         # 指定特化档案
+ *   node scripts/term-prefilter.js --profile demo         # 指定特化档案（用档案 id；本机叠加档案沿用基底 id）
  *   node scripts/term-prefilter.js --target tw            # 三语下指定目标列（默认 cn，与运行期一致）
  *   node scripts/term-prefilter.js --from-snapshot        # 只读构建期落盘结论（与页面徽标同源，不重算）
  *   node scripts/term-prefilter.js --json --out report.json
@@ -72,8 +72,9 @@ function loadRows() {
 }
 
 /** 只读构建期结论：给页面徽标同源的清单，不重新查表。 */
-function reportFromSnapshot({ layer, profileId, proofreadMode, targetKey }) {
-  const match = termLayerFor(layer, profileId, { proofreadMode, targetKey });
+function reportFromSnapshot({ layer, profileId, proofreadMode, targetKey, files }) {
+  // 指纹按本次实际加载的表重算（落盘块里只有文件名，本机路径不回读产物）。
+  const match = termLayerFor(layer, profileId, { proofreadMode, targetKey, files });
   if (!match) {
     console.error("当前快照没有这个档案的对照表判定：请重新构建工作台（npm run build），或去掉 --from-snapshot 现算。");
     return 1;
@@ -102,6 +103,12 @@ function main() {
   const bilingual = project.comparisonMode === "bilingual";
   const proofreadMode = bilingual ? "bilingual" : "trilingual";
   const targetKey = termTargetKeyFor(proofreadMode, options.target);
+  // 本次实际要用的表：--table 优先，其次档案声明，最后环境变量。与构建期同一口径。
+  const tables = normalizeTermTablePaths([
+    ...options.tables,
+    ...(profile.termTables || []),
+    ...String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
+  ]);
 
   if (options.fromSnapshot) {
     return reportFromSnapshot({
@@ -109,14 +116,10 @@ function main() {
       profileId: profile.id,
       proofreadMode,
       targetKey,
+      files: tables,
     });
   }
 
-  const tables = normalizeTermTablePaths([
-    ...options.tables,
-    ...(profile.termTables || []),
-    ...String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
-  ]);
   if (!tables.length) {
     console.error(`没有可用的对照表：特化档案「${profile.name}」没有声明 termTables，也没有 --table / TRANSCOMPARATOR_TERM_TABLES。`);
     return 1;
@@ -176,6 +179,7 @@ function main() {
     profileId: profile.id,
     proofreadMode,
     targetKey,
+    files: loaded.files,
     report,
   });
   if (layerNote) console.log(layerNote);
@@ -199,8 +203,8 @@ function main() {
 }
 
 /** 现算结果与构建期落盘结论对照：两者必须给出同一批命中行。 */
-function compareWithLayer({ layer, profileId, proofreadMode, targetKey, report }) {
-  const match = termLayerFor(layer, profileId, { proofreadMode, targetKey });
+function compareWithLayer({ layer, profileId, proofreadMode, targetKey, files = null, report }) {
+  const match = termLayerFor(layer, profileId, { proofreadMode, targetKey, files });
   if (!match) return "";
   if (match.stale) return "对照表在构建之后被修改过：页面徽标已过期，请重新构建工作台。";
   if (!match.variant) return "";

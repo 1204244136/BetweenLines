@@ -19,10 +19,11 @@ const {
 } = require("./ai/term-table");
 const { termTargetKeyFor } = require("./ai/term-prefilter");
 const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
-const { tableSourceCandidates } = require("./layer-sources");
-const { tablesFingerprint } = require("../../core/table-fingerprint");
+const { tableFilesForProfile, tableSourceCandidates, toPathList } = require("./layer-sources");
+const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
-const TERM_LAYER_VERSION = 1;
+// 2：落盘块的 `files` 从「本机完整路径」改成「文件名」，运行期改为按当前档案重算指纹。
+const TERM_LAYER_VERSION = 2;
 
 /**
  * 对照表判定与「校对模式 + 目标列」绑定：双语只有目标列 cn，三语可以是 cn 或 tw。
@@ -111,7 +112,8 @@ function buildTermLayer({ rows = [], profiles = null, envTables = [], comparison
     byProfile[candidate.id] = {
       id: candidate.id,
       name: candidate.name,
-      files: tables.files,
+      // 只留文件名：这是要进快照与页面的，本机完整路径不该出现在产物里。
+      files: tableFileNames(candidate.files),
       fingerprint: tablesFingerprint(TERM_LAYER_VERSION, candidate.files, tables.entries.length),
       entries: tables.entries.length,
       defaultVariant,
@@ -129,17 +131,38 @@ function buildTermLayer({ rows = [], profiles = null, envTables = [], comparison
 }
 
 /**
+ * 运行期：本次实际用到的对照表路径。
+ *
+ * 指纹要 stat 真实文件，而落盘块里只有文件名，所以运行期必须自己解析路径——
+ * 口径与构建期 `tableSourceCandidates` 相同（档案声明 → 环境变量，同一份归一化与去重），
+ * 否则同一张表会被算成两个不同的来源、指纹永远对不上。
+ */
+function currentTermFiles(profileId, envTables) {
+  return tableFilesForProfile(resolveProfile(profileId), {
+    tableKey: "termTables",
+    envTables: envTables === undefined ? process.env.TRANSCOMPARATOR_TERM_TABLES : envTables,
+    normalize: normalizeTermTablePaths,
+  });
+}
+
+/**
  * 运行期取用：指纹一致且变体存在时给出可复用的判定，否则让调用方自己重算。
  * 与说话习惯层同口径——表被改过就回退现算，并提示重新构建工作台。
+ *
+ * @param {string[]} [files] 本次**实际加载**的表路径（含显式指定的表）。不传时按当前档案解析；
+ *   两种情况都解析不出表时视为不可信（stale），绝不静默复用旧结论。
  */
-function termLayerFor(layer, profileId, { proofreadMode = "bilingual", targetKey = "cn" } = {}) {
+function termLayerFor(layer, profileId, { proofreadMode = "bilingual", targetKey = "cn", files = null } = {}) {
   if (!layer || !layer.byProfile) return null;
   const entry = layer.byProfile[profileId] || null;
   if (!entry) return null;
-  const current = tablesFingerprint(TERM_LAYER_VERSION, entry.files || [], entry.entries || 0);
+  const currentFiles = files ? normalizeTermTablePaths(files) : currentTermFiles(profileId);
+  const current = currentFiles.length
+    ? tablesFingerprint(TERM_LAYER_VERSION, currentFiles, entry.entries || 0)
+    : "";
   const key = termVariantKey(proofreadMode, targetKey);
   return {
-    stale: current !== entry.fingerprint,
+    stale: !current || current !== entry.fingerprint,
     entry,
     variantKey: key,
     variant: (entry.variants || {})[key] || null,

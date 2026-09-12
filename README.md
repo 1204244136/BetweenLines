@@ -171,19 +171,20 @@ AI 校对带有错误率熔断保护：累计满 10 次结果后开始判定，�
 $env:TRANSCOMPARATOR_PROFILE_FILES = 'D:\my-profiles\work.js'   # 多个文件用 ; 或 , 分隔
 ```
 
-特化侧除了提示词，还能带**辅助判断数据**：在档案里声明译名对照表（`termTables`），校对前先做确定性查表，命中的行直接用表里的内容判定，不再调用模型。
+如果自己的档案只是"某份既有档案 + 本机专有的东西"，不要另立一份：用 `extends` 叠加，只写差异字段。注册表会把差异合并进基底并**沿用基底的 id**，所以下拉里仍然只有那一项，不会出现两份逐字相同的规范让人分不清该选哪个，也不会因为选了另一份而静默丢掉下面声明的表；基底以后改了规范，这里也自动跟上。
 
 ```js
-// profiles/local/work-profile.js
+// profiles/local/work-profile.js：让"某系列成品"这一项带上本机的两张表
 module.exports = {
-  ...require("../demo"),
-  id: "work",
-  name: "我的作品",
+  extends: "demo",                        // 叠加到内置示范档案上（沿用它的 id、规范正文）
+  name: "我的作品（本机档案）",             // 只声明要改的字段：名字、摘要、补充小节、表
   termTables: ["D:\\tables\\译名对照表.xlsx"],   // 也支持 csv/tsv/json；可用 TRANSCOMPARATOR_TERM_TABLES 追加
 };
 ```
 
-对照表按表头识别列（`Base_Ori` 原文、`Ruby_Ori` 读音、`Base_Trans` 本项目译名、`Ruby_Trans`/`Other_Fandom` 英文与其他译法、`Type`、`Memo*`）。选好特化规范后，「校对设置」里会显示一行对照表状态——`未声明` / `文件名（N 条术语）` / `加载失败`，鼠标悬停可看完整路径与错误，用来确认表到底有没有生效。判定规则是保守的：
+叠加规则：`name`/`summary`/`speechHabitScope` 声明即覆盖，未声明沿用基底；`sections` 按小节标题追加，标题与基底重名时替换基底那一节；`termTables`/`speechTables` 与基底的合并去重（基底的表继续生效）。`extends` 只能指向已注册的档案，指向不存在的 id 时只告警并跳过（不会凭空造出一份档案）。
+
+对照表按表头识别列（`Base_Ori` 原文、`Ruby_Ori` 读音、`Base_Trans` 本项目译名、`Ruby_Trans`/`Other_Fandom` 英文与其他译法、`Type`、`Memo*`）。选好特化规范后，「校对设置」里会显示一行对照表状态——`未声明` / `文件名（N 条术语）` / `加载失败`，鼠标悬停可看完整路径与错误，用来确认表到底有没有生效。项目快照与工作台页面里只记录表的**文件名**（对照表与说话习惯表都是），本机完整路径只出现在这个状态提示、运行日志和离线脚本报告里，页面可以直接分享。判定规则是保守的：
 
 - 译文已使用本项目译名（含只写姓或名的分段写法、括号与字形差异）→ 判为一致，该行不再交给模型；
 - 译文里出现的是对照表登记的“其他译法/英文写法/字形差异”→ 给出**只替换术语**的最小修改建议，其余句子不动；
@@ -194,10 +195,12 @@ module.exports = {
 想先看命中情况再决定花不花 token，可以不启动服务直接跑离线脚本：
 
 ```powershell
-node scripts/term-prefilter.js --profile work --limit 20     # 只列需要人工确认的行，并对照构建期结论
-node scripts/term-prefilter.js --profile work --from-snapshot # 只读构建期落盘结论（与页面徽标同源）
-node scripts/term-prefilter.js --profile work --all --json --out report.json
+node scripts/term-prefilter.js --profile demo --limit 20     # 只列需要人工确认的行，并对照构建期结论
+node scripts/term-prefilter.js --profile demo --from-snapshot # 只读构建期落盘结论（与页面徽标同源）
+node scripts/term-prefilter.js --profile demo --all --json --out report.json
 ```
+
+（`--profile` 用档案 id，也就是叠加时 `extends` 指向的那个 id：内置示范档案是本机的叠加基底，所以本机的表也算在 `demo` 这个 id 下。）
 
 ### 说话习惯层
 
@@ -216,7 +219,7 @@ node scripts/term-prefilter.js --profile work --all --json --out report.json
 index-X 缓存的日文原文（`<index-X>/.cache/epub-work/japanese-text/[S3_01]…`）可以校验对齐产物与上述判定，加 `--verify-source` 即可（目录缺省取同级 `../index-X`，或用环境变量 `INDEX_X_DIR` / `--index-x` 指定）：
 
 ```powershell
-node scripts/speech-habit.js --profile work --verify-source
+node scripts/speech-habit.js --profile demo --verify-source
 ```
 
 校验三件事：卷目录与正文文件是否齐全；快照里的章节能否与原文的「序章 / 行间N / 第N章 / 终章」结构标记一一对应（中日章名是翻译关系，只比结构标记）；各角色口癖在原文与快照 `jp` 列里的出现次数——差值为 0 说明对齐产物完整，偏少通常是后记、插页没有收入正文，明显缺失则说明快照丢了内容，会影响说话习惯与补回判定。
