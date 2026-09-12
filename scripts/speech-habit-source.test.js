@@ -7,6 +7,7 @@ const test = require("node:test");
 const {
   chapterHabitBlock,
   detectCharacters,
+  findHabitMisses,
   habitCandidatesForRow,
   loadSpeechTables,
   speakerCheckBlock,
@@ -62,6 +63,7 @@ test("说话人候选来自本行命中的口癖，且只在有特征时出现",
   assert.equal(candidates[0].habit, "オレ");
   assert.equal(candidates[0].expected, "本大爷");
   assert.equal(candidates[0].confidence, "high");
+  assert.equal(candidates[0].detectable, true, "登记了写法才可用于判断译文是否流失");
 
   // 本行没有口癖特征 → 不需要判断说话人
   assert.deepEqual(habitCandidatesForRow({ row: rows[1], characters }), []);
@@ -72,6 +74,29 @@ test("说话人候选来自本行命中的口癖，且只在有特征时出现",
   });
   const low = habitCandidatesForRow({ row: { index: 3, jp: "オレの話。" }, characters: fragmentOnly });
   assert.deepEqual(low, []);
+});
+
+test("没有说话习惯写法登记的口癖只作说话人线索，不得据此判译文遗漏", () => {
+  const tables = loadFixture();
+  const jp = "「じゃん」と乙川次郎。";
+  const cn = "「吧」乙川次郎说。";
+  const rows = [{ index: 1, chapter: "第一章", jp, cn }];
+  const characters = detectCharacters({ rows, tables });
+  const candidates = habitCandidatesForRow({ row: rows[0], characters });
+
+  // 候选仍然给出（名字命中），但表里没登记写法 → 没有比对基准。
+  assert.deepEqual(candidates.map((item) => item.character), ["乙川次郎"]);
+  assert.equal(candidates[0].expected, "");
+  assert.equal(candidates[0].detectable, false);
+
+  const block = speakerCheckBlock({ chapter: "第一章", candidates });
+  assert.match(block, /只作说话人线索/);
+  assert.match(block, /不要因为译文里没有对应写法就判缺漏、扣分或要求补写/);
+  assert.doesNotMatch(block, /可按本项目写法判断的口癖/);
+
+  // 不得算遗漏：流失检测与章级习惯块都不认这种条目。
+  assert.deepEqual(findHabitMisses({ source: jp, target: cn, characters }), []);
+  assert.equal(chapterHabitBlock({ chapter: "第一章", characters }), "");
 });
 
 test("说话人判断段落要求先定人、再处理习惯", () => {
@@ -113,13 +138,14 @@ test("说话人判断随请求注入，并写入结果备注", () => {
   assert.equal(system.split("【说话人判断（").length - 1, 1);
   assert.equal(system.split("【说话习惯（").length - 1, 1);
   assert.equal(system.split("只返回一个 JSON 对象").length - 1, 1);
-  assert.match(system, /先判断这一行是谁在说话/);
+  assert.match(system, /先判断这一行到底是谁在说话/);
   assert.match(system, /speaker 字段/);
 
   const user = JSON.parse(messages[1].content);
   assert.equal(user.speakerCheck.chapter, "第一章");
   assert.deepEqual(user.speakerCheck.candidates.map((item) => item.character), ["甲野一郎"]);
-  assert.match(user.speakerCheck.note, /先判断说话人/);
+  // 规则句子只在系统提示词的【说话人判断】段落里发一次，载荷只给候选事实。
+  assert.equal(user.speakerCheck.note, undefined, "说话人判断口径只在系统提示词里发一次");
 
   // 模型返回的说话人进入备注，便于人工核对。
   const decision = parseDecision(JSON.stringify({
@@ -414,7 +440,7 @@ test("校对流水线把说话人判断发给模型", async () => {
       const user = JSON.parse(captured[0].messages[1].content);
       assert.match(system, /【说话习惯（本章）】/);
       assert.match(system, /【说话人判断（本章）】/);
-      assert.match(system, /先判断这一行是谁在说话/);
+      assert.match(system, /先判断这一行到底是谁在说话/);
       assert.deepEqual(user.speakerCheck.candidates.map((item) => item.character), ["甲野一郎"]);
       assert.deepEqual(user.chapterSpeechHabits.characters, ["甲野一郎"]);
 
@@ -466,9 +492,9 @@ test("说话习惯随请求注入：系统提示词一段、用户载荷只给�
     scope: "chapter",
     chapter: "第一章",
     characters: ["甲野一郎"],
-    note: "系统提示词【说话习惯】段落列出的是刻意语言特征，不得判为翻译错误；原文出现口癖而译文未体现时可给最小补回建议。",
   });
   assert.equal(user.chapterSpeechHabits.block, undefined, "完整规则只在系统提示词里发一次");
+  assert.equal(user.chapterSpeechHabits.note, undefined, "规则句子不随载荷重发");
 
   // 没有说话习惯上下文时，提示词里不出现该段落，用户载荷也不带该字段。
   const plain = buildMessages({

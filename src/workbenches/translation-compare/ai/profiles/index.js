@@ -23,10 +23,38 @@ const fs = require("fs");
 const path = require("path");
 const novel = require("./novel");
 const demo = require("./demo");
+const { FEATURE_IDS } = require("../row-features");
 
 const builtInProfiles = [novel, demo];
 const localProfileDir = path.join(__dirname, "local");
 const DEFAULT_PROFILE_ID = "novel";
+const warnedFeatureIds = new Set();
+
+/**
+ * 规则条目归一化。条目支持两种形态（写法与选择标准见 `./novel.js` 的文件头说明）：
+ * - 字符串：常驻条目，每一行都注入；
+ * - `{ text, features: [...] }`：按行条目，只在当前行命中这些特征时才注入。
+ *
+ * 这里**不能**把对象压成字符串（旧版 `String(line)` 会让对象条目变成 "[object Object]"，
+ * 按行裁剪随之静默失效）。`features` 声明了未注册的 id 时按常驻处理并告警一次：
+ * 宁可多注入几十 token，也不能因为一个笔误让某条规范永远不出现。
+ */
+function normalizeLine(line) {
+  if (line == null) return null;
+  if (typeof line === "string") return line.trim() || null;
+  const text = String(line.text || "").trim();
+  if (!text) return null;
+  const features = (Array.isArray(line.features) ? line.features : [line.features])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  for (const id of features) {
+    if (!FEATURE_IDS.includes(id) && !warnedFeatureIds.has(id)) {
+      warnedFeatureIds.add(id);
+      console.warn(`[ai] 特化档案声明了未注册的行特征「${id}」，该条目按常驻处理（注册表见 ai/row-features.js）。`);
+    }
+  }
+  return features.length ? Object.freeze({ text, features: Object.freeze(features) }) : text;
+}
 
 function externalProfileFiles() {
   const fromEnv = String(process.env.TRANSCOMPARATOR_PROFILE_FILES || "")
@@ -45,10 +73,10 @@ function normalizeProfile(profile) {
   const id = String(profile?.id || "").trim();
   if (!id) throw new Error("特化侧档案缺少 id。");
   const sections = (profile.sections || [])
-    .map((section) => ({
-      title: String(section?.title || "").trim(),
-      lines: (section?.lines || []).map((line) => String(line || "").trim()).filter(Boolean),
-    }))
+    .map((section) => {
+      const lines = (section?.lines || []).map(normalizeLine).filter(Boolean);
+      return { title: String(section?.title || "").trim(), lines };
+    })
     .filter((section) => section.lines.length);
   if (!sections.length) throw new Error(`特化侧档案 ${id} 没有可用规则。`);
   const name = String(profile.name || id).trim();

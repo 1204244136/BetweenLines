@@ -228,17 +228,47 @@ function describeHabit(entry) {
   if (entry.versions.x) writings.push(`本项目写作「${entry.versions.x}」`);
   const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
   if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
-  if (!writings.length && entry.memo) writings.push(entry.memo);
+  if (!writings.length && entry.memo) writings.push(`备注：${entry.memo}`);
   return `${entry.character}：${head}${writings.length ? ` → ${writings.join("；")}` : ""}`;
+}
+
+/**
+ * 已启用角色的名字（按角色去重）。
+ *
+ * 一个角色可能有多条习惯（如「力」与「ダゾ」各一条），逐条取名字会让提示词载荷里的
+ * characters 出现同一个名字两次，看名字像本章登场了两个角色。规则本身在提示词里逐条列出，
+ * 这里只负责“本章有哪些角色”。
+ *
+ * 兼容两种条目形态：现算路径给 `{ entry, activated }`，落盘块还原路径给 `{ character, activated }`。
+ */
+function activatedCharacterNames(items = []) {
+  const names = [];
+  for (const item of items) {
+    if (item.activated === false) continue;
+    const name = item.character || item.entry?.character || "";
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * 注入提示词的角色行：只保留系统真正会用它们做判断的条目。
+ * 结构性特征（句式/称谓/「XX力」后缀）用不了、同形条目没有“补回”可言、没有目标写法的条目
+ * 连比对基准都没有——把这些规则发给模型等于让它按一条无法执行的规则做事，故一律不进提示词
+ * （判定与补回检测用的是同一把尺子 isHabitDetectable，两侧不会分叉）。
+ */
+function habitBlockLines(characters = []) {
+  return characters
+    .filter((item) => item.activated !== false && isHabitDetectable(item.entry))
+    .map((item) => `- ${describeHabit(item.entry)}`);
 }
 
 /**
  * 章级提示块：只含本章“名字命中”的角色，作为“刻意特色”的判据注入提示词。
  */
 function chapterHabitBlock({ chapter, characters = [] } = {}) {
-  const activated = characters.filter((item) => item.activated !== false);
-  if (!activated.length) return "";
-  const lines = activated.map((item) => `- ${describeHabit(item.entry)}`);
+  const lines = habitBlockLines(characters);
+  if (!lines.length) return "";
   return [
     `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征，不得判为翻译腔、病句或误译；也不要按通顺中文的标准改写。`,
     "原文出现口癖而译文完全没有对应写法时，可以给出把该特色补回的最小改动（revisedText），并在 summary 说明依据；没有把握就只提示待人工确认。",
@@ -250,13 +280,13 @@ function chapterHabitBlock({ chapter, characters = [] } = {}) {
  * 卷级提示块：整卷命中人名的角色（章级没命中时的兜底，规则集更宽、token 更多）。
  */
 function volumeHabitBlock({ volume, characters = [] } = {}) {
-  const activated = characters.filter((item) => item.activated !== false);
-  if (!activated.length) return "";
+  const lines = habitBlockLines(characters);
+  if (!lines.length) return "";
   const label = volume?.code ? `本卷 ${volume.code}` : "本卷";
   return [
     `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征，不得判为翻译腔、病句或误译；也不要按通顺中文的标准改写。`,
     "原文出现口癖而译文完全没有对应写法时，可以给出把该特色补回的最小改动（revisedText），并在 summary 说明依据；没有把握就只提示待人工确认。",
-    ...activated.map((item) => `- ${describeHabit(item.entry)}`),
+    ...lines,
   ].join("\n");
 }
 
@@ -289,27 +319,44 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
 
 /**
  * 说话人判断与习惯处理的提示块：附在章级习惯之后，只在有候选时出现。
+ *
+ * 候选分两类，口径必须写清：表里已经登记「本项目写法」的口癖才拿来判断译文是否流失这个特色；
+ * 没有写法的条目（例如只填了备注“通常放在句尾”）只说明“这句可能是谁在说”，**不能**用来判
+ * 译文遗漏——没有比对基准，模型只能凭感觉补一句，那是误报的源头。两类都保留，但要求分开处理。
  */
 function speakerCheckBlock({ chapter, candidates = [] } = {}) {
   if (!candidates.length) return "";
   const names = [...new Set(candidates.map((candidate) => candidate.character))];
-  return [
+  const writable = candidates.filter((candidate) => candidate.detectable);
+  const clueOnly = candidates.filter((candidate) => !candidate.detectable);
+  const list = (items) => items.map((candidate) => `${candidate.character}「${candidate.habit}」`).join("、");
+  const lines = [
     `【说话人判断（本章）】本行原文出现了说话习惯特征，候选说话人：${names.join("、")}（本章/本卷出现过该角色）。`,
     "先判断这一行到底是谁在说话，再据此处理：确认是某个候选角色时，按他的说话习惯判断译文是否流失了特色；确认不了或明显是别人时，不要以说话习惯为由判定缺陷，也不要按候选角色的口癖去改写。",
-    `判断结果填在 speaker 字段（填角色名；确认不了留空字符串）；候选习惯：${candidates.map((candidate) => `${candidate.character}「${candidate.habit}」`).join("、")}。`,
-  ].join("\n");
+    "判断结果填在 speaker 字段（填角色名；确认不了留空字符串）。",
+  ];
+  if (writable.length) {
+    lines.push(`可按本项目写法判断的口癖：${list(writable)}（只有译文完全没有该写法时才算说话特色流失，并按最小改动补回）。`);
+  }
+  if (clueOnly.length) {
+    lines.push(`只作说话人线索、不得据此判译文遗漏的口癖：${list(clueOnly)}（本项目尚未登记这些口癖的译法，缺少比对基准；不要因为译文里没有对应写法就判缺漏、扣分或要求补写）。`);
+  }
+  return lines.join("\n");
 }
 /**
  * 该条目是否适合做字面“流失”检测：
  * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
  * - 单字口癖（力、超、訳）会撞普通词，不检测；
- * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测。
+ * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
+ * - 没有任何可核对的目标写法时（x版/网翻/台版都空，只有备注）“译文少了这个特色”无从判定：
+ *   备注写的是“通常放在句尾”这类说明，拿它去比对中文译文只会每行都报流失。
  */
 function isHabitDetectable(entry) {
   if (!entry || !entry.hasLiteralHabit) return false;
   if (!DETECTABLE_TYPES.has(entry.type)) return false;
   if (String(entry.habit).length < 2) return false;
   if (entry.versions.x && entry.versions.x === entry.habit) return false;
+  if (!(entry.expectedWritings || []).length) return false;
   return true;
 }
 
@@ -419,6 +466,7 @@ function summarizeGroup({ name, rows = [], tables, volume = null, characters = n
 module.exports = {
   COLUMN_CANDIDATES,
   DETECTABLE_TYPES,
+  activatedCharacterNames,
   chapterHabitBlock,
   characterAliases,
   compareVolume,

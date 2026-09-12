@@ -1,5 +1,7 @@
 const { JSON_ONLY_INSTRUCTION, promptSections, withJsonOnly } = require("../../../ai/prompt-contract");
 const { DEFAULT_PROFILE_ID, listProfiles, resolveProfile } = require("./profiles");
+// 按行裁剪的依据与特征注册表都在 row-features；这里只用它做“该条目是否注入”的判断。
+const { FEATURE_IDS, unknownFeatureIds } = require("./row-features");
 // 段首标记的唯一定义在注入层（term-prefilter）：这里只借用前缀做剥离，不复制字面量。
 const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
 
@@ -11,9 +13,9 @@ const modeSchemas = Object.freeze({
     needsEdit: "boolean（B 是否需要修改；与 semanticSame 分开判断）",
     needsContext: "boolean（仅当判断确实依赖当前行之外的证据时为 true）",
     decision: "keep | replace | unclear（keep=保持 B 现状，无需修改；replace=用 revisedText 整体替换 B 当前行；unclear=依据不足，转人工确认，不要用它表达“不确定要不要改”）",
-    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算；needsEdit=false 时为 100）",
-    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算；needsEdit=false 时为 0）",
-    grade: "excellent | good | fair | poor（90~100为excellent优等，75~89为good良好，60~74为fair一般，<60为poor较差；needsEdit=false 时为 excellent）",
+    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算）",
+    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算）",
+    grade: "excellent | good | fair | poor（档位定义见 system 提示词的通用规则：poor=致命缺陷、fair=严重缺陷、good=轻微缺陷、excellent=无缺陷；needsEdit=false 时为 excellent）",
     severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
     summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
     speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
@@ -24,9 +26,9 @@ const modeSchemas = Object.freeze({
     needsEdit: "boolean（目标列结合 A 判断后是否需要修改；与 semanticSame 分开判断）",
     needsContext: "boolean（仅当判断确实依赖当前行之外的证据时为 true）",
     better: "target | counterpart | neither | unclear（target=保持目标列；counterpart=另一非原文更好；neither=两份都不如按 A 修订；unclear=无法判断，转人工确认）",
-    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算；needsEdit=false 时为 100）",
-    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算；needsEdit=false 时为 0）",
-    grade: "excellent | good | fair | poor（90~100为excellent优等，75~89为good良好，60~74为fair一般，<60为poor较差；needsEdit=false 时为 excellent）",
+    score: "number|null（0~100整数；score 必须等于 100 - penalty；算不出就填 null，系统按 grade 折算）",
+    penalty: "number|null（0~100整数；算不出就填 null，系统按 grade 折算）",
+    grade: "excellent | good | fair | poor（档位定义见 system 提示词的通用规则：poor=致命缺陷、fair=严重缺陷、good=轻微缺陷、excellent=无缺陷；needsEdit=false 时为 excellent）",
     severity: "none | minor | major | critical（grade 的兼容映射：excellent->none, good->minor, fair->major, poor->critical）",
     summary: "一到两句：结论、扣分项与最关键证据；needsEdit=false 时以“无需修改”起头，needsEdit=true 时写明“需要修改”",
     speaker: "string（仅当本次提供了【说话人判断】段落时填写：判断出的说话人角色名；确认不了填空字符串，不要猜）",
@@ -44,9 +46,10 @@ const modeMarkers = Object.freeze({
   trilingual: "当前是三语校对",
 });
 
+// 通用侧只放与作品、语言阶段无关的任务契约。字段默认值、档位定义、needsContext 口径都只在这里写一次：
+// modeSchemas 负责“键名 + 取值”，本数组负责“怎么判断”，两边不再互相复述。
 const sharedInstructions = [
-  "你是严谨的翻译校对助手，用于辅助人工校对，不替代人工最终判断。",
-  "按固定顺序在内部完成判断，不要输出推理过程：先确认原文边界和目标列，再核对事实与语义完整性，最后才判断语言质量；不要把表达偏好当成错误。",
+  "你是严谨的翻译校对助手，用于辅助人工校对，不替代人工最终判断。按固定顺序在内部完成判断，不要输出推理过程：先确认原文边界和目标列，再核对事实与语义完整性，最后才判断语言质量；不要把表达偏好当成错误。",
   "证据优先级：原文中的人物、数字、否定、时态、因果和动作关系 > 目标列是否完整准确 > 术语和语体一致性 > 局部措辞偏好；无法由输入证明的内容不要猜测。",
   "semanticSame 与 needsEdit 必须分别判断；语义相同但表达生硬、翻译腔、遗漏语气或存在其他明确问题时，可以 semanticSame=true、needsEdit=true。",
   "除非存在明确的意义、完整性、语法或可用性问题，否则不要建议修改；需要修改时只做能被证据支持的最小改动，不要整段重译。",
@@ -54,12 +57,11 @@ const sharedInstructions = [
   "当原文或目标列任一侧是不完整片段（以接续词、助词、标点结尾，缺少谓语，或明显只是上下句的一半）时：不得据该片段的句读、标点收尾或语气判定 needsEdit；若片段范围内两侧内容互相对应、差异只是断句位置或片段长度，判定 semanticSame=true、needsEdit=false；若片段范围内无法判断语义对应，返回 needsContext=true；确实需要修改时，revisedText 仍须限制在该片段范围内，不得补全成完整句或改写上下句。",
   "形如 <a ... epub:type=\"noteref\" ...><sup>㊟</sup></a> 的内容是 EPUB 注释标记，不属于正文语义；不得因其标签、属性、数量或位置差异判定翻译问题。",
   "目标列中原文没有的内容（特典、后记、译注、制作信息等）不是翻译缺陷：不得据此判定 needsEdit=true，也不得在 revisedText 中删除、改写或补写这类内容。",
-  "仅当判断确实依赖当前行之外的证据（代词指向、承接关系、省略主语、术语延续、上文伏笔或下文指代）时才返回 needsContext=true；当前行内已有足够依据时必须直接给出明确判断，不要为保险而索要上下文。",
-  "不要说明需要哪些行、需要多少行上下文，也不要重复请求上下文；系统会在 needsContext=true 时自动补充相邻行。",
-  "只判档位、不自己算分：按缺陷档位判定 grade（四档取其一，融合 MQM 风格分级与缺陷扣分的口径）——poor=致命缺陷（颠倒核心事实、主谓宾或因果逻辑，剧情反转性误译，核心专有名词/人名灾难性错译，大段关键语义脱落或遗漏）；fair=严重缺陷（影响主干准确性或完整性的误译/漏译，关键否定/时态/语态错误，角色口吻与说话语气严重倒错，关键代词指代混乱）；good=轻微缺陷（轻度翻译腔，局部用词欠妥但不影响大意，次要语法或标点瑕疵，轻度句意冗余）；excellent=没有缺陷，或只有纯修辞与行文偏好差异。",
-  "penalty 与 score 是同一件事的两种记法（score 必须等于 100 - penalty），能在档位内估一个整数就给，拿不准就两个都填 null，系统会按 grade 折算，不要为了凑数做算术。severity 同样不必斟酌，它只是 grade 的兼容字段（excellent对应none，good对应minor，fair对应major，poor对应critical），照填对应值即可。",
-  "needsEdit=false 时 score 必须为 100、penalty 为 0、grade 为 excellent、severity 为 none、revisedText 留空；needsContext=true 时各字段仍要输出，score 与 penalty 填 null，系统按待人工确认处理，不要自行扣分。",
-  "当本次提供了【说话人判断】段落时：先判断这一行是谁在说话（填 speaker 字段），再据此处理说话习惯——确认是候选角色才按他的习惯判断译文是否流失了特色；确认不了或明显是别人时，不要以说话习惯为由判定缺陷，也不要把候选角色的口癖硬套上去。",
+  "仅当判断确实依赖当前行之外的证据（代词指向、承接关系、省略主语、术语延续、上文伏笔或下文指代）时才返回 needsContext=true；当前行内已有足够依据时必须直接给出明确判断，不要为保险而索要上下文。不要说明需要哪些行、需要多少行上下文，也不要重复请求上下文；系统会在 needsContext=true 时自动补充相邻行。",
+  "只判档位、不自己算分：按缺陷档位判定 grade（融合 MQM 风格分级与缺陷扣分的口径，四档取其一）——poor=致命缺陷（颠倒核心事实、主谓宾或因果逻辑，剧情反转性误译，核心专有名词/人名灾难性错译，大段关键语义脱落或遗漏）；fair=严重缺陷（影响主干准确性或完整性的误译/漏译，关键否定/时态/语态错误，角色口吻与说话语气严重倒错，关键代词指代混乱）；good=轻微缺陷（轻度翻译腔，局部用词欠妥但不影响大意，次要语法或标点瑕疵，轻度句意冗余）；excellent=没有缺陷，或只有纯修辞与行文偏好差异。severity 只是 grade 的兼容字段，照填对应值即可（excellent→none，good→minor，fair→major，poor→critical）。",
+  "penalty 与 score 是同一件事的两种记法（score 必须等于 100 - penalty），能在档位内估一个整数就给，拿不准就两个都填 null，系统会按 grade 折算，不要为了凑数做算术。needsEdit=false 时：score=100、penalty=0、grade=excellent、severity=none、revisedText 留空（此约定优先于“拿不准填 null”）；needsContext=true 时各字段仍要输出，score 与 penalty 填 null，系统按待人工确认处理，不要自行扣分。",
+  // 说话人判断口径不在这里重复：「【说话人判断（…）】」段落由说话习惯层动态生成并自带同一套口径，
+  // 而它只在原文命中口癖时才出现——那正是需要这条规则的唯一场景。
   "summary 只写结论、扣分项与最关键的证据，控制在一到两句，且必须与 semanticSame、needsEdit、decision/better、score、grade、revisedText 完全一致。措辞约定：needsEdit=false 时以“无需修改”起头，且不要出现“建议修改/需要修改/局部优化/润色”等字样；needsEdit=true 时写明“需要修改”并列出扣分项，不要以“无需”“不必”起头。",
 ];
 
@@ -67,13 +69,11 @@ const modeContracts = Object.freeze({
   bilingual: {
     mode: "bilingual",
     instructions: [
-      "当前是双语校对：A 是原文（通常为日文），B 是唯一译文与唯一修改列；A 是语义依据。",
-      "A 同时是正文准入边界；只处理 A 中存在的内容。A 之外在 B 中新增的特典、后记、译注或制作信息不能被当作原文要求。",
+      "当前是双语校对：A 是原文（通常为日文），是语义依据，同时是正文准入边界——只处理 A 中存在的内容；B 是唯一译文与唯一修改列。A 之外在 B 中新增的特典、后记、译注或制作信息不能被当作原文要求。",
       "semanticSame 表示 B 是否完整、准确地传达 A 的核心语义；needsEdit 表示 B 是否存在误译、漏译、增译、语气偏差、术语问题或不自然表达。",
-      "A（日文）常省略主语或人称代词，B（中文）按中文习惯通常需要补出主语才能成立。当 A 的主语可由上下文、敬语、授受关系或前后行确定，而 B 因照搬 A 的省略而读成无主句、句子成分残缺或指代不明时，判定 needsEdit=true，并在 revisedText 中按中文习惯适当补上缺失的主语（可用代词或原文已确立的人物称谓），补出的主语必须由 A 与其上下文支持，不得新增原文没有的行为主体；反之，若 B 比 A 多出主语但该主语会改变行为主体或因果归属，同样按误译处理。",
+      "A（日文）常省略主语或人称代词，B（中文）按中文习惯通常需要补出主语才能成立。当 A 的主语可由上下文、敬语、授受关系或前后行确定，而 B 因照搬 A 的省略而读成无主句、句子成分残缺或指代不明时，判定 needsEdit=true，并在 revisedText 中按中文习惯适当补上缺失的主语（可用代词或原文已确立的人物称谓），补出的主语必须由 A 与其上下文支持，不得新增原文没有的行为主体；反之，若 B 比 A 多出主语但该主语会改变行为主体或因果归属，同样按误译处理。当前行是不完整片段时以通用规则的片段口径为准，不据此把片段补全成完整句。",
       "A 不是可直接复制进 B 的候选译文，不得把 A 直接复制进 B。不要假设存在另一份译文，也不要比较不存在的 counterpartText；双语模式不要输出 counterpart 或“另一版本更好”这类判断。",
       "用 decision 表达结论，不要用“谁更好”：B 无需修改时 decision=keep；B 需要修改时 decision=replace，并给出可直接替换当前行的 revisedText。只有在依据完全不足、无法判断时才用 decision=unclear，它等于转人工确认，不要用它表达“不确定要不要改”。",
-      "数字、专名、否定、数量、指代和说话语气必须逐项核对；能在当前行确认的就必须给出明确判断，只有证据确实在当前行之外时才返回 needsContext=true，不要凭常识补全。",
     ],
   },
   trilingual: {
@@ -85,7 +85,6 @@ const modeContracts = Object.freeze({
       "若两份非原文不同但目标列更准确或更贴合 A，返回 semanticSame=false、needsEdit=false、better=target，不要建议修改目标列。",
       "better=counterpart 表示另一非原文列更好：在目标列原文上做最小化局部替换，只融入更优片段并调整为目标列的字形和用词，保留目标列已正确通顺的部分；禁止抛开现有译文重新翻译整句。",
       "若 B、C 都与 A 不一致，或两者都可能正确而输入不足，返回 better=unclear、needsContext=true；不要强行选择一方。",
-      "数字、专名、否定、数量、指代和说话语气必须逐项核对；能在当前行确认的就必须给出明确判断，只有证据确实在当前行之外时才返回 needsContext=true，不要凭常识补全。",
     ],
   },
 });
@@ -93,13 +92,87 @@ const modeContracts = Object.freeze({
 // 通用侧标题：与作品、语言阶段无关的那部分规则从这里开始，便于人工核对拆分边界。
 const genericHeader = "【通用校对规则】";
 
+/**
+ * 提示词分层（本文件是**唯一权威定义**，其它模块只消费不重定义）。
+ *
+ * 一次请求的 system 提示词由五层按固定顺序拼成，每层的职责与注入时机都不同：
+ *
+ * | 层 | 内容 | 来源 | 注入时机 |
+ * |----|------|------|----------|
+ * | 1 通用侧 | 与作品、模式无关的任务契约：证据优先级、片段口径、needsContext、档位与字段约定 | 本文件 `sharedInstructions` | 每行 |
+ * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
+ * | 3 特化档案 | 作品/阶段规范，分两种条目：**常驻条目**（关系、作品专有、说话特色、证据边界）与 **按行条目**（排版层、文本层规范，声明 `features`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`） |
+ * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段 | `term-prefilter.js`、`speech-habit.js` | 命中该行/该章才注入 |
+ * | 5 固定尾巴 | noteref 硬性约束、术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行（刻意保守：宁可重复也不丢） |
+ *
+ * 约束：
+ * - **顺序不得调整**，测试按分区顺序断言（通用侧 → 模式 → 特化侧 → 动态段 → 约束 → 输出约定）。
+ * - 判据**只写一层**：字段默认值、档位定义、needsContext 口径在通用侧写一次；`modeSchemas`
+ *   只负责“键名 + 取值”；特化档案只写工作阶段规范，不复述任务契约。
+ * - 裁剪只发生在第 3 层的按行条目与第 4 层：第 1、2、5 层永远全量，避免“省了 token 丢了契约”。
+ * - 页面里预填的默认提示词始终是**全量**（第 3 层不裁剪），人工读得到完整规范；
+ *   真正发给模型的请求才按 `rowFeatures` 裁剪。
+ */
+
+/** 档案条目支持两种形态：字符串＝常驻；`{ text, features }`＝只在该行命中这些特征时注入。 */
+function lineText(line) {
+  if (typeof line === "string") return line;
+  return String(line?.text || "");
+}
+
+/**
+ * 条目是否该注入。
+ * - `features` 为空（全量模式：页面默认提示词、审计、脚本）→ 全部注入；
+ * - 没声明 `features` 或声明为空数组 → 常驻；
+ * - 声明了未注册的特征 id（笔误）→ 按常驻处理，宁可多注入（见 row-features 的纪律）。
+ */
+function lineIncluded(line, features) {
+  if (!features) return true;
+  if (typeof line === "string") return true;
+  const need = Array.isArray(line?.features) ? line.features.filter((id) => FEATURE_IDS.includes(id)) : [];
+  if (!need.length) return true;
+  return need.some((id) => features.has(id));
+}
+
 // 特化侧正文：只由 profiles/ 里的可替换档案生成，通用侧不认识它的内容。
-function profileSystemFor(profile) {
+// features = null 时输出全量（页面/审计）；给了特征集合时按行裁剪，整节被裁空则连标题一起省掉。
+function profileSystemFor(profile, features = null) {
   if (!profile) return "";
+  const sections = profile.sections
+    .map((section) => {
+      const lines = (section.lines || [])
+        .filter((line) => lineIncluded(line, features))
+        .map(lineText)
+        .filter(Boolean);
+      return lines.length ? promptSections(`— ${section.title}`, lines) : "";
+    })
+    .filter(Boolean);
   return promptSections(
     `${profile.marker}${profile.summary ? ` ${profile.summary}` : ""}`,
-    profile.sections.map((section) => promptSections(`— ${section.title}`, section.lines)),
+    sections,
   );
+}
+
+/** 按行裁剪的审计数字：条目总数、注入/省略条数与被省掉的字符数。 */
+function profileLineStats(profile, features = null) {
+  let injected = 0;
+  let omitted = 0;
+  let omittedChars = 0;
+  let conditional = 0;
+  for (const section of profile?.sections || []) {
+    for (const line of section.lines || []) {
+      const isConditional = typeof line !== "string"
+        && Array.isArray(line?.features)
+        && line.features.some((id) => FEATURE_IDS.includes(id));
+      if (isConditional) conditional += 1;
+      if (lineIncluded(line, features)) injected += 1;
+      else {
+        omitted += 1;
+        omittedChars += lineText(line).length;
+      }
+    }
+  }
+  return { injected, omitted, omittedChars, conditional };
 }
 
 function proofreadPromptFor(mode = "bilingual", profileId = DEFAULT_PROFILE_ID) {
@@ -107,6 +180,7 @@ function proofreadPromptFor(mode = "bilingual", profileId = DEFAULT_PROFILE_ID) 
   const outputSchema = modeSchemas[contract.mode] || modeSchemas.bilingual;
   const profile = resolveProfile(profileId);
   const generic = promptSections(genericHeader, sharedInstructions);
+  // 页面预填、脚本审计用全量：人工要能读到完整规范，裁剪只发生在真正发请求时。
   const profileSystem = profileSystemFor(profile);
   // body 是“通用侧 + 当前模式规则 + 特化侧”的完整正文（不含 JSON 输出约定与 noteref 硬性约束），
   // 默认提示词与自定义提示词都按同一顺序合并注入。
@@ -192,25 +266,47 @@ function buildProofreadSystemPrompt({
   glossary = "",
   speechHabitBlock = "",
   termBlock = "",
+  rowFeatures = null,
+  fullPrompt = false,
 } = {}) {
   const contract = proofreadPromptFor(mode, profileId);
+  // 按行裁剪只作用于特化档案的按行条目：`fullPrompt`（排查/对比用）与没给 rowFeatures 时输出全量。
+  const features = fullPrompt ? null : rowFeatures;
+  const profileSystem = profileSystemFor(resolveProfile(profileId), features);
+  const trimmedBody = promptSections(contract.genericSystem, contract.instructions, profileSystem);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
   // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段与上一行的术语段，
   // 再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层与对照表命中段总是按本次上下文重新注入。
   const custom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(customSystem))));
   const dynamicBlocks = [String(termBlock || "").trim(), String(speechHabitBlock || "").trim()];
   const body = !custom || custom === contract.body
-    ? promptSections(
-      contract.body,
-      ...dynamicBlocks,
-    )
+    ? promptSections(trimmedBody, ...dynamicBlocks)
     : promptSections(
       custom,
       custom.includes(modeMarkers[contract.mode]) ? "" : contract.modeSystem,
-      contract.profileSystem,
+      profileSystem,
       ...dynamicBlocks,
     );
   return withJsonOnly(promptSections(body, noterefConstraint, glossary), contract.outputSchema);
+}
+
+/**
+ * 本次注入的构成（审计用）：各层字符数 + 特化侧按行裁剪的条目数。
+ * 供日志汇总与测试断言，不参与提示词文本本身。
+ */
+function promptLayerReport({ mode = "bilingual", profileId = DEFAULT_PROFILE_ID, rowFeatures = null } = {}) {
+  const contract = proofreadPromptFor(mode, profileId);
+  const profile = resolveProfile(profileId);
+  return {
+    profileId: profile.id,
+    layers: {
+      generic: contract.genericSystem.length,
+      mode: contract.modeSystem.length,
+      profile: profileSystemFor(profile, rowFeatures).length,
+    },
+    profileLines: profileLineStats(profile, rowFeatures),
+    unknownFeatures: unknownFeatureIds(profile),
+  };
 }
 
 module.exports = {
@@ -218,7 +314,9 @@ module.exports = {
   DEFAULT_PROFILE_ID,
   genericHeader,
   listProfiles,
+  profileLineStats,
   proofreadOutputSchema,
+  promptLayerReport,
   modeSchemas,
   noterefConstraint,
   profileSystemFor,

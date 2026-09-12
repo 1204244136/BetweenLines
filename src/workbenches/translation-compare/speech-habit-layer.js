@@ -15,6 +15,7 @@
  * `rowsSignature`/`signature`，浏览器备注与写回定位不受影响。
  */
 const {
+  activatedCharacterNames,
   chapterHabitBlock,
   detectCharacters,
   groupRowsByChapter,
@@ -236,7 +237,7 @@ function contextFromLayerEntry(entry) {
       volume: entry.volume ? { code: entry.volume } : null,
       characters: activated.map(descriptorOf),
     });
-    const names = activated.map((item) => item.character);
+    const names = activatedCharacterNames(activated);
     for (const chapter of entry.chapters || []) {
       blocks.set(chapter.chapter, { block, characters: names, characters_raw: activated.map(descriptorOf) });
     }
@@ -245,7 +246,7 @@ function contextFromLayerEntry(entry) {
       const activated = chapter.characters.filter((item) => item.activated);
       blocks.set(chapter.chapter, {
         block: chapterHabitBlock({ chapter: chapter.chapter, characters: activated.map(descriptorOf) }),
-        characters: activated.map((item) => item.character),
+        characters: activatedCharacterNames(activated),
         characters_raw: chapter.characters.map(descriptorOf),
       });
     }

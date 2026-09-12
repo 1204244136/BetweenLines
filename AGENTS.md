@@ -104,7 +104,11 @@ index-X 结构与命名规范契约：
    - 翻译比较与说话人推断必须使用独立的工作台数据模型、结果和备注空间。
    - `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；未来共享 AI 传输能力放在 `src/ai/`，不要反向污染领域模型。
    - 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。
-   - 提示词分两层并在组装时合并注入：通用侧（`proofread-contract.js` 的 `sharedInstructions`、模式契约、schema，标 `【通用校对规则】`）只放与作品无关的任务契约；特化侧是 `ai/profiles/` 下的可替换档案（每项 `{ id, name, summary, sections }`，标 `【成品校对规范：<name>】`），只放工作阶段规范（什么不算缺陷、什么才算缺陷、证据边界）。合并顺序固定为通用侧 → 当前模式 → 特化侧 → noteref 硬性约束 → 术语表 → JSON 输出约定。
+   - 提示词按**五层**组装，权威定义写在 `proofread-contract.js` 顶部（改分层前先读那段），任何模块都不得另立一套口径：① 通用侧（`sharedInstructions`，标 `【通用校对规则】`）＝与作品/模式无关的任务契约；② 模式层（`modeContracts`）＝当前模式的列语义与结论字段；③ 特化侧（`ai/profiles/` 档案，标 `【成品校对规范：<name>】`）＝工作阶段规范；④ 动态上下文＝对照表命中段、说话习惯段、说话人判断段，命中该行/该章才注入；⑤ 固定尾巴＝noteref 硬性约束、术语表、JSON 输出约定，每行全量。合并顺序固定为 ①②③④⑤，测试按分区顺序断言。
+   - **分层纪律：同一条判据只写一层**。字段默认值、档位定义、needsContext 口径、片段处理只写在通用侧；`modeSchemas` 只负责“键名 + 取值”（不重复定义档位，也不再用分数区间描述 grade，那会与“只判档位、不自己算分”冲突）；特化档案不复述任务契约；说话人判断口径只由动态段 `speakerCheckBlock` 自己带（它只在原文命中口癖时出现，正是需要该规则的唯一场景）。
+   - 第 ③ 层分两种条目形态，写法与选择标准写在 `profiles/novel.js` 文件头：**字符串**＝常驻（语义判断类：遗漏信息、否定时态、译名一致性、作品专有写法、说话特色、证据边界）；**`{ text, features: [...] }`**＝按行条目（离开特定版式/文字现象就无从谈起的规范：注音、傍点加粗、译注标记、分页图片、空行、省略号、「！？」、引号用途、连接词衔接、拟声词语气词、数字单位）。拿不准就写常驻。
+   - 按行裁剪的依据是 `ai/row-features.js`（特征注册表 + 探测器，唯一权威）：`detectRowFeatures({ source, target })` 只看本行文本，命中哪些特征就注入哪些按行条目。三条纪律：**探测不出/行数据缺失一律按命中处理**（`detectRowFeatures({})` 返回全部特征，宁可多花 token 也不丢规范）；**特征只描述现象不描述结论**；**不猜语义**（语义类规则不得声明 `features`）。`FEATURE_RULES` 与 `FEATURE_IDS` 必须一一对应。
+   - `profiles/index.js` 的 `normalizeLine` 必须**保留对象形态**（旧版 `String(line)` 会把 `{ text, features }` 压成 `[object Object]`，让裁剪静默失效）；声明了未注册特征的条目按常驻处理并告警一次，不得静默丢弃。页面预填、`clientStatus().proofreadPrompt`、脚本审计用的都是**全量**（`proofreadPromptFor(...).system`）；只有 `buildMessages` 发出的请求才按行裁剪，`TRANSCOMPARATOR_FULL_PROMPT=1` 可退回全量做对比排查。审计数字走 `profileLineStats`/`promptLayerReport`（各层长度、省略条数与字符数），任务结束时由 `promptTrimSummary()` 汇报一次。契约见 `scripts/proofread-prompt-layers.test.js`，改分层、改特征、改档案条目形态前先跑它。
    - 特化档案通过 `profiles/index.js` 注册（`listProfiles`/`resolveProfile`，未注册的 `profileId` 一律回落 `DEFAULT_PROFILE_ID`），可选值随配置 `profileId` 下发，界面「校对设置 → 特化规范」按注册表渲染并嵌每个档案的默认提示词。仓库内档案为 `profiles/novel.js`（与作品无关的通用规范）与 `profiles/demo.js`（作品专有档案，兼公开示范）；用户自己的档案走被忽略的 `profiles/local/*.js` 或环境变量 `TRANSCOMPARATOR_PROFILE_FILES` 指向的仓库外文件，加载失败只告警并跳过，不得让坏档案拖垮服务。
    - 本机档案要的是「某份既有档案 + 本机专有的名字/表/补充规则」，所以走**叠加**而不是再写一份：文件只写 `{ extends: "<既有 id>", ...差异字段 }`，注册表合并后**沿用基底 id**（`name`/`summary`/`speechHabitScope` 声明即覆盖，`sections` 按小节标题追加、同名小节替换，`termTables`/`speechTables` 与基底合并去重），于是下拉里不会出现两份逐字相同的档案，也不会因为选错而静默丢掉本机的表，基底改了规范本机副本自动跟上。`extends` 只能指向已注册的档案（含先加载的仓库外档案），指向不存在的 id 时只告警并跳过。不写 `extends` 时仍是「新档案」语义，此时与内置档案撞 id 才告警覆盖并提示改用 `extends`。叠加契约见 `scripts/ai-profile-overlay.test.js`，改 `applyOverlay` 前先跑它。
    - 档案 id 是稳定槽位：本机用 `extends` 叠加 `demo` 后它只是换了名字（如「某系列成品（本机档案）」），所以文档、脚本示例与测试一律按 id 引用档案，不要拿 name 去认定某条档案。
@@ -289,6 +293,8 @@ Pandoc 输出混入非正文：优先调整转换后的块级正文边界规则�
 对齐发生连锁错位：检查快照中的 `paragraphs.json` 是否混入图片占位、页码、脚注或元信息，再重新运行对齐与构建。
 
 写回定位失败或写错位置：先确认目标类型是否被正确识别（四种 `TARGET_*` 之一），再检查原文件块的文本是否与行文本一致；含内联标记的段落必须走块级匹配路径，不能回退到朴素字符串替换。定位失败的行不得写入。
+
+特化规范“没生效”或提示词突然变短：先看 `promptLayerReport()` 的 `profileLines`（注入了多少条、省了多少条、省了多少字符），再确认三件事——该条目是否被误写成按行条目（应当常驻的语义规则却声明了 `features`）、`features` 里的 id 是否在 `ai/row-features.js` 的注册表里（未注册的会告警并按常驻处理）、行的 `source`/`target` 是否真的包含触发该特征的现象（例如注音规则只在原文有 `|基文[注文]` 或译文有 `ruby`/`rt` 时注入）。排查对比用 `TRANSCOMPARATOR_FULL_PROMPT=1` 跑一次，它与裁剪前的提示词逐字一致；若怀疑是请求里少了内容，先确认自定义提示词不是“旧默认提示词整段”，旧文本里的通用侧不会被剥离，需要在界面上点「恢复默认」。
 
 ## 当前限制
 

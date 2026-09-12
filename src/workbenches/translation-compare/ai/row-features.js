@@ -1,0 +1,131 @@
+/**
+ * 行特征探测：按行裁剪提示词的**唯一依据**。
+ *
+ * 为什么需要它：特化档案里有一批“只在特定版式或文字现象上才有意义”的规范——注音、
+ * 傍点加粗、译注标记、分页与图片、省略号写法、「！？」顺序、引号用途、连接词衔接、
+ * 拟声词与语气词选词、数字与单位。每行都注入它们既贵（占前缀的一半以上），
+ * 又会把注意力从“这一行到底哪里有问题”上稀释掉；只有当前行真的出现对应现象时才需要。
+ *
+ * 三条纪律（改这个文件前先读）：
+ * 1. **宁可多注入**：探测不出、看不出来、行文本缺失时一律算命中——漏注入等于模型看不到
+ *    这条规范，会产出“不知道规范就判违规”的结果，比多花几十个 token 严重得多。
+ * 2. **只描述现象，不描述结论**：特征名说的是“这一行出现了 ruby/加粗/引号/数字……”，
+ *    不是“这一行有缺陷”。判定永远留给模型与人工。
+ * 3. **不猜语义**：语义类规则（遗漏信息、否定时态、译名一致性）不属于可裁剪项，
+ *    它们必须每行都在——档案里不声明 `features` 的条目永远注入。
+ *
+ * 换了作品/阶段的自定义档案可以完全不使用特征（条目写成字符串即可），
+ * 这样档案不需要跟着这里改；只有想省 token 的条目才声明 `features`。
+ */
+
+// 注册表：档案条目只能声明这里列出的特征；声明了未注册的 id 时该条目按“常驻”处理并告警，
+// 避免一个笔误让某条规范永远不注入。
+const FEATURE_IDS = Object.freeze([
+  "ruby",          // 注音（稿件 |基文[注文]、成品 ruby/rt）
+  "emphasis",      // 傍点 → 加粗（原文着重号、成品 b/strong）
+  "noteref",       // 译注标记（EPUB noteref、㊟）
+  "page",          // 分页换页与版式（pb class、图片占位、插图行）
+  "blank",         // 空行折叠
+  "ellipsis",      // 省略号写法
+  "interrobang",   // 「！？」顺序与数量
+  "quote",         // 引号层级与用途（「」/『』/书名号）
+  "conjunction",   // 连接词独立成段与衔接
+  "repeat",        // 重复字/符号、长串假名
+  "speechEffect",  // 拟声词、被打断、异口同声、断续
+  "particle",      // 语气词与拟声词选词
+  "numeric",       // 数字与单位、儿化音
+]);
+
+const KATAKANA_RUN = /[\u30a1-\u30f6\u30fc]{3,}/u;
+// 语气词/拟声词：原文侧常见写法（成品选词规则要用的那批）。
+const PARTICLE_WORDS = /チッ|ちっ|まあ|やれやれ|あら|おや|ふむ|へえ|はあ|こら|そら|ほら/u;
+const PARTICLE_TARGETS = /啧|呀嘞|啊啦|嘛|嘞/u;
+
+const RULES = {
+  ruby: ({ source, target }) =>
+    /\|[^\s|\]]{0,30}\[[^\]\n]{1,40}\]/u.test(source) || /<\s*(ruby|rt)[\s>/]/i.test(target),
+  emphasis: ({ source, target }) =>
+    /[\uFE45\uFE46\uFF9E\uFF9F]/u.test(source) || /<\s*(b|strong)[\s>]/i.test(target),
+  noteref: ({ source, target }) =>
+    /noteref|epub:type|㊟/iu.test(`${source}\n${target}`),
+  page: ({ source, target }) =>
+    /class\s*=\s*["']?[^"'>]*\bpb\b|<img|\[图片\]|\[插图\]|\[p\d+\]|<!--\s*page/iu.test(`${source}\n${target}`),
+  blank: ({ source, target }) => /(\n[ \t\r]*){2,}/u.test(source) || /(\n[ \t\r]*){2,}/u.test(target),
+  ellipsis: ({ source, target }) =>
+    /。。。|\.{4,}|…|‥/u.test(`${source}\n${target}`),
+  interrobang: ({ source, target }) =>
+    /！？|？！|！\?|\?！|!\?|\?!/u.test(`${source}\n${target}`),
+  quote: ({ source, target }) =>
+    /[「」『』《》]|["“”]/u.test(`${source}\n${target}`),
+  conjunction: ({ source, target }) =>
+    /(しかし|だが|でも|そして|また|つまり|ただし|だから|そこで|すると|ゆえに|なぜなら|けれども|けれど|けど|なお)[、,，]?\s*$/u.test(source)
+    || /——|--/u.test(target),
+  repeat: ({ source, target }) => /(.)\1{2,}/u.test(`${source}\n${target}`) || KATAKANA_RUN.test(source),
+  speechEffect: ({ source, target }) =>
+    KATAKANA_RUN.test(source) || /「「/u.test(target) || /[A-Za-z]\s*$/u.test(target),
+  particle: ({ source, target }) => PARTICLE_WORDS.test(source) || PARTICLE_TARGETS.test(target),
+  numeric: ({ source, target }) =>
+    /[0-9０-９]|キロ|メートル|センチ|グラム|千克|千米|公里|公斤|儿/u.test(`${source}\n${target}`),
+};
+
+/**
+ * 本轮行数据给出的特征集合。
+ *
+ * @param {{source?: string, target?: string}} row 原文（A）与目标列（B）的当前行文本
+ * @returns {Set<string>} 命中的特征 id
+ */
+function detectRowFeatures({ source = "", target = "" } = {}) {
+  const text = { source: String(source || ""), target: String(target || "") };
+  // 兜底：两侧都没有文本（行数据缺失/统计口径外的调用）时不做裁剪，全部按命中处理。
+  if (!text.source && !text.target) return new Set(FEATURE_IDS);
+  const hit = new Set();
+  for (const id of FEATURE_IDS) {
+    try {
+      if (RULES[id](text)) hit.add(id);
+    } catch {
+      // 探测本身出错时按命中处理：裁剪是优化，不该成为丢规则的原因。
+      hit.add(id);
+    }
+  }
+  return hit;
+}
+
+/** 档案里声明了但未注册的特征 id（用于告警；这类条目按常驻处理）。 */
+function unknownFeatureIds(profile) {
+  const unknown = new Set();
+  for (const section of profile?.sections || []) {
+    for (const line of section.lines || []) {
+      if (typeof line === "string") continue;
+      for (const id of line?.features || []) {
+        if (!FEATURE_IDS.includes(id)) unknown.add(id);
+      }
+    }
+  }
+  return [...unknown];
+}
+
+/** 档案里声明了 features 的条目总数与特征分布（审计/测试用）。 */
+function featureUsage(profile) {
+  const usage = new Map();
+  let conditional = 0;
+  let always = 0;
+  for (const section of profile?.sections || []) {
+    for (const line of section.lines || []) {
+      if (typeof line === "string" || !line?.features?.length) {
+        always += 1;
+        continue;
+      }
+      conditional += 1;
+      for (const id of line.features) usage.set(id, (usage.get(id) || 0) + 1);
+    }
+  }
+  return { always, conditional, usage: Object.fromEntries([...usage].sort()) };
+}
+
+module.exports = {
+  FEATURE_IDS,
+  FEATURE_RULES: RULES,
+  detectRowFeatures,
+  featureUsage,
+  unknownFeatureIds,
+};

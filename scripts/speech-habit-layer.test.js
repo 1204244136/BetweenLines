@@ -149,16 +149,21 @@ test("同一角色的多条习惯不会被字典折叠", () => {
   const file = writeTable("multi.csv", [
     "小说首次出现,角色,口癖,类型,x版,网翻,台版（转简中）,备注",
     "S1_04,多人角色,力,名词后缀,力,,,XX力",
-    "S1_04,多人角色,ダゾ,谓语形式,,,,句尾",
+    "S1_04,多人角色,ダゾ,谓语形式,哒唑,,,句尾",
+    "S1_04,多人角色,オレ,第一人称,本大爷,,俺,男性化自称",
   ].join("\n"));
   const rows = [{ index: 1, chapter: "第一章", jp: "多人角色のダゾ。", cn: "多人角色说道。" }];
   const layer = buildSpeechHabitLayer({ rows, projectFiles: {}, profiles: [profile(file)] });
   const entry = layer.byProfile.unit;
-  assert.equal(entry.characterRecords.length, 2, "两条习惯都要保留");
+  assert.equal(entry.characterRecords.length, 3, "每条习惯都要保留");
   const context = contextFromLayerEntry(entry);
   const block = context.blocks.get("第一章").block;
-  assert.match(block, /名词后缀 「力」/);
+  // 两条可检测的习惯都要出现在块里；同形条目（力→力）没有“补回”可言，不进提示词。
   assert.match(block, /谓语形式 「ダゾ」/);
+  assert.match(block, /第一人称 「オレ」/);
+  assert.doesNotMatch(block, /名词后缀 「力」/);
+  // 同一角色有多条习惯时，本章角色名只算一次（否则载荷里的 characters 看着像两个人）。
+  assert.deepEqual(context.blocks.get("第一章").characters, ["多人角色"]);
 });
 
 test("没有声明说话习惯表的档案不进层", () => {

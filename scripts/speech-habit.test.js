@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  activatedCharacterNames,
   chapterHabitBlock,
   characterAliases,
   compareVolume,
@@ -29,7 +30,7 @@ const HABIT_CSV = [
   "小说首次出现,角色,口癖,类型,x版,网翻,台版（转简中）,备注",
   "S1_04,甲野一郎,オレ,第一人称,本大爷,,俺,男性化自称",
   "S1_04,乙川次郎,ですの,谓语形式,的说,,,",
-  "S1_08,丙山三郎,じゃん,谓语形式,,,,",
+  "S1_08,丙山三郎,じゃん,谓语形式,的吧,,,",,
   "-,丁原四郎,力,名词后缀,力,,,XX力",
   "S2_01,戊田五郎,なの,句末语气词,,,,通常放在句尾",
 ].join("\n");
@@ -111,6 +112,22 @@ test("按章命中人名才启用该角色的说话特色，片段命中只报�
   assert.equal(later.some((item) => item.entry.character === "丙山三郎"), true);
 });
 
+test("同一个角色的多条习惯只算一个角色名", () => {
+  const tables = loadFixture();
+  const detected = detectCharacters({
+    rows: [{ index: 1, chapter: "第一章", jp: "甲野一郎が来た。乙川次郎も来た。", cn: "甲野一郎来了。乙川次郎也来了。" }],
+    tables,
+  });
+  assert.equal(detected.length, 2);
+  // 逐条取名字会把同一角色算两次；这里按角色去重（规则仍逐条写在提示词里）。
+  assert.deepEqual(activatedCharacterNames(detected), ["甲野一郎", "乙川次郎"]);
+  assert.deepEqual(activatedCharacterNames([
+    { entry: { character: "甲野一郎" }, activated: true },
+    { entry: { character: "甲野一郎" }, activated: true },
+    { entry: { character: "乙川次郎" }, activated: false },
+  ]), ["甲野一郎"]);
+});
+
 test("章级与卷级提示块说明“刻意特色”与补回口径", () => {
   const tables = loadFixture();
   const rows = [{ index: 1, chapter: "第一章", jp: "甲野一郎が来た。", cn: "甲野一郎来了。" }];
@@ -137,6 +154,9 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(isHabitDetectable(shiro), false);
   assert.equal(isHabitDetectable(jiro), true);
   assert.equal(isHabitDetectable(ichiro), true);
+  // 没有任何目标写法（x版/网翻/台版都空，只有备注）时也没有“流失”可言：
+  // 备注写的是说明，不是译文里该出现的东西，拿它比对只会每行都报流失。
+  assert.equal(isHabitDetectable(go), false);
 
   const characters = [ichiro, jiro, shiro, go].map((entry) => ({ entry, activated: true }));
 
@@ -189,5 +209,5 @@ test("normalizeSpeechEntry 处理空口癖与占位符", () => {
   assert.equal(entry.habit, "");
   assert.equal(entry.hasLiteralHabit, false);
   assert.equal(isHabitDetectable(entry), false);
-  assert.match(describeHabit(entry), /句式 → 句尾最后一个假名变为片假名/);
+  assert.match(describeHabit(entry), /句式 → 备注：句尾最后一个假名变为片假名/);
 });

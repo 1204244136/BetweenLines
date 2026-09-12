@@ -8,6 +8,7 @@ const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-pr
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
 const {
+  activatedCharacterNames,
   chapterHabitBlock,
   detectCharacters,
   groupRowsByChapter,
@@ -37,8 +38,10 @@ const {
   listProfiles,
   proofreadPromptFor,
   buildProofreadSystemPrompt,
+  profileLineStats,
   resolveProfile,
 } = require("./proofread-contract");
+const { detectRowFeatures } = require("./row-features");
 
 const providerDefaults = {
   claude: {
@@ -526,6 +529,8 @@ async function startProofread(input) {
   }
   if (config.proofreadMode === "bilingual") config.target = "cn";
   resetStatus(config, rows.length);
+  // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
+  resetPromptTrim();
   const labels = {
     jp: "原文 A",
     cn: "非原文 B",
@@ -788,6 +793,10 @@ function finish() {
   status.running = false;
   status.finishedAt = new Date().toISOString();
   const isPrefilter = status.kind === "prefilter";
+  if (!isPrefilter) {
+    const summary = promptTrimSummary();
+    if (summary) pushLog(summary);
+  }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
   } else {
@@ -1153,7 +1162,7 @@ function buildSpeechHabitContext(config, rows, project, snapshotLayer = null) {
   if (scope === "volume") {
     const characters = detectCharacters({ rows, tables, volume });
     const block = volumeHabitBlock({ volume, characters });
-    const names = characters.filter((item) => item.activated).map((item) => item.entry.character);
+    const names = activatedCharacterNames(characters);
     for (const row of rows) blocks.set(String(row.chapter || ""), { block, characters: names, characters_raw: characters });
     activatedChapters = block ? 1 : 0;
     activatedCharacters = new Set(names);
@@ -1161,7 +1170,7 @@ function buildSpeechHabitContext(config, rows, project, snapshotLayer = null) {
     for (const group of groupRowsByChapter(rows)) {
       const characters = detectCharacters({ rows: group.rows, tables, volume });
       const block = chapterHabitBlock({ chapter: group.chapter, characters });
-      const names = characters.filter((item) => item.activated).map((item) => item.entry.character);
+      const names = activatedCharacterNames(characters);
       blocks.set(group.chapter, { block, characters: names, characters_raw: characters });
       if (!block) continue;
       activatedChapters += 1;
@@ -1315,6 +1324,41 @@ function diffSummary(fromText, toText, labels) {
     : "差异辅助未发现明显词级差异。";
 }
 
+/**
+ * 按行裁剪的审计计数（每次任务重置；只记数字与特征分布，不落盘、不进产物）。
+ * 目的是让人能看到“这一批请求到底省掉了什么”，而不是只能相信裁剪逻辑。
+ */
+const promptTrim = { rows: 0, omittedLines: 0, omittedChars: 0, featureHits: new Map() };
+
+function resetPromptTrim() {
+  promptTrim.rows = 0;
+  promptTrim.omittedLines = 0;
+  promptTrim.omittedChars = 0;
+  promptTrim.featureHits = new Map();
+}
+
+function recordPromptTrim(config, rowFeatures, fullPrompt = false) {
+  promptTrim.rows += 1;
+  for (const id of rowFeatures) {
+    promptTrim.featureHits.set(id, (promptTrim.featureHits.get(id) || 0) + 1);
+  }
+  if (fullPrompt) return;
+  const stats = profileLineStats(resolveProfile(config.profileId), rowFeatures);
+  promptTrim.omittedLines += stats.omitted;
+  promptTrim.omittedChars += stats.omittedChars;
+}
+
+function promptTrimSummary() {
+  if (!promptTrim.rows) return "";
+  const average = Math.round(promptTrim.omittedChars / promptTrim.rows);
+  const top = [...promptTrim.featureHits.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([id, count]) => `${id} ${count} 行`)
+    .join("、");
+  return `提示词按行裁剪：${promptTrim.rows} 行共省略 ${promptTrim.omittedLines} 条只在特定版式/文字现象下才需要的特化规范（平均每行省约 ${average} 字符）；命中特征：${top || "（无）"}。`;
+}
+
 function buildMessages(payload, config = {}) {
   const bilingualMode = config.proofreadMode === "bilingual";
   const proofreadMode = bilingualMode ? "bilingual" : "trilingual";
@@ -1324,7 +1368,9 @@ function buildMessages(payload, config = {}) {
     task: `${bilingualMode ? "双语版本校对" : "三语语境校对"}；校对目标列：${payload.targetLabel}`,
     comparisonMode: proofreadMode,
     profile: { id: contract.profileId, name: contract.profileName },
-    // 说话习惯层：系统提示词里已有本章的完整规则，这里只给出作用范围，避免同一段内容发两遍。
+    // 说话习惯层：完整规则与说话人判断口径都在系统提示词的【说话习惯】【说话人判断】段落里，
+    // 这里只给出本行/本卷的范围与候选事实（谁、什么类型、期望写法、能否用于判断流失），
+    // 不再复述规则句子。detectable=false 的候选只作说话人线索：表里没登记写法，不能判译文遗漏。
     ...(payload.speechHabit?.speakerCheck ? {
       speakerCheck: {
         chapter: payload.speechHabit.speakerCheck.chapter,
@@ -1334,8 +1380,8 @@ function buildMessages(payload, config = {}) {
           habit: candidate.habit,
           expected: candidate.expected,
           confidence: candidate.confidence,
+          detectable: candidate.detectable === true,
         })),
-        note: "本行原文命中了说话习惯特征：先判断说话人（填 speaker），确认是候选角色才按他的习惯判断；确认不了就不要据此判缺陷。",
       },
     } : {}),
     ...(payload.speechHabit ? {
@@ -1343,7 +1389,6 @@ function buildMessages(payload, config = {}) {
         scope: config.speechHabitScope === "volume" ? "volume" : "chapter",
         chapter: payload.speechHabit.chapter,
         characters: payload.speechHabit.characters,
-        note: "系统提示词【说话习惯】段落列出的是刻意语言特征，不得判为翻译错误；原文出现口癖而译文未体现时可给最小补回建议。",
       },
     } : {}),
     ...(payload.termGuidance ? {
@@ -1392,6 +1437,15 @@ function buildMessages(payload, config = {}) {
     nearbyRows: payload.context,
   };
   const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : "";
+  // 按行裁剪：从本行原文与目标列文本探测特征（注音、加粗、译注标记、分页、省略号、引号、
+  // 连接词、数字单位……），特化档案里声明了 features 的条目只在这时注入。探测与纪律见 row-features.js。
+  const rowFeatures = detectRowFeatures({
+    source: payload.row.jp || payload.row.source || "",
+    target: payload.targetText || "",
+  });
+  // 排查用：TRANSCOMPARATOR_FULL_PROMPT=1 时不做按行裁剪，等价于裁剪前的行为。
+  const fullPrompt = process.env.TRANSCOMPARATOR_FULL_PROMPT === "1";
+  recordPromptTrim(config, rowFeatures, fullPrompt);
   return [
     { role: "system", content: buildProofreadSystemPrompt({
       mode: proofreadMode,
@@ -1400,6 +1454,8 @@ function buildMessages(payload, config = {}) {
       glossary,
       speechHabitBlock: [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n"),
       termBlock: payload.termGuidance?.block || "",
+      rowFeatures,
+      fullPrompt,
     }) },
     { role: "user", content: JSON.stringify(user, null, 2) },
   ];
@@ -1902,6 +1958,8 @@ module.exports = {
   providerDefaults,
   proofreadPromptFor,
   proofreadPrompts,
+  promptTrimSummary,
+  resetPromptTrim,
   DEFAULT_PROFILE_ID,
   listProfiles,
   resolveProfile,
