@@ -4,7 +4,7 @@ const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
 const { evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
-const { makeTermResult, termTargetKeyFor } = require("./term-prefilter");
+const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-prefilter");
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
 const {
@@ -142,6 +142,7 @@ const status = {
   structuredConflicts: 0,
   termPrefiltered: 0,
   termConflicts: 0,
+  termInjected: 0,
   termTables: { files: [], entries: 0 },
   speechHabitChapters: 0,
   speechHabitCharacters: [],
@@ -217,6 +218,7 @@ function clientStatus(options = {}) {
     structuredConflicts: status.structuredConflicts,
     termPrefiltered: status.termPrefiltered,
     termConflicts: status.termConflicts,
+    termInjected: status.termInjected,
     termTables: status.termTables,
     termTableStatus: options.includeTermTables === false ? null : termTableStatusFor(options.profileId || status.profileId),
     speechHabitStatus: options.includeTermTables === false ? null : speechHabitStatusFor(options.profileId || status.profileId),
@@ -329,6 +331,8 @@ function cleanConfig(input = {}) {
     glossaryFile: String(input.glossaryFile || "").trim(),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
     monitorEnabled: Boolean(input.monitorEnabled),
+    // 本次任务里「术语一致但整行还有别的内容」的行：术语提示段落按行号在此登记，跑任务时注入提示词。
+    termContext: new Map(),
   };
 }
 
@@ -378,6 +382,7 @@ function resetStatus(config, rowsLength) {
   status.structuredConflicts = 0;
   status.termPrefiltered = 0;
   status.termConflicts = 0;
+  status.termInjected = 0;
   status.skippedDone = 0;
   status.modelProcessed = 0;
   status.modelHandled = 0;
@@ -496,7 +501,7 @@ async function startPrefilter(input) {
   }
 
   status.queued = pending;
-  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表命中 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${pending} 行需要 AI 校对。`);
+  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${pending} 行需要 AI 校对。`);
   finish();
   return clientStatus({ includeResults: false });
 }
@@ -565,7 +570,7 @@ async function startProofread(input) {
   }
 
   status.queued = queue.length;
-  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表命中 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${queue.length} 行进入 AI 校对。`);
+  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，剩余 ${queue.length} 行进入 AI 校对。`);
   pushLog(config.circuitBreakerEnabled
     ? `错误率熔断：最近 ${errorCircuitBreaker.windowSize} 次调用中失败占比达到 ${Math.round(config.circuitBreakerErrorRate * 100)}% 时自动终止。`
     : "错误率熔断：已关闭，调用失败不会自动终止任务。");
@@ -721,6 +726,7 @@ function clearProofreadCache() {
   status.structuredConflicts = 0;
   status.termPrefiltered = 0;
   status.termConflicts = 0;
+  status.termInjected = 0;
   status.termTables = { files: [], entries: 0 };
   status.speechHabitChapters = 0;
   status.speechHabitCharacters = [];
@@ -841,6 +847,8 @@ async function proofreadRow(row, allRows, config, labels) {
     counterpartText,
     diffHelper,
     speechHabit: speechHabitFor(row, config.speechHabitContext),
+    // 对照表命中的术语：只作为提示词注入，不替模型下结论（跳过模型的行根本不会走到这里）。
+    termGuidance: config.termContext?.get(Number(row.index)) || null,
     context: [],
     contextMode: "none",
   };
@@ -942,7 +950,10 @@ function shouldRetryWithContext(decision) {
 }
 
 /**
- * 对照表预处理：命中行直接用表里的内容写成结果，并返回这些行的 index。
+ * 对照表预处理：命中行按「整行是否只有术语」分流，并返回被它直接处理掉的行号集合。
+ * - `term-only`：整行有效内容就是术语，直接写成结果，不调用模型；
+ * - `consistent`：术语一致但句中还有别的内容——照常交给模型，只把术语当提示词注入；
+ * - `conflict`：译名不一致，给出最小替换或转人工确认（与过去一致）。
  * AI 校对与预筛选共用这条路径——它不调用模型，只做确定性查表。
  */
 function applyTermTable(config, rows, labels) {
@@ -952,17 +963,34 @@ function applyTermTable(config, rows, labels) {
   status.termTables = { files: termTables.files, entries: termTables.entries.length };
   let consistentRows = 0;
   let conflictRows = 0;
+  const resolvedByTable = [];
+  const skippedByTable = [];
   const targetKey = termTargetKeyFor(config.proofreadMode, config.target);
+  const targetLabel = targetKey === "tw" ? (labels.tw || "非原文 C") : (labels.cn || "译文 B");
   for (const row of rows) {
-    if (config.completedIndexes.has(Number(row.index))) continue;
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: textForKey(row, targetKey),
       tables: termTables,
     });
     if (!evaluation) continue;
-    if (evaluation.kind === "consistent") consistentRows += 1;
-    else conflictRows += 1;
+    if (evaluation.kind === "conflict") {
+      // 译名冲突由对照表直接给结论（最小替换或转人工确认），这一行不会走到模型。
+      conflictRows += 1;
+    } else {
+      // 「术语一致」只覆盖术语：整行是否还有问题由模型判定，这里只登记术语提示。
+      consistentRows += 1;
+      resolvedByTable.push(Number(row.index));
+      // 已人工确认的行本来就不会再跑：不必为它们准备提示词。
+      if (evaluation.kind === "consistent" && !config.completedIndexes.has(Number(row.index))) {
+        config.termContext.set(Number(row.index), termGuidanceFor(row, { evaluation, targetKey, targetLabel }));
+      }
+    }
+    if (config.completedIndexes.has(Number(row.index))) continue;
+    if (evaluation.kind === "consistent") continue;
+    if (evaluation.kind === "term-only") {
+      skippedByTable.push(Number(row.index));
+    }
     const result = makeTermResult(row, labels, evaluation, config.proofreadMode, targetKey);
     result.runId = status.runId;
     result.signature = rowSignature(row);
@@ -970,17 +998,18 @@ function applyTermTable(config, rows, labels) {
     resolved.add(Number(row.index));
   }
   status.termConflicts = conflictRows;
-  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows} 行（译名一致 ${consistentRows}，需人工确认 ${conflictRows}），这些行不再交给模型判定。`);
-  compareWithTermLayer(config, { resolved, targetKey });
+  status.termInjected = resolvedByTable.filter((index) => config.termContext.has(index)).length;
+  pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，需人工确认 ${conflictRows}），另有 ${status.termInjected} 行的术语一致但句中还有别的词，按提示词注入后照常交给模型。`);
+  compareWithTermLayer(config, { resolved, targetKey, skippedByTable });
   return resolved;
 }
 
 /**
- * 与构建期结论交叉校验：对照表判定是确定性函数，两条路径算出来的命中行集合必须一致。
- * 不一致只有两种可能——对照表在构建之后被改过（指纹过期），或者页面上的徽标已经过期。
+ * 与构建期结论交叉校验：对照表判定是确定性函数，两条路径算出来的「命中行」与「跳过模型的纯术语行」
+ * 必须一致。不一致只有两种可能——对照表在构建之后被改过（指纹过期），或者页面上的徽标已经过期。
  * 这里不改结论（运行期算的就是本次生效的判定），只把分叉显式说出来。
  */
-function compareWithTermLayer(config, { resolved, targetKey }) {
+function compareWithTermLayer(config, { resolved, targetKey, skippedByTable = [] }) {
   // 指纹按**本次实际加载的表**重算：落盘块里只有文件名，本机路径不回读产物。
   const match = termLayerFor(config.termLayer, config.profileId, {
     proofreadMode: config.proofreadMode,
@@ -997,13 +1026,17 @@ function compareWithTermLayer(config, { resolved, targetKey }) {
   const predicted = new Set([...built.consistent, ...built.conflicts]);
   // 两侧都排除「已人工确认」的行：运行期本来就会跳过它们。
   const expected = new Set([...predicted].filter((index) => !config.completedIndexes.has(index)));
-  const missing = [...expected].filter((index) => !resolved.has(index));
+  const missing = [...expected].filter((index) => !config.termContext.has(index) && !resolved.has(index));
   const extra = [...resolved].filter((index) => !predicted.has(index));
-  if (!missing.length && !extra.length) {
+  // 快照可能由旧版本生成（那时所有命中行都会跳过模型）：这种分叉要如实报告，不能静默按新规则跑。
+  const skips = new Set(skippedByTable);
+  const builtSkips = [...built.termOnly].filter((index) => !config.completedIndexes.has(index));
+  const skipMismatch = built.termOnly.size && (builtSkips.some((index) => !skips.has(index)) || [...skips].some((index) => !built.termOnly.has(index)));
+  if (!missing.length && !extra.length && !skipMismatch) {
     pushLog(`对照表：与构建期预筛一致（构建期判定 ${predicted.size} 行，本次参与 ${expected.size} 行）。`);
     return;
   }
-  pushLog(`对照表：运行期判定与构建期预筛不一致（少 ${missing.length} 行 / 多 ${extra.length} 行）；重新构建工作台后再核对页面徽标。`);
+  pushLog(`对照表：运行期判定与构建期预筛不一致（少 ${missing.length} 行 / 多 ${extra.length} 行${skipMismatch ? " / 跳过模型的行集合不同" : ""}）；重新构建工作台后再核对页面徽标。`);
 }
 
 // 表路径写法（数组 / `;` / 换行）的解析与构建期共用同一实现，避免两处口径漂移。
@@ -1313,6 +1346,22 @@ function buildMessages(payload, config = {}) {
         note: "系统提示词【说话习惯】段落列出的是刻意语言特征，不得判为翻译错误；原文出现口癖而译文未体现时可给最小补回建议。",
       },
     } : {}),
+    ...(payload.termGuidance ? {
+      // 术语提示只影响“概念该用哪个译名”，不改变整行判断：系统提示词里已有完整边界说明，
+      // 这里只列出本行实际命中的条目，并把结论字段交回给模型的常规判断。
+      terms: {
+        source: "译名对照表（本行命中的条目）",
+        targetLabel: payload.targetLabel,
+        items: payload.termGuidance.terms.map((term) => ({
+          source: term.source,
+          matchedAlias: term.alias,
+          translation: term.target,
+          type: term.type,
+          note: term.note,
+        })),
+        note: "译文出现这些概念时必须使用对照表给出的标准译名；一致性只覆盖术语，句子的其余部分仍按常规规则逐项核对。",
+      },
+    } : {}),
     modePolicy: bilingualMode
       ? "以原文 A 与译文 B 的语义对应为主要判断对象；只能修改 B，原文 A 用于确认语义边界、遗漏和误译。"
       : "同时参考原文、目标列和另一非原文列，判断目标列是否准确、通顺并符合原文语义；两份非原文仍是同级材料。",
@@ -1350,6 +1399,7 @@ function buildMessages(payload, config = {}) {
       customSystem: config.systemPrompt,
       glossary,
       speechHabitBlock: [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n"),
+      termBlock: payload.termGuidance?.block || "",
     }) },
     { role: "user", content: JSON.stringify(user, null, 2) },
   ];

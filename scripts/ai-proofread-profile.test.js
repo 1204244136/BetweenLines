@@ -42,6 +42,8 @@ const {
 } = require("../src/workbenches/translation-compare/ai/proofread-contract");
 const { buildMessages, clientStatus } = require("./ai-proofread");
 const { makeHtml } = require("./build-compare");
+const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+const { TERM_BLOCK_PREFIX, termGuidanceFor } = require("../src/workbenches/translation-compare/ai/term-prefilter");
 
 const testProfileName = "作品专有档案（测试）";
 const testProfileMarker = `【成品校对规范：${testProfileName}】`;
@@ -264,6 +266,32 @@ test("AI 面板按注册表渲染特化规范下拉，并按档案嵌入默认�
   assert.notEqual(novelEntry.prompt, workEntry.prompt);
   assert.match(workEntry.prompt, /测试档案专有约定/);
   assert.equal(pageMeta.proofreadPrompt.profileId, "novel");
+});
+
+test("对照表命中的术语作为提示词注入，且不会与自定义提示词里的残留段落重复", () => {
+  const tables = loadTermTables([path.join(tempDir, "profile-terms.csv")]);
+  // 整行不止术语：一致也只作提示，不能跳过模型，因此这里必须由提示词把术语告诉模型。
+  const source = "【試作】の機体を動かす。";
+  const evaluation = evaluateTermRow({ source, target: "启动试作的机体。", tables });
+  assert.equal(evaluation.kind, "consistent");
+  const guidance = termGuidanceFor({ index: 838, jp: source }, { evaluation, targetKey: "cn", targetLabel: "主文本（待修改文本）" });
+  assert.match(guidance.block, new RegExp(`^${TERM_BLOCK_PREFIX}`));
+  assert.match(guidance.block, /- 試作 → 试作（术语）/);
+
+  const config = { proofreadMode: "bilingual", profileId: "test-profile", systemPrompt: "" };
+  const system = buildMessages(payload({ termGuidance: guidance }), config)[0].content;
+  assert.equal(countOf(system, new RegExp(TERM_BLOCK_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")), 1);
+  assert.match(system, /- 試作 → 试作（术语）/);
+  // 用户自定义提示词里若残留上一行的术语段：先剥掉再注入本次的，只能剩一段。
+  // 注意边界：动态段（术语段/说话习惯段/档案块）都按“到下一个【小节或硬性约束”结尾，
+  // 因此追加规则要写在段之前，写在段之后会被当成该段的一部分剥掉——与档案块同一条既有规则。
+  const stale = `${proofreadPromptFor("bilingual", "test-profile").system}\n补充：术语段之前的规则要保留。\n${guidance.block}`;
+  const rebuilt = buildMessages(payload({ termGuidance: guidance }), { ...config, systemPrompt: stale })[0].content;
+  assert.equal(countOf(rebuilt, new RegExp(TERM_BLOCK_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")), 1);
+  assert.match(rebuilt, /补充：术语段之前的规则要保留。/);
+  // 未命中术语的行不注入段落。
+  const empty = buildMessages(payload(), config)[0].content;
+  assert.equal(empty.includes(TERM_BLOCK_PREFIX), false);
 });
 
 test("buildProofreadSystemPrompt 直接调用时同样合并两侧并保留硬性约束", () => {

@@ -58,26 +58,38 @@ function publishRows(label, rows, extra = {}) {
   return project;
 }
 
-test("对照表命中的行直接出结果，一次模型调用都不发", async () => {
+test("对照表只跳过整行都是术语的行，其余命中行注入术语后照常调用模型", async () => {
   clearProofreadCache();
   const rows = [
     { index: 1, jp: "ＧＰＳ発信機を取り外す。", cn: "取下GPS信号发射机。", tw: "", twCn: "", score: 0 },
     { index: 2, jp: "東雲太郎は言った。", cn: "東雲太郎说道。", tw: "", twCn: "", score: 0 },
-    { index: 3, jp: "今日はいい天気だ。", cn: "今天天气不错。", tw: "", twCn: "", score: 0 },
+    { index: 3, jp: "【発信機】", cn: "【发信器】", tw: "", twCn: "", score: 0 },
+    { index: 4, jp: "今日はいい天気だ。", cn: "今天天气不错。", tw: "", twCn: "", score: 0 },
   ];
   const project = publishRows("term-resolved", rows);
 
   let requestCount = 0;
+  const sentSystems = [];
   const server = http.createServer((request, response) => {
     requestCount += 1;
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-      semanticSame: true,
-      needsEdit: false,
-      needsContext: false,
-      decision: "keep",
-      summary: "无需修改。",
-    }) } }] }));
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      try {
+        const parsed = JSON.parse(body);
+        sentSystems.push(parsed.messages[0].content);
+      } catch {
+        sentSystems.push("");
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        semanticSame: true,
+        needsEdit: false,
+        needsContext: false,
+        decision: "keep",
+        summary: "无需修改。",
+      }) } }] }));
+    });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 
@@ -105,17 +117,27 @@ test("对照表命中的行直接出结果，一次模型调用都不发", async
     assert.match(byIndex.get(1).note, /^\[对照表\]/);
     assert.match(byIndex.get(1).note, /修改结果：取下GPS信号【发信器】。/);
     assert.equal(byIndex.get(1).done, false);
-    // 第 2 行：译名一致，直接标记完成。
-    assert.match(byIndex.get(2).note, /是否需要修改：否/);
-    assert.equal(byIndex.get(2).done, true);
-    // 第 3 行：没命中对照表，仍然交给模型。
-    assert.match(byIndex.get(3).note, /^\[AI校对\]/);
+    // 第 2 行：术语一致，但句中还有别的内容 → 不写对照表备注，注入术语后由模型给结论。
+    assert.match(byIndex.get(2).note, /^\[AI校对\]/);
+    // 第 3 行：整行有效内容就是术语，直接标记完成。
+    assert.match(byIndex.get(3).note, /^\[对照表\]/);
+    assert.match(byIndex.get(3).note, /该行有效内容全部是本项目术语/);
+    assert.match(byIndex.get(3).note, /是否需要修改：否/);
+    assert.equal(byIndex.get(3).done, true);
+    // 第 4 行：没命中对照表，仍然交给模型。
+    assert.match(byIndex.get(4).note, /^\[AI校对\]/);
 
-    assert.equal(requestCount, 1, "只有未命中对照表的那一行才应该调用模型");
-    assert.equal(finished.termPrefiltered, 2);
+    assert.equal(requestCount, 2, "第 2 行（术语+别的词）和第 4 行（未命中）都要调用模型");
+    const injectedSystem = sentSystems.find((system) => system.includes("【术语（对照表命中）】"));
+    assert.ok(injectedSystem, "命中术语但整行不止术语时，标签与术语要作为提示词注入");
+    assert.match(injectedSystem, /- 東雲太郎 → 東雲太郎（人名\/日式全名）/);
+    assert.match(injectedSystem, /对照表只能证明术语译名对不对，不能证明整句翻译没有问题/);
+    assert.equal(finished.termPrefiltered, 2, "跳过模型的只有冲突行与纯术语行");
+    assert.equal(finished.termInjected, 1, "注入提示词的行要单独计数");
     assert.equal(finished.termConflicts, 1);
     assert.deepEqual(finished.termTables.entries, 2);
-    assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 2 条术语：命中 2 行（译名一致 1，需人工确认 1）/);
+    assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 2 条术语：命中 3 行（整行只有术语、跳过模型 1，需人工确认 1）/);
+    assert.match(finished.logs.join("\n"), /另有 1 行的术语一致但句中还有别的词，按提示词注入后照常交给模型/);
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

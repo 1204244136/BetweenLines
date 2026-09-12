@@ -1,5 +1,7 @@
 const { JSON_ONLY_INSTRUCTION, promptSections, withJsonOnly } = require("../../../ai/prompt-contract");
 const { DEFAULT_PROFILE_ID, listProfiles, resolveProfile } = require("./profiles");
+// 段首标记的唯一定义在注入层（term-prefilter）：这里只借用前缀做剥离，不复制字面量。
+const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
 
 // 每种模式一段说明，只有当前模式需要担心的字段语义才出现在该模式的契约里。
 // 双语没有 counterpart 列：对外只问“保持还是替换”，不再问“谁更好”，避免模型臆想“另一份译文”。
@@ -165,7 +167,8 @@ function stripProfileBlock(text) {
 
 // 说话习惯段与说话人判断段都是动态生成的（按章、按行）：自定义提示词里可能留着上一次的，
 // 先剥掉再注入本次的。段首标记用前缀匹配，避免与档案正文里提到的「【说话习惯】」混淆。
-const dynamicBlockPrefixes = [speechHabitPrefix, "【说话人判断（"];
+// 对照表命中段同理（按行生成，只会出现在被注入的那一行）。
+const dynamicBlockPrefixes = [speechHabitPrefix, "【说话人判断（", TERM_BLOCK_PREFIX];
 
 function stripSpeechHabitBlock(text) {
   let value = String(text || "");
@@ -188,22 +191,24 @@ function buildProofreadSystemPrompt({
   customSystem = "",
   glossary = "",
   speechHabitBlock = "",
+  termBlock = "",
 } = {}) {
   const contract = proofreadPromptFor(mode, profileId);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
-  // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块与上一章的说话习惯段，
-  // 再按“是否已带本模式规则”补模式规则，特化侧与说话习惯层总是按本次上下文重新注入。
+  // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段与上一行的术语段，
+  // 再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层与对照表命中段总是按本次上下文重新注入。
   const custom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(customSystem))));
+  const dynamicBlocks = [String(termBlock || "").trim(), String(speechHabitBlock || "").trim()];
   const body = !custom || custom === contract.body
     ? promptSections(
       contract.body,
-      String(speechHabitBlock || "").trim(),
+      ...dynamicBlocks,
     )
     : promptSections(
       custom,
       custom.includes(modeMarkers[contract.mode]) ? "" : contract.modeSystem,
       contract.profileSystem,
-      String(speechHabitBlock || "").trim(),
+      ...dynamicBlocks,
     );
   return withJsonOnly(promptSections(body, noterefConstraint, glossary), contract.outputSchema);
 }

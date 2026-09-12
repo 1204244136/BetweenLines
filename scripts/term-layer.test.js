@@ -18,6 +18,8 @@ const {
   variantIndexSets,
 } = require("../src/workbenches/translation-compare/term-layer");
 const { rebuildCompareHtmlFromSnapshot } = require("./build-compare");
+const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+const { hitsUsedInRow } = require("../src/workbenches/translation-compare/ai/term-prefilter");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "betweenlines-term-layer-"));
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -79,7 +81,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 2);
+  assert.equal(layer.version, 3);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -87,11 +89,16 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const variant = entry.variants["bilingual:cn"];
   assert.deepEqual(variant.consistent, [1, 3]);
   assert.deepEqual(variant.conflicts, [2]);
+  // 一致的行里没有一行是“整行只有术语”（都还带着「が来た。」这类内容），因此一行都不跳过模型。
+  assert.deepEqual(variant.termOnly, []);
+  assert.deepEqual(variant.injected, [1, 3]);
   assert.deepEqual(variant.chapters, [{ chapter: "第一章", hits: 2 }, { chapter: "第二章", hits: 1 }]);
   assert.equal(variant.summary.hits, 3);
-  assert.equal(variant.summary.removedFromModel, 2);
-  assert.equal(variant.summary.aiRows, 2);
-  assert.match(entry.fingerprint, /^2\|terms\.csv:\d+:\d+#2$/);
+  assert.equal(variant.summary.termOnly, 0);
+  assert.equal(variant.summary.injected, 2);
+  assert.equal(variant.summary.removedFromModel, 0);
+  assert.equal(variant.summary.aiRows, 4);
+  assert.match(entry.fingerprint, /^3\|terms\.csv:\d+:\d+#2$/);
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["terms.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -155,7 +162,7 @@ test("摘要与缺表行为", () => {
   });
   assert.deepEqual(Object.keys(layer.byProfile), ["unit"]);
   const text = describeTermLayerEntry(layer.byProfile.unit);
-  assert.match(text, /对照表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2，需人工确认 1，目标列 译文 B）/);
+  assert.match(text, /对照表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2（整行只有术语 0，需注入术语 2），需人工确认 1，目标列 译文 B）/);
   assert.equal(describeTermLayerEntry(null), "");
 });
 
@@ -173,7 +180,7 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":2/);
+  assert.match(html, /"termPrefilter":\{"version":3/);
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
@@ -213,13 +220,102 @@ test("页面按构建期判定给未跑过的行标出术语徽标，并跟随�
   };
 
   const own = run("unit");
-  assert.equal(own.__verdicts.get("1"), "consistent");
+  assert.equal(own.__verdicts.get("1"), "injected", "术语一致但整行不止术语：徽标必须说明仍会交给模型");
   assert.equal(own.__verdicts.get("2"), "conflict");
   assert.equal(own.__verdicts.get("4"), undefined, "没命中的行不该有徽标");
-  assert.match(own.__summary, /构建期预筛 3 行命中（一致 2 \/ 需确认 1），预计 2 行仍需 AI 判定/);
+  assert.match(own.__summary, /构建期预筛 3 行命中（术语一致 2：整行只有术语 0 \/ 需注入术语 2；需确认 1），预计 4 行仍需 AI 判定/);
 
   // 换档案：该档案没有对照表 → 不发徽标；换成没算过的变体 → 回落到默认变体
   assert.equal(run("other").__verdicts.size, 0);
   const otherVariant = run("unit", { proofreadMode: "trilingual", target: "tw" });
   assert.equal(otherVariant.__verdicts.get("2"), "conflict", "没有该变体时回落到默认变体");
+});
+
+test("页面在跑任务之前就显示本行命中了哪些术语", () => {
+  const { html, pageMeta } = buildFixturePage("termlist");
+  assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"], ["山田太郎 → 山田太郎（人名）"]);
+  const script = html.split("<script>")[1].split("</script>")[0];
+  const grab = (name) => {
+    const found = script.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n    \\}\\n`));
+    assert.ok(found, `页面脚本里应有 ${name}`);
+    return found[0];
+  };
+  const source = [
+    "termVariantKeyForPage", "currentTermVariant", "refreshTermVerdicts",
+    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "automatedNoteMarker", "parseAutomatedNote",
+  ].map(grab).join("\n");
+  const sandbox = {
+    pageMeta, Map, Set, String, Number, Boolean, Object, Array, Math, JSON, Date, RegExp,
+    escapeHtml: (value) => String(value == null ? "" : value),
+    renderDiffBlock: () => "",
+    renderNoteSummary: () => "<!--note-summary-->",
+    pageLabels: { jp: "原文 A", cn: "非原文 B", tw: "非原文 C" },
+    bilingualMode: true,
+    notes: {},
+    rowsById: new Map(),
+    automatedNoteMarkers: ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[对照表]"],
+    speechHabitMissIndexes: new Set(),
+    aiActiveIds: new Set(),
+    activeRowId: "",
+    aiIds: { profile: { value: "unit" }, target: { value: "cn" }, proofreadMode: { value: "bilingual" } },
+  };
+  vm.createContext(sandbox);
+  vm.runInNewContext(
+    `let termLayer = pageMeta.termPrefilter || null;\nlet termVerdicts = new Map();\nlet termEntries = new Map();\n${source}\nrefreshTermVerdicts();\nthis.__row = renderRow;`,
+    sandbox,
+  );
+
+  const base = { chapter: "第一章", relation: "原文-译文 1:1", score: 0.9, scoreText: "90%", cls: "row-b", jpChars: 8, cnChars: 6 };
+  // 命中术语的行：芯片给出条数与具体术语（正文与备注都还没跑，显示的是构建期预判）。
+  const hit = sandbox.__row({ ...base, index: 1, jp: "【山田太郎】が来た。", cn: "山田太郎来了。" });
+  assert.match(hit, /class="term-chip" data-term-chip="1"/);
+  assert.match(hit, /术语 1/);
+  assert.match(hit, /山田太郎 → 山田太郎（人名）/);
+  assert.match(hit, /构建期判定：本行原文命中对照表 1 条术语/);
+  assert.match(hit, /term-chip-state">预判</);
+  // 没命中的行：芯片容器在，但里面是空的（CSS 用 .term-chip-slot:empty 隐藏）。
+  const miss = sandbox.__row({ ...base, index: 4, jp: "誰も来ない。", cn: "谁都没来。" });
+  assert.equal(miss.includes("term-chip\""), false);
+  assert.match(miss, /data-term-chip-slot="4"><\/span>/);
+});
+
+test("只有整行都是术语的行才标成跳过模型", () => {
+  const file = writeTable("term-only-terms.csv");
+  const rows = [
+    { index: 1, chapter: "第一章", jp: "【山田太郎】", cn: "【山田太郎】" },
+    { index: 2, chapter: "第一章", jp: "【山田太郎】が来た。", cn: "山田太郎来了。" },
+    { index: 3, chapter: "第一章", jp: "【佐藤】", cn: "佐藤" },
+  ];
+  const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
+  const variant = layer.byProfile.unit.variants["bilingual:cn"];
+  // 第 3 行只命中 2 字短词（佐藤）：短词不能指控译名错误，但当整行就是这个词时，
+  // 一致性仍然覆盖了整行的有效内容，因此允许跳过模型。
+  assert.deepEqual(variant.termOnly, [1, 3]);
+  assert.deepEqual(variant.injected, [2]);
+  assert.equal(variant.summary.removedFromModel, 2);
+  assert.equal(variant.summary.aiRows, 1);
+  const { termOnly, injected } = variantIndexSets(variant);
+  assert.deepEqual([...termOnly], [1, 3]);
+  assert.deepEqual([...injected], [2]);
+  // 芯片列表与「跳过模型」的判定同源：命中术语的行才有列表。
+  assert.deepEqual(variant.terms["3"], ["佐藤 → 佐藤（人名）"]);
+  assert.equal(variant.terms["4"], undefined, "没命中的行不该有术语列表");
+});
+
+test("只命中分段写法或读音撞车的行不算“用到这个术语”", () => {
+  const file = writeTable("segment-terms.csv");
+  const tables = loadTermTables([file]);
+  // 原文只写姓（山田）：命中分段别名，但不足以说明本行指的是「山田太郎」，交回后续流程。
+  assert.equal(evaluateTermRow({ source: "山田は来なかった。", target: "山田没有来。", tables }), null);
+  // 原文写的是别的角色，只因为共用读音而命中：不算用到（只有读音、译文里也没有这个名字）。
+  assert.equal(evaluateTermRow({ source: "しののめが来た。", target: "别人来了。", tables }), null);
+  // 单段条目（佐藤）本身就是整条术语，正常参与判定。
+  const single = evaluateTermRow({ source: "佐藤は来なかった。", target: "佐藤没有来。", tables });
+  assert.equal(single.kind, "consistent");
+  assert.deepEqual(hitsUsedInRow("佐藤は来なかった。", single.hits).map((hit) => hit.entry.source), ["【佐藤】"]);
+  // 分段命中不进“用到的术语”：提示词与页面芯片都不会拿它当本行术语。
+  const partOnly = hitsUsedInRow("山田は来なかった。", [{ entry: tables.entries[0], alias: "山田", scope: "part", strong: false, consistent: true, aliases: tables.entries[0].aliases }]);
+  assert.deepEqual(partOnly, []);
+  const full = evaluateTermRow({ source: "山田太郎が来た。", target: "山田太郎来了。", tables });
+  assert.deepEqual(hitsUsedInRow("山田太郎が来た。", full.hits).map((hit) => hit.entry.source), ["【山田太郎】"]);
 });

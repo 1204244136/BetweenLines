@@ -84,9 +84,10 @@ function reportFromSnapshot({ layer, profileId, proofreadMode, targetKey, files 
     console.error(`构建期没有算过「${match.variantKey}」这个变体：请重新构建工作台。`);
     return 1;
   }
-  const { consistent, conflicts } = variantIndexSets(match.variant);
+  const { consistent, conflicts, termOnly } = variantIndexSets(match.variant);
   console.log(describeTermLayerEntry(match.entry, match.variantKey));
-  console.log(`构建期结论：命中 ${match.variant.hits} 行（译名一致 ${consistent.size}，需人工确认 ${conflicts.size}），预计 ${match.variant.summary.aiRows} 行仍需 AI 判定。`);
+  console.log(`构建期结论：命中 ${match.variant.hits} 行（译名一致 ${consistent.size}：整行只有术语 ${termOnly.size} / 需注入术语 ${consistent.size - termOnly.size}，需人工确认 ${conflicts.size}），预计 ${match.variant.summary.aiRows} 行仍需 AI 判定。`);
+  if (termOnly.size) console.log(`整行只有术语、跳过模型的行号：${[...termOnly].join(", ")}`);
   if (conflicts.size) console.log(`需人工确认的行号：${[...conflicts].join(", ")}`);
   return 0;
 }
@@ -132,7 +133,7 @@ function main() {
     return 1;
   }
 
-  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, conflicts: 0, total: rows.length };
+  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, termOnly: 0, injected: 0, conflicts: 0, total: rows.length };
 
   for (const row of rows) {
     const evaluation = evaluateTermRow({
@@ -144,6 +145,8 @@ function main() {
     const record = {
       index: row.index,
       kind: evaluation.kind,
+      // 整行有效内容都是术语时，覆盖率说明了“术语之外还剩什么”，便于人工核对跳过是否合理。
+      coverage: evaluation.coverage || null,
       revisedText: evaluation.revisedText || "",
       terms: evaluation.hits.map((hit) => ({
         source: hit.entry.source,
@@ -157,8 +160,15 @@ function main() {
       target: String(row[targetKey] ?? row.cn ?? "").slice(0, 120),
     };
     report.hits.push(record);
-    if (evaluation.kind === "consistent") report.consistent += 1;
-    else report.conflicts += 1;
+    if (evaluation.kind === "term-only") {
+      report.termOnly += 1;
+      report.consistent += 1;
+    } else if (evaluation.kind === "consistent") {
+      report.injected += 1;
+      report.consistent += 1;
+    } else {
+      report.conflicts += 1;
+    }
   }
 
   if (options.json) {
@@ -173,7 +183,8 @@ function main() {
   const limited = options.limit > 0 ? listed.slice(0, options.limit) : listed;
   console.log(termTableSummary(loaded));
   console.log(`特化档案：${profile.name}（${profile.id}）；目标列：${targetKey === "tw" ? "非原文 C" : "非原文 B"}`);
-  console.log(`扫描 ${report.total} 行，命中 ${report.hits.length} 行：译名一致 ${report.consistent}，需人工确认 ${report.conflicts}`);
+  console.log(`扫描 ${report.total} 行，命中 ${report.hits.length} 行：译名一致 ${report.consistent}（整行只有术语 ${report.termOnly}，需注入术语 ${report.injected}），需人工确认 ${report.conflicts}`);
+  console.log("跳过模型的条件：整行有效内容本身就是术语；句中还有别的词时，术语只作为提示词注入，整行照常交给模型。");
   const layerNote = compareWithLayer({
     layer: termPrefilter,
     profileId: profile.id,
@@ -187,7 +198,8 @@ function main() {
     console.log("");
     console.log(options.showAll ? "全部命中明细：" : "需人工确认的行：");
     for (const hit of limited) {
-      console.log(`  #${hit.index} ${hit.kind === "conflict" ? "需确认" : "一致"}`);
+      const label = hit.kind === "conflict" ? "需确认" : (hit.kind === "term-only" ? "整行只有术语·跳过模型" : "术语一致·需注入提示词");
+      console.log(`  #${hit.index} ${label}`);
       console.log(`    原文：${hit.source}`);
       console.log(`    译文：${hit.target}`);
       for (const term of hit.terms) console.log(`    ${term.description}`);

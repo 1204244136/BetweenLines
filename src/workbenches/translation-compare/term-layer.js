@@ -5,25 +5,39 @@
  * - 说话习惯层产出的**提示词上下文**（章级命中角色），运行期复用它就等价于现算，所以直接复用；
  * - 对照表层产出的是**行级结果**（写进备注、作为「不调用模型」的依据），结果的生成必须留在运行期：
  *   它要带当次任务的标签、目标列与「已人工确认」的过滤，构建期不能替用户写备注空间。
- * - 但「哪些行会被对照表命中、命中的是一致还是冲突」只依赖「整卷行数据 + 对照表」，与模型无关，
- *   因此在构建期算一次落盘：页面在跑任务之前就能标出待处理的行、给出预筛数字，
+ * - 但「哪些行会被对照表命中、命中是一致还是冲突、哪些行整行只有术语」只依赖「整卷行数据 + 对照表」，
+ *   与模型无关，因此在构建期算一次落盘：页面在跑任务之前就能标出待处理的行、给出预筛数字，
  *   离线脚本/AI/页面也能拿同一份结论对照，避免三处各算一份。
+ *
+ * 落盘块区分两类命中一致的行（`termOnly` / `injected`）：
+ * - `termOnly`：原文的有效内容本身就是术语，对照表能给出完整结论，跳过模型；
+ * - `injected`：术语一致但句中还有别的内容，这一行仍要交给模型，只把术语当提示词注入。
+ * 对照表只能证明「术语用对了」，证明不了「整句翻译没问题」，所以两者绝不能混为一谈。
+ *
+ * 块里还带一份 `terms`（行号 → 该行命中的术语对，每行最多 `TERMS_PER_ROW_CAP` 条）：
+ * 它只由「原文 + 对照表」决定，不涉及模型，因此可以随页面下发，让人在跑任务之前就能看见
+ * “这行到底命中了哪些术语”；**行文本与备注仍然不进产物**。
  *
  * 落盘块写在行数据之外（顶层 `termPrefilter`），不修改任何行字段，
  * 因此不改变 `rowsSignature`/`signature`，备注与写回定位不受影响。
  */
 const {
+  displayTermPair,
   evaluateTermRow,
   loadTermTables,
   normalizeTermTablePaths,
 } = require("./ai/term-table");
-const { termTargetKeyFor } = require("./ai/term-prefilter");
+const { hitsUsedInRow, termTargetKeyFor } = require("./ai/term-prefilter");
 const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
 const { tableFilesForProfile, tableSourceCandidates, toPathList } = require("./layer-sources");
 const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
 // 2：落盘块的 `files` 从「本机完整路径」改成「文件名」，运行期改为按当前档案重算指纹。
-const TERM_LAYER_VERSION = 2;
+// 3：每个变体多一份 `terms`（行号 → 命中的术语对），供页面在跑任务之前就显示“这行命中了哪些术语”。
+const TERM_LAYER_VERSION = 3;
+
+// 每行最多随页面带上这么多条术语：命中行平均 2~3 条，上限定得宽松但能挡住病态行（同一行命中几十条）。
+const TERMS_PER_ROW_CAP = 8;
 
 /**
  * 对照表判定与「校对模式 + 目标列」绑定：双语只有目标列 cn，三语可以是 cn 或 tw。
@@ -44,8 +58,13 @@ function termVariantKey(proofreadMode, targetKey) {
 }
 
 function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
-  const consistent = [];
+  // 命中但整行还有术语之外的内容：一致性只覆盖术语，这些行仍要交给模型（术语只作提示词注入）。
+  const injected = [];
+  // 整行有效内容就是术语：对照表能给出完整结论，跳过模型。
+  const termOnly = [];
   const conflicts = [];
+  // 行号 → 该行命中的术语对（去方括号的「原文 → 译名（类型）」）：页面在跑任务前就能显示命中了什么。
+  const terms = {};
   const chapters = new Map();
   for (const row of rows) {
     const evaluation = evaluateTermRow({
@@ -54,27 +73,38 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
       tables,
     });
     if (!evaluation) continue;
-    if (evaluation.kind === "consistent") consistent.push(Number(row.index));
-    else conflicts.push(Number(row.index));
+    if (evaluation.kind === "term-only") termOnly.push(Number(row.index));
+    else if (evaluation.kind === "conflict") conflicts.push(Number(row.index));
+    else injected.push(Number(row.index));
+    // 页面上的术语块只列本行**确实用到**的术语（与注入给模型的同一批，见 hitsUsedInRow）。
+    const pairs = [...new Set(hitsUsedInRow(row.jp || "", evaluation.hits).map((hit) => displayTermPair(hit.entry)))];
+    if (pairs.length) terms[Number(row.index)] = pairs.slice(0, TERMS_PER_ROW_CAP);
     const chapter = String(row.chapter || "");
     chapters.set(chapter, (chapters.get(chapter) || 0) + 1);
   }
+  // consistent 是「译名一致」的合并集合（页面徽标按它渲染），termOnly 是其中被跳过模型的那部分。
+  const consistent = [...termOnly, ...injected].sort((a, b) => a - b);
   const hits = consistent.length + conflicts.length;
   return {
     proofreadMode,
     targetKey,
     hits,
     consistent,
+    termOnly: termOnly.slice().sort((a, b) => a - b),
+    injected: injected.slice().sort((a, b) => a - b),
     conflicts,
+    terms,
     chapters: [...chapters.entries()].map(([chapter, count]) => ({ chapter, hits: count })),
     summary: {
       rows: rows.length,
       hits,
       consistent: consistent.length,
+      termOnly: termOnly.length,
+      injected: injected.length,
       conflicts: conflicts.length,
       // 对照表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
-      removedFromModel: consistent.length,
-      aiRows: Math.max(0, rows.length - consistent.length),
+      removedFromModel: termOnly.length,
+      aiRows: Math.max(0, rows.length - termOnly.length),
       chapters: chapters.size,
     },
   };
@@ -172,10 +202,14 @@ function termLayerFor(layer, profileId, { proofreadMode = "bilingual", targetKey
 
 /** 变体判定 → 行号集合，供运行期交叉校验与页面徽标使用。 */
 function variantIndexSets(variant) {
-  return {
-    consistent: new Set((variant?.consistent || []).map(Number)),
-    conflicts: new Set((variant?.conflicts || []).map(Number)),
-  };
+  const consistent = new Set((variant?.consistent || []).map(Number));
+  const conflicts = new Set((variant?.conflicts || []).map(Number));
+  // 旧快照只有 consistent/conflicts：那时所有命中一致的行都会跳过模型，
+  // 这里回落到同一语义（termOnly=consistent），避免用新规则误读旧结论。
+  const declared = Array.isArray(variant?.termOnly) ? variant.termOnly.map(Number) : [...consistent];
+  const termOnly = new Set(declared);
+  const injected = new Set([...consistent].filter((index) => !termOnly.has(index)));
+  return { consistent, conflicts, termOnly, injected };
 }
 
 /** 构建期日志与脚本共用的一句话摘要。 */
@@ -184,11 +218,16 @@ function describeTermLayerEntry(entry, variantKey = "") {
   const variant = (entry.variants || {})[variantKey || entry.defaultVariant] || null;
   if (!variant) return "";
   const targetLabel = variant.targetKey === "tw" ? "非原文 C" : "译文 B";
-  return `对照表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（译名一致 ${variant.summary.consistent}，需人工确认 ${variant.summary.conflicts}，目标列 ${targetLabel}）`;
+  const summary = variant.summary || {};
+  const detail = summary.termOnly === undefined
+    ? `译名一致 ${summary.consistent}`
+    : `译名一致 ${summary.consistent}（整行只有术语 ${summary.termOnly}，需注入术语 ${summary.injected}）`;
+  return `对照表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（${detail}，需人工确认 ${summary.conflicts}，目标列 ${targetLabel}）`;
 }
 
 module.exports = {
   TERM_LAYER_VERSION,
+  TERMS_PER_ROW_CAP,
   buildTermLayer,
   describeTermLayerEntry,
   termLayerFor,
