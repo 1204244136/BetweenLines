@@ -99,13 +99,28 @@ test("explicitly cleared spaces stay empty and malformed current data is protect
   assert(backup.spaces.some((space) => space.raw === "{broken"));
 });
 
-test("automatic recovery defers contradictory historical notes to manual preview", () => {
+test("automatic recovery merges contradictory historical notes for the same row signature instead of dropping them", () => {
+  // 同一行在两份历史空间里记录不同（例如 [规则预筛] 结论 ↔ [AI校对] 结论）：按行内容签名逐字段合并，
+  // 不再整条丢弃——那样会把「确认预筛」的人工确认一起丢掉。
+  const ui = createWorkbench(storageFixture({
+    [sourceKey]: JSON.stringify({ 1: { note: "第一份记录", manualDone: true, rowSig: "sig-1" } }),
+    "translation-compare-notes-v5:previous:rows": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
+  }));
+  assert.equal(ui.run("Object.keys(notes).length"), 1);
+  assert.equal(ui.run('notes["1"].manualDone'), true, "任一历史空间确认过、行签名又对得上，人工确认必须保留");
+  assert.match(ui.run('notes["1"].note'), /第一份记录/);
+  assert.match(ui.run('notes["1"].note'), /不同的记录/);
+  assert.notEqual(ui.storage.getItem(key), null);
+});
+
+test("automatic recovery never invents manual confirmation for unconfirmed historical notes", () => {
   const ui = createWorkbench(storageFixture({
     [sourceKey]: JSON.stringify({ 1: { note: "第一份记录", rowSig: "sig-1" } }),
     "translation-compare-notes-v5:previous:rows": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
   }));
-  assert.equal(ui.run("Object.keys(notes).length"), 0);
-  assert.equal(ui.storage.getItem(key), null);
+  assert.equal(ui.run("Object.keys(notes).length"), 1);
+  assert.equal(ui.run('notes["1"].manualDone'), false);
+  assert.equal(ui.run('notes["1"].mergedFromSpaces'), undefined);
 });
 
 test("preview requires an explicit index action and never overwrites rows added during preview", async () => {

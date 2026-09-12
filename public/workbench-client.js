@@ -55,9 +55,37 @@
     let notesRecovery = null;
 
     function recoveryPlan(space, byIndex = false) {
-      return notesTools.plan(space.data, allRows, notes, {
+      const plan = notesTools.plan(space.data, allRows, notes, {
         sameSnapshot: space.sameSnapshot, byIndex, revisionTextFor,
       });
+      // 找回只在「本页没有这一行记录」时才搬运，所以 plan.pairs 里看不到已被本页占用的行——
+      // 而本页记录与历史记录常常只是内容不同（AI 结论 ↔ 预筛结论），
+      // 直接跳过就会连带丢掉历史空间里的「人工确认」。这里对签名能对上同一行的条目逐字段合并。
+      if (!byIndex) {
+        let merged = 0;
+        for (const [id, raw] of notesTools.entries(space.data)) {
+          const row = rowsById.get(String(id));
+          const targetSignature = String(row?.signature || "");
+          const sourceSignature = String(raw?.rowSig || "");
+          if (!targetSignature || !sourceSignature || sourceSignature !== targetSignature) continue;
+          const existing = notes[String(id)];
+          if (!existing) continue;
+          if (String(existing.rowSig || "") && String(existing.rowSig) !== targetSignature) continue;
+          const keptManual = Boolean(existing.manualDone) || Boolean(raw.manualDone);
+          existing.manualDone = keptManual;
+          existing.done = Boolean(existing.manualDone);
+          existing.aiDone = Boolean(existing.aiDone || raw.aiDone);
+          mergeNotes(existing, normalizeStoredNote(raw));
+          if (keptManual) existing.mergedFromSpaces = true;
+          merged += 1;
+        }
+        // 合并结果照常按防抖落盘：这一步不经过「应用找回」，用户取消预览也不该丢掉刚保住的人工确认。
+        if (merged) {
+          saveNotes();
+          plan.merged = merged;
+        }
+      }
+      return plan;
     }
 
     function applyRecovery(space, plan) {
@@ -73,6 +101,62 @@
       }
     }
 
+    /**
+     * 多个历史空间对同一行有不同记录时，逐字段合并，而不是把这一行整条丢掉。
+     * 依据是行内容签名（pair.verified）：各空间的签名都对上同一行，说明它们说的是同一行文本，
+     * 只是记录的内容不同——「确认预筛」写的是 [规则预筛]/[对照表] 结论且没有修改结果，
+     * 同一个备注对象后来被 AI 结论替换（或反过来）就会造成这种差异，丢掉它等于把人工确认一起丢了。
+     * 「人工确认」是布尔判定，任一空间确认过、且该行签名匹配，就应当保留；没有签名证据的行不会走到这里
+     * （未校验的条目仍按 applyRecovery 的约定清除人工确认）。
+     */
+    function mergeNotes(canonical, other) {
+      const note = String(other.note || "");
+      const current = String(canonical.note || "");
+      // 两份记录直接拼接会让解析层把后一份的字段覆盖前一份（备注是按行取值的）。
+      // 所以只搬「另一份记录独有」的分析内容：结论字段取基准记录，「分析：」各自只有一行时合并成一行
+      // （解析层遇到第二个「分析：」会覆盖前一个，那会丢掉基准记录的结论依据），
+      // 段首标记与结论字段行留在各自记录里，既不丢证据，也不会拼出一份自相矛盾的备注。
+      const analysis = [];
+      const others = [];
+      for (const line of note.split(/\n+/).map((item) => item.trim())) {
+        if (!line || automatedNoteMarker(line)) continue;
+        if (/^分析：/.test(line)) { analysis.push(line.slice("分析：".length).trim()); continue; }
+        if (/^(语义是否相同|是否需要修改|质量评分|评分|翻译得分|质量分级|质量等级|分级|严重程度|问题严重程度|修改结果|修改后|修改后文本)：/.test(line)) continue;
+        others.push(line);
+      }
+      const additions = [...others, analysis.length ? "分析：" + analysis.join("；") : ""].filter(Boolean)
+        .filter((line) => !current.includes(line));
+      if (additions.length) {
+        // 补充行必须落在「修改结果：」之前——那是分析栏的边界，跟在它后面会被解析层并进
+        // 可供写回的成品文本（备注是按行取值的，这一段就是人工点「写回」会送出的内容）。
+        const lines = current.split("\n");
+        const revisionAt = lines.findIndex((line) => /^(修改结果|修改后|修改后文本)：/.test(line.trim()));
+        const insertAt = revisionAt < 0 ? lines.length : revisionAt;
+        lines.splice(insertAt, 0, ...additions);
+        canonical.note = lines.join("\n");
+      }
+      if (!String(canonical.revisionText || "").trim() && String(other.revisionText || "").trim()) {
+        canonical.revisionText = other.revisionText;
+      }
+      if (!canonical.revisionTarget && other.revisionTarget) canonical.revisionTarget = other.revisionTarget;
+    }
+
+    function mergeRecoveredVariants(entries) {
+      // 先选基准：有修改结果的优先（内容最全），其次记录更长的。
+      const ranked = entries.slice().sort((a, b) => Number(Boolean(String(b.revisionText || "").trim())) - Number(Boolean(String(a.revisionText || "").trim()))
+        || String(b.note || "").length - String(a.note || "").length);
+      const canonical = { ...ranked[0] };
+      for (const other of ranked.slice(1)) {
+        canonical.manualDone = Boolean(canonical.manualDone || other.manualDone);
+        canonical.aiDone = Boolean(canonical.aiDone || other.aiDone);
+        mergeNotes(canonical, other);
+      }
+      canonical.done = Boolean(canonical.manualDone);
+      // 人工确认来自多份历史记录时留个标记：预览面板据此显示「已合并」，也便于事后核查。
+      if (ranked.slice(1).some((other) => other.manualDone)) canonical.mergedFromSpaces = true;
+      return canonical;
+    }
+
     // 只在从未保存过的空间自动恢复；已有备注（包括刻意清空的空间）由用户预览后合并。
     if (initialRaw === null) {
       const candidates = notesTools.inventory(localStorage, storageKey, notes)
@@ -86,17 +170,31 @@
           for (const pair of candidate.plan.pairs.filter((pair) => pair.verified)) {
             const note = normalizeStoredNote(candidate.space.data[String(pair.from)]);
             delete note.rowSig;
-            if (!variants.has(pair.to)) variants.set(pair.to, new Set());
-            variants.get(pair.to).add(JSON.stringify(note));
+            if (!variants.has(pair.to)) variants.set(pair.to, new Map());
+            variants.get(pair.to).set(JSON.stringify(note), note);
           }
         }
-        // 多个历史空间对同一行有不同记录时，交由用户选择，不能按条数猜哪个更新。
-        const verified = { ...best.plan, pairs: best.plan.pairs.filter((pair) => pair.verified && variants.get(pair.to).size === 1) };
-        if (verified.pairs.length) {
-          applyRecovery(best.space, verified);
-          persistNotes();
+        // 同一行只有一个版本的直接找回；多个版本（同一行在两份历史空间里记录不同）逐字段合并，
+        // 而不是像以前那样整条丢弃——那会把「确认预筛」的人工确认一并丢掉。
+        let mergedVariants = 0;
+        const pairs = [];
+        for (const pair of best.plan.pairs.filter((pair) => pair.verified)) {
+          const entries = [...(variants.get(pair.to)?.values() || [])];
+          if (!entries.length) continue;
+          if (entries.length === 1) {
+            pairs.push({ ...pair, item: entries[0] });
+            continue;
+          }
+          const item = mergeRecoveredVariants(entries);
+          if (item.mergedFromSpaces) mergedVariants += 1;
+          pairs.push({ ...pair, item });
         }
-        notesRecovery = "已按行内容找回 " + verified.pairs.length + " 条记录；其余或相互冲突的历史记录可在「备注空间与找回」中预览。";
+        if (pairs.length) {
+          for (const pair of pairs) notes[String(pair.to)] = pair.item;
+          persistNotes();
+          const mergedNote = mergedVariants ? `，其中 ${mergedVariants} 条合并了多个历史版本的记录（人工确认已保留）` : "";
+          notesRecovery = `已按行内容找回 ${pairs.length} 条记录${mergedNote}；其余或相互冲突的历史记录可在「备注空间与找回」中预览。`;
+        }
       } else if (candidates.length) {
         notesRecovery = "发现历史备注。请展开「备注空间与找回」，预览匹配结果后找回。";
       }
@@ -2946,7 +3044,9 @@
       }).join('');
       notesPanelIds.preview.innerHTML = '<p class="notes-preview-source">' + escapeHtml(notesSpaceTitle(space)) + ' · ' + action + '</p>'
         + '<div class="notes-preview-stats"><span><strong>' + plan.verified + '</strong>内容匹配</span><span><strong>' + plan.unverified
-        + '</strong>需核验</span><span><strong>' + plan.occupied + '</strong>本页已有</span><span><strong>' + plan.unmatched + '</strong>未匹配</span></div>'
+        + '</strong>需核验</span><span><strong>' + plan.occupied + '</strong>本页已有</span><span><strong>' + plan.unmatched + '</strong>未匹配</span>'
+        + (plan.merged ? '<span><strong>' + plan.merged + '</strong>已合并</span>' : '') + '</div>'
+        + (plan.merged ? '<p>其中 ' + plan.merged + ' 条本页已有记录、但历史记录里带人工确认：已按行内容签名逐字段合并（人工确认保留），不需要再点找回。</p>' : '')
         + '<p>' + (byIndex ? '仅将旧第 N 行对应到当前第 N 行，行内容可能已经变化。所有条目都需核验。'
           : '优先匹配行集或行内容签名。旧版文本锚点只作为行序推断，相关条目仍需核验。') + '</p>'
         + '<p>保留本页已有记录。需核验的条目会清除人工确认状态，逐行确认后才能写回。来源空间始终保留。</p>'
