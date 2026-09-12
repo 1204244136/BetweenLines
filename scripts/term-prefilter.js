@@ -133,16 +133,20 @@ function main() {
     return 1;
   }
 
-  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, termOnly: 0, injected: 0, advisory: 0, conflicts: 0, rubySkipped: 0, total: rows.length };
+  const report = { project: project.projectKey || "", snapshot: file, profile: profile.id, tables: loaded.files, entries: loaded.entries.length, hits: [], consistent: 0, termOnly: 0, injected: 0, advisory: 0, conflicts: 0, rubySkipped: 0, rubyDemoted: 0, total: rows.length };
 
-  // 被注音口径排除的候选（非人名条目带注音时，基文不足以命中，注文也要在原文里对上）。
+  // 被注音口径排除的候选（非人名条目带注音时：中日两侧都注音才按完整口径判定，
+  // 否则降级为只作一致性证据；这里是“降级且译文也没用该译名”的那部分）。
   const rubySkippedCandidates = [];
+  // 降级命中：没有双侧注音，但译文确实用了该译名（算命中，只是不能指控译名差异）。
+  const rubyDemotedCandidates = [];
   for (const row of rows) {
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: String(row[targetKey] ?? row.cn ?? ""),
       tables: loaded,
       rejected: rubySkippedCandidates,
+      demoted: rubyDemotedCandidates,
     });
     if (!evaluation) continue;
     const record = {
@@ -187,6 +191,7 @@ function main() {
   }
 
   report.rubySkipped = rubySkippedCandidates.length;
+  report.rubyDemoted = rubyDemotedCandidates.length;
   if (options.json) {
     const text = JSON.stringify(report, null, 2);
     console.log(text);
@@ -200,9 +205,13 @@ function main() {
   console.log(termTableSummary(loaded));
   console.log(`特化档案：${profile.name}（${profile.id}）；目标列：${targetKey === "tw" ? "非原文 C" : "非原文 B"}`);
   console.log(`扫描 ${report.total} 行，命中 ${report.hits.length} 行：整行只有术语、跳过模型 ${report.termOnly} 行；其余 ${report.injected} 行把术语作为提示词注入后交给模型（其中术语冲突 ${report.conflicts} 行、假名存疑 ${report.advisory} 行）。`);
+  if (report.rubyDemoted) {
+    const samples = [...new Set(rubyDemotedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
+    console.log(`另有 ${report.rubyDemoted} 条候选因中日两侧没有同时注音，降级为只作一致性证据（例：${samples.join("、")}）。`);
+  }
   if (report.rubySkipped) {
     const samples = [...new Set(rubySkippedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
-    console.log(`另有 ${report.rubySkipped} 条候选因原文只对上基文、注文没对上而未参与判定（例：${samples.join("、")}）。`);
+    console.log(`另有 ${report.rubySkipped} 条候选因没有同时注音、且译文未出现该译名而未参与判定（例：${samples.join("、")}）。`);
   }
   console.log("跳过模型的条件：只有整行有效内容本身就是术语；其余命中行（含术语冲突）都把术语作为提示词注入，整行交给模型判断。");
   const layerNote = compareWithLayer({

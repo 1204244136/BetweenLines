@@ -104,13 +104,21 @@ function loadFixtureTables() {
     "【時代】,,【时代】,,,术语",
     "【発信機】,はっしんき,【发信器】,,,科技/装备",
     "【常盤台中学】,ときわだいちゅうがく,常盘台中学,,,地名/学校",
+    // 无注音的非人名条目：不受「双侧注音」口径约束，冲突/替换路径用它来测（注音条目已不允许指控）。
+    "【召喚陣】,,【召唤阵】,Summon Circle,,术式",
+    "【聖堂教会】,,【圣堂教会】,Holy Church,,组织/结社",
+    // 注音只是这个词本身的普通读音（不是特殊别名）：中日两侧正文都不会注音，是「魔術 → 魔法」那一类。
+    "【魔術】,まじゅつ,魔法,,,术语",
+    // 真·双语注音专有名词：原文与译文两侧都会给这个中文译名加注音。
+    "【心理掌握】,メンタルアウト,【心理掌握】,Mental Out,,能力",
   ].join("\n"), "utf8");
   const tables = loadTermTables([file]);
   assert.deepEqual(tables.errors, []);
   return tables;
 }
 
-// 带注音的条目（非人名）必须在原文里连同注文一起出现才算命中，测试里用这个助手写「原文的注音形态」。
+// 带注音的条目（非人名）要在原文与译文**两侧**都对上注音，才算「表里那个专有名词」；
+// 测试里用这个助手写「原文的注音形态」。
 function withRuby(base, ruby, tail = "") {
   return `<ruby>${base}<rt>${ruby}</rt></ruby>${tail}`;
 }
@@ -126,17 +134,19 @@ test("判定规则：命中整条术语才判，短词/读音/分段只确认或
   const partial = evaluateTermRow({ source: "東雲太郎は言った。", target: "東雲说道。", tables });
   assert.equal(partial.kind, "consistent");
   assert.equal(partial.hits[0].via, "part");
-  // 一致：括号/字形差异
-  assert.equal(evaluateTermRow({ source: `それは${withRuby("結界装置", "バリアユニット")}だ。`, target: "那是名为结界装置的能力。", tables }).kind, "consistent");
-  // 冲突：整条术语没使用本项目译名（≥3 字强证据）
-  const conflict = evaluateTermRow({ source: `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, target: "取下GPS信号发射机。", tables });
+  // 一致：括号/字形差异（注音条目只对上原文侧时降级为一致性证据，但“译文用了译名”仍然成立）
+  const rubyOnly = evaluateTermRow({ source: `それは${withRuby("結界装置", "バリアユニット")}だ。`, target: "那是名为结界装置的能力。", tables });
+  assert.equal(rubyOnly.kind, "consistent");
+  assert.equal(rubyOnly.hits[0].demoted, true, "没有双侧注音 → 降级为只作一致性证据");
+  // 冲突：整条术语没使用本项目译名（≥3 字强证据）——用无注音条目测：注音条目已不允许指控（见下一条测试）
+  const conflict = evaluateTermRow({ source: "召喚陣を使う。", target: "使用魔法阵。", tables });
   assert.equal(conflict.kind, "conflict");
   assert.equal(conflict.hits[0].consistent, false);
   assert.equal(conflict.revisedText, "", "没有可定位的旧译名时不能编造替换文本");
-  // 冲突：译文里出现的是“其他译法”，给出最小替换
-  const replaced = evaluateTermRow({ source: `${withRuby("結界装置", "バリアユニット")}を使う。`, target: "使用Barrier Unit。", tables });
+  // 冲突：译文里出现的是“其他译法”（英文写法），给出最小替换
+  const replaced = evaluateTermRow({ source: "召喚陣を使う。", target: "使用Summon Circle。", tables });
   assert.equal(replaced.kind, "conflict");
-  assert.equal(replaced.revisedText, "使用【结界装置】。", "只替换术语，句子其余部分不动");
+  assert.equal(replaced.revisedText, "使用【召唤阵】。", "只替换术语，句子其余部分不动");
   // 短词不算强证据：命中但不判定，交回后续流程
   const shortTerm = evaluateTermRow({ source: "その時代の話だ。", target: "那是这年头的事。", tables });
   assert.equal(shortTerm, null);
@@ -148,45 +158,73 @@ test("判定规则：命中整条术语才判，短词/读音/分段只确认或
   assert.equal(evaluateTermRow({ source: "今日はいい天気だ。", target: "今天天气不错。", tables }), null);
 });
 
-test("非人名条目声明注音时，基文与注文必须一起在原文里对上才进入判定", () => {
+test("非人名条目声明注音时，中日两侧都注音才算「表里那个专有名词」", () => {
   const tables = loadFixtureTables();
 
   // 误判修复：正文里的「ＧＰＳ発信機」是普通词义（发射机），表里那条「発信機/ナノデバイス」
   // 指的是另一个装备——只对上基文不能算命中，整行交回后续流程而不是报“译名差异”。
   const plainWord = evaluateTermRow({ source: "ＧＰＳ発信機を取り外す。", target: "取下GPS信号发射机。", tables });
-  assert.equal(plainWord, null, "只对上基文、注文对不上的候选不算命中");
+  assert.equal(plainWord, null, "只对上基文、且译文没用该项目译名：不算命中");
   const wrongRuby = evaluateTermRow({ source: `ＧＰＳ${withRuby("発信機", "そうち")}を取り外す。`, target: "取下GPS信号发射机。", tables });
-  assert.equal(wrongRuby, null, "注文与表里不一致时同样不算命中");
+  assert.equal(wrongRuby, null, "原文注文与表里不一致时同样不算命中");
 
-  // 注音对上了：这一处才是表里那个术语，照常出结论（译名没用到 → 转人工确认）。
-  const matched = evaluateTermRow({ source: `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, target: "取下GPS信号发射机。", tables });
-  assert.equal(matched.kind, "conflict");
-  assert.equal(matched.hits[0].entry.plainSource, "発信機");
-  assert.equal(matched.rubySkipped, 0);
+  // 只对上原文侧注音、译文侧没注音 → 降级为「只作一致性证据」：
+  // 译文用了该项目译名才算命中；译文没用（发射机）时**不算命中、不注入、不指控**（刻意选的保守方向）。
+  const demotedHit = evaluateTermRow({ source: `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, target: "取下GPS发信器。", tables });
+  assert.equal(demotedHit.kind, "consistent");
+  assert.equal(demotedHit.hits[0].entry.plainSource, "発信機");
+  assert.equal(demotedHit.hits[0].demoted, true);
+  assert.equal(demotedHit.rubySkipped, 0);
+  assert.equal(demotedHit.rubyDemoted, 1, "降级命中的候选要如实报数");
+  const demotedMiss = evaluateTermRow({ source: `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, target: "取下GPS信号发射机。", tables });
+  assert.equal(demotedMiss, null, "只有原文侧注音不足以指控译名差异");
+  const rejectedSamples = [];
+  findTermHits(`ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, tables, { target: "取下GPS信号发射机。", rejected: rejectedSamples });
+  assert.deepEqual(rejectedSamples.map((item) => item.entry.plainSource), ["発信機"], "被排除的候选要如实报数");
 
-  // 注文以正文形式出现（原文直接写出别名，而不是用注音标注）同样算对上。
-  assert.equal(evaluateTermRow({ source: "これは発信機、はっしんきだ。", target: "这是发信器。", tables }).kind, "consistent");
+  // 双侧都注音（原文注音对上 + 译文里也注了该词）→ 完整口径，不是降级命中。
+  // 译文注的是该项目译名时结论是「一致」；注的是表外写法但读音对得上时，才是真正的译名差异（见下一个用例）。
+  const both = evaluateTermRow({
+    source: `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`,
+    target: `取下GPS${withRuby("发信器", "Nano-Device")}。`,
+    tables,
+  });
+  assert.equal(both.kind, "consistent");
+  assert.equal(both.hits[0].demoted, false);
+  assert.equal(both.hits[0].consistent, true);
+  assert.equal(both.rubyDemoted, 0);
 
-  // 被排除的候选要如实报数（同一行同一术语只算一次），便于核对规则是否过严。
+  // 注文以正文形式出现（原文直接写出别名，而不是用注音标注）同样算原文侧证据；译文侧没注音仍是降级。
+  const plainRuby = evaluateTermRow({ source: "これは発信機、はっしんきだ。", target: "这是发信器。", tables });
+  assert.equal(plainRuby.kind, "consistent");
+  assert.equal(plainRuby.hits[0].demoted, true);
+
+  // 同一行里既有只对上基文的出现、又有对上原文注音的出现，译文也确实用了该译名：降级命中成立。
   const mixed = evaluateTermRow({
     source: `ＧＰＳ発信機と${withRuby("発信機", "はっしんき")}が並んでいる。`,
     target: "GPS发射机和发信器并排放着。",
     tables,
   });
   assert.equal(mixed.kind, "consistent");
-  assert.equal(mixed.rubySkipped, 0, "本行已经有对上注音的候选，命中仍然成立");
-  const skipped = evaluateTermRow({ source: "発信機と東雲寺を運ぶ。", target: "搬运发射机和东云寺。", tables });
+  assert.equal(mixed.hits[0].demoted, true);
+  assert.equal(mixed.rubySkipped, 0, "译文用了该译名：降级命中成立，不算排除");
+  assert.ok(mixed.rubyDemoted >= 1);
+
+  // 译文里连该译名都没有（降级且无法确认一致）：整条不算命中，两个条目的候选都如实报数。
+  const skipped = evaluateTermRow({ source: "発信機と東雲寺を運ぶ。", target: "搬运这种装置。", tables });
   assert.equal(skipped, null);
   assert.equal(
-    findTermHits("発信機と東雲寺を運ぶ。", tables).some((hit) => hit.scope === "term"),
+    findTermHits("発信機と東雲寺を運ぶ。", tables, { target: "搬运这种装置。" }).some((hit) => hit.scope === "term"),
     false,
-    "两个带注音的条目都没对上注文：整条命中一个都不留",
+    "两个带注音的条目都只有基文命中：整条命中一个都不留",
   );
   const rejected = [];
-  findTermHits("発信機と東雲寺を運ぶ。", tables, { rejected });
+  findTermHits("発信機と東雲寺を運ぶ。", tables, { target: "搬运这种装置。", rejected });
   assert.deepEqual(rejected.map((item) => item.entry.plainSource).sort(), ["東雲寺", "発信機"]);
   // 开关：关掉这条口径后回到旧行为（仅用于对比排查）。
   assert.equal(findTermHits("ＧＰＳ発信機を取り外す。", tables, { rubyStrict: false }).length, 1);
+  // 不提供译文时同样退回旧口径：不能因为“拿不到译文”把注音条目整批当降级。
+  assert.equal(findTermHits(`ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`, tables).length, 1);
 
   // 人名豁免：原文里的人名只在首次出现时注音，之后不带注音也必须照常判定。
   assert.equal(evaluateTermRow({ source: "東雲太郎は来なかった。", target: "他没有来。", tables }).kind, "conflict");
@@ -198,6 +236,62 @@ test("非人名条目声明注音时，基文与注文必须一起在原文里�
     tables,
   });
   assert.equal(fullWidth.kind, "term-only");
+});
+
+test("注音只是这个词本身的普通读音时不再整条排除（魔術 → 魔法）", () => {
+  const tables = loadFixtureTables();
+
+  // 原文与译文两侧都不注音（没有作者会给普通词标读音）：旧口径把它整条排除，行被裸着交给模型，
+  // 模型只能按通用词典把 魔術 判成「魔术」。新口径下它是降级命中：译文用了对照表译名 → 出一致结论。
+  const evaluation = evaluateTermRow({ source: "魔術。", target: "魔法。", tables });
+  assert.equal(evaluation.kind, "term-only", "整行有效内容就是术语 → 对照表直接出结论、跳过模型");
+  assert.equal(evaluation.hits[0].entry.plainSource, "魔術");
+  assert.equal(evaluation.hits[0].demoted, true);
+  assert.equal(evaluation.hits[0].consistent, true);
+  assert.equal(evaluation.rubySkipped, 0, "不再因为“注音没对上”整条排除");
+  assert.equal(evaluation.rubyDemoted, 1);
+
+  // 备注要写清这是「译文用了该项目译名」的证据，不据此判定译名对错。
+  const result = makeTermResult({ index: 355 }, { jp: "原文 A", cn: "主文本（待修改文本）", tw: "" }, evaluation, "bilingual", "cn");
+  assert.equal(result.status, "term-prefilter");
+  assert.match(result.note, /魔術 → 魔法/);
+  assert.match(result.note, /未双侧注音，只作一致性证据/);
+  assert.equal(/请人工确认是否需要替换/.test(result.note), false, "不得写成必须替换的指控");
+
+  // 反向：译文写成表外的「魔术」时，降级口径**不指控**（静默交回后续流程）——与本文件头的保守方向一致。
+  assert.equal(evaluateTermRow({ source: "魔術。", target: "魔术。", tables }), null);
+
+  // 真·双语注音专有名词（能力名）：两侧都注音 → 完整口径，不是降级命中。
+  const both = evaluateTermRow({
+    source: `${withRuby("心理掌握", "メンタルアウト")}。`,
+    target: `${withRuby("心理掌握", "Mental Out")}。`,
+    tables,
+  });
+  assert.equal(both.kind, "term-only");
+  assert.equal(both.hits[0].demoted, false);
+  assert.equal(both.rubyDemoted, 0);
+  // 只有原文侧注音（译文没注音）：降级——译文用了译名仍算一致，译文没用就不算命中。
+  const oneSided = evaluateTermRow({ source: `${withRuby("心理掌握", "メンタルアウト")}を使う。`, target: "使用心理掌握。", tables });
+  assert.equal(oneSided.hits[0].demoted, true);
+  assert.equal(evaluateTermRow({ source: `${withRuby("心理掌握", "メンタルアウト")}を使う。`, target: "使用别的能力。", tables }), null);
+  // 译文注音的是别的词（既不是该条目的中文译名，注音也不是表里那条读音）：不算译文侧证据，仍走降级。
+  const wrongTargetRuby = evaluateTermRow({
+    source: `${withRuby("心理掌握", "メンタルアウト")}を使う。`,
+    target: `使用${withRuby("别的能力", "Other Power")}。`,
+    tables,
+  });
+  assert.equal(wrongTargetRuby, null, "译文侧的注音要落在该条目的中文译名或其读音上");
+
+  // 译文用了表外的中文写法、但注音就是表里那条读音（ruby_trans）：
+  // 这仍是「中日两侧都注音」，而且正是要指控的译名不一致（表里 心理掌握，译文写别的词）。
+  const foreignSpelling = evaluateTermRow({
+    source: `${withRuby("心理掌握", "メンタルアウト")}を使う。`,
+    target: `使用${withRuby("心理操作", "Mental Out")}。`,
+    tables,
+  });
+  assert.equal(foreignSpelling.kind, "conflict", "注音对上了就是表里那个词：译文没用该项目译名要报出来");
+  assert.equal(foreignSpelling.hits[0].demoted, false);
+  assert.equal(foreignSpelling.hits[0].entry.plainSource, "心理掌握");
 });
 
 test("只有整行有效内容都是术语时才跳过模型", () => {
@@ -315,10 +409,10 @@ test("对照表只写「整行只有术语」的备注，冲突行改由模型�
   assert.throws(() => makeTermResult({ index: 841 }, labels, injected, "bilingual", "cn"), /只写「整行只有术语」的结论/);
 
   // 术语冲突同样不由对照表出结论：它注入提示词后交给模型，所以写备注的入口直接报错。
-  const conflictSource = `ＧＰＳ${withRuby("発信機", "はっしんき")}を取り外す。`;
+  const conflictSource = "召喚陣を使う。";
   const conflictEvaluation = evaluateTermRow({
     source: conflictSource,
-    target: "取下GPS信号发射机。",
+    target: "使用魔法阵。",
     tables,
   });
   assert.equal(conflictEvaluation.kind, "conflict");
@@ -328,7 +422,7 @@ test("对照表只写「整行只有术语」的备注，冲突行改由模型�
     "术语冲突不再写成面向人工的结论",
   );
   // 差异明细仍可供离线审计与人工核对模型的判断依据。
-  assert.match(conflictAnalysisHead(conflictEvaluation.hits), /発信機 → 发信器/);
+  assert.match(conflictAnalysisHead(conflictEvaluation.hits), /召喚陣 → 召唤阵/);
   const guidance = termGuidanceFor(
     { index: 839, jp: conflictSource },
     { evaluation: conflictEvaluation, targetKey: "cn", targetLabel: "B" },
@@ -336,24 +430,24 @@ test("对照表只写「整行只有术语」的备注，冲突行改由模型�
   assert.match(guidance.terms[0].text, /译文未出现该译名，请判断此处是否确指该术语/);
 
   const replacedEvaluation = evaluateTermRow({
-    source: `${withRuby("結界装置", "バリアユニット")}を使う。`,
-    target: "使用Barrier Unit。",
+    source: "召喚陣を使う。",
+    target: "使用Summon Circle。",
     tables,
   });
   assert.equal(replacedEvaluation.kind, "conflict");
   // 只替换术语会是什么样子仍然算出来（审计参考），但它不再是结论。
-  assert.equal(replacedEvaluation.revisedText, "使用【结界装置】。");
+  assert.equal(replacedEvaluation.revisedText, "使用【召唤阵】。");
   assert.throws(() => makeTermResult({ index: 840 }, labels, replacedEvaluation, "bilingual", "cn"), /只写「整行只有术语」的结论/);
 });
 
 test("冲突明细只列真正的译名差异，一致项与分段命中只给计数", () => {
   const tables = loadFixtureTables();
 
-  // 一行里同时有三种命中：真差异（発信機 没译成「发信器」）、已确认一致（東雲寺）、
+  // 一行里同时有三种命中：真差异（召喚陣 没译成「召唤阵」）、已确认一致（聖堂教会）、
   // 以及只出现姓氏「東雲」而带出的分段命中（東雲太郎，本行并没有写全名）。
   const evaluation = evaluateTermRow({
-    source: `東雲は${withRuby("発信機", "はっしんき")}を${withRuby("東雲寺", "しののめでら")}に置いた。`,
-    target: "东云把发射机放在了东云寺。",
+    source: "東雲は召喚陣を聖堂教会に置いた。",
+    target: "东云把魔法阵放在了圣堂教会。",
     tables,
   });
   assert.equal(evaluation.kind, "conflict");
@@ -363,11 +457,11 @@ test("冲突明细只列真正的译名差异，一致项与分段命中只给�
 
   // 明细只列差异项；标题的条数口径与明细一致。
   assert.match(head, /命中对照表 3 条，其中 1 条存在译名差异：/);
-  assert.match(head, /発信機 → 发信器/);
+  assert.match(head, /召喚陣 → 召唤阵/);
   assert.match(head, /（另有 1 条已确认一致、1 条原文只有分段或读音写法，未参与差异判定）/);
   // 一致项与分段命中的条目名不再进明细：旧版把它们贴在「存在译名差异」标题下，
   // 同一句里既有「译文已使用该译名」又有「未参与译名一致性判定」，人工要读完整串才找到真差异。
-  assert.equal(/東雲寺 → 东云寺/.test(head), false, "已确认一致的条目不该列进差异明细");
+  assert.equal(/聖堂教会 → 圣堂教会/.test(head), false, "已确认一致的条目不该列进差异明细");
   assert.equal(/東雲太郎 → 東雲太郎/.test(head), false, "只命中分段写法的同姓角色不该列进差异明细");
   assert.equal(/未参与译名一致性判定/.test(head), false);
   assert.equal(/译文已使用该译名/.test(head), false);
@@ -417,20 +511,20 @@ test("真差异与假名存疑同时命中时，明细只列真差异、存疑�
   fs.writeFileSync(file, [
     "Base_Ori,Ruby_Ori,Base_Trans,Type",
     "グループ,,GROUP,组织/暗部",
-    "【発信機】,はっしんき,【发信器】,科技/装备",
+    "【召喚陣】,,【召唤阵】,术式",
   ].join("\n"), "utf8");
   const tables = loadTermTables([file]);
   assert.deepEqual(tables.errors, []);
 
   const evaluation = evaluateTermRow({
-    source: `頂点グループをＧＰＳ${withRuby("発信機", "はっしんき")}で探す。`,
-    target: "用GPS信号发射机寻找顶点集团。",
+    source: "頂点グループを召喚陣で探す。",
+    target: "用魔法阵寻找顶点集团。",
     tables,
   });
   // 有强证据差异时整行仍交给模型，差异明细只列真差异，存疑项不能被写成差异。
   assert.equal(evaluation.kind, "conflict");
   const head = conflictAnalysisHead(evaluation.hits);
-  assert.match(head, /命中对照表 2 条，其中 1 条存在译名差异：発信機 → 发信器/);
+  assert.match(head, /命中对照表 2 条，其中 1 条存在译名差异：召喚陣 → 召唤阵/);
   assert.match(head, /（另有 1 条命中的是假名写法、可能为普通词，需结合上下文判断）/);
   assert.equal(/グループ → GROUP（组织\/暗部）：译文未出现该译名/.test(head), false, "存疑项不得写成译名差异");
 });

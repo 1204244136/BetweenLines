@@ -36,7 +36,10 @@ const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerpr
 // 3：每个变体多一份 `terms`（行号 → 命中的术语对），供页面在跑任务之前就显示“这行命中了哪些术语”。
 // 4：非人名条目声明注音时要求「基文 + 注文」都在原文里对上，命中集合随之变化；旧快照的判定口径不同，
 //    必须靠版本号判过期（否则运行期会拿新口径去对旧结论，报出一堆假分叉）。
-const TERM_LAYER_VERSION = 4;
+// 5：注音条目改成「中日两侧都注音才算表里那个专有名词」（见 ai/term-table.js 文件头）：
+//    只对上原文侧的候选降级为「只作一致性证据」——译文用了该译名才算命中，否则不算命中。
+//    影响的是命中集合本身（读音类条目重新参与判定），同样必须靠版本号判过期。
+const TERM_LAYER_VERSION = 5;
 
 // 每行最多随页面带上这么多条术语：命中行平均 2~3 条，上限定得宽松但能挡住病态行（同一行命中几十条）。
 const TERMS_PER_ROW_CAP = 8;
@@ -73,15 +76,19 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
   // 行号 → 该行命中的术语对（去方括号的「原文 → 译名（类型）」）：页面在跑任务前就能显示命中了什么。
   const terms = {};
   const chapters = new Map();
-  // 被注音口径排除的候选（基文命中、但注文没对上；详见 term-table.js 文件头）。
-  // 它不改变结论，只用于说明“表里有这条、本行却没算命中”的原因，方便核对规则是否过严。
+  // 被注音口径排除的候选（基文命中、但中日两侧没有同时注音，且译文也没用该译名；详见 term-table.js
+  // 文件头）。它不改变结论，只用于说明“表里有这条、本行却没算命中”的原因，方便核对规则是否过严。
   const rubySkippedCandidates = [];
+  // 降级为「只作一致性证据」的候选（同样是没有双侧注音，但译文确实用了该译名）。
+  // 它们**算命中**，只是没有任何指控译名差异的能力；单独计数是为了看清新口径的影响面。
+  const rubyDemotedCandidates = [];
   for (const row of rows) {
     const evaluation = evaluateTermRow({
       source: row.jp || "",
       target: String(row[targetKey] ?? ""),
       tables,
       rejected: rubySkippedCandidates,
+      demoted: rubyDemotedCandidates,
     });
     if (!evaluation) continue;
     if (evaluation.kind === "term-only") termOnly.push(Number(row.index));
@@ -117,8 +124,12 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
       injected: injected.length,
       advisory: advisoryRows,
       conflicts: conflicts.length,
-      // 基文命中、但注文没对上而被排除的候选条数（非人名条目带注音时的匹配口径，见 term-table.js）。
+      // 基文命中、但中日两侧没有同时注音且译文也没用该译名，因而被排除的候选条数
+      // （非人名条目带注音时的匹配口径，见 term-table.js）。
       rubySkipped: rubySkippedCandidates.length,
+      // 同样没有双侧注音、但译文用了该译名，因而降级为「只作一致性证据」的候选条数：
+      // 它们算命中，只是不再具备指控译名差异的能力。
+      rubyDemoted: rubyDemotedCandidates.length,
       // 对照表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
       removedFromModel: termOnly.length,
       aiRows: Math.max(0, rows.length - termOnly.length),

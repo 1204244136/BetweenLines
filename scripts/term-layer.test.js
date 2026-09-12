@@ -81,7 +81,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 4);
+  assert.equal(layer.version, 5);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -100,7 +100,9 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   assert.equal(variant.summary.aiRows, 4);
   // 夹具里两条都是人名条目（豁免注音口径），没有候选被排除。
   assert.equal(variant.summary.rubySkipped, 0);
-  assert.match(entry.fingerprint, /^4\|terms\.csv:\d+:\d+#2$/);
+  // 降级为「只作一致性证据」的候选同样要如实报数（本夹具全是人名条目，不受注音口径约束）。
+  assert.equal(variant.summary.rubyDemoted, 0);
+  assert.match(entry.fingerprint, /^5\|terms\.csv:\d+:\d+#2$/);
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["terms.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -182,7 +184,7 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":4/);
+  assert.match(html, /"termPrefilter":\{"version":5/);
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。

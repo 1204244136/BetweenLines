@@ -130,7 +130,7 @@ function hitsUsedInRow(sourceText, hits = []) {
 function termGuidanceFor(row, { evaluation = null, targetKey = "cn", targetLabel = "" } = {}) {
   if (!evaluation || !evaluation.hits || !evaluation.hits.length) return null;
   const terms = hitsUsedInRow(row?.jp || "", evaluation.hits).map((hit) => {
-    const { entry, consistent, variant, scope, via, strong, advisory } = hit;
+    const { entry, consistent, variant, scope, via, strong, advisory, demoted } = hit;
     const note = describeTermHit(hit);
     // 术语一律用去方括号的形态显示：表里的【】只是给注音标记位置，正文里不出现。
     const line = {
@@ -144,6 +144,8 @@ function termGuidanceFor(row, { evaluation = null, targetKey = "cn", targetLabel
       consistent: consistent === true,
       // 存疑项：命中的是假名写法（可能只是普通词），由模型结合上下文判断此处是否确指该术语。
       advisory: advisory === true,
+      // 降级项：原文与译文没有同时注音，只作“译文用了该项目译名”的证据，不据此判定译名对错。
+      demoted: demoted === true,
       variant: variant ? { from: variant.from, kind: variant.kind } : null,
       note,
     };
@@ -153,6 +155,7 @@ function termGuidanceFor(row, { evaluation = null, targetKey = "cn", targetLabel
     if (variant) line.text += `（译文现用「${variant.from}」，属${variant.kind}，请判断是否需要改用本项目译名）`;
     else if (advisory) line.text += "（可能为普通词，需结合上下文判断）";
     else if (!consistent) line.text += "（译文未出现该译名，请判断此处是否确指该术语、是否需要改用该项目译名）";
+    else if (demoted) line.text += "（原文与译文未同时注音，只作一致性证据：译文已用该译名，不据此改译名）";
     else if (via === "part") line.text += "（译文用了分段写法）";
     return line;
   });

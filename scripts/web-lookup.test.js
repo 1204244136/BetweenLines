@@ -42,6 +42,8 @@ function writeTerms() {
     "Base_Ori,Ruby_Ori,Base_Trans,Ruby_Trans,Other_Fandom,Type",
     "グループ,,GROUP,,,组织/暗部",
     "【発信機】,はっしんき,【发信器】,,发射机,科技/装备",
+    // 无注音条目：只有这类（以及人名）才可能产出译名差异——注音条目按新口径只能确认一致。
+    "【召喚陣】,,【召唤阵】,,魔法阵,术式",
   ].join("\n"), "utf8");
   const tables = loadTermTables([file]);
   assert.deepEqual(tables.errors, []);
@@ -83,11 +85,17 @@ test("检索词条只来自假名存疑项：译名优先、原文备选，且�
   assert.match(entries[0].excerpt, /頂点グループ/);
   assert.equal(entries[0].targetText, "处于顶级位置的一类人。", "片段里的内联标记要剥掉");
 
-  // 非存疑命中不给词条：conflict 由对照表直接给结论。
-  const conflictJp = "ＧＰＳ<ruby>発信機<rt>はっしんき</rt></ruby>を取り外す。";
-  const conflictGuidance = guidanceFor(conflictJp, "取下GPS信号发射机。", tables);
+  // 非存疑命中不给词条：译名差异行由模型结合整句判断，不靠线上查证。
+  const conflictJp = "召喚陣を取り外す。";
+  const conflictGuidance = guidanceFor(conflictJp, "取下魔法阵。", tables);
   assert.equal(conflictGuidance.evaluation.kind, "conflict");
-  assert.deepEqual(webLookupEntries({ termGuidance: conflictGuidance, jp: conflictJp, targetText: "GPS发射机。" }), []);
+  assert.deepEqual(webLookupEntries({ termGuidance: conflictGuidance, jp: conflictJp, targetText: "取下魔法阵。" }), []);
+  // 注音条目降级命中（原文/译文没有同时注音，只作一致性证据）同样不进这一层。
+  const demotedJp = "ＧＰＳ<ruby>発信機<rt>はっしんき</rt></ruby>を取り外す。";
+  const demotedGuidance = guidanceFor(demotedJp, "取下GPS发信器。", tables);
+  assert.equal(demotedGuidance.evaluation.kind, "consistent");
+  assert.equal(demotedGuidance.terms[0].demoted, true);
+  assert.deepEqual(webLookupEntries({ termGuidance: demotedGuidance, jp: demotedJp, targetText: "取下GPS发信器。" }), []);
   assert.deepEqual(webLookupEntries({ termGuidance: { terms: [] }, jp, targetText }), []);
 });
 
@@ -313,10 +321,10 @@ test("关闭开关或档案没声明站点时这一层完全不动（不注入�
   assert.equal(noSites.status.webLookups, 0);
 });
 
-test("非存疑行不进这一层：译名差异行由对照表直接给结论", async () => {
+test("非存疑行不进这一层：译名差异行由对照表交给模型判断", async () => {
   const { tables } = writeTerms();
-  const jp = "ＧＰＳ<ruby>発信機<rt>はっしんき</rt></ruby>を取り外す。";
-  const targetText = "取下GPS信号发射机。";
+  const jp = "召喚陣を取り外す。";
+  const targetText = "取下魔法阵。";
   const guidance = guidanceFor(jp, targetText, tables);
   assert.equal(guidance.evaluation.kind, "conflict");
   assert.deepEqual(webLookupEntries({ termGuidance: guidance, jp, targetText }), []);

@@ -157,8 +157,11 @@ const status = {
   termPrefiltered: 0,
   termConflicts: 0,
   termInjected: 0,
-  // 基文命中、但注文没对上原文而被排除的候选条数（非人名条目带注音时的匹配口径，见 term-table.js）。
+  // 注音条目（非人名）的两类不完整证据，口径见 term-table.js 文件头：
+  // termRubySkipped ＝ 中日两侧没有同时注音、且译文未出现该译名，因而未参与判定的候选条数；
+  // termRubyDemoted ＝ 同样没有双侧注音，但译文确实用了该译名，因而降级为「只作一致性证据」的候选条数。
   termRubySkipped: 0,
+  termRubyDemoted: 0,
   termTables: { files: [], entries: 0 },
   // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
   lowScoreEnabled: true,
@@ -243,6 +246,7 @@ function clientStatus(options = {}) {
     termConflicts: status.termConflicts,
     termInjected: status.termInjected,
     termRubySkipped: status.termRubySkipped,
+    termRubyDemoted: status.termRubyDemoted,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
@@ -1154,9 +1158,12 @@ function applyTermTable(config, rows, labels) {
   const skippedByTable = [];
   const targetKey = termTargetKeyFor(config.proofreadMode, config.target);
   const targetLabel = targetKey === "tw" ? (labels.tw || "非原文 C") : (labels.cn || "译文 B");
-  // 被注音口径排除的候选：非人名条目声明了注音时，基文命中还不够，注文也要在原文里对上。
-  // 这里只统计与提示，不改变结论——它回答的是“表里有这条、本行为什么没算命中”。
+  // 被注音口径排除的候选：非人名条目声明了注音时，要么中日两侧都注音（完整判定），
+  // 要么降级为只作一致性证据——这里收集的是“降级且译文也没用该译名”的候选。
+  // 只统计与提示，不改变结论——它回答的是“表里有这条、本行为什么没算命中”。
   const rubySkippedCandidates = [];
+  // 降级为「只作一致性证据」的候选（没有双侧注音，但译文确实用了该译名）：算命中，只是不能指控译名差异。
+  const rubyDemotedCandidates = [];
   for (const row of rows) {
     const index = Number(row.index);
     const evaluation = evaluateTermRow({
@@ -1164,6 +1171,7 @@ function applyTermTable(config, rows, labels) {
       target: textForKey(row, targetKey),
       tables: termTables,
       rejected: rubySkippedCandidates,
+      demoted: rubyDemotedCandidates,
     });
     if (!evaluation) continue;
     if (evaluation.kind === "conflict") {
@@ -1188,11 +1196,18 @@ function applyTermTable(config, rows, labels) {
   status.termConflicts = conflictRows;
   status.termInjected = [...config.termContext.keys()].length;
   status.termRubySkipped = rubySkippedCandidates.length;
+  status.termRubyDemoted = rubyDemotedCandidates.length;
   pushLog(`${termTableSummary(termTables)}：命中 ${consistentRows + conflictRows + advisoryRows} 行（整行只有术语、跳过模型 ${skippedByTable.length}，术语冲突 ${conflictRows}，存疑交模型判断 ${advisoryRows}），另有 ${status.termInjected} 行的术语作为提示词注入后照常交给模型（含术语冲突行：术语判断由模型结合整句给出，不再直接转人工）。`);
+  if (rubyDemotedCandidates.length) {
+    // 如实说出来：这些条目声明了注音，但本行原文与译文没有同时注音——按新口径它们只作一致性证据
+    // （译文用了该项目译名才留下），不能据此指控译名差异。
+    const samples = [...new Set(rubyDemotedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
+    pushLog(`对照表：${rubyDemotedCandidates.length} 条候选因中日两侧没有同时注音，降级为只作一致性证据（例：${samples.join("、")}）。`);
+  }
   if (rubySkippedCandidates.length) {
-    // 如实说出来：这些候选是“表里有这条、原文却只对上了基文”——非人名条目带注音时的匹配口径。
+    // 如实说出来：这些候选是“表里有这条、本行却没算命中”的——非人名条目带注音时的匹配口径。
     const samples = [...new Set(rubySkippedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
-    pushLog(`对照表：${rubySkippedCandidates.length} 条候选因原文只对上基文、注文没对上而未参与判定（例：${samples.join("、")}）。`);
+    pushLog(`对照表：${rubySkippedCandidates.length} 条候选因没有同时注音、且译文未出现该译名而未参与判定（例：${samples.join("、")}）。`);
   }
   compareWithTermLayer(config, { resolved, targetKey, skippedByTable });
   return resolved;

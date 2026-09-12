@@ -17,13 +17,25 @@
  * - type：条目类型（人名/术语/地名…），判定时只用于一件事：区分人名与非人名（见下）
  * - other_fandom / ruby_trans / memo1 / memo2：其他译法、英文、备注，用于冲突时给出线索
  *
- * **注音条目的匹配口径（非人名）**：`ruby_ori` 记的是这个词在原文里的注音写法/别名（如
- * 「【発信機】」注「ナノデバイス」、「【表層融解】」注「フラックスコート」）。这类条目只靠基文
- * 字面命中会误判：正文里的「ＧＰＳ発信機」是普通词义（发射机），与表里那个装备不是一回事。
- * 所以非人名条目一旦声明了注音，就**必须基文与注文都在原文里对上**才进入翻译判断——
- * 即本行存在注音对「基文含该条目写法 + 读音等于该注文」，或注文直接以正文形式出现在本行。
- * 只有基文命中、注文对不上的候选**不算命中**（不判定、不计入覆盖率、不进提示词），
- * 但会通过 `rejected` 回传计数，便于日志与页面区分“表里没这条”和“注音不符所以没算”。
+ * **注音条目的匹配口径（非人名）：中日两侧都注音，才当作「表里那个专有名词」**。
+ * `ruby_ori` 这一列混着两类写法：
+ * - ① 特殊别名读音：「【発信機】」注「ナノデバイス」、「【表層融解】」注「フラックスコート」；
+ * - ② 这个词本身的普通读音：「【魔術】」注「まじゅつ」、「【学園都市】」注「がくえんとし」。
+ * ②类在正文里**永远不带注音**（没有作者会给普通词标读音），所以单看原文的“基文 + 注文必须一起出现”
+ * 会把它们整体排除：实测整卷 3119 行里光「魔術」就有 42 处候选被挡掉，那些行被裸着交给模型，
+ * 模型只能按通用词典把 魔術 判成「魔术」（`【魔術】→魔法` 本来就写在表里，却没能注入）。
+ * 反过来，只对上基文的「ＧＰＳ発信機」是普通词义（发射机），与表里那件装备不是一回事，又不能一律放行。
+ * 因此改成**双侧证据**：真正带特殊注音的专有名词在中日两侧都会注音
+ * （`<ruby>心理掌握<rt>メンタルアウト</rt></ruby>` ↔ `<ruby>心理掌握<rt>Mental Out</rt></ruby>`），
+ * 于是把「译文里对应的中文译名也被注音」当作第二个证据，候选因此有三种出口：
+ * - `full`：原文侧对上（基文 + 注文，或注文以正文形式出现）**且**译文侧的中文译名也带注音
+ *   → 按完整口径判定：可确认一致、可指控译名差异、可计入覆盖率；
+ * - `demoted`：只有一侧对上、或两侧都没有 → **降级为「只作一致性证据」**：译文确实用了该译名时
+ *   照常算命中（一致 → 可注入提示词、可判「整行只有术语」），译文没用该译名时**不算命中**
+ *   （不判定、不计入覆盖率、不进提示词）——宁可不判，也不凭一次字面命中去指控译名错误；
+ * - `excluded`：降级且译文也没用该译名，通过 `rejected` 回传计数；降级命中的候选通过 `demoted`
+ *   回传，便于日志与页面区分「表里没这条」与「注音没双侧对上、只作一致性证据」。
+ * `ruby` 别名（原文只写了读音）不设这道门槛：它本来就只能确认一致、不能指控，与降级后的效果一致。
  *
  * **人名条目豁免**：原文里的人名只在首次出现时注音，之后一律不带注音，若也要求注音对上，
  * 人名条目会在绝大多数行里失效。因此人名（`type` 含人名/角色/姓名/名字/character/person 等）
@@ -167,6 +179,39 @@ function rubyEvidenceMatches(entry, alias, pairs = [], plain = "") {
   if (matched) return true;
   const plainKey = normalizeRubyText(plain);
   return expected.some((key) => key.length >= 2 && plainKey.includes(key));
+}
+
+/**
+ * 译文侧的注音证据：本行译文里出现了该条目的**中文注音形态**（成品 `<ruby>基文<rt>注音</rt></ruby>`
+ * 与稿件 `|基文[注音]` 两种形态都认，由 `rubyPairs` 解析）。满足任一条即算对上：
+ * 1. 注音落在该条目的**中文译名**上（基文互相包含，容忍方括号/字形/简繁差异）；
+ * 2. 注音内容就是表里那条读音（`ruby_ori` 归一后的假名，或 `ruby_trans` 英文列）——译文用了
+ *    别的中文写法但注音指的还是同一个词，这正是「译名不一致」的典型形态：
+ *    表里 `【念動能力】/テレキネシス`，译文写「念动力`<Telekinesis>`」。
+ *
+ * 为什么需要译文侧证据：见文件头——`ruby_ori` 一列同时装着“特殊别名读音”和“这个词本身的普通读音”，
+ * 前者（発信機/ナノデバイス）只对上基文会误判，后者（魔術/まじゅつ）却永远不会带注音。
+ * 真正的注音专有名词在中日两侧都注音，所以「译文也注了这个词」能把两者分开：
+ * 有它才按完整口径判定，没有它降级为只作一致性证据。
+ *
+ * 第 1 条不校验注音内容（中文侧注音多是拉丁原名 Level 5/Mental Out，与表里的注文并不总一致）；
+ * 第 2 条反过来只认注音内容。两条都不要求基文与表里译名一致——否则“译文没按表里译名写”
+ * 这件事本身就会让证据消失，指控永远无从谈起。
+ */
+function targetRubyEvidenceMatches(entry, pairs = []) {
+  const key = entry && entry.compareKey;
+  const expected = (entry && entry.rubyKeys) || [];
+  const latin = normalizeRubyText((entry && entry.rubyTarget) || "");
+  if (!latin && !expected.length && (!key || key.length < 2)) return false;
+  return pairs.some((pair) => {
+    const base = normalizeForCompare(pair.base);
+    if (base.length < 2) return false;
+    if (key && key.length >= 2 && (base.includes(key) || key.includes(base))) return true;
+    const ruby = normalizeRubyText(pair.ruby);
+    if (!ruby) return false;
+    if (latin && ruby === latin) return true;
+    return expected.includes(ruby);
+  });
 }
 
 // 片假名别名不能落在更长的片假名词内部（サンタクロース 里的「タク」不是「巧」）。
@@ -401,7 +446,9 @@ function buildTermBuckets(entries) {
  * @param {string} sourceText 原文（**带内联标记的原始文本**：注音校验要看 `<ruby>/<rt>`，
  *   调用方不要预先 strip——内部自己剥掉注音内容做字面匹配，再单独解析注音对）。
  * @param {object} tables loadTermTables 的结果。
- * @param {object} [options] `rubyStrict` 覆盖开关；`rejected` 传入数组时收集因注音不符而未算命中的候选。
+ * @param {object} [options] `rubyStrict` 覆盖开关；`target` 本行译文（带内联标记的原始文本，
+ *   用于「中文译名也被注音」这第二个证据；**不提供时退回只看原文侧口径**，调用方应尽量提供）；
+ *   `rejected` 收集因注音证据不足而未算命中的候选；`demoted` 收集降级为「只作一致性证据」的候选。
  */
 function findTermHits(sourceText, tables, options = {}) {
   const raw = String(sourceText || "");
@@ -409,10 +456,17 @@ function findTermHits(sourceText, tables, options = {}) {
   if (!text || !tables || !tables.entries || !tables.entries.length) return [];
   const rubyStrict = options.rubyStrict === undefined ? rubyStrictDefault() : Boolean(options.rubyStrict);
   const rejected = options.rejected || null;
+  const demoted = options.demoted || null;
+  // 译文侧证据只在调用方给了译文时启用：没给（例如只做原文侧的离线排查）就退回旧口径，
+  // 不能因为“拿不到译文”把带特殊注音的专有名词整批当成降级。
+  const hasTarget = options.target !== undefined && options.target !== null;
   const pairs = rubyStrict ? rubyPairs(raw) : [];
+  const targetPairs = rubyStrict && hasTarget ? rubyPairs(String(options.target)) : [];
+  const targetKey = rubyStrict && hasTarget ? normalizeForCompare(stripInlineMarkup(String(options.target))) : "";
   const hits = new Map();
   const tried = new Set();
   const rejectedEntries = new Set();
+  const demotedEntries = new Set();
   for (const char of new Set(Array.from(text))) {
     const bucket = tables.buckets.get(char);
     if (!bucket) continue;
@@ -422,21 +476,47 @@ function findTermHits(sourceText, tables, options = {}) {
       if (tried.has(key)) continue;
       tried.add(key);
       if (!hasUsableMatch(text, alias)) continue;
-      // 读音别名本身就是“原文只写了读音”的证据，不需要再要求注音形态；
-      // 基文/分段别名则要在带注音的条目上先过注音这一关。
-      if (rubyStrict && scope !== "ruby" && entryNeedsRuby(entry) && !rubyEvidenceMatches(entry, alias, pairs, text)) {
-        if (rejected && !rejectedEntries.has(entry.source)) {
-          rejectedEntries.add(entry.source);
-          rejected.push({ entry, alias, scope });
+      // 读音别名（原文只写了读音）不设这道门槛：它只能确认一致、不能指控译名错误（strong 恒为 false），
+      // 与「降级为只作一致性证据」等价。基文/分段别名则要在带注音的条目上过「双侧注音」这一关。
+      let demotedHit = false;
+      if (rubyStrict && scope !== "ruby" && entryNeedsRuby(entry)) {
+        const sourceOk = rubyEvidenceMatches(entry, alias, pairs, text);
+        const full = hasTarget ? (sourceOk && targetRubyEvidenceMatches(entry, targetPairs)) : sourceOk;
+        if (!full) {
+          // 降级：只有译文确实用了该译名时才算命中（只作一致性证据），否则整条不算命中。
+          if (!checkTargetConsistency(entry, targetKey)) {
+            if (rejected && !rejectedEntries.has(entry.source)) {
+              rejectedEntries.add(entry.source);
+              rejected.push({ entry, alias, scope });
+            }
+            continue;
+          }
+          demotedHit = true;
+          if (demoted && !demotedEntries.has(entry.source)) {
+            demotedEntries.add(entry.source);
+            demoted.push({ entry, alias, scope });
+          }
         }
-        continue;
       }
       const current = hits.get(entry.source);
+      const incoming = {
+        entry,
+        alias,
+        scope,
+        // 降级命中只作一致性证据：永远不是强证据，因此不会被判成译名差异。
+        strong: demotedHit ? false : strong,
+        demoted: demotedHit,
+      };
+      // 同一条目上的择优顺序（前一条成立就不再往后看）：
+      // ① 强证据 > 弱证据；② 整条术语 > 分段/读音别名（读音别名不走注音门槛，别抢占整条命中）；
+      // ③ 同档内 完整口径 > 降级口径；④ 别名更长。
       const better = !current
-        || (!current.strong && strong)
+        || (!current.strong && incoming.strong)
         || (current.scope !== "term" && scope === "term")
-        || (current.scope === scope && current.strong === strong && alias.length > current.alias.length);
-      if (better) hits.set(entry.source, { entry, alias, scope, strong });
+        || (current.scope === scope && current.demoted && !incoming.demoted)
+        || (current.scope === scope && current.demoted === incoming.demoted
+          && current.strong === incoming.strong && alias.length > current.alias.length);
+      if (better) hits.set(entry.source, incoming);
     }
   }
   return [...hits.values()];
@@ -567,26 +647,42 @@ function measureTermCoverage(sourceText, hits) {
  * 1. 只有“强证据”（3 字及以上的基文别名）才能判“译名不一致”，并把线索写进提示词交给模型；
  * 2. 2 字词、读音别名、分段别名只能“确认一致”，不能指控译名错误——它们常以普通词义出现；
  * 3. 一行若既没有强证据、也没被确认一致，就不由对照表处理，继续走 AI；
- * 4. 非人名条目声明了注音时，基文还必须与注文一起在原文里对上（见文件头）——只对上基文的
- *    候选不算命中，`rubySkipped` 如实报出本行有几条这样被排除的候选。
+ * 4. 非人名条目声明了注音时，还要**中日两侧都注音**才算“表里那个专有名词”（见文件头）：
+ *    只对上原文侧的候选**降级为只作一致性证据**——译文用了该译名才算命中，否则不算命中；
+ *    `rubySkipped` 报出被排除的候选条数，`rubyDemoted` 报出降级命中的候选条数。
  */
-function evaluateTermRow({ source, target, tables, rejected = null }) {
+function evaluateTermRow({ source, target, tables, rejected = null, demoted = null }) {
   const plainSource = stripInlineMarkup(source);
   const plainTarget = stripInlineMarkup(target);
   const collected = [];
-  const hits = findTermHits(source, tables, { rejected: collected });
+  const demotedHits = [];
+  const hits = findTermHits(source, tables, { rejected: collected, demoted: demotedHits, target });
   const rubySkipped = collected.length;
+  const rubyDemoted = demotedHits.length;
   if (rejected && collected.length) rejected.push(...collected);
+  if (demoted && demotedHits.length) demoted.push(...demotedHits);
   if (!hits.length) return null;
   const targetKey = normalizeForCompare(plainTarget);
   // 每条命中都带上该条目**全部**可用别名：覆盖率要按全部写法划除，提示词也要据此判断
   // “这个术语本行到底用到了没有”（只留命中时选中的那一条会漏掉同一术语的另一种写法）。
   const usableAliases = (entry) => entry.aliases || [];
-  const results = hits.map(({ entry, alias, scope, strong }) => {
+  const results = hits.map(({ entry, alias, scope, strong, demoted: isDemoted }) => {
     const decidable = scope === "term" && strong;
     const via = checkTargetConsistency(entry, targetKey);
     if (!decidable) {
-      return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : null, via, variant: null, advisory: false };
+      return {
+        entry,
+        alias,
+        aliases: usableAliases(entry),
+        scope,
+        strong,
+        // 降级命中：原文/译文没有同时注音，只作一致性证据（译文确实用了该译名才留在这里）。
+        demoted: isDemoted === true,
+        consistent: via ? true : null,
+        via,
+        variant: null,
+        advisory: false,
+      };
     }
     const variant = via ? null : findWrongVariant(plainTarget, entry);
     // **存疑（advisory）**：命中的基文别名全是假名（グループ、メンバー、トリック…）时，对照表不足以定论。
@@ -594,7 +690,7 @@ function evaluateTermRow({ source, target, tables, rejected = null }) {
     // 既可能是译名没统一，也可能这里本来就是普通词义——只有结合上下文的模型（与最终的人工）能判断。
     // 因此标为 advisory：不写对照表结论、不跳过模型，改为把该术语注入提示词后照常交给模型判断。
     const advisory = Boolean(variant === null && !via && KANA_ONLY_BASE.test(String(alias || "")));
-    return { entry, alias, aliases: usableAliases(entry), scope, strong, consistent: via ? true : false, via, variant, advisory };
+    return { entry, alias, aliases: usableAliases(entry), scope, strong, demoted: false, consistent: via ? true : false, via, variant, advisory };
   });
   const advisory = results.filter((result) => result.advisory === true);
   const conflicts = results.filter((result) => result.consistent === false && !result.advisory);
@@ -612,6 +708,7 @@ function evaluateTermRow({ source, target, tables, rejected = null }) {
       advisory,
       revisedText: "",
       rubySkipped,
+      rubyDemoted,
     };
   }
 
@@ -624,7 +721,7 @@ function evaluateTermRow({ source, target, tables, rejected = null }) {
     }
     revisedText = text.trim();
   }
-  return { kind: "conflict", hits: results, advisory, revisedText, rubySkipped };
+  return { kind: "conflict", hits: results, advisory, revisedText, rubySkipped, rubyDemoted };
 }
 
 /**
@@ -654,6 +751,11 @@ function describeTermHit(result) {
   if (scope === "ruby") {
     return `${pair}：原文只出现了读音写法，基文与读音可能对应不同中文，未参与判定。`;
   }
+  if (result.demoted) {
+    // 降级命中：本条目的注音没有在中日两侧同时出现，只能当“译文确实用了该项目译名”的证据
+    // （降级命中必然是「译文已使用该译名」），不能反过来指控译名错误——那是完整口径才有的结论。
+    return `${pair}：原文与译文没有同时注音，只作一致性证据（译文已使用该译名，不据此判定译名对错）。`;
+  }
   if (!strong) {
     return consistent
       ? `${pair}：译文已使用该译名（短词，只作为一致性证据）。`
@@ -681,6 +783,8 @@ function termHitGroupLabel(result) {
   const { consistent, scope, via, strong } = result;
   if (scope === "part") return "原文为分段写法";
   if (scope === "ruby") return "原文为读音写法";
+  // 降级命中（原文/译文没有同时注音）单独成群：它只是“译文用了该项目译名”的证据。
+  if (result.demoted) return "未双侧注音，只作一致性证据";
   if (!strong) return "短词证据";
   if (consistent === true) return via === "part" ? "译文用分段写法" : "译文已用译名";
   return "未确认";
@@ -749,6 +853,7 @@ module.exports = {
   splitBracketed,
   stripInlineMarkup,
   stripMarks,
+  targetRubyEvidenceMatches,
   termAliases,
   termTableSummary,
 };
