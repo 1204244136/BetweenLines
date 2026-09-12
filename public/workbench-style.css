@@ -878,6 +878,14 @@
       gap: 6px;
       margin-bottom: 7px;
     }
+    /* 状态徽标成组靠右：单个徽标时整组贴右（与过去一致），多个徽标时彼此相邻而不是被拉开。 */
+    .confirm-status {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
     .done-line {
       display: inline-flex;
       align-items: center;
@@ -928,6 +936,71 @@
       border-color: #e6aaa5;
       background: #fff7f6;
       color: var(--review-strong);
+    }
+    /* 本行命中的术语：默认只显示条数，展开看具体是哪几条（正文与备注列都不占常驻空间）。 */
+    .term-chip-slot:empty {
+      display: none;
+    }
+    /* 容器只作占位与更新锚点：`display: contents` 让芯片自己参与 .confirm-status 的 flex 布局，
+       这样展开时它才能拿到整行宽度，而不会被这个 span 限制成一行文字宽。 */
+    .term-chip-slot:not(:empty) {
+      display: contents;
+    }
+    .term-chip {
+      font-size: 12px;
+    }
+    .term-chip > summary {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 22px;
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-subtle);
+      color: var(--muted);
+      cursor: pointer;
+      list-style: none;
+      white-space: nowrap;
+    }
+    .term-chip > summary::-webkit-details-marker {
+      display: none;
+    }
+    .term-chip > summary:hover {
+      border-color: color-mix(in srgb, var(--focus) 40%, var(--line));
+    }
+    .term-chip-count {
+      font-weight: 700;
+    }
+    .term-chip-state {
+      color: var(--muted-2);
+      font-size: 11px;
+    }
+    .term-chip[open] > summary {
+      border-color: color-mix(in srgb, var(--focus) 28%, var(--line));
+      background: color-mix(in srgb, var(--info) 62%, var(--surface));
+      color: #175cd3;
+    }
+    /* 展开列表占满本行备注列整宽（弹层会被 .table-frame 的 overflow 裁掉，所以就地展开）。 */
+    .term-chip[open] {
+      flex-basis: 100%;
+    }
+    .term-chip-list {
+      margin: 6px 0 2px;
+      padding: 8px 10px;
+      max-height: 220px;
+      overflow: auto;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+      color: #344054;
+      list-style: none;
+      text-align: left;
+      white-space: normal;
+      line-height: 1.5;
+    }
+    .term-chip-list li + li {
+      margin-top: 3px;
     }
     .note-summary {
       display: grid;

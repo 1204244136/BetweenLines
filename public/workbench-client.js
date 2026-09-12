@@ -218,6 +218,9 @@
     // 判定与「校对模式 + 目标列」绑定，切换后重新取用；跑过 AI/预筛的行以真实备注为准，不再叠徽标。
     const termLayer = pageMeta.termPrefilter || null;
     let termVerdicts = new Map();
+    // 行号 → 构建期算出的命中术语对（「原文 → 译名（类型）」）：页面在跑任务之前就能显示命中了什么。
+    // 只存文案，判定与备注仍以运行期为准。
+    let termEntries = new Map();
     function termVariantKeyForPage() {
       const mode = aiIds.proofreadMode?.value === "bilingual" ? "bilingual" : "trilingual";
       return mode + ":" + (mode === "bilingual" ? "cn" : (aiIds.target?.value === "tw" ? "tw" : "cn"));
@@ -230,15 +233,27 @@
     }
     function refreshTermVerdicts() {
       termVerdicts = new Map();
+      termEntries = new Map();
       const { variant } = currentTermVariant();
       if (!variant) return;
-      for (const index of variant.consistent || []) termVerdicts.set(String(index), "consistent");
+      // 旧快照没有 termOnly：那时命中一致的行一律跳过模型，按同一语义回落到 termOnly。
+      const termOnly = new Set(variant.termOnly || variant.consistent || []);
+      for (const index of variant.consistent || []) {
+        termVerdicts.set(String(index), termOnly.has(index) ? "term-only" : "injected");
+      }
       for (const index of variant.conflicts || []) termVerdicts.set(String(index), "conflict");
+      for (const [index, list] of Object.entries(variant.terms || {})) {
+        if (Array.isArray(list) && list.length) termEntries.set(String(index), list);
+      }
     }
     function termLayerSummary() {
       const { variant } = currentTermVariant();
       if (!variant) return "";
-      return `构建期预筛 ${variant.hits} 行命中（一致 ${variant.summary.consistent} / 需确认 ${variant.summary.conflicts}），预计 ${variant.summary.aiRows} 行仍需 AI 判定`;
+      const summary = variant.summary || {};
+      const consistent = summary.consistent || 0;
+      const termOnly = summary.termOnly === undefined ? consistent : summary.termOnly;
+      const injected = Math.max(0, consistent - termOnly);
+      return `构建期预筛 ${variant.hits} 行命中（术语一致 ${consistent}：整行只有术语 ${termOnly} / 需注入术语 ${injected}；需确认 ${summary.conflicts || 0}），预计 ${summary.aiRows} 行仍需 AI 判定`;
     }
     // 每个特化档案在页面里自带默认提示词：切换下拉时不必等状态轮询就能替换未手改的提示词。
     function defaultPromptForProfile(profileId) {
@@ -1231,6 +1246,25 @@
       ].join(" ").toLowerCase();
     }
 
+    // 本行命中了哪些术语：构建期随页面下发的行级术语对（只由原文 + 对照表决定，与模型无关）。
+    // 有备注时以备注里的结论为准（那是当次任务的判定），这里退回构建期判定并说明出处。
+    function renderTermChipHtml(id, noteText) {
+      const pairs = termEntries.get(id);
+      if (!pairs || !pairs.length) return "";
+      const fromNote = Boolean(noteText);
+      const cap = 8;
+      const lines = pairs.slice(0, cap).map((pair) => "- " + pair);
+      if (pairs.length > cap) lines.push("- …（其余 " + (pairs.length - cap) + " 条见对照表）");
+      const source = fromNote
+        ? "对照表结论（备注）：命中 " + pairs.length + " 条术语"
+        : "构建期判定：本行原文命中对照表 " + pairs.length + " 条术语";
+      const title = [source, ...lines].join("\n");
+      return '<details class="term-chip" data-term-chip="' + id + '" title="' + escapeHtml(title) + '">' +
+        '<summary><span class="term-chip-count">术语 ' + pairs.length + '</span><span class="term-chip-state">' + (fromNote ? "结论" : "预判") + '</span></summary>' +
+        '<ul class="term-chip-list">' + pairs.map((pair) => '<li>' + escapeHtml(pair) + '</li>').join("") + '</ul>' +
+        '</details>';
+    }
+
     function renderRow(row) {
       const id = String(row.index);
       const note = notes[id] || { note: "", done: false, manualDone: false, aiDone: false };
@@ -1245,13 +1279,19 @@
       const termVerdict = note.note ? "" : (termVerdicts.get(id) || "");
       const termBadge = termVerdict === "conflict"
         ? '<span class="ai-confirm-badge is-modify" title="构建期判定：本行原文命中对照表，译文里的译名与项目译名不一致；跑 AI 校对或预筛选时会先给出术语替换建议">术语需改</span>'
-        : (termVerdict === "consistent"
-          ? '<span class="ai-confirm-badge is-same" title="构建期判定：本行原文命中对照表，译文已使用项目译名；跑预筛选时这行不会调用模型">术语一致</span>'
-          : "");
-      const rowBadges = aiBadge + termBadge + habitBadge;
+        : (termVerdict === "term-only"
+          // 只有整行有效内容都是术语时才跳过模型：这一行没有术语之外的内容可校。
+          ? '<span class="ai-confirm-badge is-same" title="构建期判定：本行原文的有效内容全部是项目术语，对照表能给出完整结论；跑预筛选时这行不会调用模型">纯术语</span>'
+          : (termVerdict === "injected"
+            ? '<span class="ai-confirm-badge is-unclear" title="构建期判定：本行原文命中对照表但句中还有术语之外的内容；术语一致只能证明术语用对了，整句仍会交给模型判定（术语以提示词注入）">术语注入</span>'
+            : ""));
+      // 备注列首行分两组：左侧「人工确认」勾选，右侧状态徽标（AI 结论 + 术语/特色提示）。
+      // 徽标必须聚成一组，否则 space-between 会把它们拉到备注列两端，中间空出一大片。
+      const rowBadges = aiBadge + habitBadge;
       const verifyBadge = note.recoveredUnverified
         ? '<button type="button" class="ai-confirm-badge is-unverified" data-verify="' + id + '" title="找回记录缺少完整内容证据；点击表示已核对本行内容">未校验</button>'
         : "";
+      const termChip = renderTermChipHtml(id, note.note || "");
       const classes = [row.cls, done ? "done" : "", activeRowId === id ? "active-row" : "", aiActiveIds.has(id) ? "ai-active" : ""]
         .filter(Boolean)
         .join(" ");
@@ -1286,8 +1326,12 @@
         '<td class="note-cell">',
         '<div class="confirm-row">',
         '<label class="done-line"><input type="checkbox" data-done="' + id + '"' + (done ? " checked" : "") + '><span>人工确认</span></label>',
+        '<div class="confirm-status">',
         rowBadges,
+        termBadge,
         verifyBadge,
+        '<span class="term-chip-slot" data-term-chip-slot="' + id + '">' + termChip + '</span>',
+        '</div>',
         '</div>',
         renderNoteSummary(note, id),
         '</td>',
@@ -1425,6 +1469,12 @@
         const state = aiBadgeState(notes[id]);
         aiBadge.className = "ai-confirm-badge " + state.cls;
         aiBadge.textContent = state.text;
+      }
+      // 术语块只在「跑过对照表/AI」前后切换出处说明（构建期预判 ↔ 备注结论），内容不变就不重建。
+      const termChipSlot = rendered?.querySelector('[data-term-chip-slot]');
+      if (termChipSlot) {
+        const html = renderTermChipHtml(id, notes[id]?.note || "");
+        if (termChipSlot.innerHTML !== html) termChipSlot.innerHTML = html;
       }
       const diffSlot = rendered?.querySelector('[data-diff-slot]');
       const row = rowsById.get(id);
@@ -2243,7 +2293,7 @@
         // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
         hint.dataset.state = built ? "ok" : "pending";
         hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
-        hint.title = "特化规范里声明的译名对照表：命中的行先查表，不再调用模型。";
+        hint.title = "特化规范里声明的译名对照表：整行有效内容都是术语时才跳过模型，否则术语只作为提示词注入、整句仍由模型判定。";
         return;
       }
       const files = status.files || [];
@@ -2320,12 +2370,13 @@
       const similarityPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.similarityPrefiltered || 0));
       const structuredConflicts = Math.min(rowTotal || Infinity, Math.max(0, ai.structuredConflicts || 0));
       const termPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.termPrefiltered || 0));
+      const termInjected = Math.min(rowTotal || Infinity, Math.max(0, ai.termInjected || 0));
       aiIds.progress.style.width = Math.min(100, Math.round((done / total) * 100)) + "%";
       aiIds.progressWrap.hidden = !ai.running && done === 0 && !prefiltered;
       const isPrefilter = ai.kind === "prefilter";
       const queueText = done + "/" + aiTotal;
       const skipText = "人工确认跳过 " + skippedDone;
-      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered + (termPrefiltered ? "，对照表 " + termPrefiltered : "");
+      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered + (termPrefiltered ? "，对照表跳过 " + termPrefiltered : "") + (termInjected ? "，对照表注入术语 " + termInjected : "");
       const pendingText = "待 AI 校对 " + aiTotal;
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
