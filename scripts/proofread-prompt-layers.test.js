@@ -84,8 +84,10 @@ function payload(overrides = {}) {
 }
 
 // 每条按行规范的辨识短语：出现在提示词里就说明该条被注入了。
+// 注意 ruby 的辨识短语不能选「基文[注文]」这类字样：通用侧的输出语言约束里也会提到注音写法，
+// 那样连纯叙述行都能匹配上，断言就失去意义了。
 const ROW_LINE_MARKERS = {
-  ruby: "基文[注文]",
+  ruby: "普通词没有注音不算缺陷",
   emphasis: "原文右侧傍点",
   noteref: "（*译注：…）",
   page: "段落 class",
@@ -142,6 +144,35 @@ test("按行裁剪：只在当前行命中特征时才注入对应的特化规�
   assert.equal(withRuby.includes(ROW_LINE_MARKERS.ruby), true);
   assert.equal(withRuby.includes(ROW_LINE_MARKERS.emphasis), false, "命中 ruby 不该连带注入傍点规范");
   assert.ok(withRuby.length > trimmed.length, "命中特征后提示词应当变长");
+});
+
+test("原文侧的 HTML 注音也算命中：不能漏掉“原文有注音、译文没有”的行", () => {
+  // 本工作台的日文原文列就是 <ruby>基文<rt>注文</rt></ruby> 形态（实测整卷 3119 行里 1116 行），
+  // 探测器只认目标列会让其中 923 行拿不到注音规范——模型没有口径可依，就会照抄原文的日文读音。
+  const row = {
+    source: "「ねえ待って、無理だよ!! あのこれちょっと見て、手のトコ<ruby>鍋掴<rt>なべつか</rt></ruby>みたいになってるよ!!」",
+    target: "「喂等等，办不到啦！！那个稍微看看这个，手部跟防烫隔热手套一样啊！！」",
+  };
+  const hit = detectRowFeatures(row);
+  assert.equal(hit.has("ruby"), true, "原文侧带 <ruby> 却不命中，等于整条注音规范不注入");
+  const system = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: hit });
+  assert.equal(system.includes(ROW_LINE_MARKERS.ruby), true);
+  // 目标列侧带注音（旧口径唯一认的那种）与译者稿形态都仍然命中。
+  assert.equal(detectRowFeatures(FEATURE_SAMPLES.ruby).has("ruby"), true);
+  assert.equal(detectRowFeatures({ source: "|鍋掴[なべつか]みたい", target: "跟隔热手套一样" }).has("ruby"), true);
+});
+
+test("输出语言约束与标记范围：修订结果不得写入原文文字，标记只留目标列自身已有的", () => {
+  const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+  const full = proofreadPromptFor("bilingual", "novel").system;
+  const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
+  for (const text of [full, trimmed]) {
+    // 通用侧与固定尾巴永远全量：裁剪之后这两条也必须在，否则模型只在“恰好命中 ruby”的行才受约束。
+    assert.equal(text.includes("revisedText 只能是目标列语言的文字"), true);
+    assert.equal(text.includes("不得照抄原文读音"), true);
+    assert.equal(text.includes("只保留目标列自身已有的内联标记"), true);
+    assert.equal(text.includes("目标列里没有的标记不得从原文补进 revisedText"), true);
+  }
 });
 
 test("页面默认提示词保持全量：裁剪只发生在真正发请求时", () => {

@@ -162,6 +162,8 @@ const status = {
   // termRubyDemoted ＝ 同样没有双侧注音，但译文确实用了该译名，因而降级为「只作一致性证据」的候选条数。
   termRubySkipped: 0,
   termRubyDemoted: 0,
+  // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、转人工确认的行数（见 guardTargetScript）。
+  scriptLeaks: 0,
   termTables: { files: [], entries: 0 },
   // 低分归因层：多少行因极低分进入归因复核、其中多少行真的归到跨行错位（计数在 resetStatus 里清零）。
   lowScoreEnabled: true,
@@ -247,6 +249,8 @@ function clientStatus(options = {}) {
     termInjected: status.termInjected,
     termRubySkipped: status.termRubySkipped,
     termRubyDemoted: status.termRubyDemoted,
+    // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
+    scriptLeaks: status.scriptLeaks,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
     webLookupAttempts: status.webLookupAttempts,
@@ -447,6 +451,8 @@ function resetStatus(config, rowsLength) {
   status.termPrefiltered = 0;
   status.termConflicts = 0;
   status.termInjected = 0;
+  // 输出侧护栏：多少行的 revisedText 混进了原文（日文）文字而被作废转人工（提示词约束之外的确定性闸门）。
+  status.scriptLeaks = 0;
   // 线上查询层：多少行模型判断不了而进入查证、一共问了几轮、其中多少行据此得出结论。
   status.webLookups = 0;
   status.webLookupResolved = 0;
@@ -814,6 +820,7 @@ function clearProofreadCache() {
   status.termPrefiltered = 0;
   status.termConflicts = 0;
   status.termInjected = 0;
+  status.scriptLeaks = 0;
   status.webLookups = 0;
   status.webLookupResolved = 0;
   status.webLookupAttempts = 0;
@@ -888,6 +895,9 @@ function finish() {
     if (lowScore) pushLog(lowScore);
     const lookup = webLookupSummary();
     if (lookup) pushLog(lookup);
+    if (status.scriptLeaks) {
+      pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废并转人工确认。`);
+    }
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
@@ -1053,7 +1063,13 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
-  return decisionToResult(row, decision, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
+  // 输出侧兜底（最后一关）：模型把原文文字写进修订结果时作废它——这种文本会被人工直接写回成品。
+  const guarded = guardTargetScript(decision, targetText);
+  if (guarded !== decision) {
+    status.scriptLeaks += 1;
+    pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废并转人工确认。`);
+  }
+  return decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
 }
 
 async function trackedCallModel(row, stage, stageLabel, messages, config) {
@@ -1499,6 +1515,44 @@ function textForKey(row, key) {
 function contextItemChars(item) {
   return [item.source, item.target, item.counterpart]
     .reduce((sum, value) => sum + String(value || "").length, 0);
+}
+
+/**
+ * 目标列语言护栏：修订结果里混进原文（日文）文字时一律作废并转人工。
+ *
+ * 为什么需要：提示词只能“要求”模型，做不到“保证”。模型有两种情况下会写出带原文文字的修订结果——
+ * ① 原文有注音标记（<ruby>鍋掴<rt>なべつか</rt></ruby>）而目标列没有，它判定“译文漏了注音”，
+ *    手上却没有目标列的读音可写，于是照抄日文读音；② 上下文轮/低分归因轮把相邻行的原文
+ *    当成了可复制文本。而备注里的「修改结果：」会被人工直接写回成品，等于把日文写进中文成品，
+ * 所以这里必须有一道确定性闸门（提示词侧的同名约束写在 proofread-contract 的通用规则里）。
+ *
+ * 判据很窄（两条同时成立才拦）：目标列当前行**本来不含假名**（含则说明该列有刻意的假名写法，
+ * 例如作品里允许的片假名口癖，不拦），而 revisedText 含假名。summary 里的原文引用不受影响——
+ * 它只进备注，不进成品。
+ */
+const SOURCE_SCRIPT_PATTERN = /[\u3041-\u3096\u309d-\u309f\u30a1-\u30f6\u30fc]/u;
+
+function hasTargetScriptLeak(revisedText, targetText) {
+  const revised = String(revisedText || "");
+  if (!revised || !SOURCE_SCRIPT_PATTERN.test(revised)) return false;
+  return !SOURCE_SCRIPT_PATTERN.test(String(targetText || ""));
+}
+
+function guardTargetScript(decision, targetText) {
+  if (!decision || !hasTargetScriptLeak(decision.revisedText, targetText)) return decision;
+  return {
+    ...decision,
+    revisedText: "",
+    suggestion: "",
+    needsContext: true,
+    better: "unclear",
+    severity: "none",
+    scriptLeak: true,
+    summary: [
+      String(decision.summary || "").trim(),
+      "模型给出的修改结果混入了原文（日文）文字，已作废并转人工确认——成品不得写入原文文字。",
+    ].filter(Boolean).join(" "),
+  };
 }
 
 function ensureRevisedText(decision, targetKey, targetText, counterpartText, proofreadMode = "trilingual") {
@@ -2254,6 +2308,8 @@ module.exports = {
   detectModelCapabilities,
   errorCircuitBreaker,
   extractClaudeText,
+  guardTargetScript,
+  hasTargetScriptLeak,
   isGptModel,
   isAlignFragmentRow,
   isAlignFragmentText,

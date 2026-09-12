@@ -21,7 +21,7 @@
 // 注册表：档案条目只能声明这里列出的特征；声明了未注册的 id 时该条目按“常驻”处理并告警，
 // 避免一个笔误让某条规范永远不注入。
 const FEATURE_IDS = Object.freeze([
-  "ruby",          // 注音（稿件 |基文[注文]、成品 ruby/rt）
+  "ruby",          // 注音（原文 ruby/rt 或稿件 |基文[注文]、成品 ruby/rt）
   "emphasis",      // 傍点 → 加粗（原文着重号、成品 b/strong）
   "noteref",       // 译注标记（EPUB noteref、㊟）
   "page",          // 分页换页与版式（pb class、图片占位、插图行）
@@ -42,8 +42,14 @@ const PARTICLE_WORDS = /チッ|ちっ|まあ|やれやれ|あら|おや|ふむ|�
 const PARTICLE_TARGETS = /啧|呀嘞|啊啦|嘛|嘞/u;
 
 const RULES = {
+  // 注音现象在原文与目标列**任一侧**出现都算命中。原文侧有两种形态：译者稿的 |基文[注文]，
+  // 以及本工作台日文原文列的 <ruby>基文<rt>注文</rt></ruby>。只认稿件形态会让“原文有注音、
+  // 译文没有”的行整条拿不到注音规范（实测整卷 3119 行里 923 行），而这类行恰恰最需要那条规范：
+  // 模型不知道注音该怎么处理时，会照抄原文的日文读音（见 ai-proofread 的目标列语言护栏）。
   ruby: ({ source, target }) =>
-    /\|[^\s|\]]{0,30}\[[^\]\n]{1,40}\]/u.test(source) || /<\s*(ruby|rt)[\s>/]/i.test(target),
+    /<\s*(ruby|rt)[\s>/]/i.test(source)
+    || /\|[^\s|\]]{0,30}\[[^\]\n]{1,40}\]/u.test(source)
+    || /<\s*(ruby|rt)[\s>/]/i.test(target),
   emphasis: ({ source, target }) =>
     /[\uFE45\uFE46\uFF9E\uFF9F]/u.test(source) || /<\s*(b|strong)[\s>]/i.test(target),
   noteref: ({ source, target }) =>

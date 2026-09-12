@@ -9,7 +9,13 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-ai-statu
 const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
 process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
 
-const { clearProofreadCache, clientStatus, startProofread } = require("./ai-proofread");
+const {
+  clearProofreadCache,
+  clientStatus,
+  guardTargetScript,
+  hasTargetScriptLeak,
+  startProofread,
+} = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
 const {
   createProjectStaging,
@@ -529,4 +535,57 @@ test("对齐片段行在模型索要上下文后直接终局，不再扩展相�
       server.closeAllConnections();
     });
   }
+});
+
+test("修订结果混入原文（日文）文字时作废并转人工，不允许写回成品", async () => {
+  const leakedDecision = JSON.stringify({
+    semanticSame: false,
+    needsEdit: true,
+    needsContext: false,
+    decision: "replace",
+    score: 70,
+    penalty: 30,
+    grade: "good",
+    severity: "minor",
+    summary: "需要修改：原文的注音没有译出。",
+    revisedText: "「手部跟<ruby>防烫隔热手套<rt>なべつか</rt></ruby>一样啊！！」",
+  });
+  const body = JSON.stringify({ choices: [{ message: { content: leakedDecision } }] });
+  const { finished, rows } = await runProofreadAgainst({
+    label: "script-leak",
+    rowCount: 2,
+    respond: (count, response) => response.end(body),
+  });
+  assert.equal(finished.running, false);
+  assert.equal(finished.errors, 0);
+  assert.equal(finished.scriptLeaks, rows.length, "每一行的越界输出都要计数");
+  assert.match(finished.logs.join("\n"), /输出语言护栏：2 行的修改结果混入了原文（日文）文字/);
+
+  const results = clientStatus().results.filter((item) => item.status !== "error");
+  assert.equal(results.length, rows.length);
+  for (const result of results) {
+    assert.equal(result.status, "suggestion");
+    assert.equal(result.done, false);
+    assert.match(result.note, /是否需要修改：待人工确认/);
+    assert.equal(
+      result.note.includes("修改结果："),
+      false,
+      "被作废的修订结果不得留在备注里——备注里的修改结果会被人工直接写回成品",
+    );
+    assert.match(result.note, /混入了原文（日文）文字/);
+  }
+});
+
+test("目标列本来就有刻意的假名写法时不拦；纯目标列语言的修订结果照常通过", () => {
+  const leaked = { needsEdit: true, revisedText: "「なべつか」", summary: "需要修改。" };
+  assert.equal(hasTargetScriptLeak("「手部跟なべつか一样」", "手部跟隔热手套一样。"), true);
+  assert.equal(hasTargetScriptLeak("「手部跟隔热手套一样」", "手部跟隔热手套一样。"), false);
+  assert.equal(hasTargetScriptLeak("", "手部跟隔热手套一样。"), false);
+  // 目标列自己就带假名（作品允许的刻意写法）时，不因为“出现假名”就作废模型给的最小改动。
+  assert.equal(guardTargetScript(leaked, "「ビリビリ来たわね」").revisedText, "「なべつか」");
+  const guarded = guardTargetScript(leaked, "手部跟隔热手套一样。");
+  assert.equal(guarded.revisedText, "");
+  assert.equal(guarded.needsContext, true);
+  assert.equal(guarded.better, "unclear");
+  assert.match(guarded.summary, /混入了原文（日文）文字/);
 });
