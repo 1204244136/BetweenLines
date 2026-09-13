@@ -15,9 +15,9 @@ function promptSections(...sections) {
     .join("\n");
 }
 
-function withJsonOnly(system, schema) {
+function withJsonOnly(system, schema, { includeKeys = true } = {}) {
   const schemaKeys = schema && typeof schema === "object" ? Object.keys(schema) : [];
-  const schemaHint = schemaKeys.length
+  const schemaHint = includeKeys && schemaKeys.length
     ? `必须使用以下英文键名且不得省略：${schemaKeys.join(", ")}。`
     : "";
   return promptSections(system, JSON_ONLY_INSTRUCTION, schemaHint);

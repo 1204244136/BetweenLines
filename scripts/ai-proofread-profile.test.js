@@ -92,7 +92,6 @@ test("通用侧与特化侧各自独立，合并注入时顺序固定", () => {
     testProfileMarker,
     "硬性格式约束：",
     "只返回一个 JSON 对象",
-    "必须使用以下英文键名",
   ].map((needle) => contract.system.indexOf(needle));
   assert.equal(order.every((index) => index >= 0), true, "合并后的提示词缺少某个分区");
   assert.deepEqual([...order].sort((a, b) => a - b), order, "分区顺序必须是通用侧 → 模式 → 特化侧 → 约束 → 输出约定");
@@ -223,7 +222,7 @@ test("自定义提示词与特化档案合并时不会出现两套规范或两�
       systemPrompt,
     })[0].content;
     assert.equal(countOf(content, /只返回一个 JSON 对象/g), 1, `${label} 的 JSON 输出约定重复`);
-    assert.equal(countOf(content, /必须使用以下英文键名/g), 1, `${label} 的键名约定重复`);
+    assert.equal(countOf(content, /必须使用以下英文键名/g), 0, `${label} 不应在 system 里重复键名清单`);
     assert.equal(countOf(content, /硬性格式约束/g), 1, `${label} 的硬性格式约束重复`);
     assert.equal(countOf(content, /【成品校对规范：/g), 1, `${label} 的档案块重复或残留`);
     assert.equal(content.includes(testProfileMarker), true, `${label} 没有注入当前选中的档案`);

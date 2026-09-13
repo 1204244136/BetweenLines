@@ -77,6 +77,8 @@ const FEATURE_SAMPLES = {
   speechEffect: { source: "ドキドキした。", target: "心跳不已。" },
   particle: { source: "まあ、いいか。", target: "嘛，算了吧。" },
   numeric: { source: "3キロ先だ。", target: "在3千米外。" },
+  fragment: { source: "しかし、", target: "但是。" },
+  outOfScope: { source: "本文。", target: "本文。\n\n特典附录。" },
 };
 
 function payload(overrides = {}) {
@@ -150,7 +152,6 @@ test("按行裁剪：只在当前行命中特征时才注入对应的特化规�
     "人名或术语与译名表、前后文不一致",
     "行边界由上游对齐决定",
     "系列名、专有名词与术语以本项目译名表为准",
-    "角色口癖、第一人称、句尾语气词",
     // 标点全角化是每行都要看的排版底线：任何一行都可能被改写，规范漏注入就等于模型
     // 只在“恰好出现连点”的行才受约束，其余行的改写可以随便打半角标点。
     PUNCT_FULLWIDTH_MARKER,
@@ -172,6 +173,35 @@ test("按行裁剪：只在当前行命中特征时才注入对应的特化规�
   assert.equal(withRuby.includes(ROW_LINE_MARKERS.ruby), true);
   assert.equal(withRuby.includes(ROW_LINE_MARKERS.emphasis), false, "命中 ruby 不该连带注入傍点规范");
   assert.ok(withRuby.length > trimmed.length, "命中特征后提示词应当变长");
+});
+
+test("通用侧的三条可判定规则也按行注入：片段、noteref 与原文外内容", () => {
+  const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+  const plainPrompt = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
+  for (const marker of ["任一侧是不完整片段", "EPUB 注释标记", "目标列中原文没有的特典"]) {
+    assert.equal(plainPrompt.includes(marker), false, `普通完整行不该注入通用规则：${marker}`);
+  }
+
+  const fragment = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    rowFeatures: detectRowFeatures({ source: "しかし、", target: "但是。" }),
+  });
+  assert.equal(fragment.includes("任一侧是不完整片段"), true);
+
+  const noteref = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    rowFeatures: detectRowFeatures({ source: "本文。", target: "本文<a epub:type=\"noteref\"><sup>㊟</sup></a>" }),
+  });
+  assert.equal(noteref.includes("EPUB 注释标记，不属于正文语义"), true);
+
+  const outOfScope = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    rowFeatures: detectRowFeatures({ source: "本文。", target: "本文。\n\n特典附录。" }),
+  });
+  assert.equal(outOfScope.includes("目标列中原文没有的特典"), true);
 });
 
 test("原文侧的 HTML 注音也算命中：不能漏掉“原文有注音、译文没有”的行", () => {
@@ -480,6 +510,25 @@ test("任务结束时汇报本次裁剪省了多少条规范", () => {
   assert.match(summary, /平均每行省约 \d+ 字符/);
   assert.match(summary, /ruby 1 行/);
   resetPromptTrim();
+});
+
+test("真实行样本保持压缩后的请求预算", () => {
+  const messages = buildMessages({
+    row: {
+      index: 3014,
+      jp: "ただし彼女は『理解者』、少年の支え方なら心得ている。",
+      cn: "但是对于怎么让作为「理解者」的少年振作起来，她还是很有心得的。",
+    },
+    targetLabel: "主文本（待修改文本）",
+    targetText: "但是对于怎么让作为「理解者」的少年振作起来，她还是很有心得的。",
+    counterpartLabel: "原文 A",
+    counterpartText: "ただし彼女は『理解者』、少年の支え方なら心得ている。",
+    context: [],
+    contextMode: "none",
+  }, { proofreadMode: "bilingual", profileId: "demo" });
+  assert.ok(messages[0].content.length <= 4000, `system 前缀仍过长：${messages[0].content.length}`);
+  assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
+  assert.ok(messages[0].content.length + messages[1].content.length <= 4900, "单行请求总长度超过预算");
 });
 
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {

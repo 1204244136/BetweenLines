@@ -1956,14 +1956,14 @@ function buildMessages(payload, config = {}) {
       },
     } : {}),
     modePolicy: bilingualMode
-      ? "以原文 A 与译文 B 的语义对应为主要判断对象；只能修改 B，原文 A 用于确认语义边界、遗漏和误译。"
-      : "同时参考原文、目标列和另一非原文列，判断目标列是否准确、通顺并符合原文语义；两份非原文仍是同级材料。",
+      ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
+      : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
     contextPolicy: [
       payload.contextMode === "auto"
-        ? "已提供自动补充的相邻上下文，请结合上下文给出最终判断。"
+        ? "已补相邻上下文，请据此给出最终判断。"
         : payload.contextMode === "requested"
-          ? "已按固定策略补充当前行前后文。若仍不足，请返回 needsContext=true；若足够，请给出最终判断。"
-          : "当前只提供目标行。若当前行不足以判断，请返回 needsContext=true；不要猜测，也不要为保险索要上下文。",
+          ? "已补相邻上下文；仍不足返回 needsContext=true，足够则给出最终判断。"
+          : "只提供目标行；不足则返回 needsContext=true，不要猜测或为保险索要上下文。",
       payload.context?.length ? "相邻行只作判断依据，不是修改对象；revisedText 只针对当前目标行。" : "",
     ].filter(Boolean).join(" "),
     // contextBudget（轮数/行数/字符上限）与 contextExpansion 是程序内部参数，模型无法也无需据此判断，
@@ -1978,8 +1978,8 @@ function buildMessages(payload, config = {}) {
       ...(bilingualMode ? {} : {
         counterpartLabel: payload.counterpartLabel,
         counterpartText: payload.counterpartText || "",
+        diffHelper: payload.diffHelper,
       }),
-      diffHelper: payload.diffHelper,
     },
     // 上下文只以实际行数据形式给出（含行号与相对位置），不再附带“补充几轮”这类程序细节。
     nearbyRows: payload.context,

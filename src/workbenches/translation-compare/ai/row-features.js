@@ -3,7 +3,7 @@
  *
  * 为什么需要它：特化档案里有一批“只在特定版式或文字现象上才有意义”的规范——注音、
  * 傍点加粗、译注标记、分页与图片、省略号写法、「！？」顺序、引号用途与成对标记内的句末点号、连接词衔接、
- * 拟声词与语气词选词、数字与单位。每行都注入它们既贵（占前缀的一半以上），
+ * 拟声词与语气词选词、数字与单位、片段与原文外内容。每行都注入它们既贵（占前缀的一半以上），
  * 又会把注意力从“这一行到底哪里有问题”上稀释掉；只有当前行真的出现对应现象时才需要。
  *
  * 三条纪律（改这个文件前先读）：
@@ -35,12 +35,24 @@ const FEATURE_IDS = Object.freeze([
   "speechEffect",  // 拟声词、被打断、异口同声、断续
   "particle",      // 语气词与拟声词选词
   "numeric",       // 数字与单位、儿化音
+  "fragment",      // 不完整片段（接续词/助词/标点收尾或缺少句末标点）
+  "outOfScope",    // 目标列出现特典、后记、译注、制作信息等原文外内容
 ]);
 
 const KATAKANA_RUN = /[\u30a1-\u30f6\u30fc]{3,}/u;
 // 语气词/拟声词：原文侧常见写法（成品选词规则要用的那批）。
 const PARTICLE_WORDS = /チッ|ちっ|まあ|やれやれ|あら|おや|ふむ|へえ|はあ|こら|そら|ほら/u;
 const PARTICLE_TARGETS = /啧|呀嘞|啊啦|嘛|嘞/u;
+const TERMINAL_PUNCTUATION = /[。！？…」』）)\]】]$/u;
+const FRAGMENT_ENDING = /(?:しかし|だが|でも|そして|また|つまり|ただし|だから|そこで|すると|ゆえに|なぜなら|けれども|けれど|けど|なお)[、,，]?\s*$/u;
+
+function looksLikeFragment(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return !TERMINAL_PUNCTUATION.test(text)
+    || FRAGMENT_ENDING.test(text)
+    || /[、,，:：;；]$/u.test(text);
+}
 
 const RULES = {
   // 注音现象在原文与目标列**任一侧**出现都算命中。原文侧有两种形态：译者稿的 |基文[注文]，
@@ -82,6 +94,12 @@ const RULES = {
   particle: ({ source, target }) => PARTICLE_WORDS.test(source) || PARTICLE_TARGETS.test(target),
   numeric: ({ source, target }) =>
     /[0-9０-９]|キロ|メートル|センチ|グラム|千克|千米|公里|公斤|儿/u.test(`${source}\n${target}`),
+  // 片段口径只描述可观察的收尾形态：缺少句末标记或以接续词、逗号、助词性收束结尾。
+  // 这是**保守命中**：完整但没有句末标点的行也会被算进来，宁可多注入也不误导模型把片段补成整句。
+  fragment: ({ source, target }) => looksLikeFragment(source) || looksLikeFragment(target),
+  // 原文外内容只在这一行真的出现相应类别时才有判断价值；命中后仍由规则要求模型不要据此增删。
+  outOfScope: ({ source, target }) =>
+    /特典|后记|後記|译注|譯注|制作信息|製作信息|版权|版權|附录|附錄|番外/u.test(`${source}\n${target}`),
 };
 
 /**

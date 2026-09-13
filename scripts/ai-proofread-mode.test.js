@@ -78,7 +78,8 @@ test("bilingual and trilingual workbenches use different default prompts", () =>
   assert.match(bilingual, /needsEdit=false 时以“无需修改”起头/);
   assert.match(bilingual, /needsEdit=true 时写明“需要修改”/);
   assert.equal(proofreadPromptFor("bilingual").outputSchema.severity.includes("critical"), true);
-  assert.match(proofreadPromptFor("bilingual").outputSchema.revisedText, /原样保留目标列的 EPUB 注释标记/);
+  assert.equal(proofreadPromptFor("bilingual").outputSchema.revisedText, "string");
+  assert.match(proofreadPromptFor("bilingual").system, /EPUB noteref 注释标记必须在 revisedText 中逐字、原位保留/);
   // 双语契约不再问“谁更好”，只问“保持还是替换”：schema 里不能出现 counterpart 语义。
   const bilingualSchema = proofreadPromptFor("bilingual").outputSchema;
   assert.equal(Object.hasOwn(bilingualSchema, "decision"), true);
@@ -197,7 +198,7 @@ test("bilingual result status never claims the target is better than a counterpa
   assert.equal(trilingualResult.status, "target-better");
 });
 
-test("system prompt carries exactly one JSON output contract and one mode rule block", () => {
+test("system prompt carries one JSON contract, one mode block, and leaves key names to user.outputSchema", () => {
   const countOf = (text, pattern) => (text.match(pattern) || []).length;
   const defaultPrompt = proofreadPromptFor("bilingual").system;
   // 旧版本页面里嵌的默认提示词尾部重复过两份 JSON 约定，重新校对时也必须收敛成一份。
@@ -220,7 +221,7 @@ test("system prompt carries exactly one JSON output contract and one mode rule b
   for (const [label, systemPrompt] of Object.entries(cases)) {
     const content = buildMessages(payload(), { proofreadMode: "bilingual", systemPrompt })[0].content;
     assert.equal(countOf(content, /只返回一个 JSON 对象/g), 1, `${label} 的 JSON 输出约定重复`);
-    assert.equal(countOf(content, /必须使用以下英文键名/g), 1, `${label} 的键名约定重复`);
+    assert.equal(countOf(content, /必须使用以下英文键名/g), 0, `${label} 不应在 system 里重复键名清单`);
     assert.equal(countOf(content, /当前是双语校对/g), 1, `${label} 的模式规则重复`);
     assert.equal(countOf(content, /硬性格式约束/g), 1, `${label} 的硬性格式约束重复`);
     assert.doesNotMatch(content, /当前是三语校对/, `${label} 混入了他模式规则`);

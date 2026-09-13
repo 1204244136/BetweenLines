@@ -135,8 +135,8 @@ test("章级与卷级提示块说明“刻意特色”与补回口径", () => {
   const characters = detectCharacters({ rows, tables });
   const block = chapterHabitBlock({ chapter: "第一章", characters });
   assert.match(block, /^【说话习惯（本章）】本章「第一章」/);
-  assert.match(block, /不得判为翻译腔、病句或误译/);
-  assert.match(block, /补回的最小改动/);
+  assert.match(block, /保留它们不算翻译腔、病句或不自然/);
+  assert.match(block, /补回特色的最小 revisedText/);
   assert.match(block, /甲野一郎：第一人称 「オレ」/);
   assert.equal(chapterHabitBlock({ chapter: "空章", characters: [] }), "");
 
