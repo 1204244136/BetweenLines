@@ -1235,6 +1235,10 @@
       pointer-events: auto;
       animation: toast-in 160ms ease-out;
     }
+    .toast--leaving {
+      animation: toast-out 180ms ease-in forwards;
+      pointer-events: none;
+    }
     .toast--success { border-left-color: var(--ok-strong); }
     .toast--watch { border-left-color: var(--watch-strong); }
     .toast--error { border-left-color: var(--review-strong); }
@@ -1263,8 +1267,13 @@
       from { opacity: 0; transform: translateY(6px); }
       to { opacity: 1; transform: none; }
     }
+    @keyframes toast-out {
+      from { opacity: 1; transform: none; }
+      to { opacity: 0; transform: translateY(4px); }
+    }
     @media (prefers-reduced-motion: reduce) {
       .toast { animation: none; }
+      .toast--leaving { opacity: 0; }
     }
     @media (max-width: 1100px) {
       .app-shell { min-width: 760px; }

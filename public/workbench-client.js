@@ -883,6 +883,8 @@
     // 「机器任务的持续状态」（正在跑什么、跑完的统计、未连接本地服务、被跳过/忽略的结果汇总），
     // 一次性回执一律浮动提示。
     const toastMaxVisible = 4;
+    const toastDurationScale = 0.5;
+    const toastFadeMs = 180;
     const toasts = [];
     let toastSeq = 0;
     // 本页亲眼看到「正在运行」的那一轮：只有它跑完才弹结束提示。页面刚打开时从服务端认领到的
@@ -927,7 +929,8 @@
     }
 
     function toastTimer(toast, durationMs) {
-      return durationMs > 0 ? window.setTimeout(() => dismissToast(toast.id), durationMs) : 0;
+      const visibleMs = durationMs > 0 ? Math.max(1, Math.round(durationMs * toastDurationScale)) : 0;
+      return visibleMs > 0 ? window.setTimeout(() => dismissToast(toast.id), visibleMs) : 0;
     }
 
     function dismissToast(id) {
@@ -935,7 +938,17 @@
       if (index < 0) return false;
       const [toast] = toasts.splice(index, 1);
       if (toast.timer) window.clearTimeout(toast.timer);
-      if (typeof toast.node?.remove === "function") toast.node.remove();
+      const node = toast.node;
+      if (!node) return true;
+      if (typeof node.classList?.add === "function") node.classList.add("toast--leaving");
+      let removed = false;
+      const remove = () => {
+        if (removed) return;
+        removed = true;
+        if (typeof node.remove === "function") node.remove();
+      };
+      if (typeof node.addEventListener === "function") node.addEventListener("animationend", remove, { once: true });
+      window.setTimeout(remove, toastFadeMs + 80);
       return true;
     }
 

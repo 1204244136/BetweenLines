@@ -257,7 +257,11 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   // 一次性回执（按钮结果、行内写回、模型刷新、一轮跑完）走浮动提示；
   // 固定状态行只留机器任务的持续状态，旧的 setTemporaryStatus 口径已删除。
   assert.match(script, /function showToast\(message, \{ tone = "info", durationMs = 6000 \} = \{\}\)/);
+  assert.match(script, /const toastDurationScale = 0\.5/);
+  assert.match(script, /const toastFadeMs = 180/);
+  assert.match(script, /node\.classList\.add\("toast--leaving"\)/);
   assert.match(script, /function dismissToast\(id\)/);
+  assert.match(html, /@keyframes toast-out/);
   assert.match(script, /while \(toasts\.length > toastMaxVisible\) dismissToast\(toasts\[0\]\.id\)/);
   assert.match(script, /showToast\(ai\.error \|\| finishedStatus/);
   assert.doesNotMatch(script, /setTemporaryStatus/);

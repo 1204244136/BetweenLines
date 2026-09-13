@@ -27,7 +27,18 @@ function storageFixture(initial = {}) {
 
 function createWorkbench(storage = storageFixture(), options = {}) {
   const elements = new Map();
+  const timeouts = [];
   let createdSeq = 0;
+  let timeoutSeq = 0;
+  const scheduleTimeout = (callback, delay = 0) => {
+    const id = ++timeoutSeq;
+    timeouts.push({ id, callback, delay: Number(delay) || 0, cleared: false });
+    return id;
+  };
+  const clearScheduledTimeout = (id) => {
+    const timer = timeouts.find((item) => item.id === id);
+    if (timer) timer.cleared = true;
+  };
   const element = (id) => {
     if (!elements.has(id)) {
       const listeners = new Map();
@@ -77,7 +88,10 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       documentElement: element("html"), addEventListener() {},
     },
     localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
-    window: { addEventListener() {}, requestAnimationFrame() {}, setTimeout() {}, clearTimeout() {} },
+    window: {
+      addEventListener() {}, requestAnimationFrame() {},
+      setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout,
+    },
     navigator: {}, location: { protocol: "file:" },
     fetch(url, request = {}) {
       fetches.push(String(url));
@@ -90,12 +104,12 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, results: [] } };
       return Promise.resolve({ ok: true, json: async () => payload });
     },
-    setTimeout() {}, clearTimeout() {}, setInterval() {},
+    setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout, setInterval() {},
     confirm() { return true; }, requestAnimationFrame() {},
   });
   vm.runInContext(script, context);
   return {
-    element, storage, fetches, posts,
+    element, storage, fetches, posts, timeouts,
     run: (code) => vm.runInContext(code, context),
     // 状态轮询是 async + await fetch：把微任务抽干（跨 VM 边界时 await 的延续排在后面）。
     refresh: async () => {
