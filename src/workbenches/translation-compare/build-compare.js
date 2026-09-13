@@ -844,7 +844,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-field">
                   <div class="ai-field-head">
                     <label for="aiModel">模型</label>
-                    <span id="aiModelHint" class="ai-model-hint" hidden></span>
                   </div>
                   <div class="ai-model-row">
                     <select id="aiModel">
@@ -1064,6 +1063,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
       <div id="emptyState" class="empty-state">没有匹配的行</div>
     </main>
   </div>
+  <div id="toastStack" class="toast-stack" role="region" aria-live="polite" aria-label="操作提示"></div>
   <script id="rowData" type="application/json">${rowsJson}</script>
   <script>
     ${resolveModelOptions.toString()}

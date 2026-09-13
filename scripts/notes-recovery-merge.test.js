@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { currentKey, siblingKey, storageFixture, createWorkbench } = require("./workbench-fixture");
+const { currentKey, siblingKey, storageFixture, createWorkbench, toastMessages } = require("./workbench-fixture");
 
 const prefilterNote = "[规则预筛]\n语义是否相同：相同\n是否需要修改：否\n分析：规则预筛判定通过。";
 const aiNote = "[AI校对]\n语义是否相同：不同\n是否需要修改：是\n分析：漏译。\n修改结果：改写后的译文内容。";
@@ -37,7 +37,9 @@ test("同一行在多份历史空间记录不同时逐字段合并，不再把�
   const saved = JSON.parse(storage.getItem(currentKey));
   assert.equal(saved[1].manualDone, true);
   assert.equal(saved[1].rowSig, "sig-1");
-  assert.match(ui.element("aiStatus").textContent, /合并了多个历史版本的记录/);
+  // 找回回执走浮动提示，不再占用 AI 抽屉里那条默认折叠的固定状态行。
+  assert.match(toastMessages(ui).join("|"), /合并了多个历史版本的记录/);
+  assert.doesNotMatch(ui.element("aiStatus").textContent, /合并了多个历史版本的记录/);
 });
 
 test("只在非基准历史空间里出现的确认记录也要找回（候选集取全部历史空间的并集）", () => {
@@ -56,7 +58,8 @@ test("只在非基准历史空间里出现的确认记录也要找回（候选�
   for (const index of [1, 2, 3]) {
     assert.equal(ui.run(`notes["${index}"].manualDone`), true, `第 ${index} 行的人工确认必须找回`);
   }
-  assert.match(ui.element("aiStatus").textContent, /已按行内容找回 3 条记录/);
+  assert.match(toastMessages(ui).join("|"), /已按行内容找回 3 条记录/);
+  assert.equal(ui.run("toasts[toasts.length - 1].tone"), "success");
 });
 
 test("没有任何一条能按内容对上时如实告知，并指向按行号核验", () => {
@@ -66,8 +69,10 @@ test("没有任何一条能按内容对上时如实告知，并指向按行号�
   const ui = createWorkbench(storage);
   assert.equal(ui.run("Object.keys(notes).length"), 0);
   assert.equal(ui.storage.getItem(currentKey), null);
-  assert.match(ui.element("aiStatus").textContent, /没有任何一条能按行内容对上/);
-  assert.match(ui.element("aiStatus").textContent, /按行号找回/);
+  const notices = toastMessages(ui).join("|");
+  assert.match(notices, /没有任何一条能按行内容对上/);
+  assert.match(notices, /按行号找回/);
+  assert.equal(ui.run("toasts[toasts.length - 1].tone"), "watch", "一条都没对上时要提醒，而不是报成功");
 });
 
 test("预览找回时本页已有记录的行也按签名合并，不丢历史空间里的人工确认", () => {

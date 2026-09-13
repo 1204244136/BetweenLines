@@ -182,6 +182,11 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.doesNotMatch(batchPanel, /id="showRevisionDiff"/);
 
   const script = html.split("<script>")[1].split("</script>")[0];
+  // 浮动提示容器：一次性按钮回执的落点，在控制面板之外（整组收起、抽屉滚出视野时仍然可见）
+  assert.match(html, /<div id="toastStack" class="toast-stack" role="region" aria-live="polite" aria-label="操作提示"><\/div>/);
+  assert.ok(html.indexOf('id="toastStack"') > html.indexOf("</main>"), "浮动提示容器应在正文之后，不受面板折叠影响");
+  // 模型提示不再是固定位置的元素：刷新模型的结果改走浮动提示
+  assert.doesNotMatch(html, /id="aiModelHint"/);
   // 父抽屉的摘要状态由客户端按组内面板展开数同步；toggle 不冒泡，必须捕获阶段监听
   assert.match(script, /function syncPanelGroupState\(group\) \{/);
   assert.match(script, /function bindPanelGroups\(scope = document\) \{/);
@@ -249,6 +254,15 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(script, /nonGptIntensity: savedNonGptIntensity/);
   assert.match(script, /inferenceSettingVersion: 3/);
   assert.doesNotMatch(html, /backdrop-filter/);
+  // 一次性回执（按钮结果、行内写回、模型刷新、一轮跑完）走浮动提示；
+  // 固定状态行只留机器任务的持续状态，旧的 setTemporaryStatus 口径已删除。
+  assert.match(script, /function showToast\(message, \{ tone = "info", durationMs = 6000 \} = \{\}\)/);
+  assert.match(script, /function dismissToast\(id\)/);
+  assert.match(script, /while \(toasts\.length > toastMaxVisible\) dismissToast\(toasts\[0\]\.id\)/);
+  assert.match(script, /showToast\(ai\.error \|\| finishedStatus/);
+  assert.doesNotMatch(script, /setTemporaryStatus/);
+  assert.doesNotMatch(script, /aiIds.modelHint/);
+  assert.doesNotMatch(script, /statusMessageLockedUntil/);
   assert.doesNotThrow(() => new Function(script));
 });
 

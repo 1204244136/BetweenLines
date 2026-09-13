@@ -27,6 +27,7 @@ function storageFixture(initial = {}) {
 
 function createWorkbench(storage = storageFixture(), options = {}) {
   const elements = new Map();
+  let createdSeq = 0;
   const element = (id) => {
     if (!elements.has(id)) {
       const listeners = new Map();
@@ -38,7 +39,22 @@ function createWorkbench(storage = storageFixture(), options = {}) {
         async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
         setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
         querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; },
-        replaceChildren() {}, append() {}, focus() {}, click() {},
+        // 子节点要真的记下来：浮动提示的断言看的就是「页面上留下了哪几条提示」。
+        append(...nodes) {
+          for (const node of nodes) {
+            this.children.push(node);
+            if (node && typeof node === "object") node.parentNode = this;
+          }
+        },
+        replaceChildren(...nodes) {
+          this.children = [];
+          this.append(...nodes);
+        },
+        remove() {
+          const parent = this.parentNode;
+          if (parent) parent.children = parent.children.filter((item) => item !== this);
+        },
+        focus() {}, click() {},
         showModal() { this.open = true; }, close() { this.open = false; },
         getBoundingClientRect() { return { height: 0, top: 0, bottom: 0 }; },
       });
@@ -56,7 +72,8 @@ function createWorkbench(storage = storageFixture(), options = {}) {
   const context = vm.createContext({
     document: {
       getElementById: element, querySelector: element, querySelectorAll() { return []; },
-      createElement: () => element(Symbol()), createElementNS: () => element(Symbol()),
+      createElement: (tag) => Object.assign(element("created-" + (++createdSeq)), { tagName: String(tag).toUpperCase() }),
+      createElementNS: () => element("ns-" + (++createdSeq)),
       documentElement: element("html"), addEventListener() {},
     },
     localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
@@ -108,4 +125,12 @@ function prefilterResult(index, { runId = "run-1", status = "rule-prefilter", si
   };
 }
 
-module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, prefilterStatus, prefilterResult };
+// 页面当前留下的浮动提示（按渲染顺序）：每条取 .toast-text 的文字，也就是用户看到的回执。
+function toastMessages(ui) {
+  return ui.element("toastStack").children.map((node) => {
+    const line = (node.children || []).find((child) => child && child.className === "toast-text");
+    return line ? line.textContent : String(node.textContent ?? "");
+  });
+}
+
+module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, toastMessages, prefilterStatus, prefilterResult };

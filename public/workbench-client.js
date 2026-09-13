@@ -68,6 +68,7 @@
     let notesStorageBlocked = initialData === null;
     let lastPersistedNotesRaw = initialRaw;
     for (const [id, value] of notesTools.entries(initialData)) notes[id] = normalizeStoredNote(value);
+    // 恢复通告：{ message, tone }——找回成功与「一条都对不上」是两种语气，写在赋值处而不是猜文案。
     let notesRecovery = null;
 
     function recoveryPlan(space, byIndex = false) {
@@ -211,15 +212,15 @@
           for (const pair of pairs) notes[String(pair.to)] = pair.item;
           persistNotes();
           const mergedNote = mergedVariants ? `，其中 ${mergedVariants} 条合并了多个历史版本的记录（人工确认已保留）` : "";
-          notesRecovery = `已按行内容找回 ${pairs.length} 条记录${mergedNote}；其余或相互冲突的历史记录可在「备注空间与找回」中预览。`;
+          notesRecovery = { tone: "success", message: `已按行内容找回 ${pairs.length} 条记录${mergedNote}；其余或相互冲突的历史记录可在「备注空间与找回」中预览。` };
         }
       } else if (candidates.length) {
-        notesRecovery = "发现历史备注，但没有任何一条能按行内容对上本页——历史记录仍保留在「备注空间与找回」中，可用「按行号找回」逐行核验。";
+        notesRecovery = { tone: "watch", message: "发现历史备注，但没有任何一条能按行内容对上本页——历史记录仍保留在「备注空间与找回」中，可用「按行号找回」逐行核验。" };
       }
     }
 
     function announceNotesRecovery() {
-      if (notesRecovery) setTemporaryStatus(notesRecovery, 12000);
+      if (notesRecovery) showToast(notesRecovery.message, { tone: notesRecovery.tone, durationMs: 12000 });
       updateNotesSaveState();
     }
     const tbody = document.querySelector("tbody");
@@ -256,7 +257,6 @@
       serviceFields: document.getElementById("aiServiceFields"),
       baseUrl: document.getElementById("aiBaseUrl"),
       model: document.getElementById("aiModel"),
-      modelHint: document.getElementById("aiModelHint"),
       reasoningField: document.getElementById("aiReasoningField"),
       reasoningEffort: document.getElementById("aiReasoningEffort"),
       refreshModels: document.getElementById("aiRefreshModels"),
@@ -382,7 +382,6 @@
       return (entry && entry.prompt) || "";
     }
     let aiModelOptions = [];
-    let statusMessageLockedUntil = 0;
     aiIds.monitorSection.hidden = !aiIds.monitorEnabled.checked;
     aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
 
@@ -872,22 +871,72 @@
       });
     }
 
-    function isStatusMessageLocked() {
-      return Date.now() < statusMessageLockedUntil;
-    }
-
     function setRuntimeStatus(message) {
-      statusMessageLockedUntil = 0;
       aiIds.status.dataset.runtimeMessage = "1";
       aiIds.status.textContent = message;
       aiIds.status.title = message;
     }
 
-    function setTemporaryStatus(message, durationMs = 8000) {
-      statusMessageLockedUntil = Date.now() + durationMs;
-      aiIds.status.dataset.runtimeMessage = "1";
-      aiIds.status.textContent = message;
-      aiIds.status.title = message;
+    // ---- 浮动提示（Toast）----
+    // 按钮与控件的一次性回执走这里。这类消息原先写进 AI 抽屉里的固定状态行，而五个抽屉默认全部折叠，
+    // 用户在「批量操作」里点按钮、在行内点「写回」时，回执被写进一个看不见的位置。固定状态行只留
+    // 「机器任务的持续状态」（正在跑什么、跑完的统计、未连接本地服务、被跳过/忽略的结果汇总），
+    // 一次性回执一律浮动提示。
+    const toastMaxVisible = 4;
+    const toasts = [];
+    let toastSeq = 0;
+    // 本页亲眼看到「正在运行」的那一轮：只有它跑完才弹结束提示。页面刚打开时从服务端认领到的
+    // 历史轮次（没看到运行中）不弹，否则每次重新生成工作台都会收到一条过期回执。
+    let observedRunningRunId = "";
+    let notifiedFinishedRunId = "";
+
+    // tone 表示结果的语气：info 中性、success 成功、watch 需要留意但没失败、error 失败。
+    // durationMs <= 0 表示不自动消失（等下一步结果替换它，或人工关闭）。
+    function showToast(message, { tone = "info", durationMs = 6000 } = {}) {
+      const text = String(message ?? "").trim();
+      if (!text) return "";
+      const stack = document.getElementById("toastStack");
+      if (!stack) return "";
+      // 同一条消息连续出现（例如地址输入框每敲一个字符就提示一次）只保留一条，并顺延它的存活时间。
+      const last = toasts[toasts.length - 1];
+      if (last && last.message === text && last.tone === tone) {
+        if (last.timer) window.clearTimeout(last.timer);
+        last.timer = toastTimer(last, durationMs);
+        return last.id;
+      }
+      const node = document.createElement("div");
+      node.className = "toast toast--" + tone;
+      node.setAttribute("role", tone === "error" ? "alert" : "status");
+      node.dataset.toastId = String(++toastSeq);
+      const line = document.createElement("span");
+      line.className = "toast-text";
+      line.textContent = text;
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "toast-dismiss";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "关闭提示");
+      close.addEventListener("click", () => dismissToast(node.dataset.toastId));
+      node.append(line, close);
+      stack.append(node);
+      const toast = { id: node.dataset.toastId, message: text, tone, node, timer: 0 };
+      toasts.push(toast);
+      toast.timer = toastTimer(toast, durationMs);
+      while (toasts.length > toastMaxVisible) dismissToast(toasts[0].id);
+      return toast.id;
+    }
+
+    function toastTimer(toast, durationMs) {
+      return durationMs > 0 ? window.setTimeout(() => dismissToast(toast.id), durationMs) : 0;
+    }
+
+    function dismissToast(id) {
+      const index = toasts.findIndex((toast) => toast.id === String(id ?? ""));
+      if (index < 0) return false;
+      const [toast] = toasts.splice(index, 1);
+      if (toast.timer) window.clearTimeout(toast.timer);
+      if (typeof toast.node?.remove === "function") toast.node.remove();
+      return true;
     }
 
     function clearLocalAiCache() {
@@ -2100,14 +2149,14 @@
       const row = rowsById.get(String(id));
       const item = notes[String(id)];
       if (item?.recoveredUnverified) {
-        setTemporaryStatus("第 " + id + " 行是按行号找回的未校验记录，写回前请先点「未校验」徽标确认无误。", 8000);
+        showToast("第 " + id + " 行是按行号找回的未校验记录，写回前请先点「未校验」徽标确认无误。", { tone: "watch", durationMs: 9000 });
         return;
       }
       const revision = revisionTextFor(item).trim();
       const targetKey = revisionTargetFor(item);
       const searchText = String(row?.[targetKey] || "");
       if (!row || !searchText || !revision) {
-        setTemporaryStatus("第 " + id + " 行没有可写回的修改结果。", 5000);
+        showToast("第 " + id + " 行没有可写回的修改结果。", { tone: "watch", durationMs: 6000 });
         return;
       }
       button.disabled = true;
@@ -2133,9 +2182,9 @@
         saveNotes();
         applyFilters({ reset: false });
         const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
-        setTemporaryStatus("已写回第 " + id + " 行修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + "，并标记为人工确认。" + importedCopyHint(result), 9000);
+        showToast("已写回第 " + id + " 行修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + "，并标记为人工确认。" + importedCopyHint(result), { tone: result.importedCopy ? "watch" : "success", durationMs: 12000 });
       } catch (error) {
-        setTemporaryStatus(error.message, 8000);
+        showToast(error.message, { tone: "error", durationMs: 12000 });
         button.disabled = false;
         button.textContent = "写回";
       }
@@ -2144,7 +2193,7 @@
     document.getElementById("acceptAiSame").addEventListener("click", () => {
       const rows = currentAiSameRows();
       if (!rows.length) {
-        setTemporaryStatus("当前筛选结果中没有待确认的自动不改行。", 5000);
+        showToast("当前筛选结果中没有待确认的自动不改行。", { tone: "watch", durationMs: 6000 });
         return;
       }
       if (!confirm("将当前筛选结果中的 " + rows.length + " 条自动不改行标记为人工确认？")) return;
@@ -2157,7 +2206,7 @@
       }
       saveNotes();
       updateDoneCount();
-      setTemporaryStatus("已将 " + rows.length + " 条自动不改行标记为人工确认。", 7000);
+      showToast("已将 " + rows.length + " 条自动不改行标记为人工确认。", { tone: "success", durationMs: 7000 });
       applyFilters({ reset: false });
     });
 
@@ -2165,9 +2214,9 @@
       const skippedUnverified = countSkippedUnverifiedRevisions();
       const entries = currentRevisionEntries();
       if (!entries.length) {
-        setTemporaryStatus(skippedUnverified
+        showToast(skippedUnverified
           ? "当前筛选结果没有可写回的修改结果；" + skippedUnverified + " 条未校验找回行已跳过。"
-          : "当前筛选结果中没有待写回的修改结果。", 8000);
+          : "当前筛选结果中没有待写回的修改结果。", { tone: "watch", durationMs: 9000 });
         return;
       }
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
@@ -2190,30 +2239,31 @@
           missedCount ? missedCount + " 处未能在原文件中定位" : "",
           ambiguousCount ? ambiguousCount + " 处在原文件中有多处同段、未写入" : "",
         ].filter(Boolean).join("；");
-        setTemporaryStatus((unwrittenNote
+        const tone = (unwrittenNote || result.importedCopy) ? "watch" : "success";
+        showToast((unwrittenNote
           ? "已写回 " + result.updated + " 处修改；" + unwrittenNote + "，这些行未标记为已确认。"
-          : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + importedCopyHint(result), 12000);
-      } catch (error) { setTemporaryStatus(error.message, 8000); }
+          : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + importedCopyHint(result), { tone, durationMs: 15000 });
+      } catch (error) { showToast(error.message, { tone: "error", durationMs: 12000 }); }
     });
 
     document.getElementById("confirmRevisions").addEventListener("click", () => {
       const entries = currentRevisionEntries();
       const pending = entries.filter((entry) => !notes[entry.id]?.manualDone);
       if (!pending.length) {
-        setTemporaryStatus("当前筛选结果中没有待确认的修改结果。", 5000);
+        showToast("当前筛选结果中没有待确认的修改结果。", { tone: "watch", durationMs: 6000 });
         return;
       }
       if (!confirm("将当前筛选结果中的 " + pending.length + " 处修改结果标记为人工确认？")) return;
       markEntriesConfirmed(pending.map((entry) => entry.id));
       applyFilters({ reset: false });
-      setTemporaryStatus("已将 " + pending.length + " 处修改结果标记为人工确认。", 5000);
+      showToast("已将 " + pending.length + " 处修改结果标记为人工确认。", { tone: "success", durationMs: 6000 });
       tableFrame.scrollTop = 0;
     });
 
     prefilterIds.confirm.addEventListener("click", () => {
       const rows = currentPrefilterRows();
       if (!rows.length) {
-        setTemporaryStatus("当前筛选结果中没有待确认的预筛通过行。", 5000);
+        showToast("当前筛选结果中没有待确认的预筛通过行。", { tone: "watch", durationMs: 6000 });
         updatePrefilterConfirmButton();
         return;
       }
@@ -2234,7 +2284,7 @@
       saveNotes();
       updateDoneCount();
       applyFilters({ reset: false });
-      setTemporaryStatus("已将 " + rows.length + " 条预筛结果标记为人工确认。", 7000);
+      showToast("已将 " + rows.length + " 条预筛结果标记为人工确认。", { tone: "success", durationMs: 7000 });
       tableFrame.scrollTop = 0;
     });
 
@@ -2553,14 +2603,26 @@
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
         : "尚未运行预筛选。";
-      if (!isStatusMessageLocked()) {
-        if (ai.running) {
-          setRuntimeStatus((isPrefilter ? "预筛选中：" : "AI 校对中：实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
-        } else if (ai.finishedAt) {
-          setRuntimeStatus((isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
-        } else if (ai.error) {
-          setRuntimeStatus(ai.error);
-        }
+      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中：实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
+      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
+      if (ai.running) {
+        setRuntimeStatus(runningStatus);
+      } else if (ai.finishedAt) {
+        setRuntimeStatus(finishedStatus);
+      } else if (ai.error) {
+        setRuntimeStatus(ai.error);
+      }
+      // 抽屉默认折叠：一轮跑完时固定状态行可能根本没进过视野，所以同一轮结束再补一次浮动提示。
+      // 只提示「本页看着它跑起来」的那一轮——打开页面时从服务端认领到的历史轮次不弹。
+      if (aiRunId && ai.running) observedRunningRunId = aiRunId;
+      const finishedRunId = aiRunId && !ai.running && ai.finishedAt ? aiRunId : "";
+      if (finishedRunId && finishedRunId === observedRunningRunId && notifiedFinishedRunId !== finishedRunId) {
+        notifiedFinishedRunId = finishedRunId;
+        // 失败轮次优先报错因（固定状态行只给统计数字），原因比数字更可行动。
+        showToast(ai.error || finishedStatus, {
+          tone: ai.error ? "error" : (ai.stopRequested ? "watch" : "success"),
+          durationMs: ai.error ? 15000 : 12000,
+        });
       }
       const previousActive = Array.from(aiActiveIds).join(",");
       aiActiveIds.clear();
@@ -2602,10 +2664,10 @@
           saveNotes();
           updateDoneCount();
         }
-        if (skippedStaleResults && !isStatusMessageLocked()) {
+        if (skippedStaleResults) {
           setRuntimeStatus("已跳过 " + skippedStaleResults + " 条与当前工作台行内容不匹配的自动结果。");
         }
-      } else if ((ai.results || []).length && !ai.running && !isStatusMessageLocked()) {
+      } else if ((ai.results || []).length && !ai.running) {
         setRuntimeStatus("已忽略非当前项目快照的自动结果；当前项目备注保持独立。");
       }
       lastAiResultRevision = Math.max(lastAiResultRevision, Number(ai.resultRevision) || 0);
@@ -2635,7 +2697,7 @@
         }
       } catch {
         if (aiIds.status.dataset.cacheCleared) return;
-        if (!isStatusMessageLocked()) setRuntimeStatus("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
+        setRuntimeStatus("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
       } finally {
         aiStatusRefreshInFlight = false;
         if (hasMoreResults && !aiCatchupTimer) {
@@ -2668,24 +2730,16 @@
       updateInferenceSettingOptions();
     }
 
-    let modelHintTimer = 0;
-    function showModelHint(message, { isError = false, timeout = 6000 } = {}) {
-      if (!aiIds.modelHint) return;
-      window.clearTimeout(modelHintTimer);
-      aiIds.modelHint.textContent = message;
-      aiIds.modelHint.title = message;
-      aiIds.modelHint.classList.toggle("is-error", isError);
-      aiIds.modelHint.hidden = false;
-      if (timeout > 0) {
-        modelHintTimer = window.setTimeout(() => { aiIds.modelHint.hidden = true; }, timeout);
-      }
-    }
-
     async function refreshAiModels() {
       aiIds.refreshModels.disabled = true;
       const requestedProvider = aiIds.provider.value;
       const requestedBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl.value);
-      showModelHint("正在获取可用模型...", { timeout: 0 });
+      // 「正在获取」占住一条不自动消失的提示，结果回来时换成结论：整场只留一条回执。
+      const pendingToast = showToast("正在获取可用模型...", { durationMs: 0 });
+      const finishModelHint = (message, options) => {
+        dismissToast(pendingToast);
+        showToast(message, options);
+      };
       try {
         const response = await apiFetch("/api/ai-proofread/models", {
           method: "POST",
@@ -2700,7 +2754,7 @@
         if (!data.ok) throw new Error(data.error);
         const currentBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl.value);
         if (aiIds.provider.value !== requestedProvider || currentBaseUrl !== requestedBaseUrl) {
-          showModelHint("接口地址已变更，已忽略旧地址返回的模型列表。");
+          finishModelHint("接口地址已变更，已忽略旧地址返回的模型列表。", { tone: "watch", durationMs: 9000 });
           return;
         }
         const models = data.models?.models || data.models || [];
@@ -2710,14 +2764,14 @@
         setModelOptions(models, { selected: selectedModel });
         aiIds.model.dataset.touched = "1";
         if (data.models?.warning) {
-          showModelHint("已使用内置模型列表：" + models.length + " 个模型。");
+          finishModelHint("已使用内置模型列表：" + models.length + " 个模型。", { tone: "info", durationMs: 9000 });
         } else {
-          showModelHint(models.length
+          finishModelHint(models.length
           ? "已获取 " + models.length + " 个模型，可在模型下拉框中选择。"
-          : "没有从接口返回模型列表，可手动输入模型名。");
+          : "没有从接口返回模型列表，可手动输入模型名。", { tone: models.length ? "success" : "watch", durationMs: 9000 });
         }
       } catch (error) {
-        showModelHint("获取模型失败：" + error.message + "。可手动输入模型名。", { isError: true, timeout: 10000 });
+        finishModelHint("获取模型失败：" + error.message + "。可手动输入模型名。", { tone: "error", durationMs: 12000 });
       } finally {
         aiIds.refreshModels.disabled = false;
         saveAiConfig();
@@ -2729,7 +2783,6 @@
       aiIds.model.dataset.touched = "";
       aiModelOptions = [];
       aiIds.status.dataset.runtimeMessage = "";
-      statusMessageLockedUntil = 0;
       if (providerDefaults[aiIds.provider.value]) {
         applyProviderDefaults(providerDefaults[aiIds.provider.value], { force: true });
         saveAiConfig();
@@ -2749,11 +2802,11 @@
       aiIds.baseUrl.dataset.touched = "1";
       aiIds.model.dataset.touched = "";
       setModelOptions([], { selected: "" });
-      setTemporaryStatus("地址已修改，可点击刷新获取模型列表。", 5000);
+      showToast("地址已修改，可点击刷新获取模型列表。", { tone: "info", durationMs: 6000 });
       saveAiConfig();
     });
     aiIds.baseUrl.addEventListener("change", () => {
-      setTemporaryStatus("地址已更新，可点击刷新获取模型列表。", 8000);
+      showToast("地址已更新，可点击刷新获取模型列表。", { tone: "info", durationMs: 9000 });
       saveAiConfig();
     });
     aiIds.model.addEventListener("input", () => {
@@ -2810,6 +2863,7 @@
       aiIds.prompt.dataset.touched = "";
       aiIds.prompt.focus();
       saveAiPrompt();
+      showToast("已恢复当前特化规范的默认提示词。", { tone: "success", durationMs: 6000 });
     });
     aiIds.profile.addEventListener("change", () => {
       // 换特化规范：只替换没有手改过的提示词，手改过的提示词由服务端按“是否已带该档案”决定补不补。
@@ -2827,13 +2881,10 @@
       saveAiConfig();
       renderVisibleRows();
       const selected = aiIds.profile.selectedOptions[0];
-      if (!isStatusMessageLocked()) {
-        setTemporaryStatus("特化规范：" + ((selected && selected.textContent) || aiIds.profile.value), 6000);
-      }
+      showToast("特化规范：" + ((selected && selected.textContent) || aiIds.profile.value), { tone: "info", durationMs: 6000 });
     });
     aiIds.refreshModels.addEventListener("click", refreshAiModels);
     prefilterIds.start.addEventListener("click", async () => {
-      statusMessageLockedUntil = 0;
       prefilterIds.start.disabled = true;
       prefilterIds.confirm.disabled = true;
       prefilterIds.panel.open = true;
@@ -2866,13 +2917,12 @@
         applyFilters();
         refreshAiStatus();
       } catch (error) {
-        setRuntimeStatus(error.message);
+        showToast(error.message, { tone: "error", durationMs: 12000 });
         prefilterIds.start.disabled = false;
         updatePrefilterConfirmButton();
       }
     });
     prefilterIds.stop.addEventListener("click", async () => {
-      statusMessageLockedUntil = 0;
       prefilterIds.stop.disabled = true;
       setRuntimeStatus("正在终止预筛选...");
       try {
@@ -2883,7 +2933,7 @@
           refreshAiStatus();
         }
       } catch (error) {
-        setRuntimeStatus(error.message);
+        showToast(error.message, { tone: "error", durationMs: 12000 });
       }
     });
     window.addEventListener("resize", syncVisibleRowLayout);
@@ -2892,7 +2942,6 @@
       if (document.hidden) flushNotes();
     });
     aiIds.start.addEventListener("click", async () => {
-      statusMessageLockedUntil = 0;
       aiIds.start.disabled = true;
       const monitorEnabled = aiIds.monitorEnabled.checked;
       aiIds.monitorEnabled.disabled = true;
@@ -2917,13 +2966,12 @@
         renderAiStatus(data.ai);
         refreshAiStatus();
       } catch (error) {
-        setRuntimeStatus(error.message);
+        showToast(error.message, { tone: "error", durationMs: 12000 });
         aiIds.start.disabled = false;
         aiIds.monitorEnabled.disabled = false;
       }
     });
     aiIds.stop.addEventListener("click", async () => {
-      statusMessageLockedUntil = 0;
       aiIds.stop.disabled = true;
       setRuntimeStatus("正在终止 AI 校对...");
       try {
@@ -2934,15 +2982,14 @@
           refreshAiStatus();
         }
       } catch (error) {
-        setRuntimeStatus(error.message);
+        showToast(error.message, { tone: "error", durationMs: 12000 });
       } finally {
         aiIds.monitorEnabled.disabled = false;
       }
     });
     aiIds.clearCache.addEventListener("click", async () => {
-      statusMessageLockedUntil = 0;
       if (aiIds.stop.disabled === false) {
-        setRuntimeStatus("AI 校对仍在运行，请先停止任务再清除 AI 记录。");
+        showToast("AI 校对仍在运行，请先停止任务再清除 AI 记录。", { tone: "watch", durationMs: 8000 });
         return;
       }
       if (!confirm("清除 AI 运行记录和对话监控？备注与人工确认不会被清除。")) return;
@@ -2957,11 +3004,14 @@
         if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
         if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);
         renderClearedAiStatus();
+        showToast("已清除 AI 运行记录和对话监控；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
       } catch (error) {
         if (error instanceof TypeError || /Unknown local API endpoint|清除失败/.test(error.message || "")) {
-          renderClearedAiStatus("已清除本页 AI 对话监控；备注与人工确认已保留。本地服务重启后可同步清除后台记录。");
+          const fallback = "已清除本页 AI 对话监控；备注与人工确认已保留。本地服务重启后可同步清除后台记录。";
+          renderClearedAiStatus(fallback);
+          showToast(fallback, { tone: "watch", durationMs: 12000 });
         } else {
-          setRuntimeStatus(error.message);
+          showToast(error.message, { tone: "error", durationMs: 12000 });
         }
       } finally {
         aiIds.clearCache.disabled = false;
@@ -2981,6 +3031,7 @@
       saveNotes({ immediate: true });
       updateDoneCount();
       applyFilters({ reset: false });
+      showToast("已核验第 " + id + " 行的找回记录，并标记为人工确认。", { tone: "success", durationMs: 6000 });
     });
 
     const notesPanelIds = {
@@ -3001,9 +3052,11 @@
     let notesSpaceInventory = [];
     let pendingNotesRecovery = null;
 
-    function notesPanelStatus(message) {
+    // 备注面板的按钮既要就地回执（固定状态行就在按钮旁边，与空间列表一起读），也要跨面板可见：
+    // 面板可能收起、也可能滚出视野，所以同一句话再弹一条浮动提示。
+    function notesPanelStatus(message, { tone = "info" } = {}) {
       notesPanelIds.status.textContent = message;
-      setTemporaryStatus(message, 12000);
+      showToast(message, { tone, durationMs: 12000 });
     }
 
     function collectNotesSpaces() {
@@ -3115,7 +3168,7 @@
       const action = ["notesExport", "notesRestore", "notesIndex", "notesDrop"].find((key) => key in button.dataset);
       const cached = notesSpaceInventory[Number(button.dataset[action])];
       const space = cached && freshNotesSpace(cached.key);
-      if (!space) { renderNotesSpaces(); notesPanelStatus("该空间已发生变化，请重新选择。"); return; }
+      if (!space) { renderNotesSpaces(); notesPanelStatus("该空间已发生变化，请重新选择。", { tone: "watch" }); return; }
       if (action === "notesExport") {
         downloadNotesJson("betweenlines-notes-" + (space.rows || "space") + ".json", notesBackup([space]));
       } else if (action === "notesRestore" || action === "notesIndex") {
@@ -3125,8 +3178,8 @@
         try {
           localStorage.removeItem(space.key);
           renderNotesSpaces();
-          notesPanelStatus("已删除所选历史空间。");
-        } catch { notesPanelStatus("删除失败，浏览器未允许修改本地存储。"); }
+          notesPanelStatus("已删除所选历史空间。", { tone: "success" });
+        } catch { notesPanelStatus("删除失败，浏览器未允许修改本地存储。", { tone: "error" }); }
       }
     });
     notesPanelIds.apply.addEventListener("click", () => {
@@ -3135,13 +3188,13 @@
       const space = freshNotesSpace(pending.key);
       if (!space || space.raw !== pending.raw) {
         notesPanelIds.dialog.close();
-        notesPanelStatus("来源空间已变化，请重新预览。");
+        notesPanelStatus("来源空间已变化，请重新预览。", { tone: "watch" });
         renderNotesSpaces();
         return;
       }
       // 预览期间本页仍可能收到 AI 结果；重新排除已占用的目标行。
       const plan = recoveryPlan(space, pending.byIndex);
-      if (notesStorageBlocked) { notesPanelStatus("请先解决保存冲突，再找回记录。"); return; }
+      if (notesStorageBlocked) { notesPanelStatus("请先解决保存冲突，再找回记录。", { tone: "watch" }); return; }
       applyRecovery(space, plan);
       saveNotes({ immediate: true });
       updateDoneCount();
@@ -3149,17 +3202,18 @@
       notesPanelIds.dialog.close();
       renderNotesSpaces();
       notesPanelStatus("已找回 " + plan.pairs.length + " 条，其中 " + plan.unverified + " 条需逐行核验。"
-        + (notesPersistFailed || notesStorageBlocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"));
+        + (notesPersistFailed || notesStorageBlocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"),
+        { tone: notesPersistFailed || notesStorageBlocked ? "watch" : "success" });
     });
     document.getElementById("cancelNotesRecovery").addEventListener("click", () => notesPanelIds.dialog.close());
     notesPanelIds.dialog.addEventListener("close", () => { pendingNotesRecovery = null; });
     notesPanelIds.exportAll.addEventListener("click", () => {
       downloadNotesJson("betweenlines-notes-backup.json", notesBackup(collectNotesSpaces()));
-      notesPanelStatus("已导出本页和全部历史空间。");
+      notesPanelStatus("已导出本页和全部历史空间。", { tone: "success" });
     });
     notesPanelIds.clearCurrent.addEventListener("click", () => {
       const current = collectNotesSpaces().find((space) => space.current);
-      if (!current?.entries) { notesPanelStatus("本页没有可清空的备注记录。"); return; }
+      if (!current?.entries) { notesPanelStatus("本页没有可清空的备注记录。", { tone: "watch" }); return; }
       if (!confirm("清空本页备注空间中的 " + current.entries + " 条记录？\n这会同时清除人工确认和修改结果，历史空间不会受影响。\n\n建议先备份，再确认清空。")) return;
       try {
         localStorage.setItem(storageKey, "{}");
@@ -3170,19 +3224,19 @@
         updateDoneCount();
         applyFilters({ reset: false });
         renderNotesSpaces();
-        notesPanelStatus("已清空本页备注空间；历史空间仍保留。");
-      } catch { notesPanelStatus("清空失败：浏览器未允许修改本地存储。"); }
+        notesPanelStatus("已清空本页备注空间；历史空间仍保留。", { tone: "success" });
+      } catch { notesPanelStatus("清空失败：浏览器未允许修改本地存储。", { tone: "error" }); }
     });
     notesPanelIds.clearHistory.addEventListener("click", () => {
       const history = collectNotesSpaces().filter((space) => !space.current && space.entries);
-      if (!history.length) { notesPanelStatus("没有可清空的历史备注空间。"); return; }
+      if (!history.length) { notesPanelStatus("没有可清空的历史备注空间。", { tone: "watch" }); return; }
       const count = history.reduce((total, space) => total + space.entries, 0);
       if (!confirm("清空 " + history.length + " 个历史空间中的 " + count + " 条记录？\n此操作不可撤销，请先点击「备份全部」。")) return;
       try {
         for (const space of history) localStorage.removeItem(space.key);
         renderNotesSpaces();
-        notesPanelStatus("已清空历史备注空间；本页记录保持不变。");
-      } catch { notesPanelStatus("清空历史失败：浏览器未允许修改本地存储。"); }
+        notesPanelStatus("已清空历史备注空间；本页记录保持不变。", { tone: "success" });
+      } catch { notesPanelStatus("清空历史失败：浏览器未允许修改本地存储。", { tone: "error" }); }
     });
     notesPanelIds.file.addEventListener("change", async () => {
       const [file] = notesPanelIds.file.files || [];
@@ -3194,14 +3248,15 @@
         const result = notesTools.importBackup(localStorage, spaces, storageKey);
         renderNotesSpaces();
         notesPanelStatus("已导入 " + result.imported.length + " 个空间，跳过 " + result.skipped + " 个相同空间。"
-          + (result.error ? "另有 " + result.failed + " 个未能保存，请先导出并清理空间后重试。" : "可在历史列表预览找回。"));
-      } catch (error) { notesPanelStatus("导入失败：" + error.message); }
+          + (result.error ? "另有 " + result.failed + " 个未能保存，请先导出并清理空间后重试。" : "可在历史列表预览找回。"),
+          { tone: result.error ? "watch" : "success" });
+      } catch (error) { notesPanelStatus("导入失败：" + error.message, { tone: "error" }); }
     });
     notesPanelIds.refresh.addEventListener("click", renderNotesSpaces);
     document.getElementById("retryNotesSave").addEventListener("click", () => {
       saveNotes({ immediate: true });
       renderNotesSpaces();
-      if (!notesPersistFailed && !notesStorageBlocked) notesPanelStatus("本页记录已保存。");
+      if (!notesPersistFailed && !notesStorageBlocked) notesPanelStatus("本页记录已保存。", { tone: "success" });
     });
     notesPanelIds.panel.addEventListener("toggle", () => {
       if (notesPanelIds.panel.open) renderNotesSpaces();
