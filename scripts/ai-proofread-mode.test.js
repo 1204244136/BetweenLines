@@ -38,7 +38,7 @@ test("bilingual AI prompt treats A as source and B as the only editable target",
   const messages = buildMessages(payload(), { proofreadMode: "bilingual", systemPrompt: "base" });
   const user = JSON.parse(messages[1].content);
   assert.match(messages[0].content, /A 是原文.*B 是唯一译文与唯一修改列/);
-  assert.match(messages[0].content, /A 不是可直接复制进 B 的候选译文/);
+  assert.match(messages[0].content, /A 不是可复制进 B 的候选译文/);
   assert.equal(user.comparisonMode, "bilingual");
   assert.match(user.modePolicy, /只能修改 B/);
   assert.equal(user.row.targetLabel, "B 译文");
