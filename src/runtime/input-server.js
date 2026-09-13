@@ -167,6 +167,12 @@ function readJson(req, maxBytes = 128 * 1024 * 1024) {
   });
 }
 
+// 写回的行序清单（第 i 行对应下标 i-1）只做形状校验：它是定位线索而不是可信输入，
+// 对不上就按 missed/ambiguous 上报，不参与任何文本决策。
+function sanitizeRowTexts(value) {
+  return Array.isArray(value) ? value.map((text) => String(text ?? "")) : [];
+}
+
 function filePayload(file) {
   const stat = fs.statSync(file);
   const resolved = path.resolve(file);
@@ -425,6 +431,8 @@ async function handleApi(req, res, pathname, searchParams) {
       if (!selection?.files) throw new Error("没有可写回的输入选择，请先生成工作台。");
       // 按写回目标列（targetKey）分组：cn 写回主文本，tw 写回参考文本，互不混写。
       const groups = new Map();
+      // 行序清单按同一列分组，用于「未改动的行也按行序占住锚点」，见 applyTextReplacements。
+      const rowTextsByKey = payload.rowTexts && typeof payload.rowTexts === "object" ? payload.rowTexts : {};
       for (const entry of (Array.isArray(payload.entries) ? payload.entries : [])) {
         const searchText = String(entry?.searchText || "");
         const replaceText = String(entry?.replaceText || "");
@@ -441,7 +449,7 @@ async function handleApi(req, res, pathname, searchParams) {
       for (const [key, entries] of groups) {
         const target = selection.files[key];
         if (!target) throw new Error(`没有已选择的${key === "tw" ? "参考文本" : "主文本"}文件，无法写回。`);
-        const result = await applyTextReplacements(target, entries);
+        const result = await applyTextReplacements(target, entries, { rowTexts: sanitizeRowTexts(rowTextsByKey[key]) });
         updated += result.updated;
         missed.push(...result.missed);
         ambiguous.push(...(result.ambiguous || []));
@@ -465,8 +473,9 @@ async function handleApi(req, res, pathname, searchParams) {
         }))
         .filter((entry) => entry.speaker && entry.text);
       if (!entries.length) throw new Error("没有可写回的说话人。");
-      const result = await applySpeakerAnnotations(target, entries);
-      sendJson(res, 200, { ok: true, target, updated: result.updated, skipped: result.skipped, missed: result.missed });
+      const result = await applySpeakerAnnotations(target, entries, { rowTexts: sanitizeRowTexts(payload.rowTexts) });
+      // ambiguous 也要如实返回：没写回的行走客户端会当成已写回，把没标注的行从复核视野里抹掉。
+      sendJson(res, 200, { ok: true, target, updated: result.updated, skipped: result.skipped, missed: result.missed, ambiguous: result.ambiguous });
       return;
     }
     if (req.method === "GET" && pathname === "/api/status") {

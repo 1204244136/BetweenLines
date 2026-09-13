@@ -2076,6 +2076,26 @@
         .join("、");
     }
 
+    // 写回要带上目标列的**整卷行序**（第 i 行对应下标 i-1）：写回定位按行序推进锚点，
+    // 未改动的行也要按自己的文本先占住位置，同一段文字在别处先出现的行才不会被本行改掉
+    // （真实回归：一卷里两处独立成行的 <p>尽管如此。</p>，写回第 2 处却落到第 1 处）。
+    // 只发到要写的最后一行为止——更靠后的行不参与锚点。缺行号的行不生成清单，服务端按旧行为处理。
+    function writebackRowTexts(entries) {
+      const limit = entries.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+      const columns = new Set(entries.map((entry) => entry.targetKey));
+      const rowTexts = {};
+      for (const key of columns) {
+        const list = new Array(limit).fill("");
+        for (const row of allRows) {
+          const index = Number(row.index);
+          if (!Number.isInteger(index) || index < 1 || index > limit) continue;
+          list[index - 1] = String(row[key] || "");
+        }
+        rowTexts[key] = list;
+      }
+      return rowTexts;
+    }
+
     async function writebackSingleRevision(id, button) {
       const row = rowsById.get(String(id));
       const item = notes[String(id)];
@@ -2093,10 +2113,11 @@
       button.disabled = true;
       button.textContent = "写回中...";
       try {
+        const entries = [{ id: String(id), targetKey, searchText, replaceText: revision }];
         const response = await apiFetch("/api/translation-export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entries: [{ id: String(id), targetKey, searchText, replaceText: revision }] }),
+          body: JSON.stringify({ entries, rowTexts: writebackRowTexts(entries) }),
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
@@ -2152,7 +2173,7 @@
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
       if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote)) return;
       try {
-        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }) });
+        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries, rowTexts: writebackRowTexts(entries) }) });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
         // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，

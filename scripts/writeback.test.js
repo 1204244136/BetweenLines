@@ -112,6 +112,82 @@ test("写回：重复出现的短句按行序各归其位，就近优先", async
   assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["「……（一）」", "甲段。", "乙段。", "丙段。", "「……（二）」", "丁段。"]);
 });
 
+test("写回：卷内两处相同段落，只写第二处时不会落到第一处", async () => {
+  // 真实回归：S3_01 的 Chapter1 里有两处独立成行的 <p>尽管如此。</p>（第 423 行与第 667 行），
+  // 只写回第二处时，旧实现从卷首开始找、命中第一处并把它改掉。
+  const dir = epubFixture({
+    first: ["开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "6", searchText: "尽管如此。", replaceText: "尽管如此（第二处改）。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  // 第一处（第 2 行）不动，第二处（第 6 行）才改。
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [
+    "开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此（第二处改）。", "收场。",
+  ]);
+});
+
+test("写回：未改动的重复行也要按行序占住锚点", async () => {
+  // 第 2、6 行都是「尽管如此。」，这次只改第 6 行。行序清单把没改动的第 2 行也插回来，
+  // 第 6 行才落得到第二处；第 3~5 行照样按各自的文本推进锚点。
+  const dir = epubFixture({
+    first: ["开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此。", "收场。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "6", searchText: "尽管如此。", replaceText: "改后。" },
+    { id: "3", searchText: "甲段。", replaceText: "甲段改后。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 2);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [
+    "开场。", "尽管如此。", "甲段改后。", "乙段。", "丙段。", "改后。", "收场。",
+  ]);
+});
+
+test("写回：没有行序清单时退化为只按条目推进（旧调用方）", async () => {
+  // 服务端与页面总是带上行序清单；这里锁住缺清单时的退化行为，避免它悄悄变成乱写。
+  const dir = epubFixture({
+    first: ["开场。", "尽管如此。", "甲段。", "乙段。", "丙段。", "尽管如此。", "收场。"],
+    second: [],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "6", searchText: "尽管如此。", replaceText: "尽管如此（改）。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [
+    "开场。", "尽管如此（改）。", "甲段。", "乙段。", "丙段。", "尽管如此。", "收场。",
+  ]);
+});
+
+test("写回：前面有同一段文字的行没能落地时报歧义，不猜第一处", async () => {
+  // 第 2 行是多段行，它的第一段在原文件里已经不存在（页面快照与源文件不同步）：这一行没落地，
+  // 它没占住的「同一句。」就不能被第 5 行认领为「自己那一处」——否则第 5 行的修改结果会写进
+  // 第 2 行的第二段。
+  const dir = epubFixture({
+    first: ["开场。", "同一句。", "乙段。", "丙段。", "同一句。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "已经不在的段落。\n\n同一句。", "乙段。", "丙段。", "同一句。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "5", searchText: "同一句。", replaceText: "同一句（改）。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 0);
+  assert.deepEqual(result.missed, []);
+  assert.equal(result.ambiguous.length, 1);
+  assert.match(result.ambiguous[0].reason, /前面有同一段文字/);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "同一句。", "乙段。", "丙段。", "同一句。", "收场。"]);
+});
+
 test("写回：同一行在同一批里出现两次时只落一次", async () => {
   const dir = epubFixture({ first: ["只有一行。"], second: [] });
   const result = await applyTextReplacements(dir, [
@@ -170,6 +246,25 @@ test("说话人写回：定位失败的行不标注，且不影响后面的行",
   assert.match(html, /<!--Speaker:甲-->/);
   assert.match(html, /<!--Speaker:丙-->/);
   assert.doesNotMatch(html, /<!--Speaker:乙-->/);
+});
+
+test("说话人写回：同一句发话出现两次时按行序归位", async () => {
+  // 卷里两处相同的发话段落（相隔较远）：只写第 5 行时，行序清单让它落到第二处。
+  const dir = epubFixture({
+    first: ["「……」", "甲段。", "乙段。", "丙段。", "「……」", "丁段。"],
+    second: [],
+  });
+  const rowTexts = ["「……」", "甲段。", "乙段。", "丙段。", "「……」"];
+  const result = await applySpeakerAnnotations(dir, [
+    { index: 5, text: "「……」", speaker: "乙" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  const html = bodyOf(dir, "a.xhtml");
+  assert.equal((html.match(/<!--Speaker:/g) || []).length, 1);
+  assert.match(html, /<p>「……」<\/p>[\s\S]*<p><!--Speaker:乙-->「……」<\/p>/);
 });
 
 test("说话人写回：已标注的段落只计 skipped，重复标注不重复写", async () => {

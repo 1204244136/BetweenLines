@@ -20,6 +20,10 @@ const WRITEBACK_HINT = "支持 TXT、XHTML/HTML、EPUB 文件与解压 EPUB 目�
 // 锚点单调是防「嫁接到别处」的第一道闸门——本行文本在原位找不到时也不许回头或跳远重命中；
 // 第二道闸门是「锚点附近有两处同样的段落就不猜、报歧义」。
 //
+// 锚点由**整卷行序**推进，而不是只由这次要写的行推进：未改动的行也要按自己的文本先占用
+// 锚点，要改的行才落在自己那一处。只按条目推进时，同一段文字在别处先出现的那一行会被改掉
+// （真实回归：一卷里两处独立成行的 <p>尽管如此。</p>，想写回第 667 行却写进了第 423 行）。
+//
 // 只保留这两条、**不做窗口限制**是实测结论：窗口一旦存在，全卷重复的短句（「「……」」这类）
 // 会在窗口外找不到自己而整行漏写（真实语料实测漏写 1631/3120）；去掉窗口、只按锚点单调 +
 // 局部重复判歧义，同一语料（S3_01 整卷 3120 行，且源文件已含若干外部改动）为 3102 写入 /
@@ -354,63 +358,149 @@ function createPlacementState(documents) {
   };
 }
 
-function planReplacements(documents, entries) {
+// 条目的行号：工作台行号是 1 起的整数，写回按它把「未改动的行」插回行序里。
+function entryRowIndex(entry) {
+  const id = Number(entry?.id ?? entry?.index);
+  return Number.isInteger(id) && id >= 1 ? id : 0;
+}
+
+// 一条写回条目落盘：逐段定位，任一段定位失败或命中不唯一就整行放弃（锚点与占用标记一起回滚）。
+// 后面的行仍然按它们自己的位置定位——绝不因为这一行没写成就把内容挪到别处。
+function placeEntry(state, entry) {
+  const searchParts = splitParts(entry.searchText);
+  const replaceParts = splitParts(entry.replaceText);
+  if (!searchParts.length || !replaceParts.length) return { placements: [], empty: true };
+  const instructions = alignParts(searchParts, replaceParts);
+  const snapshot = state.snapshot();
+  const placements = [];
+  let failed = null;
+  let conflict = null;
+  for (const instruction of instructions) {
+    const located = state.place(instruction.search);
+    if (located.hit) {
+      state.commit(located.hit);
+      placements.push({ ...located.hit, replacement: instruction.replacement });
+      continue;
+    }
+    if (located.ambiguous) conflict = { search: instruction.search, candidates: located.candidates || [] };
+    else failed = instruction;
+    break;
+  }
+  if (failed || conflict) {
+    state.restore(snapshot);
+    return { placements: [], failed, conflict };
+  }
+  return { placements, failed: null, conflict: null };
+}
+
+// 没能落地的行文本：后面出现同一段文字时，第一处候选可能正是它该改而没占住的那一处。
+function noteUnresolved(unresolved, parts) {
+  for (const part of parts) {
+    const text = comparableText(part);
+    if (text) unresolved.add(text);
+  }
+}
+
+// 未改动的行只推进锚点：命中就占用（后面的行从它之后继续找），命中不到或命中不唯一就停在原地。
+// 这份行清单只服务定位，所以这里不报错、也不越过这一段往前跳。
+function seekRow(state, text, unresolved) {
+  const parts = splitParts(text);
+  for (let index = 0; index < parts.length; index += 1) {
+    const located = state.place(parts[index]);
+    if (!located.hit) {
+      noteUnresolved(unresolved, parts.slice(index));
+      return false;
+    }
+    state.commit(located.hit);
+  }
+  return true;
+}
+
+/**
+ * 定位计划：把「要改的行」（entries）与「整卷行序」（`options.rowTexts`，第 i 行对应下标 i-1）
+ * 合成一条单调的定位链。
+ *
+ * 为什么需要整卷行序：写回请求只带要改的行，但同一段文字在整卷里可能出现多次。只按条目推进
+ * 锚点时，第二处的那一行会从卷首开始找、命中第一处并把它改掉（真实回归：两处独立成行的
+ * <p>尽管如此。</p>，想写回第 667 行却写进了第 423 行）。把未改动的行也按行序插进来占用锚点，
+ * 重复段落才各归其位。缺这份行清单（旧调用方、单条脚本）时退化成只按条目推进。
+ *
+ * 前一行没能落地（定位失败或命中不唯一）时，它没占住的那段文字记为「未落地」：后面遇到同一段
+ * 文字的行报歧义，不猜第一处候选是不是它的。
+ */
+function planReplacements(documents, entries, options = {}) {
   const state = createPlacementState(documents);
+  const rowTexts = Array.isArray(options.rowTexts) ? options.rowTexts : [];
   const placements = [];
   const touched = new Set();
   const missed = [];
   const ambiguous = [];
+  const unresolved = new Set();
   // 同一行（同 id 同文本）在一次请求里出现两次时只落一次，第二次直接跳过：
   // 第一次已经把该段落改掉、再写一遍只会命中同一处或漂到别处，两种结果都不是用户要的；
   // 也不把它计进 updated——那会让「已写回 N 处」比实际写入的段落多。
   const seenEntries = new Set();
+  const byRow = new Map();
+  const loose = [];
   let updated = 0;
+
   for (const entry of entries) {
-    const key = `${entry.id ?? entry.index ?? ""}\u0000${String(entry.searchText || "")}`;
+    const key = `${entry?.id ?? entry?.index ?? ""}\u0000${String(entry?.searchText || "")}`;
     if (seenEntries.has(key)) continue;
     seenEntries.add(key);
-    const searchParts = splitParts(entry.searchText);
-    const replaceParts = splitParts(entry.replaceText);
-    if (!searchParts.length || !replaceParts.length) continue;
-    const instructions = alignParts(searchParts, replaceParts);
-    const snapshot = state.snapshot();
-    const entryPlacements = [];
-    let failed = null;
-    let conflict = null;
-    for (const instruction of instructions) {
-      const located = state.place(instruction.search);
-      if (located.hit) {
-        state.commit(located.hit);
-        entryPlacements.push({ ...located.hit, replacement: instruction.replacement });
-        continue;
-      }
-      if (located.ambiguous) conflict = { search: instruction.search, candidates: located.candidates || [] };
-      else failed = instruction;
-      break;
+    const row = entryRowIndex(entry);
+    if (!row) {
+      loose.push(entry);
+      continue;
     }
-    if (failed || conflict) {
-      // 该行任一段落定位失败或命中不唯一则整行放弃，锚点回到行前位置，
-      // 后面的行仍然按它们自己的位置定位——绝不因为这一行没写成就把内容挪到别处。
-      state.restore(snapshot);
-      if (conflict) {
+    if (!byRow.has(row)) byRow.set(row, entry);
+  }
+
+  const commitEntry = (entry) => {
+    const outcome = placeEntry(state, entry);
+    if (outcome.empty) return;
+    if (outcome.failed || outcome.conflict) {
+      noteUnresolved(unresolved, splitParts(entry.searchText));
+      if (outcome.conflict) {
         ambiguous.push({
           index: entry.id ?? entry.index ?? null,
           searchText: previewText(entry.searchText),
-          reason: `原文件中有多处同样的段落，无法确定该改哪一处：${previewText(conflict.search)}`,
+          reason: `原文件中有多处同样的段落，无法确定该改哪一处：${previewText(outcome.conflict.search)}`,
         });
       } else {
         missed.push({
           index: entry.id ?? entry.index ?? null,
           searchText: previewText(entry.searchText),
-          reason: `未能在原文件中定位段落：${previewText(failed.search)}`,
+          reason: `未能在原文件中定位段落：${previewText(outcome.failed.search)}`,
         });
       }
+      return;
+    }
+    placements.push(...outcome.placements);
+    for (const placement of outcome.placements) touched.add(placement.docIndex);
+    updated += 1;
+  };
+
+  const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
+  for (let row = 1; row <= maxRow; row += 1) {
+    const entry = byRow.get(row);
+    if (!entry) {
+      seekRow(state, rowTexts[row - 1], unresolved);
       continue;
     }
-    placements.push(...entryPlacements);
-    for (const placement of entryPlacements) touched.add(placement.docIndex);
-    updated += 1;
+    const blocked = splitParts(entry.searchText).find((part) => unresolved.has(comparableText(part)));
+    if (blocked) {
+      noteUnresolved(unresolved, splitParts(entry.searchText));
+      ambiguous.push({
+        index: entry.id ?? entry.index ?? null,
+        searchText: previewText(entry.searchText),
+        reason: `本行前面有同一段文字的行没能写回（${previewText(blocked)}），无法确定原文件里的这一处属于哪一行`,
+      });
+      continue;
+    }
+    commitEntry(entry);
   }
+  for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();
   for (const placement of placements) {
     if (!byDocument.has(placement.docIndex)) byDocument.set(placement.docIndex, []);
@@ -424,15 +514,34 @@ function planReplacements(documents, entries) {
   return { planned, touched, updated, missed, ambiguous };
 }
 
-function planSpeakerAnnotations(documents, entries) {
+// 说话人标注与文本写回共用同一套定位纪律（行序锚定 + 单调 + 不占用已写块 + 近处重复即歧义）。
+function planSpeakerAnnotations(documents, entries, options = {}) {
   const state = createPlacementState(documents);
+  const rowTexts = Array.isArray(options.rowTexts) ? options.rowTexts : [];
   const placements = [];
   const touched = new Set();
   const missed = [];
   const ambiguous = [];
+  const unresolved = new Set();
+  const seenEntries = new Set();
+  const byRow = new Map();
+  const loose = [];
   let updated = 0;
   let skipped = 0;
+
   for (const entry of entries) {
+    const key = `${entry?.index ?? ""}\u0000${String(entry?.text || "")}`;
+    if (seenEntries.has(key)) continue;
+    seenEntries.add(key);
+    const row = entryRowIndex(entry);
+    if (!row) {
+      loose.push(entry);
+      continue;
+    }
+    if (!byRow.has(row)) byRow.set(row, entry);
+  }
+
+  const commitEntry = (entry) => {
     const snapshot = state.snapshot();
     const speaker = String(entry.speaker || "").replace(/-{2,}/g, "-").trim();
     const located = state.placeBlockForInsert(entry.text, speaker);
@@ -440,6 +549,7 @@ function planSpeakerAnnotations(documents, entries) {
     if (!placement) {
       // 定位失败或命中不唯一时锚点不动，后面的行按各自的位置重来。
       state.restore(snapshot);
+      noteUnresolved(unresolved, splitParts(entry.text));
       if (located.ambiguous) {
         ambiguous.push({
           index: entry.index ?? null,
@@ -453,17 +563,38 @@ function planSpeakerAnnotations(documents, entries) {
           reason: `未能在原文件中定位发话段落：${previewText(entry.text)}`,
         });
       }
-      continue;
+      return;
     }
     state.commit(placement);
     if (placement.skipped) {
       skipped += 1;
-      continue;
+      return;
     }
     placements.push(placement);
     touched.add(placement.docIndex);
     updated += 1;
+  };
+
+  const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
+  for (let row = 1; row <= maxRow; row += 1) {
+    const entry = byRow.get(row);
+    if (!entry) {
+      seekRow(state, rowTexts[row - 1], unresolved);
+      continue;
+    }
+    const blocked = splitParts(entry.text).find((part) => unresolved.has(comparableText(part)));
+    if (blocked) {
+      noteUnresolved(unresolved, splitParts(entry.text));
+      ambiguous.push({
+        index: entry.index ?? null,
+        text: previewText(entry.text),
+        reason: `本行前面有同一段发话的行没能写回（${previewText(blocked)}），无法确定原文件里的这一处属于哪一行`,
+      });
+      continue;
+    }
+    commitEntry(entry);
   }
+  for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();
   for (const placement of placements) {
     if (!byDocument.has(placement.docIndex)) byDocument.set(placement.docIndex, []);
@@ -529,11 +660,13 @@ async function saveWritebackDocuments(target, kind, documents, zip, touched) {
 // 把一组 { searchText, replaceText } 写回目标（TXT / XHTML / EPUB 文件 / 解压 EPUB 目录）。
 // 返回 `updated`（真正写入的行数）、`missed`（定位失败，未写入）与 `ambiguous`（命中不唯一，未写入）。
 // 两类未写入的行都必须如实上报：静默跳过会让用户以为已经写回，模糊兜底则会把内容写到别的段落上。
-async function applyTextReplacements(target, entries) {
+// `options.rowTexts`（可选）是目标列**按行序**排列的整卷行文本（第 i 行对应下标 i-1）：
+// 未改动的行也按序占锚点，重复段落才能各归其位，详见 planReplacements。
+async function applyTextReplacements(target, entries, options = {}) {
   const described = describeWritebackTarget(target);
   if (!described.ok) throw new Error(described.message);
   const { documents, zip } = await loadWritebackDocuments(target, described.kind);
-  const plan = planReplacements(documents, entries);
+  const plan = planReplacements(documents, entries, options);
   if (plan.planned.length) {
     applyPlacements(plan.planned, documents);
     await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
@@ -542,14 +675,15 @@ async function applyTextReplacements(target, entries) {
 }
 
 // 把说话人标记 <!--Speaker:xxx--> 注入包含发话文本的块级元素。
-async function applySpeakerAnnotations(target, entries) {
+// `options.rowTexts` 与文本写回同义：那一路是发话所在列的整卷行文本。
+async function applySpeakerAnnotations(target, entries, options = {}) {
   const described = describeWritebackTarget(target);
   if (!described.ok) throw new Error(described.message);
   if (described.kind === TARGET_TEXT) {
     throw new Error(`TXT 纯文本没有块级段落结构，暂不支持说话人写回。${WRITEBACK_HINT}`);
   }
   const { documents, zip } = await loadWritebackDocuments(target, described.kind);
-  const plan = planSpeakerAnnotations(documents, entries);
+  const plan = planSpeakerAnnotations(documents, entries, options);
   if (plan.planned.length) {
     applyPlacements(plan.planned, documents);
     await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);

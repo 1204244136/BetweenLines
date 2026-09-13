@@ -52,6 +52,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
   const script = html.match(/<script>\s*([\s\S]*?)<\/script>\s*<\/body>/)[1];
   const statusQueue = options.statusQueue ? options.statusQueue.slice() : [];
   const fetches = [];
+  const posts = [];
   const context = vm.createContext({
     document: {
       getElementById: element, querySelector: element, querySelectorAll() { return []; },
@@ -61,8 +62,14 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
     window: { addEventListener() {}, requestAnimationFrame() {}, setTimeout() {}, clearTimeout() {} },
     navigator: {}, location: { protocol: "file:" },
-    fetch(url) {
+    fetch(url, request = {}) {
       fetches.push(String(url));
+      if (request.body) posts.push({ url: String(url), body: JSON.parse(String(request.body)) });
+      const responses = options.apiResponses || {};
+      if (Object.prototype.hasOwnProperty.call(responses, String(url))) {
+        const payload = responses[String(url)];
+        return Promise.resolve({ ok: payload?.ok !== false, json: async () => payload });
+      }
       const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, results: [] } };
       return Promise.resolve({ ok: true, json: async () => payload });
     },
@@ -71,7 +78,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
   });
   vm.runInContext(script, context);
   return {
-    element, storage, fetches,
+    element, storage, fetches, posts,
     run: (code) => vm.runInContext(code, context),
     // 状态轮询是 async + await fetch：把微任务抽干（跨 VM 边界时 await 的延续排在后面）。
     refresh: async () => {

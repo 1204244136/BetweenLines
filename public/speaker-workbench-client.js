@@ -501,17 +501,20 @@
         evidence: record.evidence,
       };
     });
+    const rowTexts = speakerRowTexts(rowsToWrite.reduce((max, row) => Math.max(max, Number(row.index) || 0), 0));
 
     try {
       const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows, rowTexts }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "批量写回失败");
 
-      const missedIndexes = new Set((Array.isArray(result.missed) ? result.missed : []).map((item) => String(item?.index)));
+      // 定位失败与「有多处同段」都没落到文件上，都不能标记为已写回。
+      const unwritten = [...(Array.isArray(result.missed) ? result.missed : []), ...(Array.isArray(result.ambiguous) ? result.ambiguous : [])];
+      const missedIndexes = new Set(unwritten.map((item) => String(item?.index)));
       let written = 0;
       for (const row of rowsToWrite) {
         if (missedIndexes.has(String(row.index))) continue;
@@ -522,7 +525,7 @@
       }
       scheduleSave();
       if (missedIndexes.size) {
-        window.alert(`已写回 ${written} 行；${missedIndexes.size} 行未能在原文件中定位，未写回。`);
+        window.alert(`已写回 ${written} 行；${missedIndexes.size} 行未写入（原文件中定位不到或多处同段），仍留在复核视野里。`);
       }
       if (btn) {
         btn.textContent = `已写回 ${result.updated} 行`;
@@ -625,6 +628,19 @@
   document.getElementById("speakerPrevPage").addEventListener("click", () => { currentPage -= 1; renderVisibleRows(false); });
   document.getElementById("speakerNextPage").addEventListener("click", () => { currentPage += 1; renderVisibleRows(false); });
   document.getElementById("speakerLastPage").addEventListener("click", () => { currentPage = totalPages(); renderVisibleRows(false); });
+  // 写回要带上目标列的**整卷行序**（第 i 行对应下标 i-1）：写回定位按行序推进锚点，
+  // 未标注的行也要按自己的文本先占住位置，同一句发话在卷里出现多次时才不会把标记写到前一处。
+  // 只发到要写的最后一行为止——更靠后的行不参与锚点。
+  function speakerRowTexts(limit) {
+    const list = new Array(Math.max(0, limit)).fill("");
+    for (const row of allRows) {
+      const index = Number(row.index);
+      if (!Number.isInteger(index) || index < 1 || index > limit) continue;
+      list[index - 1] = String(row.parallelText || row.sourceText || "");
+    }
+    return list;
+  }
+
   async function writebackSingleRow(rowId, button) {
     const row = allRows.find((item) => item.id === rowId);
     if (!row) return;
@@ -652,12 +668,14 @@
             status: statusLabels[record.status],
             evidence: record.evidence,
           },
+          rowTexts: speakerRowTexts(Number(row.index) || 0),
         }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
       if (result.updated !== 1 && !result.skipped) {
-        const reason = result.missed && result.missed[0] && result.missed[0].reason ? result.missed[0].reason : "原文件中没有匹配的段落。";
+        const detail = (Array.isArray(result.ambiguous) && result.ambiguous[0]) || (Array.isArray(result.missed) && result.missed[0]);
+        const reason = detail && detail.reason ? detail.reason : "原文件中没有匹配的段落。";
         throw new Error("写回未生效：" + reason);
       }
       updateRowState(rowId, "status", "written");
