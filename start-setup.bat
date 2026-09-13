@@ -18,12 +18,11 @@ if not defined NPM_CMD (
 )
 
 echo Starting TransComparator setup server...
-echo %URL%
+echo The console page %URL% opens automatically once the server is listening.
 
-timeout /t 2 /nobreak >nul
-start "" "%URL%"
-
+rem The page is opened by the server inside its listen callback: start the server first and let it open the page when it is really listening. Never guess the startup time with a fixed timeout here.
 set "TRANSCOMPARATOR_SETUP_PORT=%PORT%"
+set "TRANSCOMPARATOR_OPEN_BROWSER=1"
 call "%NPM_CMD%" run setup
 set "EXIT_CODE=%ERRORLEVEL%"
 

@@ -333,6 +333,8 @@ AI 判「对话尾部引号前多出句号」，并在 `revisedText` 里删掉�
 
 特化规范“没生效”或提示词突然变短：先看 `promptLayerReport()` 的 `profileLines`（注入了多少条、省了多少条、省了多少字符）与 `entities`（声明了哪些角色/专有词、本行命中了哪些、跳过了哪些），再确认四件事——该条目是否被误写成按行条目（应当常驻的语义规则却声明了 `features` 或 `characters`）、`features` 里的 id 是否在 `ai/row-features.js` 的注册表里（未注册的会告警并按常驻处理）、`characters` 里的名字是否与原文/译文里的写法一致（**名字写错或别名写窄是实体闸门唯一的静默失效方式**：闸门只在命中时注入，写错了就是整卷一次都不注入，`promptTrimSummary()` 的「因本行未出现该名字而省掉 N 次」与 `entityGateReport().skipped` 是对账入口）、行的 `source`/`target` 是否真的包含触发该特征的现象（例如注音规则只在原文侧有 `<ruby>基文<rt>注文</rt></ruby>`／`|基文[注文]`，或译文侧有 `ruby`/`rt` 时注入）。排查对比用 `TRANSCOMPARATOR_FULL_PROMPT=1` 跑一次，它与裁剪前的提示词逐字一致；若怀疑是请求里少了内容，先确认自定义提示词不是“旧默认提示词整段”，旧文本里的通用侧不会被剥离，需要在界面上点「恢复默认」；**注意顺序**：该按钮（路径：「AI 辅助校对」抽屉 → 开始/停止那一行的「内置提示词」复选框 → 「AI 对话监控」下方的同名折叠项 → 文本框右上角）填回的是 `pageMeta.profiles[].prompt`，也就是**构建期嵌进页面的那份**提示词，所以必须先重新 `npm run build` 再打开新页面点它，否则恢复回来的还是旧文本；若从未手改过提示词（localStorage 无 `promptTouched`），新页面的文本框本身就是新文本，不必点任何按钮。
 
+双击 `start-setup.bat` 后浏览器先停在「127.0.0.1 拒绝了连接」、片刻后才恢复：启动脚本在服务就绪前就打开了页面。控制台页面必须由服务端在 `server.listen` 回调里打开（由 `start-setup.bat` 设 `TRANSCOMPARATOR_OPEN_BROWSER=1` 驱动，`npm run setup` 默认不打开），启动脚本里不得再用固定 `timeout` 猜 npm 与 node 的启动耗时；地址要用 `server.address().port` 拼（`TRANSCOMPARATOR_SETUP_PORT=0` 时端口由系统分配）。端口被占用时服务端只打印 `EADDRINUSE` 提示并以非零码退出，不打开页面。契约见 `scripts/setup-browser-open.test.js`。
+
 ## 当前限制
 
 - UI 是静态 HTML table，使用客户端分页切片（翻译比较默认 100 行/页，说话人默认 50 行/页），行数据仍随页面整体内嵌；未实现虚拟滚动，超大文本下页面体积增长仍受行数据量限制。

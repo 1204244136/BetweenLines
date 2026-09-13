@@ -826,12 +826,41 @@ function createServer() {
 
 const server = createServer();
 
+// 控制台页面只能在端口真正绑定后打开：调用方（start-setup.bat）无法预知 npm 与 node 的启动耗时，
+// 用固定等待去猜就会让浏览器先访问到未监听的 127.0.0.1 并停在「拒绝连接」。
+function browserLaunchCommand(url) {
+  if (process.platform === "win32") return { command: "cmd.exe", args: ["/c", "start", "", url] };
+  if (process.platform === "darwin") return { command: "open", args: [url] };
+  return { command: "xdg-open", args: [url] };
+}
+
+function openConsolePage(url) {
+  const { command, args } = browserLaunchCommand(url);
+  console.log(`Opening the console page: ${url}`);
+  execFile(command, args, { windowsHide: true }, (error) => {
+    if (error) console.warn(`Could not open the console page automatically: ${error.message}`);
+  });
+}
+
+server.on("error", (error) => {
+  if (error && error.code === "EADDRINUSE") {
+    console.error(`Port ${defaultPort} is already in use. Stop the other TransComparator setup server, or start this one with TRANSCOMPARATOR_SETUP_PORT=<port>.`);
+  } else {
+    console.error(`TransComparator setup server failed to start: ${error && error.message}`);
+  }
+  process.exitCode = 1;
+});
+
 function startServer() {
+  const openPage = process.env.TRANSCOMPARATOR_OPEN_BROWSER === "1";
   server.listen(defaultPort, host, () => {
-    const url = `http://${host}:${defaultPort}/`;
+    // 用真实绑定到的端口拼地址：TRANSCOMPARATOR_SETUP_PORT=0 时端口由系统分配。
+    const url = `http://${host}:${server.address().port}/`;
     console.log(`TransComparator console: ${url}`);
     console.log("Press Ctrl+C to stop.");
+    if (openPage) openConsolePage(url);
   });
+  return server;
 }
 
 if (require.main === module) startServer();

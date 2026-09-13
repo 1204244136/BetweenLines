@@ -93,6 +93,8 @@ npm run setup:env                    # 首次初始化
 npm run setup                        # 启动本地服务
 ```
 
+Windows 上也可以直接双击仓库根目录的 `start-setup.bat`：它等价于 `npm run setup`，并在本地服务开始监听后自动打开控制台页面；服务未就绪时不会提前打开，因此不会看到「拒绝连接」的错误页。
+
 GPU 环境可先检测并安装匹配的 PyTorch：
 
 ```powershell
