@@ -16,6 +16,19 @@ const TARGET_EPUB_DIRECTORY = "epub-directory";
 
 const WRITEBACK_HINT = "支持 TXT、XHTML/HTML、EPUB 文件与解压 EPUB 目录。";
 
+// 行锚点：一行文本必须落在上一行落点**之后**的段落上（工作台行序与文件段落序一致）。
+// 锚点单调是防「嫁接到别处」的第一道闸门——本行文本在原位找不到时也不许回头或跳远重命中；
+// 第二道闸门是「锚点附近有两处同样的段落就不猜、报歧义」。
+//
+// 只保留这两条、**不做窗口限制**是实测结论：窗口一旦存在，全卷重复的短句（「「……」」这类）
+// 会在窗口外找不到自己而整行漏写（真实语料实测漏写 1631/3120）；去掉窗口、只按锚点单调 +
+// 局部重复判歧义，同一语料（S3_01 整卷 3120 行，且源文件已含若干外部改动）为 3102 写入 /
+// 11 定位失败 / 7 歧义——失败的 11 行正是「页面快照与源文件不同步」该交人工的那些行。
+//
+// 间距阈值取 2：真实回归里两处相同的发话段落之间正好隔着一句旁白（索引差 2），
+// 这条线以下就报歧义；全卷范围内的重复（差 3 以上）仍按顺序各归其位。
+const NEAR_DUPLICATE_BLOCKS = 2;
+
 // 允许在替换文本中原样保留的内联标记（与 ingest 归一化保留的集合一致）。
 const preservedInlineTagPattern = /^(?:<\/?(?:ruby|rt|b|sup)(?:\s[^<>]*)?>|<a\b[^<>]*\bnoteref\b[^<>]*>|<\/a\s*>)$/i;
 const blockElementPattern = /<(p|h[1-6]|blockquote|li|dd|dt)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
@@ -196,7 +209,11 @@ async function loadWritebackDocuments(target, kind) {
   return { documents, zip };
 }
 
-function documentBlocks(doc) {
+// 块序号计数器：跨文档累加，锚点才能在文档之间保持单调。
+// 每次 `prepareDocuments` 重置，避免同一进程里多次写回互相污染序号。
+let blockIndexCursor = 0;
+
+function documentBlocks(doc, docIndex = -1) {
   if (doc.blocks) return doc.blocks;
   const blocks = [];
   const pattern = new RegExp(blockElementPattern.source, "gi");
@@ -207,6 +224,9 @@ function documentBlocks(doc) {
     const closeTag = `</${tagName}>`;
     const innerEnd = match.index + match[0].length - closeTag.length;
     blocks.push({
+      docIndex,
+      tagName,
+      index: blockIndexCursor++,
       start: match.index,
       openEnd: openTagEnd,
       innerStart: openTagEnd,
@@ -220,56 +240,116 @@ function documentBlocks(doc) {
   return blocks;
 }
 
-// 全局单调游标：工作台行顺序与原文顺序一致，定位从上次命中之后继续，
-// 避免重复出现的短句被错误替换到前面的段落。
-function createPlacementState(documents) {
+// 文档的块级列表缓存。块序号必须**全局单调**：定位引擎的锚点跨文档推进，
+// 只有每本文档内部编号会让「换到下一本文档后」的判断整体错位。
+function prepareDocuments(documents) {
+  blockIndexCursor = 0;
+  documents.forEach((doc, docIndex) => {
+    documentBlocks(doc, docIndex);
+  });
+  return documents;
+}
+
+/**
+ * 定位：从锚点向后扫描**未占用**的块，取第一处文本相同的段落。
+ *
+ * 三条纪律（缺一条就会把内容写到别的段落上）：
+ * - **锚点单调**：只在上一行落点之后找。回头匹配会把上一行刚改过的位置再改一次。
+ * - **不占用已改块**：同一段落被前一行改过之后不再参与本行匹配。
+ * - **近处重复即歧义**：锚点附近（索引差 ≤ `NEAR_DUPLICATE_BLOCKS`）出现两处同样的文本时，
+ *   无从判断改的是哪一处，报 `ambiguous`；相隔较远的重复（全卷多处「「……」」）按顺序各归其位。
+ *
+ * 找不到就返回空，由上层把整行记为「未写入」——**绝不退化成模糊匹配**：本行文本在原位
+ * 找不到，说明源文件已被改动（例如页面快照生成之后做过对齐调整），此时任何「再往前找找」
+ * 都可能把这一行的内容写到别的段落甚至别的文档上；真实回归就是这么把一章的句子写进了另一章。
+ */
+function locate(text, state) {
+  const candidates = [];
+  for (let docIndex = state.docIndex; docIndex < state.documents.length && candidates.length < 2; docIndex += 1) {
+    for (const block of state.documents[docIndex].blocks) {
+      if (block.index < state.lastBlock || block.used || !block.comparable) continue;
+      if (block.comparable !== text) continue;
+      candidates.push(block);
+      if (candidates.length >= 2) break;
+    }
+  }
+  if (!candidates.length) return { hit: null, ambiguous: false };
+  const [first, second] = candidates;
+  // 第二处必须紧挨着第一处才算歧义：隔得远的那一处是同一段文字在别处出现，不是同一个位置的两种可能。
+  if (second && second.index - first.index <= NEAR_DUPLICATE_BLOCKS) {
+    return { hit: null, ambiguous: true, candidates: [first.index, second.index] };
+  }
   return {
+    hit: { docIndex: first.docIndex, start: first.innerStart, end: first.innerEnd, block: first },
+    ambiguous: false,
+  };
+}
+
+// 全局单调锚点：工作台行顺序与原文顺序一致，定位从上一行的落点之后继续。
+// `lastBlock` 是行锚点——定位失败的行不推进锚点，也不会把它后面的行一起带偏到别处。
+function createPlacementState(documents) {
+  prepareDocuments(documents);
+  return {
+    documents,
     docIndex: 0,
+    // 仅用于整行放弃后的回滚：有「已占用」标记在，定位本身不再依赖字符偏移。
     offset: 0,
-    // 在游标之后为 searchText 定位一个替换区间；直排优先，其次块级可比匹配。
-    place(searchPart, replacement) {
-      for (let index = this.docIndex; index < documents.length; index += 1) {
-        const from = index === this.docIndex ? this.offset : 0;
-        const found = documents[index].html.indexOf(searchPart, from);
-        if (found >= 0) {
-          return { docIndex: index, start: found, end: found + searchPart.length, replacement };
-        }
-      }
-      const comparable = comparableText(searchPart);
-      if (comparable) {
-        for (let index = this.docIndex; index < documents.length; index += 1) {
-          const floor = index === this.docIndex ? this.offset : 0;
-          for (const block of documentBlocks(documents[index])) {
-            if (block.used || block.end <= floor || !block.comparable) continue;
-            if (block.comparable === comparable) {
-              block.used = true;
-              return { docIndex: index, start: block.innerStart, end: block.innerEnd, replacement };
-            }
-          }
-        }
-      }
-      return null;
+    lastBlock: 0,
+    // 为 searchPart 定位一个替换区间；命中不唯一时报歧义。
+    place(searchPart) {
+      const text = comparableText(searchPart);
+      if (!text) return { hit: null, ambiguous: false };
+      return locate(text, this);
     },
-    // 为说话人写回定位目标块：返回块的 openEnd 作为插入点。
-    placeBlockForInsert(text, speaker) {
-      const comparable = comparableText(text);
-      if (!comparable) return null;
-      const comment = `<!--Speaker:${speaker}-->`;
-      for (let index = this.docIndex; index < documents.length; index += 1) {
-        const floor = index === this.docIndex ? this.offset : 0;
-        const html = documents[index].html;
-        for (const block of documentBlocks(documents[index])) {
-          if (block.used || block.end <= floor || !block.comparable) continue;
-          if (block.comparable !== comparable) continue;
-          block.used = true;
-          // 已有说话人注释的块视为已写回，跳过且不计入更新。
-          if (html.slice(block.openEnd, block.openEnd + 12).startsWith("<!--Speaker:")) {
-            return { docIndex: index, start: block.openEnd, end: block.openEnd, replacement: "", skipped: true };
-          }
-          return { docIndex: index, start: block.openEnd, end: block.openEnd, replacement: comment };
+    // 确认一次成功落点：锚点推进到该块之后。
+    commit(hit) {
+      if (hit.block) {
+        hit.block.used = true;
+        this.lastBlock = hit.block.index + 1;
+      }
+      this.docIndex = hit.docIndex;
+      this.offset = hit.end;
+      return hit;
+    },
+    // 整行放弃时回滚：锚点与「已占用」标记一起还原，
+    // 否则这一行试错时占掉的段落会跟着消失，后面的行反而少了一个候选。
+    snapshot() {
+      return {
+        docIndex: this.docIndex,
+        offset: this.offset,
+        lastBlock: this.lastBlock,
+        used: this.documents.flatMap((doc) => doc.blocks || []).filter((block) => block.used),
+      };
+    },
+    restore(snapshot) {
+      this.docIndex = snapshot.docIndex;
+      this.offset = snapshot.offset;
+      this.lastBlock = snapshot.lastBlock;
+      for (const doc of this.documents) {
+        for (const block of doc.blocks || []) {
+          if (block.used && !snapshot.used.includes(block)) block.used = false;
         }
       }
-      return null;
+    },
+    // 为说话人写回定位目标块：返回块的 openEnd 作为插入点，定位规则与文本写回一致。
+    placeBlockForInsert(text, speaker) {
+      const located = this.place(text);
+      if (!located.hit?.block) return located;
+      const block = located.hit.block;
+      const html = this.documents[block.docIndex].html;
+      // 已有说话人注释的块视为已写回，跳过且不计入更新（仍推进锚点）。
+      const skipped = html.slice(block.openEnd, block.openEnd + 12).startsWith("<!--Speaker:");
+      return {
+        hit: {
+          docIndex: block.docIndex,
+          start: block.openEnd,
+          end: block.openEnd,
+          replacement: skipped ? "" : `<!--Speaker:${speaker}-->`,
+          block,
+          skipped,
+        },
+        ambiguous: false,
+      };
     },
   };
 }
@@ -279,34 +359,52 @@ function planReplacements(documents, entries) {
   const placements = [];
   const touched = new Set();
   const missed = [];
+  const ambiguous = [];
+  // 同一行（同 id 同文本）在一次请求里出现两次时只落一次，第二次直接跳过：
+  // 第一次已经把该段落改掉、再写一遍只会命中同一处或漂到别处，两种结果都不是用户要的；
+  // 也不把它计进 updated——那会让「已写回 N 处」比实际写入的段落多。
+  const seenEntries = new Set();
   let updated = 0;
   for (const entry of entries) {
-    const snapshot = { docIndex: state.docIndex, offset: state.offset };
+    const key = `${entry.id ?? entry.index ?? ""}\u0000${String(entry.searchText || "")}`;
+    if (seenEntries.has(key)) continue;
+    seenEntries.add(key);
     const searchParts = splitParts(entry.searchText);
     const replaceParts = splitParts(entry.replaceText);
     if (!searchParts.length || !replaceParts.length) continue;
     const instructions = alignParts(searchParts, replaceParts);
+    const snapshot = state.snapshot();
     const entryPlacements = [];
     let failed = null;
+    let conflict = null;
     for (const instruction of instructions) {
-      const placement = state.place(instruction.search, instruction.replacement);
-      if (!placement) {
-        failed = instruction;
-        break;
+      const located = state.place(instruction.search);
+      if (located.hit) {
+        state.commit(located.hit);
+        entryPlacements.push({ ...located.hit, replacement: instruction.replacement });
+        continue;
       }
-      entryPlacements.push(placement);
-      state.docIndex = placement.docIndex;
-      state.offset = placement.end;
+      if (located.ambiguous) conflict = { search: instruction.search, candidates: located.candidates || [] };
+      else failed = instruction;
+      break;
     }
-    if (failed) {
-      // 该行任一段落定位失败则整行放弃，游标回到行前位置。
-      state.docIndex = snapshot.docIndex;
-      state.offset = snapshot.offset;
-      missed.push({
-        index: entry.id ?? entry.index ?? null,
-        searchText: previewText(entry.searchText),
-        reason: `未能在原文件中定位段落：${previewText(failed.search)}`,
-      });
+    if (failed || conflict) {
+      // 该行任一段落定位失败或命中不唯一则整行放弃，锚点回到行前位置，
+      // 后面的行仍然按它们自己的位置定位——绝不因为这一行没写成就把内容挪到别处。
+      state.restore(snapshot);
+      if (conflict) {
+        ambiguous.push({
+          index: entry.id ?? entry.index ?? null,
+          searchText: previewText(entry.searchText),
+          reason: `原文件中有多处同样的段落，无法确定该改哪一处：${previewText(conflict.search)}`,
+        });
+      } else {
+        missed.push({
+          index: entry.id ?? entry.index ?? null,
+          searchText: previewText(entry.searchText),
+          reason: `未能在原文件中定位段落：${previewText(failed.search)}`,
+        });
+      }
       continue;
     }
     placements.push(...entryPlacements);
@@ -323,7 +421,7 @@ function planReplacements(documents, entries) {
     list.sort((a, b) => b.start - a.start);
     planned.push({ docIndex, list });
   }
-  return { planned, touched, updated, missed };
+  return { planned, touched, updated, missed, ambiguous };
 }
 
 function planSpeakerAnnotations(documents, entries) {
@@ -331,32 +429,39 @@ function planSpeakerAnnotations(documents, entries) {
   const placements = [];
   const touched = new Set();
   const missed = [];
+  const ambiguous = [];
   let updated = 0;
   let skipped = 0;
   for (const entry of entries) {
-    const snapshot = { docIndex: state.docIndex, offset: state.offset };
+    const snapshot = state.snapshot();
     const speaker = String(entry.speaker || "").replace(/-{2,}/g, "-").trim();
-    const placement = state.placeBlockForInsert(entry.text, speaker);
+    const located = state.placeBlockForInsert(entry.text, speaker);
+    const placement = located.hit;
     if (!placement) {
-      state.docIndex = snapshot.docIndex;
-      state.offset = snapshot.offset;
-      missed.push({
-        index: entry.index ?? null,
-        text: previewText(entry.text),
-        reason: `未能在原文件中定位发话段落：${previewText(entry.text)}`,
-      });
+      // 定位失败或命中不唯一时锚点不动，后面的行按各自的位置重来。
+      state.restore(snapshot);
+      if (located.ambiguous) {
+        ambiguous.push({
+          index: entry.index ?? null,
+          text: previewText(entry.text),
+          reason: `原文件中有多处同样的发话段落，无法确定该标注哪一处：${previewText(entry.text)}`,
+        });
+      } else {
+        missed.push({
+          index: entry.index ?? null,
+          text: previewText(entry.text),
+          reason: `未能在原文件中定位发话段落：${previewText(entry.text)}`,
+        });
+      }
       continue;
     }
+    state.commit(placement);
     if (placement.skipped) {
-      state.docIndex = placement.docIndex;
-      state.offset = placement.end;
       skipped += 1;
       continue;
     }
     placements.push(placement);
     touched.add(placement.docIndex);
-    state.docIndex = placement.docIndex;
-    state.offset = placement.end;
     updated += 1;
   }
   const byDocument = new Map();
@@ -369,7 +474,7 @@ function planSpeakerAnnotations(documents, entries) {
     list.sort((a, b) => b.start - a.start);
     planned.push({ docIndex, list });
   }
-  return { planned, touched, updated, skipped, missed };
+  return { planned, touched, updated, skipped, missed, ambiguous };
 }
 
 function applyPlacements(planned, documents) {
@@ -422,6 +527,8 @@ async function saveWritebackDocuments(target, kind, documents, zip, touched) {
 }
 
 // 把一组 { searchText, replaceText } 写回目标（TXT / XHTML / EPUB 文件 / 解压 EPUB 目录）。
+// 返回 `updated`（真正写入的行数）、`missed`（定位失败，未写入）与 `ambiguous`（命中不唯一，未写入）。
+// 两类未写入的行都必须如实上报：静默跳过会让用户以为已经写回，模糊兜底则会把内容写到别的段落上。
 async function applyTextReplacements(target, entries) {
   const described = describeWritebackTarget(target);
   if (!described.ok) throw new Error(described.message);
@@ -431,7 +538,7 @@ async function applyTextReplacements(target, entries) {
     applyPlacements(plan.planned, documents);
     await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
   }
-  return { updated: plan.updated, missed: plan.missed };
+  return { updated: plan.updated, missed: plan.missed, ambiguous: plan.ambiguous };
 }
 
 // 把说话人标记 <!--Speaker:xxx--> 注入包含发话文本的块级元素。
@@ -447,7 +554,7 @@ async function applySpeakerAnnotations(target, entries) {
     applyPlacements(plan.planned, documents);
     await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
   }
-  return { updated: plan.updated, skipped: plan.skipped, missed: plan.missed };
+  return { updated: plan.updated, skipped: plan.skipped, missed: plan.missed, ambiguous: plan.ambiguous };
 }
 
 module.exports = {

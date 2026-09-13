@@ -2085,7 +2085,8 @@
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
         if (result.updated !== 1) {
-          const reason = result.missed && result.missed[0] && result.missed[0].reason ? result.missed[0].reason : "原文件中没有匹配的段落。";
+          const detail = (Array.isArray(result.ambiguous) && result.ambiguous[0]) || (Array.isArray(result.missed) && result.missed[0]);
+          const reason = detail && detail.reason ? detail.reason : "原文件中没有匹配的段落。";
           throw new Error("写回未生效：" + reason);
         }
         const current = notes[String(id)] || { note: "", done: false };
@@ -2133,19 +2134,27 @@
         return;
       }
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
-      if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败的行不会写入。" + skipNote)) return;
+      if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote)) return;
       try {
         const response = await fetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }) });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
-        const missedIds = new Set((Array.isArray(result.missed) ? result.missed : []).map((item) => String(item?.index)));
-        const confirmed = entries.filter((entry) => !missedIds.has(String(entry.id))).map((entry) => String(entry.id));
+        // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，
+        // 标成已确认会让它们从复核视野里消失。
+        const unwrittenIds = new Set([...(Array.isArray(result.missed) ? result.missed : []), ...(Array.isArray(result.ambiguous) ? result.ambiguous : [])]
+          .map((item) => String(item?.index)));
+        const confirmed = entries.filter((entry) => !unwrittenIds.has(String(entry.id))).map((entry) => String(entry.id));
         markEntriesConfirmed(confirmed);
         applyFilters({ reset: false });
-        const missedCount = missedIds.size;
+        const missedCount = (Array.isArray(result.missed) ? result.missed.length : 0);
+        const ambiguousCount = (Array.isArray(result.ambiguous) ? result.ambiguous.length : 0);
         const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
-        setTemporaryStatus((missedCount
-          ? "已写回 " + result.updated + " 处修改；" + missedCount + " 处未能在原文件中定位，未写回。"
+        const unwrittenNote = [
+          missedCount ? missedCount + " 处未能在原文件中定位" : "",
+          ambiguousCount ? ambiguousCount + " 处在原文件中有多处同段、未写入" : "",
+        ].filter(Boolean).join("；");
+        setTemporaryStatus((unwrittenNote
+          ? "已写回 " + result.updated + " 处修改；" + unwrittenNote + "，这些行未标记为已确认。"
           : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + importedCopyHint(result), 12000);
       } catch (error) { setTemporaryStatus(error.message, 8000); }
     });

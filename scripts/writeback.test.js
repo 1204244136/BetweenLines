@@ -1,0 +1,190 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const { applyTextReplacements, applySpeakerAnnotations, describeWritebackTarget } = require("../src/ingest/writeback");
+
+// 最小解压 EPUB 夹具：正文放在两个文档里，写回必须按「行序 = 文档序 = 段落序」定位。
+function epubFixture({ first = [], second = [], extra = {} } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-fixture-"));
+  fs.mkdirSync(path.join(dir, "META-INF"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "OEBPS", "Text"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "META-INF", "container.xml"),
+    '<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>\n',
+    "utf8",
+  );
+  const items = [["a", "Text/a.xhtml"], ["b", "Text/b.xhtml"]];
+  fs.writeFileSync(
+    path.join(dir, "OEBPS", "content.opf"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="id"><manifest>${items
+      .map(([id, href]) => `<item id="${id}" href="${href}" media-type="application/xhtml+xml"/>`)
+      .join("")}</manifest><spine>${items.map(([id]) => `<itemref idref="${id}"/>`).join("")}</spine></package>\n`,
+    "utf8",
+  );
+  const document = (paragraphs) =>
+    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>\n${paragraphs
+      .map((text) => `<p>${text}</p>`)
+      .join("\n")}\n</body></html>\n`;
+  fs.writeFileSync(path.join(dir, "OEBPS", "Text", "a.xhtml"), document(first), "utf8");
+  fs.writeFileSync(path.join(dir, "OEBPS", "Text", "b.xhtml"), document(second), "utf8");
+  for (const [name, content] of Object.entries(extra)) {
+    fs.writeFileSync(path.join(dir, "OEBPS", "Text", name), content, "utf8");
+  }
+  return dir;
+}
+
+const bodyOf = (dir, name) => fs.readFileSync(path.join(dir, "OEBPS", "Text", name), "utf8");
+const paragraphsOf = (dir, name) => [...bodyOf(dir, name).matchAll(/<p>([\s\S]*?)<\/p>/g)].map((match) => match[1]);
+
+test("写回：中途定位失败的行不会被嫁接到后面的段落上", async () => {
+  // 第二行的原文已被外部改动（页面仍持有旧文本），第三、四行是它后面真正的行。
+  const dir = epubFixture({
+    first: ["第一行原文。", "第二行原文。", "第三行原文。"],
+    second: ["第四行原文。"],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "第一行原文。", replaceText: "第一行改后。" },
+    { id: "2", searchText: "已经被改掉的旧文本。", replaceText: "第二行改后。" },
+    { id: "3", searchText: "第三行原文。", replaceText: "第三行改后。" },
+    { id: "4", searchText: "第四行原文。", replaceText: "第四行改后。" },
+  ]);
+
+  assert.equal(result.updated, 3);
+  assert.deepEqual(result.missed.map((item) => item.index), ["2"]);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["第一行改后。", "第二行原文。", "第三行改后。"]);
+  // 关键断言：第四行的内容没有因为第二行定位失败而落到第三行上。
+  assert.deepEqual(paragraphsOf(dir, "b.xhtml"), ["第四行改后。"]);
+});
+
+test("写回：跨文档的孤儿行不会覆盖别的文档里的段落", async () => {
+  // 页面上的第二行来自第二个文档，但那个文档的该段已被删除；
+  // 旧实现在这里会一路向前匹配到第三个文档的第一段并把内容写进去。
+  const dir = epubFixture({
+    first: ["甲段原文。", "乙段原文。"],
+    second: ["丙段原文。"],
+  });
+  const before = bodyOf(dir, "b.xhtml");
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "甲段原文。", replaceText: "甲段改后。" },
+    { id: "2", searchText: "乙段原文。", replaceText: "乙段改后。" },
+    { id: "3", searchText: "已经消失的段落。", replaceText: "丙段改后。" },
+  ]);
+
+  assert.equal(result.updated, 2);
+  assert.deepEqual(result.missed.map((item) => item.index), ["3"]);
+  assert.equal(bodyOf(dir, "b.xhtml"), before);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["甲段改后。", "乙段改后。"]);
+});
+
+test("写回：相距很近的重复段落报歧义而不是挑一处改", async () => {
+  // 真实回归的形状：两处相同的发话段落之间只隔一句旁白，改哪一处无从判断。
+  const dir = epubFixture({
+    first: ["「……」", "旁白。", "「……」", "后面段落。"],
+    second: [],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "「……」", replaceText: "「……（改）」" },
+  ]);
+
+  assert.equal(result.updated, 0);
+  assert.deepEqual(result.missed, []);
+  assert.equal(result.ambiguous.length, 1);
+  assert.equal(result.ambiguous[0].index, "1");
+  assert.match(result.ambiguous[0].reason, /多处同样的段落/);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["「……」", "旁白。", "「……」", "后面段落。"]);
+});
+
+test("写回：重复出现的短句按行序各归其位，就近优先", async () => {
+  const dir = epubFixture({
+    first: ["「……」", "甲段。", "乙段。", "丙段。", "「……」", "丁段。"],
+    second: [],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "「……」", replaceText: "「……（一）」" },
+    { id: "2", searchText: "「……」", replaceText: "「……（二）」" },
+  ]);
+
+  assert.equal(result.updated, 2);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["「……（一）」", "甲段。", "乙段。", "丙段。", "「……（二）」", "丁段。"]);
+});
+
+test("写回：同一行在同一批里出现两次时只落一次", async () => {
+  const dir = epubFixture({ first: ["只有一行。"], second: [] });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "只有一行。", replaceText: "改后。" },
+    { id: "1", searchText: "只有一行。", replaceText: "改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["改后。"]);
+});
+
+test("写回：含内联标记的段落整段替换并保留标记", async () => {
+  const dir = epubFixture({
+    first: ['带<ruby>注音<rt>ルビ</rt></ruby>的段落。', "普通段落。"],
+    second: [],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "带<ruby>注音<rt>ルビ</rt></ruby>的段落。", replaceText: "带<ruby>注音<rt>读音</rt></ruby>的段落改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ['带<ruby>注音<rt>读音</rt></ruby>的段落改后。', "普通段落。"]);
+});
+
+test("写回：多段合并行按空行逐段写回", async () => {
+  const dir = epubFixture({
+    first: ["第一段。", "第二段。", "第三段。"],
+    second: [],
+  });
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "第一段。\n\n第二段。", replaceText: "第一段改后。\n\n第二段改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["第一段改后。", "第二段改后。", "第三段。"]);
+});
+
+test("说话人写回：定位失败的行不标注，且不影响后面的行", async () => {
+  const dir = epubFixture({
+    first: ["「甲发言。」", "「乙发言。」", "「丙发言。」"],
+    second: [],
+  });
+  const result = await applySpeakerAnnotations(dir, [
+    { index: 1, text: "「甲发言。」", speaker: "甲" },
+    { index: 2, text: "「找不到的发言。」", speaker: "乙" },
+    { index: 3, text: "「丙发言。」", speaker: "丙" },
+  ]);
+
+  assert.equal(result.updated, 2);
+  assert.equal(result.skipped, 0);
+  assert.deepEqual(result.missed.map((item) => item.index), [2]);
+  assert.deepEqual(result.ambiguous, []);
+  const html = bodyOf(dir, "a.xhtml");
+  assert.match(html, /<!--Speaker:甲-->/);
+  assert.match(html, /<!--Speaker:丙-->/);
+  assert.doesNotMatch(html, /<!--Speaker:乙-->/);
+});
+
+test("说话人写回：已标注的段落只计 skipped，重复标注不重复写", async () => {
+  const dir = epubFixture({ first: ["「甲发言。」"], second: [] });
+  await applySpeakerAnnotations(dir, [{ index: 1, text: "「甲发言。」", speaker: "甲" }]);
+  const again = await applySpeakerAnnotations(dir, [{ index: 1, text: "「甲发言。」", speaker: "甲" }]);
+
+  assert.equal(again.updated, 0);
+  assert.equal(again.skipped, 1);
+  assert.equal((bodyOf(dir, "a.xhtml").match(/<!--Speaker:甲-->/g) || []).length, 1);
+});
+
+test("写回目标识别：解压 EPUB 目录之外的目录被拒绝", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-not-epub-"));
+  const described = describeWritebackTarget(dir);
+  assert.equal(described.ok, false);
+  assert.match(described.message, /不是单本解压的 EPUB/);
+});

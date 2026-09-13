@@ -363,6 +363,7 @@ async function handleApi(req, res, pathname, searchParams) {
       if (!groups.size) throw new Error("没有可写回的修改结果。");
       let updated = 0;
       const missed = [];
+      const ambiguous = [];
       const targets = [];
       for (const [key, entries] of groups) {
         const target = selection.files[key];
@@ -370,10 +371,11 @@ async function handleApi(req, res, pathname, searchParams) {
         const result = await applyTextReplacements(target, entries);
         updated += result.updated;
         missed.push(...result.missed);
+        ambiguous.push(...(result.ambiguous || []));
         targets.push(target);
       }
       const importedCopy = targets.some((target) => target.startsWith(importedInputsDir));
-      sendJson(res, 200, { ok: true, target: targets[0] || "", targets, updated, missed, importedCopy });
+      sendJson(res, 200, { ok: true, target: targets[0] || "", targets, updated, missed, ambiguous, importedCopy });
       return;
     }
     if (req.method === "POST" && pathname === "/api/speaker-export") {
