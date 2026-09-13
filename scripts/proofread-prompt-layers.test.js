@@ -236,6 +236,8 @@ test("成对标记内侧的句末点号：A 在 」/） 前省略它，不代表
   assert.equal(system.includes("也不得在 revisedText 里删掉它"), true);
   // 同一特征下的另一条规范（引号用途）仍按同一份裁剪结果注入，两条互不替代。
   assert.equal(system.includes(ROW_LINE_MARKERS.quote), true);
+  // 真实回归（第 2064 行）：纯拟声词形成的句子允许使用「」，非人声音效规则不强行要求改『』
+  assert.equal(system.includes("纯拟声词形成的句子例外"), true);
 
   // 回归（第 1087 行）：收尾符号是**括号**时同样要拿到这条规范——只认引号的特征会让
   // 整行括注的行拿不到它，模型便会再删一次句号。
