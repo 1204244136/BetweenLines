@@ -13,7 +13,9 @@ const {
   listProjects,
   projectArtifacts,
   publishProject,
+  rebuildProjectHtml,
   resolveProjectArtifact,
+  writeJsonAtomic,
 } = require("./project-store");
 
 test("explicitly disabled noteref keeps the legacy project identity", () => {
@@ -49,6 +51,9 @@ function prepareStaging(dataDir, sourceName, generatedAt) {
       generatedAt,
       rowsSignature,
       comparisonMode: "bilingual",
+      notesStorage: {
+        key: `translation-compare-notes-v7:${staging.projectKey}:${rowsSignature}`,
+      },
     },
     rowsSignature,
     rows: [{ index: 1, jp: sourceName }],
@@ -97,6 +102,86 @@ test("failed publication leaves the previously published project intact", () => 
     assert.throws(() => publishProject(incomplete.dir, { dataDir }), /待发布项目缺少文件/);
     assert.equal(getActiveProject({ dataDir }).id, published.id);
     assert.equal(fs.existsSync(incomplete.dir), true);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("rebuilding page layout publishes a new immutable snapshot", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
+  try {
+    const published = publishProject(
+      prepareStaging(dataDir, "layout", "2026-07-20T10:00:00.000Z").dir,
+      { dataDir },
+    );
+    const oldHtmlFile = resolveProjectArtifact(published.id, "translation-compare.html", { dataDir });
+    const oldHtml = fs.readFileSync(oldHtmlFile, "utf8");
+    const oldSnapshotDir = path.dirname(oldHtmlFile);
+
+    const rebuilt = rebuildProjectHtml(published.id, { dataDir });
+    const active = getActiveProject({ dataDir });
+
+    assert.notEqual(rebuilt.project.snapshotId, published.snapshotId);
+    assert.equal(active.snapshotId, rebuilt.project.snapshotId);
+    assert.equal(fs.readFileSync(oldHtmlFile, "utf8"), oldHtml);
+    assert.equal(fs.existsSync(oldSnapshotDir), true);
+    assert.notEqual(
+      resolveProjectArtifact(published.id, "translation-compare.html", {
+        dataDir,
+        snapshotId: rebuilt.project.snapshotId,
+      }),
+      oldHtmlFile,
+    );
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("atomic JSON writes restore the previous file when replacement fails", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
+  const file = path.join(dataDir, "active-project.json");
+  const originalRename = fs.renameSync;
+  try {
+    writeJsonAtomic(file, { snapshotId: "old" });
+    let renameCount = 0;
+    fs.renameSync = (source, target) => {
+      renameCount += 1;
+      if (renameCount === 1 || renameCount === 3) {
+        const error = new Error("simulated lock");
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalRename(source, target);
+    };
+
+    assert.throws(
+      () => writeJsonAtomic(file, { snapshotId: "new" }),
+      /simulated lock/,
+    );
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { snapshotId: "old" });
+    assert.equal(fs.readdirSync(dataDir).filter((name) => /\.(tmp|bak)$/.test(name)).length, 0);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("active project pointer recovers from the latest atomic-write backup", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
+  try {
+    const published = publishProject(
+      prepareStaging(dataDir, "recover", "2026-07-20T10:00:00.000Z").dir,
+      { dataDir },
+    );
+    const pointerFile = path.join(dataDir, "active-project.json");
+    const backupFile = `${pointerFile}.999-test.bak`;
+    fs.copyFileSync(pointerFile, backupFile);
+    fs.rmSync(pointerFile, { force: true });
+
+    const recovered = getActiveProject({ dataDir });
+    assert.equal(recovered.id, published.id);
+    assert.equal(recovered.snapshotId, published.snapshotId);
+    assert.equal(fs.existsSync(pointerFile), true);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

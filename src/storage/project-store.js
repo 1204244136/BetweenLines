@@ -20,13 +20,30 @@ function readJson(file) {
 function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}-${crypto.randomBytes(5).toString("hex")}.tmp`;
+  const backup = `${file}.${process.pid}-${crypto.randomBytes(5).toString("hex")}.bak`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2), "utf8");
   try {
     fs.renameSync(temp, file);
+    return;
   } catch (error) {
-    if (!fs.existsSync(file)) throw error;
-    fs.rmSync(file, { force: true });
+    if (!fs.existsSync(file)) {
+      try { fs.rmSync(temp, { force: true }); } catch {}
+      throw error;
+    }
+  }
+
+  let backupCreated = false;
+  try {
+    fs.renameSync(file, backup);
+    backupCreated = true;
     fs.renameSync(temp, file);
+    try { fs.rmSync(backup, { force: true }); } catch {}
+  } catch (error) {
+    if (backupCreated && !fs.existsSync(file) && fs.existsSync(backup)) {
+      try { fs.renameSync(backup, file); } catch {}
+    }
+    try { fs.rmSync(temp, { force: true }); } catch {}
+    throw error;
   }
 }
 
@@ -89,16 +106,34 @@ function projectName(files) {
 }
 
 function readActivePointer(layout) {
-  if (!fs.existsSync(layout.activeProjectFile)) return null;
-  try {
-    const pointer = readJson(layout.activeProjectFile);
-    return {
-      projectKey: safeProjectKey(pointer.projectKey),
-      snapshotId: safeSnapshotId(pointer.snapshotId),
-    };
-  } catch {
-    return null;
+  const candidates = [layout.activeProjectFile];
+  const directory = path.dirname(layout.activeProjectFile);
+  const prefix = `${path.basename(layout.activeProjectFile)}.`;
+  if (fs.existsSync(directory)) {
+    const backups = fs.readdirSync(directory)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
+      .map((name) => path.join(directory, name))
+      .sort((left, right) => {
+        try { return fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs; } catch { return 0; }
+      });
+    candidates.push(...backups);
   }
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const pointer = readJson(candidate);
+      if (candidate !== layout.activeProjectFile) {
+        try { fs.copyFileSync(candidate, layout.activeProjectFile); } catch {}
+      }
+      return {
+        projectKey: safeProjectKey(pointer.projectKey),
+        snapshotId: safeSnapshotId(pointer.snapshotId),
+      };
+    } catch {
+      // 主文件损坏时继续尝试最近的原子写备份。
+    }
+  }
+  return null;
 }
 
 function snapshotDescriptors(layout, projectKey) {
@@ -303,30 +338,52 @@ function rebuildProjectHtml(projectKey, options = {}) {
   const descriptor = findSnapshot(layout, key, options);
   if (!descriptor) throw new Error("项目不存在或快照已不可用。");
 
-  const snapshotDir = descriptor.dir;
-  const translationCompareJson = path.join(snapshotDir, "translation-compare.json");
+  const selection = readProjectSelection(key, {
+    ...options,
+    snapshotId: descriptor.manifest.snapshotId,
+  });
+  const staging = createProjectStaging(selection, options);
+  let stagingDir = staging.dir;
   let rebuilt = false;
   let notesKey = "";
 
-  if (fs.existsSync(translationCompareJson)) {
-    const { rebuildCompareHtmlFromSnapshot } = require("../workbenches/translation-compare/build-compare");
-    notesKey = rebuildCompareHtmlFromSnapshot(snapshotDir).notesKey;
-    rebuilt = true;
-  }
+  try {
+    for (const entry of fs.readdirSync(descriptor.dir, { withFileTypes: true })) {
+      if (entry.name === "project.json") continue;
+      fs.cpSync(
+        path.join(descriptor.dir, entry.name),
+        path.join(stagingDir, entry.name),
+        { recursive: entry.isDirectory(), force: true },
+      );
+    }
 
-  const speakerJson = path.join(snapshotDir, "speaker-attribution.json");
-  if (fs.existsSync(speakerJson)) {
-    const { renderHtml } = require("../workbenches/speaker-attribution/build-workbench");
-    const model = readJson(speakerJson);
-    fs.writeFileSync(path.join(snapshotDir, "speaker-attribution.html"), renderHtml(model), "utf8");
-    rebuilt = true;
-  }
+    const translationCompareJson = path.join(stagingDir, "translation-compare.json");
+    if (fs.existsSync(translationCompareJson)) {
+      const { rebuildCompareHtmlFromSnapshot } = require("../workbenches/translation-compare/build-compare");
+      notesKey = rebuildCompareHtmlFromSnapshot(stagingDir).notesKey;
+      rebuilt = true;
+    }
 
-  if (!rebuilt) {
-    throw new Error("当前项目快照中未找到可重新渲染的数据文件。");
-  }
+    const speakerJson = path.join(stagingDir, "speaker-attribution.json");
+    if (fs.existsSync(speakerJson)) {
+      const { renderHtml } = require("../workbenches/speaker-attribution/build-workbench");
+      const model = readJson(speakerJson);
+      fs.writeFileSync(path.join(stagingDir, "speaker-attribution.html"), renderHtml(model), "utf8");
+      rebuilt = true;
+    }
 
-  return { project: publicProject(descriptor.manifest, readActivePointer(layout)), notesKey };
+    if (!rebuilt) {
+      throw new Error("当前项目快照中未找到可重新渲染的数据文件。");
+    }
+
+    const project = publishProject(stagingDir, options);
+    stagingDir = "";
+    return { project, notesKey };
+  } finally {
+    if (stagingDir) {
+      try { discardStaging(stagingDir, options); } catch {}
+    }
+  }
 }
 
 module.exports = {
@@ -342,4 +399,5 @@ module.exports = {
   rebuildProjectHtml,
   resolveProjectArtifact,
   safeProjectKey,
+  writeJsonAtomic,
 };

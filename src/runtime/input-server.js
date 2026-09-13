@@ -73,6 +73,9 @@ const speakerPipeline = {
   finishedAt: null,
   logs: [],
 };
+const apiSessionToken = crypto.randomBytes(32).toString("hex");
+const csrfHeaderName = "x-transcomparator-token";
+const sessionMetaPattern = /(<meta\s+name="transcomparator-session-token"\s+content=")[^"]*("\s*>)/i;
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -90,7 +93,57 @@ function runningTaskLabel() {
   return aiProofreadStatus().kind === "prefilter" ? "预筛选" : "AI 校对";
 }
 
+function timingSafeTokenEqual(actual, expected) {
+  const left = Buffer.from(String(actual || ""), "utf8");
+  const right = Buffer.from(String(expected || ""), "utf8");
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function requestPort(req) {
+  return Number(req.socket?.localPort) || defaultPort;
+}
+
+function isAllowedRequestHost(req) {
+  const hostHeader = String(req.headers.host || "").toLowerCase();
+  const port = requestPort(req);
+  return hostHeader === `${host}:${port}`
+    || hostHeader === `localhost:${port}`;
+}
+
+function isAllowedRequestOrigin(req) {
+  const origin = String(req.headers.origin || "").toLowerCase();
+  if (!origin) return true;
+  const port = requestPort(req);
+  return origin === `http://${host}:${port}`
+    || origin === `http://localhost:${port}`;
+}
+
+function isAllowedFetchSite(req) {
+  const site = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+  return !site || site === "same-origin" || site === "none";
+}
+
+function isAllowedRequestSource(req) {
+  return isAllowedRequestHost(req)
+    && isAllowedRequestOrigin(req)
+    && isAllowedFetchSite(req);
+}
+
+function requiresApiSessionToken(req) {
+  return !["GET", "HEAD", "OPTIONS"].includes(String(req.method || "").toUpperCase());
+}
+
+function hasValidApiSessionToken(req) {
+  return timingSafeTokenEqual(req.headers[csrfHeaderName], apiSessionToken);
+}
+
 function readJson(req, maxBytes = 128 * 1024 * 1024) {
+  const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    const error = new Error("API 请求必须使用 application/json。");
+    error.statusCode = 415;
+    return Promise.reject(error);
+  }
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalBytes = 0;
@@ -318,6 +371,12 @@ function serveStatic(req, res, pathname) {
       : ext === ".js" ? "text/javascript; charset=utf-8"
         : "application/octet-stream";
   res.writeHead(200, { "content-type": type, "cache-control": "no-store" });
+  if (ext === ".html") {
+    const html = fs.readFileSync(resolved, "utf8")
+      .replace(sessionMetaPattern, `$1${apiSessionToken}$2`);
+    res.end(html);
+    return;
+  }
   fs.createReadStream(resolved).pipe(res);
 }
 
@@ -327,17 +386,23 @@ function serveOutput(res, pathname) {
       const speakerFile = path.join(speakerOutputDir, "speaker-attribution.html");
       if (!fs.existsSync(speakerFile)) throw new Error("Speaker Attribution 工作台尚未生成。");
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      fs.createReadStream(speakerFile).pipe(res);
+      const html = fs.readFileSync(speakerFile, "utf8")
+        .replace(sessionMetaPattern, `$1${apiSessionToken}$2`);
+      res.end(html);
       return;
     }
     const match = pathname.match(/^\/output\/([^/]+)\/translation-compare\.html$/);
+    const activeProject = getActiveProject();
     const projectKey = match
       ? decodeURIComponent(match[1])
-      : (pathname === "/output/translation-compare.html" ? getActiveProject()?.id : "");
+      : (pathname === "/output/translation-compare.html" ? activeProject?.id : "");
     if (!projectKey) throw new Error("工作台尚未生成。");
-    const compareHtmlFile = resolveProjectArtifact(projectKey, "translation-compare.html");
+    const snapshotId = activeProject?.id === projectKey ? activeProject.snapshotId : "";
+    const compareHtmlFile = resolveProjectArtifact(projectKey, "translation-compare.html", { snapshotId });
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    fs.createReadStream(compareHtmlFile).pipe(res);
+    const html = fs.readFileSync(compareHtmlFile, "utf8")
+      .replace(sessionMetaPattern, `$1${apiSessionToken}$2`);
+    res.end(html);
   } catch (error) {
     sendError(res, 404, error);
   }
@@ -345,6 +410,14 @@ function serveOutput(res, pathname) {
 
 async function handleApi(req, res, pathname, searchParams) {
   try {
+    if (!isAllowedRequestSource(req)) {
+      sendError(res, 403, new Error("拒绝跨站或非本机 API 请求。"));
+      return;
+    }
+    if (requiresApiSessionToken(req) && !hasValidApiSessionToken(req)) {
+      sendError(res, 403, new Error("API 会话令牌无效，请从本地控制台重新打开页面。"));
+      return;
+    }
     if (req.method === "POST" && pathname === "/api/translation-export") {
       const payload = await readJson(req);
       const project = getActiveProject();
@@ -714,23 +787,41 @@ async function handleApi(req, res, pathname, searchParams) {
 
     sendError(res, 404, new Error(`Unknown local API endpoint: ${pathname}`));
   } catch (error) {
-    sendError(res, 400, error);
+    sendError(res, Number(error.statusCode) || 400, error);
   }
 }
 
 function createServer() {
-  return http.createServer((req, res) => {
-    const url = new URL(req.url, `http://${host}:${defaultPort}`);
-    if (url.pathname.startsWith("/api/")) {
-      handleApi(req, res, url.pathname, url.searchParams);
-      return;
+  const server = http.createServer((req, res) => {
+    try {
+      if (!isAllowedRequestSource(req)) {
+        sendError(res, 403, new Error("拒绝跨站或非本机请求。"));
+        return;
+      }
+      const url = new URL(req.url, `http://${host}:${requestPort(req)}`);
+      if (url.pathname.startsWith("/api/")) {
+        handleApi(req, res, url.pathname, url.searchParams);
+        return;
+      }
+      const pathname = decodeURIComponent(url.pathname);
+      if (pathname.startsWith("/output/")) {
+        serveOutput(res, pathname);
+        return;
+      }
+      serveStatic(req, res, pathname);
+    } catch (error) {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      sendError(res, 400, error instanceof URIError ? new Error("请求路径无效。") : error);
     }
-    if (url.pathname.startsWith("/output/")) {
-      serveOutput(res, url.pathname);
-      return;
-    }
-    serveStatic(req, res, decodeURIComponent(url.pathname));
   });
+  server.on("clientError", (error, socket) => {
+    if (!socket.writable) return;
+    socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+  });
+  return server;
 }
 
 const server = createServer();

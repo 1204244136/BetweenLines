@@ -1,14 +1,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
+const http = require("node:http");
 const path = require("path");
 
 const {
+  assertSafeOutboundUrl,
   buildApiUrl,
   buildProviderHeaders,
   buildChatCompletionBody,
   buildClaudeMessageBody,
   cleanJsonPayload,
+  fetchJson,
 } = require("../src/ai/llm-client");
 const { TaskQueue } = require("../src/ai/task-queue");
 const {
@@ -25,6 +28,41 @@ test("共享 LLM 传输层：buildApiUrl 处理各类 endpoint 与 /v1 前缀", 
   assert.equal(buildApiUrl("http://localhost:11434/v1", "/v1/chat/completions"), "http://localhost:11434/v1/chat/completions");
   assert.equal(buildApiUrl("https://api.anthropic.com", "/v1/messages"), "https://api.anthropic.com/v1/messages");
   assert.equal(buildApiUrl("https://api.anthropic.com/v1", "/v1/messages"), "https://api.anthropic.com/v1/messages");
+});
+
+test("共享 LLM 传输层：拒绝非 HTTP 与云元数据出站目标", async () => {
+  await assert.rejects(
+    () => assertSafeOutboundUrl("file:///etc/passwd"),
+    /只支持 http/,
+  );
+  await assert.rejects(
+    () => assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data"),
+    /link-local/,
+  );
+  await assert.rejects(
+    () => assertSafeOutboundUrl("http://metadata.google.internal/computeMetadata/v1"),
+    /云元数据/,
+  );
+  await assert.doesNotReject(
+    () => assertSafeOutboundUrl("http://127.0.0.1:11434/v1"),
+  );
+});
+
+test("共享 LLM 传输层：不自动跟随可能转向内网的重定向", async () => {
+  const server = http.createServer((request, response) => {
+    response.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data" });
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    await assert.rejects(
+      () => fetchJson(`http://127.0.0.1:${address.port}/v1/models`, { method: "GET" }),
+      /HTTP 302/,
+    );
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("共享 LLM 传输层：buildProviderHeaders 与 cleanJsonPayload", () => {
@@ -91,6 +129,17 @@ test("共享 TaskQueue：控制有界并发与 AbortSignal 取消", async () => 
   controller.abort();
   const cancelResults = await cancelQueue.runAll([1, 2], async (x) => x);
   assert.equal(cancelResults.filter(Boolean).length, 0);
+});
+
+test("说话人客户端 AI 停止/重启使用运行号隔离旧任务", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "public", "speaker-workbench-client.js"),
+    "utf8",
+  );
+  assert.match(source, /let aiActiveRunId = 0/);
+  assert.match(source, /const isCurrentRun = \(\) => aiActiveRunId === runId/);
+  assert.doesNotMatch(source, /signal: aiAbortController\?\.signal/);
+  assert.match(source, /if \(!isCurrentRun\(\)\) return;/);
 });
 
 test("说话人推断：validateSpeakerOutput 规范化校验与容错", () => {

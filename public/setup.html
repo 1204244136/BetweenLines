@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="transcomparator-session-token" content="">
   <title>BetweenLines 控制台</title>
   <style>
     :root {
@@ -1037,6 +1038,21 @@
       inputsReady: false,
       serverApiVersion: 0,
     };
+    async function apiFetch(url, options = {}) {
+      const method = String(options.method || "GET").toUpperCase();
+      const isApiRequest = String(url).startsWith("/api/");
+      if (!isApiRequest || ["GET", "HEAD", "OPTIONS"].includes(method)) {
+        return fetch(url, options);
+      }
+      const meta = document.querySelector('meta[name="transcomparator-session-token"]');
+      const token = meta?.getAttribute("content") || "";
+      const headers = { ...(options.headers || {}) };
+      if (token) headers["X-TransComparator-Token"] = token;
+      if (options.body != null && !Object.keys(headers).some((name) => name.toLowerCase() === "content-type")) {
+        headers["Content-Type"] = "application/json";
+      }
+      return fetch(url, { ...options, headers });
+    }
     const ids = {
       translationWorkbench: document.getElementById("translationWorkbench"),
       speakerWorkbench: document.getElementById("speakerWorkbench"),
@@ -1405,7 +1421,7 @@
       validateUnique({ announce: false });
       setStatus(`正在打开${mode === "folder" ? "EPUB 文件夹" : "文件"}选择窗口，请在弹出的窗口中选择...`, "warn");
       try {
-        const response = await fetch("/api/pick-path", {
+        const response = await apiFetch("/api/pick-path", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ mode }),
@@ -1448,7 +1464,7 @@
       validateUnique({ announce: false });
       setStatus(`正在校验${roleName(role)}本地路径...`, "warn");
       try {
-        const response = await fetch("/api/validate-input", {
+        const response = await apiFetch("/api/validate-input", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ path: rawPath }),
@@ -1521,7 +1537,7 @@
     async function persistSelection() {
       if (!validateUnique()) throw new Error("请先导入所需文件。");
       const speaker = isSpeakerMode();
-      const response = await fetch(speaker ? "/api/speaker-selection" : "/api/selection", {
+      const response = await apiFetch(speaker ? "/api/speaker-selection" : "/api/selection", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(speaker ? {
@@ -1660,7 +1676,7 @@
 
     async function refreshPipeline() {
       try {
-        const response = await fetch("/api/status");
+        const response = await apiFetch("/api/status");
         const data = await response.json();
         if (data.ok) {
           state.serverApiVersion = Number(data.apiVersion) || 0;
@@ -1704,7 +1720,7 @@
 
     async function refreshAiStatus() {
       try {
-        const response = await fetch("/api/ai-proofread/status");
+        const response = await apiFetch("/api/ai-proofread/status");
         const data = await response.json();
         if (data.ok) renderAiStatus(data.ai);
       } catch {
@@ -1716,7 +1732,7 @@
       ids.aiStatus.className = "status warn";
       ids.aiStatus.textContent = "正在终止后台 AI 任务...";
       try {
-        const response = await fetch("/api/ai-proofread/stop", { method: "POST" });
+        const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         renderAiStatus(data.ai);
@@ -1741,7 +1757,7 @@
       try {
         const speaker = isSpeakerMode();
         if (!state.saved) await persistSelection();
-        const response = await fetch(speaker ? "/api/speaker-run" : "/api/run", { method: "POST" });
+        const response = await apiFetch(speaker ? "/api/speaker-run" : "/api/run", { method: "POST" });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         state.serverApiVersion = Number(data.apiVersion) || state.serverApiVersion;
@@ -1759,7 +1775,7 @@
       updateProjectSelection();
       setRunStatus(`正在切换项目：${project.name}`, "warn");
       try {
-        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/activate`, { method: "POST" });
+        const response = await apiFetch(`/api/projects/${encodeURIComponent(project.id)}/activate`, { method: "POST" });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         applySavedSelection(data.saved, data.savedFiles, true);
@@ -1781,7 +1797,7 @@
       updateProjectSelection();
       setRunStatus(`正在为项目应用新布局：${project.name}...`, "warn");
       try {
-        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/rebuild-html`, { method: "POST" });
+        const response = await apiFetch(`/api/projects/${encodeURIComponent(project.id)}/rebuild-html`, { method: "POST" });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         if (Array.isArray(data.projects)) {
@@ -1821,7 +1837,7 @@
       updateProjectSelection();
       setRunStatus(`正在删除项目：${project.name}`, "warn");
       try {
-        const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        const response = await apiFetch(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         if (data.saved) applySavedSelection(data.saved, data.savedFiles, true);

@@ -1,8 +1,29 @@
 const assert = require("node:assert/strict");
+const http = require("node:http");
 const test = require("node:test");
 
 const { createServer, host } = require("./input-server");
 const { mapCommandProgress, parseProgressMessage } = require("./generation-pipeline");
+
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, host, resolve);
+  });
+  return server.address().port;
+}
+
+async function close(server) {
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+async function apiToken(port) {
+  const response = await fetch(`http://${host}:${port}/`);
+  const html = await response.text();
+  const match = html.match(/<meta\s+name="transcomparator-session-token"\s+content="([^"]+)">/i);
+  assert.ok(match, "setup page should contain an injected API session token");
+  return match[1];
+}
 
 test("machine progress messages are parsed and clamped", () => {
   const message = parseProgressMessage(
@@ -54,19 +75,91 @@ test("status exposes the project API version and completed project slot", async 
 
 test("deleting an unknown project is rejected without touching storage", async () => {
   const server = createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, host, resolve);
-  });
+  const port = await listen(server);
   try {
-    const address = server.address();
-    const response = await fetch(`http://${host}:${address.port}/api/projects/missing-project-key`, { method: "DELETE" });
+    const token = await apiToken(port);
+    const response = await fetch(`http://${host}:${port}/api/projects/missing-project-key`, {
+      method: "DELETE",
+      headers: { "X-TransComparator-Token": token },
+    });
     const data = await response.json();
     assert.equal(response.status, 400);
     assert.equal(data.ok, false);
     assert.match(data.error, /项目不存在/);
   } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await close(server);
+  }
+});
+
+test("mutating API requests require the same-origin session token and JSON content type", async () => {
+  const server = createServer();
+  const port = await listen(server);
+  try {
+    const endpoint = `http://${host}:${port}/api/ai-proofread/stop`;
+    const missingToken = await fetch(endpoint, { method: "POST" });
+    assert.equal(missingToken.status, 403);
+
+    const token = await apiToken(port);
+    const crossOrigin = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "X-TransComparator-Token": token,
+        Origin: "https://attacker.example",
+      },
+    });
+    assert.equal(crossOrigin.status, 403);
+
+    const crossSiteFetch = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "X-TransComparator-Token": token,
+        "Sec-Fetch-Site": "cross-site",
+      },
+    });
+    assert.equal(crossSiteFetch.status, 403);
+
+    const invalidContentType = await fetch(`http://${host}:${port}/api/speaker-selection`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain",
+        "X-TransComparator-Token": token,
+      },
+      body: "{}",
+    });
+    assert.equal(invalidContentType.status, 415);
+
+    const accepted = await fetch(endpoint, {
+      method: "POST",
+      headers: { "X-TransComparator-Token": token },
+    });
+    assert.equal(accepted.status, 200);
+  } finally {
+    await close(server);
+  }
+});
+
+test("malformed request paths return 400 without terminating the server", async () => {
+  const server = createServer();
+  const port = await listen(server);
+  try {
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({
+        host,
+        port,
+        method: "GET",
+        path: "/%",
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode));
+      });
+      request.on("error", reject);
+      request.end();
+    });
+    assert.equal(status, 400);
+    const alive = await fetch(`http://${host}:${port}/api/status`);
+    assert.equal(alive.status, 200);
+  } finally {
+    await close(server);
   }
 });
 

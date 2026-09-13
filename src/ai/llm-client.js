@@ -7,11 +7,77 @@
  * 支持请求超时、取消信号、思考/推理参数映射以及安全 JSON 反序列化。
  */
 
+const dns = require("node:dns").promises;
+const net = require("node:net");
 const {
   detectModelCapabilities,
   normalizeModelReasoningEffort,
   CLAUDE_THINKING_BUDGETS,
 } = require("../workbenches/translation-compare/ai/model-capabilities");
+
+const blockedMetadataHosts = new Set([
+  "metadata.google.internal",
+  "metadata.goog",
+  "instance-data",
+  "instance-data.ec2.internal",
+]);
+const outboundHostCache = new Map();
+const outboundHostCacheTtlMs = 60 * 1000;
+
+function isBlockedAddress(address) {
+  const value = String(address || "").toLowerCase().split("%")[0];
+  if (net.isIPv4(value)) {
+    const octets = value.split(".").map(Number);
+    return octets[0] === 0
+      || (octets[0] === 169 && octets[1] === 254)
+      || octets[0] >= 224;
+  }
+  if (net.isIPv6(value)) {
+    if (value.startsWith("::ffff:")) return isBlockedAddress(value.slice("::ffff:".length));
+    return value === "::"
+      || /^fe[89ab]/i.test(value)
+      || /^ff/i.test(value);
+  }
+  return false;
+}
+
+async function resolveOutboundAddresses(hostname) {
+  const cached = outboundHostCache.get(hostname);
+  if (cached && cached.expiresAt > Date.now()) return cached.addresses;
+  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  const addresses = records.map((record) => record.address);
+  outboundHostCache.set(hostname, {
+    addresses,
+    expiresAt: Date.now() + outboundHostCacheTtlMs,
+  });
+  return addresses;
+}
+
+async function assertSafeOutboundUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || ""));
+  } catch {
+    throw new Error("模型接口地址无效。");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("模型接口只支持 http:// 或 https:// 地址。");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("模型接口地址不能包含用户名或密码。");
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+  if (!hostname) throw new Error("模型接口地址缺少主机名。");
+  if (blockedMetadataHosts.has(hostname)) {
+    throw new Error("拒绝访问云元数据地址。");
+  }
+  const addresses = net.isIP(hostname) ? [hostname] : await resolveOutboundAddresses(hostname);
+  if (!addresses.length) throw new Error(`无法解析模型接口主机：${hostname}`);
+  if (addresses.some(isBlockedAddress)) {
+    throw new Error(`拒绝访问 link-local、多播或未指定地址：${hostname}`);
+  }
+  return parsed.toString();
+}
 
 function buildApiUrl(baseUrl, endpoint) {
   const base = String(baseUrl || "").trim().replace(/\/+$/, "");
@@ -161,7 +227,12 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
   }, timeoutMs);
 
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const safeUrl = await assertSafeOutboundUrl(url);
+    const response = await fetch(safeUrl, {
+      ...options,
+      redirect: "manual",
+      signal: controller.signal,
+    });
     const text = await response.text();
     if (!response.ok) {
       const error = new Error(`${url} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
@@ -292,6 +363,7 @@ async function listProviderModels(config = {}, options = {}) {
 }
 
 module.exports = {
+  assertSafeOutboundUrl,
   buildApiUrl,
   buildProviderHeaders,
   buildChatCompletionBody,

@@ -775,6 +775,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="transcomparator-session-token" content="">
   <title>${bilingual ? "双语" : "三语"}翻译对比校对工作台</title>
   <style>${workbenchStyle}${aiPanelStyle}</style>
 </head>

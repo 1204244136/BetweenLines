@@ -2,6 +2,22 @@
     const bilingualMode = pageMeta.comparisonMode === "bilingual";
     const aiConfigStorageKey = "translation-compare-ai-config-v1";
     const aiPromptStorageKey = "translation-compare-ai-prompt-v1:" + (pageMeta.projectKey || "unscoped");
+
+    async function apiFetch(url, options = {}) {
+      const method = String(options.method || "GET").toUpperCase();
+      const isApiRequest = String(url).startsWith("/api/");
+      if (!isApiRequest || ["GET", "HEAD", "OPTIONS"].includes(method)) {
+        return fetch(url, options);
+      }
+      const meta = document.querySelector('meta[name="transcomparator-session-token"]');
+      const token = meta?.getAttribute("content") || "";
+      const headers = { ...(options.headers || {}) };
+      if (token) headers["X-TransComparator-Token"] = token;
+      if (options.body != null && !Object.keys(headers).some((name) => name.toLowerCase() === "content-type")) {
+        headers["Content-Type"] = "application/json";
+      }
+      return fetch(url, { ...options, headers });
+    }
     const gptReasoningOptions = [
       ["", "模型默认"],
       ["none", "无 (none)"],
@@ -2077,7 +2093,7 @@
       button.disabled = true;
       button.textContent = "写回中...";
       try {
-        const response = await fetch("/api/translation-export", {
+        const response = await apiFetch("/api/translation-export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ entries: [{ id: String(id), targetKey, searchText, replaceText: revision }] }),
@@ -2136,7 +2152,7 @@
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
       if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote)) return;
       try {
-        const response = await fetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }) });
+        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }) });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
         // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，
@@ -2590,7 +2606,7 @@
           params.set("afterRevision", String(lastAiResultRevision));
           for (const id of aiRequestCache.keys()) params.append("knownRequestId", id);
         }
-        const response = await fetch("/api/ai-proofread/status?" + params);
+        const response = await apiFetch("/api/ai-proofread/status?" + params);
         const data = await response.json();
         if (data.ok) {
           renderAiStatus(data.ai);
@@ -2650,7 +2666,7 @@
       const requestedBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl.value);
       showModelHint("正在获取可用模型...", { timeout: 0 });
       try {
-        const response = await fetch("/api/ai-proofread/models", {
+        const response = await apiFetch("/api/ai-proofread/models", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -2699,7 +2715,7 @@
         return;
       }
       try {
-        const response = await fetch("/api/ai-proofread/status");
+        const response = await apiFetch("/api/ai-proofread/status");
         const data = await response.json();
         providerDefaults = data.ai?.providerDefaults || providerDefaults;
         applyProviderDefaults(providerDefaults[aiIds.provider.value], { force: true });
@@ -2802,7 +2818,7 @@
       prefilterIds.panel.open = true;
       setRuntimeStatus("正在运行预筛选...");
       try {
-        const response = await fetch("/api/prefilter/start", {
+        const response = await apiFetch("/api/prefilter/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -2839,7 +2855,7 @@
       prefilterIds.stop.disabled = true;
       setRuntimeStatus("正在终止预筛选...");
       try {
-        const response = await fetch("/api/prefilter/stop", { method: "POST" });
+        const response = await apiFetch("/api/prefilter/stop", { method: "POST" });
         const data = await response.json();
         if (data.ok) {
           renderAiStatus(data.ai);
@@ -2870,7 +2886,7 @@
       }
       setRuntimeStatus("正在启动 AI 校对...");
       try {
-        const response = await fetch("/api/ai-proofread/start", {
+        const response = await apiFetch("/api/ai-proofread/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(aiConfig()),
@@ -2890,7 +2906,7 @@
       aiIds.stop.disabled = true;
       setRuntimeStatus("正在终止 AI 校对...");
       try {
-        const response = await fetch("/api/ai-proofread/stop", { method: "POST" });
+        const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
         const data = await response.json();
         if (data.ok) {
           renderAiStatus(data.ai);
@@ -2915,7 +2931,7 @@
       clearLocalAiCache();
       renderClearedAiStatus();
       try {
-        const response = await fetch("/api/ai-proofread/cache/clear", { method: "POST" });
+        const response = await apiFetch("/api/ai-proofread/cache/clear", { method: "POST" });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
         if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);

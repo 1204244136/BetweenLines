@@ -52,6 +52,22 @@
     saveTimer = window.setTimeout(flushNotes, 180);
   }
 
+  async function apiFetch(url, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    const isApiRequest = String(url).startsWith("/api/");
+    if (!isApiRequest || ["GET", "HEAD", "OPTIONS"].includes(method)) {
+      return fetch(url, options);
+    }
+    const meta = document.querySelector('meta[name="transcomparator-session-token"]');
+    const token = meta?.getAttribute("content") || "";
+    const headers = { ...(options.headers || {}) };
+    if (token) headers["X-TransComparator-Token"] = token;
+    if (options.body != null && !Object.keys(headers).some((name) => name.toLowerCase() === "content-type")) {
+      headers["Content-Type"] = "application/json";
+    }
+    return fetch(url, { ...options, headers });
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -487,7 +503,7 @@
     });
 
     try {
-      const response = await fetch("/api/speaker-export", {
+      const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows }),
@@ -621,7 +637,7 @@
     button.textContent = "写回中...";
     button.disabled = true;
     try {
-      const response = await fetch("/api/speaker-export", {
+      const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -722,6 +738,8 @@
 
   let aiRunning = false;
   let aiAbortController = null;
+  let aiRunSequence = 0;
+  let aiActiveRunId = 0;
 
   const thinkingLevelLabels = {
     "": "模型默认",
@@ -889,7 +907,7 @@
     return { speaker: "", status: "needs-review", confidence: 0, evidence: text.slice(0, 120), needsContext: true };
   }
 
-  async function callAiInfer(row, config) {
+  async function callAiInfer(row, config, signal) {
     // 1. 优先尝试通过本地后端代理执行（彻底规避浏览器的第三方 CORS 限制）
     const proxyUrls = ["/api/speaker-ai/infer"];
     if (window.location.protocol === "file:" || !window.location.host) {
@@ -897,11 +915,11 @@
     }
     for (const url of proxyUrls) {
       try {
-        const resp = await fetch(url, {
+        const resp = await apiFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ row, config }),
-          signal: aiAbortController?.signal,
+          signal,
         });
         if (resp.ok) {
           const data = await resp.json();
@@ -949,7 +967,7 @@
           method: "POST",
           headers,
           body: JSON.stringify(body),
-          signal: aiAbortController?.signal,
+          signal,
         });
         if (!resp.ok) {
           const errText = await resp.text().catch(() => "");
@@ -1002,8 +1020,12 @@
       return;
     }
 
+    const runId = ++aiRunSequence;
+    const controller = new AbortController();
+    const isCurrentRun = () => aiActiveRunId === runId && aiAbortController === controller;
     aiRunning = true;
-    aiAbortController = new AbortController();
+    aiActiveRunId = runId;
+    aiAbortController = controller;
     if (aiStartBtn) aiStartBtn.disabled = true;
     if (aiStopBtn) aiStopBtn.disabled = false;
     if (aiProgressWrap) aiProgressWrap.hidden = false;
@@ -1013,6 +1035,7 @@
     const total = allRows.length;
 
     const updateProgress = () => {
+      if (!isCurrentRun()) return;
       const pct = Math.round((completed / total) * 100);
       if (aiProgressBar) aiProgressBar.style.width = pct + "%";
       if (aiStatusText) aiStatusText.textContent = "已推断 " + completed + " / " + total + " (" + pct + "%)";
@@ -1024,12 +1047,13 @@
     const workerCount = Math.min(config.concurrency, targetRows.length);
 
     const worker = async () => {
-      while (currentIndex < targetRows.length && aiRunning) {
+      while (currentIndex < targetRows.length && isCurrentRun()) {
         const row = targetRows[currentIndex++];
         try {
-          let prediction = await callAiInfer(row, config);
+          let prediction = await callAiInfer(row, config, controller.signal);
+          if (!isCurrentRun()) break;
           // 渐进式披露闭环 (Progressive Disclosure Expansion Loop)
-          if ((prediction.needsContext || (prediction.confidence <= 0.35 && !prediction.speaker)) && aiRunning) {
+          if ((prediction.needsContext || (prediction.confidence <= 0.35 && !prediction.speaker)) && isCurrentRun()) {
             const prevRow = allRows[row.index - 2];
             const priorSpeaker = prevRow?.prediction?.speaker || recordFor(prevRow || {})?.speaker || "";
             if (priorSpeaker) {
@@ -1039,17 +1063,19 @@
                 progressiveExpansion: true,
               };
               try {
-                const expandedPrediction = await callAiInfer(row, progressiveConfig);
+                const expandedPrediction = await callAiInfer(row, progressiveConfig, controller.signal);
+                if (!isCurrentRun()) break;
                 if (expandedPrediction && (expandedPrediction.speaker || expandedPrediction.confidence > prediction.confidence)) {
                   prediction = expandedPrediction;
                 }
               } catch (_) {}
             }
           }
+          if (!isCurrentRun()) break;
           row.prediction = prediction;
           savePrediction(row.id, prediction);
         } catch (e) {
-          if (e.name === "AbortError" || !aiRunning) break;
+          if (e.name === "AbortError" || !isCurrentRun()) break;
           row.prediction = {
             speaker: "",
             status: "needs-review",
@@ -1108,7 +1134,10 @@
     for (let i = 0; i < workerCount; i += 1) workers.push(worker());
     await Promise.all(workers);
 
+    if (!isCurrentRun()) return;
     aiRunning = false;
+    aiActiveRunId = 0;
+    aiAbortController = null;
     if (aiStartBtn) aiStartBtn.disabled = false;
     if (aiStopBtn) aiStopBtn.disabled = true;
     updateAiBadge(completed);
@@ -1118,8 +1147,11 @@
 
   function stopAiInference() {
     if (!aiRunning) return;
+    const controller = aiAbortController;
     aiRunning = false;
-    if (aiAbortController) aiAbortController.abort();
+    aiActiveRunId = 0;
+    aiAbortController = null;
+    if (controller) controller.abort();
     if (aiStartBtn) aiStartBtn.disabled = false;
     if (aiStopBtn) aiStopBtn.disabled = true;
     if (aiStatusText) aiStatusText.textContent = "已停止推断。";
@@ -1213,7 +1245,7 @@
 
     try {
       // 优先尝试后端代理端点
-      const resp = await fetch("/api/speaker-ai/models", {
+      const resp = await apiFetch("/api/speaker-ai/models", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

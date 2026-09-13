@@ -338,7 +338,7 @@ function renderHtml(model) {
     : `<dl><div><dt>主文本行</dt><dd>${model.sourceLineCount}</dd></div><div><dt>发话行</dt><dd>${model.rows.length}</dd></div></dl>`;
 
   return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="transcomparator-session-token" content="">
 <title>说话人归属工作台</title><style>${workbenchStyle}${aiPanelStyle}</style></head>
 <body><div class="speaker-app${bilingual ? " is-bilingual" : " is-monolingual"}">
   <header class="speaker-header"><div class="speaker-topbar">
