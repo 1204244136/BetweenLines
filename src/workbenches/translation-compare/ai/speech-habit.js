@@ -9,8 +9,8 @@
  * - 角色：人物名（必填）
  * - 口癖：日文原词（如「オレ」「なの」），可为空（此时只有备注描述，如“句尾最后一个假名变为片假名”）
  * - 类型：第一人称 / 句末语气词 / 句首语气词 / 接续词 / 谓语形式 / 句式 / 称谓 / 名词前缀 / 名词后缀 / 短句
- * - x版：本项目（成品）的写法，作为“补回”的标准
- * - 网翻 / 台版（转简中）：其他版本写法，用于提醒模型不要按旧译名回改
+ * - x版：本项目（成品）的写法，是“补回”的唯一标准；`-` 表示本项目不作特殊处理
+ * - 网翻 / 台版（转简中）：其他版本写法，只在 x版 已登记时用于提醒模型不要按旧译名回改
  * - 备注：说明
  * - 小说首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
  */
@@ -130,8 +130,9 @@ function normalizeSpeechEntry(record) {
   };
   entry.firstWorkKey = volumeKey(entry.firstWork);
   entry.aliases = characterAliases(character);
-  // 补回时优先使用本项目的写法；没有 x版 时退到其他版本写法作为线索（同值只留一份）。
-  entry.expectedWritings = [...new Set([entry.versions.x, entry.versions.net, entry.versions.tw].filter(Boolean))];
+  // 当前项目按 X版 对齐：只有 x版 才能作为补回或“特色流失”的判定基准。
+  // `-` 表示不作特殊处理，不能退到网翻/台版；其他版本只保留作旧写法的对照。
+  entry.expectedWritings = entry.versions.x ? [entry.versions.x] : [];
   entry.hasLiteralHabit = Boolean(entry.habit) && !isPlaceholder(entry.habit);
   return entry;
 }
@@ -276,9 +277,11 @@ function describeHabit(entry) {
   if (entry.habit) parts.push(`「${entry.habit}」`);
   const head = parts.length ? parts.join(" ") : "说话特色";
   const writings = [];
-  if (entry.versions.x) writings.push(`本项目写作「${entry.versions.x}」`);
-  const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
-  if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
+  if (entry.versions.x) {
+    writings.push(`本项目写作「${entry.versions.x}」`);
+    const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
+    if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
+  }
   if (!writings.length && entry.memo) writings.push(`备注：${entry.memo}`);
   return `${entry.character}：${head}${writings.length ? ` → ${writings.join("；")}` : ""}`;
 }
@@ -360,7 +363,7 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
       character: entry.character,
       type: entry.type,
       habit: entry.habit,
-      expected: entry.versions.x || entry.versions.net || entry.versions.tw || "",
+      expected: entry.versions.x || "",
       confidence: item.activated === false ? "low" : "high",
       detectable: isHabitDetectable(entry),
     });
@@ -442,13 +445,14 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
  * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
  * - 单字口癖（力、超、訳）会撞普通词，不检测；
  * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
- * - 没有任何可核对的目标写法时（x版/网翻/台版都空，只有备注）“译文少了这个特色”无从判定：
+ * - 没有 X版 目标写法时（单元格为 `-` 或空）“译文少了这个特色”无从判定：
  *   备注写的是“通常放在句尾”这类说明，拿它去比对中文译文只会每行都报流失。
  */
 function isHabitDetectable(entry) {
   if (!entry || !entry.hasLiteralHabit) return false;
   if (!DETECTABLE_TYPES.has(entry.type)) return false;
   if (String(entry.habit).length < 2) return false;
+  if (!entry.versions?.x) return false;
   if (entry.versions.x && entry.versions.x === entry.habit) return false;
   if (!(entry.expectedWritings || []).length) return false;
   return true;
@@ -524,7 +528,7 @@ function findHabitMisses({ source, target, characters = [] } = {}) {
       character: entry.character,
       habit: entry.habit,
       type: entry.type,
-      expected: entry.versions.x || entry.versions.net || entry.versions.tw,
+      expected: entry.versions.x || "",
       memo: entry.memo,
     });
   }
@@ -566,7 +570,7 @@ function summarizeGroup({ name, rows = [], tables, volume = null, characters = n
       character: item.entry.character,
       type: item.entry.type,
       habit: item.entry.habit,
-      expected: item.entry.versions.x || item.entry.versions.net || item.entry.versions.tw,
+      expected: item.entry.versions.x || "",
       // 三个写法槽位与备注：构建期落盘要原样带上，运行期才能还原出与现算完全一致的提示词块。
       versions: {
         x: item.entry.versions.x || "",

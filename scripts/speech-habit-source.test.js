@@ -29,7 +29,7 @@ test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 const HABIT_CSV = [
   "小说首次出现,角色,口癖,类型,x版,网翻,台版（转简中）,备注",
   "S1_04,甲野一郎,オレ,第一人称,本大爷,,俺,男性化自称",
-  "S1_04,乙川次郎,じゃん,谓语形式,,,,通常放在句尾",
+  "S1_04,乙川次郎,じゃん,谓语形式,-,吧,,通常放在句尾",
 ].join("\n");
 
 function loadFixture() {
@@ -76,7 +76,7 @@ test("说话人候选来自本行命中的口癖，且只在有特征时出现",
   assert.deepEqual(low, []);
 });
 
-test("没有说话习惯写法登记的口癖只作说话人线索，不得据此判译文遗漏", () => {
+test("X版为 `-` 的口癖只作说话人线索，网翻写法不得当作补回基准", () => {
   const tables = loadFixture();
   const jp = "「じゃん」と乙川次郎。";
   const cn = "「吧」乙川次郎说。";
@@ -84,7 +84,7 @@ test("没有说话习惯写法登记的口癖只作说话人线索，不得据�
   const characters = detectCharacters({ rows, tables });
   const candidates = habitCandidatesForRow({ row: rows[0], characters });
 
-  // 候选仍然给出（名字命中），但表里没登记写法 → 没有比对基准。
+  // 候选仍然给出（名字命中），但 X版 为 `-`（网翻虽有写法也不作数）→ 没有比对基准。
   assert.deepEqual(candidates.map((item) => item.character), ["乙川次郎"]);
   assert.equal(candidates[0].expected, "");
   assert.equal(candidates[0].detectable, false);

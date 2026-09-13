@@ -29,8 +29,8 @@ const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
 const { tableFilesForProfile, tableSourceCandidates } = require("./layer-sources");
 const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
-// 2：落盘块的 `files` 从「本机完整路径」改成「文件名」，运行期改为按当前档案重算指纹。
-const LAYER_VERSION = 2;
+// 3：X版成为唯一判定基准，`-` 不再回退到网翻/台版；旧快照必须按新口径重算。
+const LAYER_VERSION = 3;
 
 /**
  * 表指纹：文件状态 + 条目数，任一变化都视为过期。
@@ -57,7 +57,8 @@ function characterDescriptor(item, records = []) {
     memo: record.memo || item.memo || "",
     hasLiteralHabit: Boolean(record.habit || item.habit),
     versions,
-    expectedWritings: [...new Set([versions.x, versions.net, versions.tw].filter(Boolean))],
+    // 当前项目按 X版 对齐，只以 x 作为判定基准；网翻/台版不参与补回。
+    expectedWritings: versions.x ? [versions.x] : [],
   };
 }
 

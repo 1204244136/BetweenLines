@@ -33,7 +33,7 @@ const HABIT_CSV = [
   "S1_04,乙川次郎,ですの,谓语形式,的说,,,",
   "S1_08,丙山三郎,じゃん,谓语形式,的吧,,,",,
   "-,丁原四郎,力,名词后缀,力,,,XX力",
-  "S2_01,戊田五郎,なの,句末语气词,,,,通常放在句尾",
+  "S2_01,戊田五郎,なの,句末语气词,-,嗯,,通常放在句尾",
 ].join("\n");
 
 function loadFixture() {
@@ -58,6 +58,19 @@ test("说话习惯表按表头解析，并生成强/弱名字关键词", () => {
   assert.deepEqual(western.weak, ["凯兹", "诺克莱本"]);
 
   assert.equal(describeHabit(loadFixture().entries[0]), "甲野一郎：第一人称 「オレ」 → 本项目写作「本大爷」；「俺」（旧写法，不要回改）");
+});
+
+test("X版写 `-` 表示不作特殊处理，不得回退到网翻或台版", () => {
+  const tables = loadFixture();
+  const go = tables.entries.find((entry) => entry.character === "戊田五郎");
+  assert.deepEqual(go.versions, { x: "", net: "嗯", tw: "" });
+  assert.deepEqual(go.expectedWritings, []);
+  assert.equal(isHabitDetectable(go), false);
+
+  const rows = [{ index: 1, chapter: "第一章", jp: "「なの」と戊田五郎。", cn: "「的说」戊田五郎说。" }];
+  const characters = detectCharacters({ rows, tables });
+  assert.deepEqual(findHabitMisses({ source: rows[0].jp, target: rows[0].cn, characters }), []);
+  assert.equal(chapterHabitBlock({ chapter: "第一章", characters }), "");
 });
 
 test("卷号比较与从输入路径推断当前卷", () => {
@@ -155,7 +168,7 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(isHabitDetectable(shiro), false);
   assert.equal(isHabitDetectable(jiro), true);
   assert.equal(isHabitDetectable(ichiro), true);
-  // 没有任何目标写法（x版/网翻/台版都空，只有备注）时也没有“流失”可言：
+  // 没有 X版 目标写法（单元格为 `-` 或空）时也没有“流失”可言：
   // 备注写的是说明，不是译文里该出现的东西，拿它比对只会每行都报流失。
   assert.equal(isHabitDetectable(go), false);
 
@@ -179,9 +192,9 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(hasHabitOccurrence("「力！」と叫んだ。", chikjo.entry), true, "引号后的独立用法算命中");
   assert.equal(hasHabitOccurrence("すごい力だ。", chikjo.entry), false, "前面是假名的「力」不算（属于普通词的一部分）");
   assert.equal(hasHabitOccurrence("彼女は<ruby>魔<rt>ま</rt></ruby>力を使った。", chikjo.entry), false, "注音标记不改变前一个字是汉字的事实");
-  // 译文已使用本项目写法（或任一版本写法）就不算流失。
+  // 只有译文使用 X版 登记写法才算译出；网翻/台版不是当前项目的判定基准。
   assert.deepEqual(findHabitMisses({ source: "オレは行く。", target: "本大爷要去。", characters }), []);
-  assert.deepEqual(findHabitMisses({ source: "オレは行く。", target: "俺要去。", characters }), []);
+  assert.equal(findHabitMisses({ source: "オレは行く。", target: "俺要去。", characters }).length, 1);
   // 译文完全没体现第一人称口癖 → 提示补回。
   const missed = findHabitMisses({ source: "オレは行く。", target: "我要去。", characters });
   assert.equal(missed.length, 1);
