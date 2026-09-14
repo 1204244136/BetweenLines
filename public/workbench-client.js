@@ -174,10 +174,11 @@
       return canonical;
     }
 
-    // 只在从未保存过的空间自动恢复；已有备注（包括刻意清空的空间）由用户预览后合并。
+    // 只在从未保存过、且属于同一输入项目的空间自动恢复；其他项目只进入手动预览列表。
+    // 已有备注（包括刻意清空的空间）同样由用户预览后合并。
     if (initialRaw === null) {
       const candidates = notesTools.inventory(localStorage, storageKey, notes)
-        .filter((space) => !space.current && space.entries && !space.parseFailed)
+        .filter((space) => !space.current && space.sameProject && space.entries && !space.parseFailed)
         .map((space) => ({ space, plan: recoveryPlan(space) }))
         .sort((a, b) => b.plan.verified - a.plan.verified);
       const best = candidates.find(({ plan }) => plan.verified);

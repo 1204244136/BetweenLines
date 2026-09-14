@@ -75,6 +75,17 @@ test("没有任何一条能按内容对上时如实告知，并指向按行号�
   assert.equal(ui.run("toasts[toasts.length - 1].tone"), "watch", "一条都没对上时要提醒，而不是报成功");
 });
 
+test("另一对输入文件的历史备注不参与自动找回，只保留为手动预览项", () => {
+  const unrelated = "translation-compare-notes-v7:another-project:rows";
+  const ui = createWorkbench(storageFixture({
+    [unrelated]: JSON.stringify({ 1: { note: "另一项目的记录", done: true, manualDone: true, rowSig: "sig-1" } }),
+  }));
+  assert.equal(ui.run("Object.keys(notes).length"), 0);
+  assert.equal(ui.storage.getItem(currentKey), null);
+  assert.equal(ui.run("toasts.some((toast) => /找回|历史备注/.test(toast.message))"), false);
+  assert.equal(ui.run("notesSpaceInventory.filter((space) => !space.current).length"), 1, "无关空间仍允许用户手动预览");
+});
+
 test("预览找回时本页已有记录的行也按签名合并，不丢历史空间里的人工确认", () => {
   const storage = storageFixture({
     [currentKey]: JSON.stringify({

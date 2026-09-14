@@ -6,7 +6,7 @@ const { createNotesTools } = require("../src/workbenches/translation-compare/not
 
 const helpers = createNotesTools(alignLegacyNotes);
 const key = "translation-compare-notes-v7:project:rows";
-const sourceKey = "translation-compare-notes-v7:previous:rows";
+const sourceKey = "translation-compare-notes-v7:project:rowsPrevious";
 
 function storageFixture(initial = {}) {
   const data = new Map(Object.entries(initial));
@@ -62,7 +62,7 @@ function createWorkbench(storage = storageFixture()) {
 }
 
 test("generated workbench recovers in memory on quota failure and preserves its source", () => {
-  const raw = JSON.stringify({ 1: { note: "历史备注", manualDone: true } });
+  const raw = JSON.stringify({ 1: { note: "历史备注", manualDone: true, rowSig: "sig-1" } });
   const storage = storageFixture({ [sourceKey]: raw });
   storage.failWrites = true;
   const ui = createWorkbench(storage);
@@ -104,7 +104,7 @@ test("automatic recovery merges contradictory historical notes for the same row 
   // 不再整条丢弃——那样会把「确认预筛」的人工确认一起丢掉。
   const ui = createWorkbench(storageFixture({
     [sourceKey]: JSON.stringify({ 1: { note: "第一份记录", manualDone: true, rowSig: "sig-1" } }),
-    "translation-compare-notes-v5:previous:rows": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
+    "translation-compare-notes-v5:project:rowsPrevious": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
   }));
   assert.equal(ui.run("Object.keys(notes).length"), 1);
   assert.equal(ui.run('notes["1"].manualDone'), true, "任一历史空间确认过、行签名又对得上，人工确认必须保留");
@@ -116,7 +116,7 @@ test("automatic recovery merges contradictory historical notes for the same row 
 test("automatic recovery never invents manual confirmation for unconfirmed historical notes", () => {
   const ui = createWorkbench(storageFixture({
     [sourceKey]: JSON.stringify({ 1: { note: "第一份记录", rowSig: "sig-1" } }),
-    "translation-compare-notes-v5:previous:rows": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
+    "translation-compare-notes-v5:project:rowsPrevious": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
   }));
   assert.equal(ui.run("Object.keys(notes).length"), 1);
   assert.equal(ui.run('notes["1"].manualDone'), false);
