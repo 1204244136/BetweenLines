@@ -267,11 +267,15 @@ function prepareDocuments(documents) {
  * 找不到，说明源文件已被改动（例如页面快照生成之后做过对齐调整），此时任何「再往前找找」
  * 都可能把这一行的内容写到别的段落甚至别的文档上；真实回归就是这么把一章的句子写进了另一章。
  */
-function locate(text, state) {
+function locate(text, state, options = {}) {
+  const maxBlock = Number.isInteger(options.maxBlock) ? options.maxBlock : Infinity;
   const candidates = [];
   for (let docIndex = state.docIndex; docIndex < state.documents.length && candidates.length < 2; docIndex += 1) {
     for (const block of state.documents[docIndex].blocks) {
       if (block.index < state.lastBlock || block.used || !block.comparable) continue;
+      // 更靠后的待写回条目已经在这一块或更早处有可用锚点。当前行若越过它，
+      // 后面的条目将永远无法从当前锚点回退到自己的位置；同块仍允许先序行占用。
+      if (block.index > maxBlock) break;
       if (block.comparable !== text) continue;
       candidates.push(block);
       if (candidates.length >= 2) break;
@@ -300,10 +304,10 @@ function createPlacementState(documents) {
     offset: 0,
     lastBlock: 0,
     // 为 searchPart 定位一个替换区间；命中不唯一时报歧义。
-    place(searchPart) {
+    place(searchPart, options = {}) {
       const text = comparableText(searchPart);
       if (!text) return { hit: null, ambiguous: false };
-      return locate(text, this);
+      return locate(text, this, options);
     },
     // 确认一次成功落点：锚点推进到该块之后。
     commit(hit) {
@@ -336,8 +340,8 @@ function createPlacementState(documents) {
       }
     },
     // 为说话人写回定位目标块：返回块的 openEnd 作为插入点，定位规则与文本写回一致。
-    placeBlockForInsert(text, speaker) {
-      const located = this.place(text);
+    placeBlockForInsert(text, speaker, options = {}) {
+      const located = this.place(text, options);
       if (!located.hit?.block) return located;
       const block = located.hit.block;
       const html = this.documents[block.docIndex].html;
@@ -364,9 +368,46 @@ function entryRowIndex(entry) {
   return Number.isInteger(id) && id >= 1 ? id : 0;
 }
 
+function buildBlockIndex(documents) {
+  const index = new Map();
+  for (const doc of documents) {
+    for (const block of doc.blocks || []) {
+      if (!block.comparable) continue;
+      if (!index.has(block.comparable)) index.set(block.comparable, []);
+      index.get(block.comparable).push(block.index);
+    }
+  }
+  return index;
+}
+
+function firstBlockAtOrAfter(index, text, lastBlock) {
+  const blocks = index.get(text);
+  if (!blocks || !blocks.length) return null;
+  let low = 0;
+  let high = blocks.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (blocks[middle] < lastBlock) low = middle + 1;
+    else high = middle;
+  }
+  return low < blocks.length ? blocks[low] : null;
+}
+
+// 未改动的行和先序写回条目都不能越过更靠后条目的首个可用锚点。
+// 同一块允许先序行先占用，后续条目会自然匹配下一处。
+function futureEntryBlockLimit(state, futureAnchors, currentRow, blockIndex) {
+  let maxBlock = Infinity;
+  for (const anchor of futureAnchors) {
+    if (anchor.row <= currentRow || !anchor.text) continue;
+    const candidate = firstBlockAtOrAfter(blockIndex, anchor.text, state.lastBlock);
+    if (candidate != null && candidate < maxBlock) maxBlock = candidate;
+  }
+  return maxBlock;
+}
+
 // 一条写回条目落盘：逐段定位，任一段定位失败或命中不唯一就整行放弃（锚点与占用标记一起回滚）。
 // 后面的行仍然按它们自己的位置定位——绝不因为这一行没写成就把内容挪到别处。
-function placeEntry(state, entry) {
+function placeEntry(state, entry, options = {}) {
   const searchParts = splitParts(entry.searchText);
   const replaceParts = splitParts(entry.replaceText);
   if (!searchParts.length || !replaceParts.length) return { placements: [], empty: true };
@@ -376,7 +417,7 @@ function placeEntry(state, entry) {
   let failed = null;
   let conflict = null;
   for (const instruction of instructions) {
-    const located = state.place(instruction.search);
+    const located = state.place(instruction.search, options);
     if (located.hit) {
       state.commit(located.hit);
       placements.push({ ...located.hit, replacement: instruction.replacement });
@@ -403,10 +444,10 @@ function noteUnresolved(unresolved, parts) {
 
 // 未改动的行只推进锚点：命中就占用（后面的行从它之后继续找），命中不到或命中不唯一就停在原地。
 // 这份行清单只服务定位，所以这里不报错、也不越过这一段往前跳。
-function seekRow(state, text, unresolved) {
+function seekRow(state, text, unresolved, options = {}) {
   const parts = splitParts(text);
   for (let index = 0; index < parts.length; index += 1) {
-    const located = state.place(parts[index]);
+    const located = state.place(parts[index], options);
     if (!located.hit) {
       noteUnresolved(unresolved, parts.slice(index));
       return false;
@@ -442,6 +483,7 @@ function planReplacements(documents, entries, options = {}) {
   const seenEntries = new Set();
   const byRow = new Map();
   const loose = [];
+  const futureAnchors = [];
   let updated = 0;
 
   for (const entry of entries) {
@@ -455,9 +497,13 @@ function planReplacements(documents, entries, options = {}) {
     }
     if (!byRow.has(row)) byRow.set(row, entry);
   }
+  for (const [row, entry] of byRow) {
+    futureAnchors.push({ row, text: comparableText(splitParts(entry.searchText)[0]) });
+  }
+  const blockIndex = buildBlockIndex(state.documents);
 
-  const commitEntry = (entry) => {
-    const outcome = placeEntry(state, entry);
+  const commitEntry = (entry, options = {}) => {
+    const outcome = placeEntry(state, entry, options);
     if (outcome.empty) return;
     if (outcome.failed || outcome.conflict) {
       noteUnresolved(unresolved, splitParts(entry.searchText));
@@ -483,9 +529,10 @@ function planReplacements(documents, entries, options = {}) {
 
   const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
   for (let row = 1; row <= maxRow; row += 1) {
+    const maxBlock = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
     const entry = byRow.get(row);
     if (!entry) {
-      seekRow(state, rowTexts[row - 1], unresolved);
+      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock });
       continue;
     }
     const blocked = splitParts(entry.searchText).find((part) => unresolved.has(comparableText(part)));
@@ -498,7 +545,7 @@ function planReplacements(documents, entries, options = {}) {
       });
       continue;
     }
-    commitEntry(entry);
+    commitEntry(entry, { maxBlock });
   }
   for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();
@@ -526,6 +573,7 @@ function planSpeakerAnnotations(documents, entries, options = {}) {
   const seenEntries = new Set();
   const byRow = new Map();
   const loose = [];
+  const futureAnchors = [];
   let updated = 0;
   let skipped = 0;
 
@@ -540,11 +588,15 @@ function planSpeakerAnnotations(documents, entries, options = {}) {
     }
     if (!byRow.has(row)) byRow.set(row, entry);
   }
+  for (const [row, entry] of byRow) {
+    futureAnchors.push({ row, text: comparableText(splitParts(entry.text)[0]) });
+  }
+  const blockIndex = buildBlockIndex(state.documents);
 
-  const commitEntry = (entry) => {
+  const commitEntry = (entry, options = {}) => {
     const snapshot = state.snapshot();
     const speaker = String(entry.speaker || "").replace(/-{2,}/g, "-").trim();
-    const located = state.placeBlockForInsert(entry.text, speaker);
+    const located = state.placeBlockForInsert(entry.text, speaker, options);
     const placement = located.hit;
     if (!placement) {
       // 定位失败或命中不唯一时锚点不动，后面的行按各自的位置重来。
@@ -577,9 +629,10 @@ function planSpeakerAnnotations(documents, entries, options = {}) {
 
   const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
   for (let row = 1; row <= maxRow; row += 1) {
+    const maxBlock = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
     const entry = byRow.get(row);
     if (!entry) {
-      seekRow(state, rowTexts[row - 1], unresolved);
+      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock });
       continue;
     }
     const blocked = splitParts(entry.text).find((part) => unresolved.has(comparableText(part)));
@@ -592,7 +645,7 @@ function planSpeakerAnnotations(documents, entries, options = {}) {
       });
       continue;
     }
-    commitEntry(entry);
+    commitEntry(entry, { maxBlock });
   }
   for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();

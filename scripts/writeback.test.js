@@ -188,6 +188,26 @@ test("写回：前面有同一段文字的行没能落地时报歧义，不猜�
   assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "同一句。", "乙段。", "丙段。", "同一句。", "收场。"]);
 });
 
+test("写回：前面未改动的短句不能越过后面条目的目标块", async () => {
+  // 页面第 2 行是「但是。」，源文件原位其实是「话说回来。」；卷末另有一处「但是。」。
+  // 旧实现会让第 2 行直接吃到卷末，锚点越过第 3 行的目标块，导致真正的写回条目 missed。
+  const dir = epubFixture({
+    first: ["开场。", "话说回来。", "目标行。", "甲段。", "乙段。", "但是。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "但是。", "目标行。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "3", searchText: "目标行。", replaceText: "目标行改后。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [
+    "开场。", "话说回来。", "目标行改后。", "甲段。", "乙段。", "但是。", "收场。",
+  ]);
+});
+
 test("写回：同一行在同一批里出现两次时只落一次", async () => {
   const dir = epubFixture({ first: ["只有一行。"], second: [] });
   const result = await applyTextReplacements(dir, [
@@ -265,6 +285,22 @@ test("说话人写回：同一句发话出现两次时按行序归位", async ()
   const html = bodyOf(dir, "a.xhtml");
   assert.equal((html.match(/<!--Speaker:/g) || []).length, 1);
   assert.match(html, /<p>「……」<\/p>[\s\S]*<p><!--Speaker:乙-->「……」<\/p>/);
+});
+
+test("说话人写回：前面未改动的短句不能越过后面条目的目标块", async () => {
+  const dir = epubFixture({
+    first: ["开场。", "话说回来。", "「目标发言。」", "甲段。", "乙段。", "「但是。」", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "「但是。」", "「目标发言。」"];
+  const result = await applySpeakerAnnotations(dir, [
+    { index: 3, text: "「目标发言。」", speaker: "甲" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.match(bodyOf(dir, "a.xhtml"), /<p><!--Speaker:甲-->「目标发言。」<\/p>/);
 });
 
 test("说话人写回：已标注的段落只计 skipped，重复标注不重复写", async () => {
