@@ -196,7 +196,7 @@ test("章级与卷级提示块说明“刻意特色”与补回口径", () => {
   const characters = detectCharacters({ rows, tables });
   const block = chapterHabitBlock({ chapter: "第一章", characters });
   assert.match(block, /^【说话习惯（本章）】本章「第一章」/);
-  assert.match(block, /保留它们不算翻译腔、病句或不自然/);
+  assert.match(block, /保留它们不算翻译腔、病句、错字或 OCR 瑕疵/);
   assert.match(block, /补回特色的最小 revisedText/);
   assert.match(block, /甲野一郎：第一人称 「オレ」/);
   assert.equal(chapterHabitBlock({ chapter: "空章", characters: [] }), "");
@@ -224,7 +224,7 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   // 句末语气词/谓语形式必须在句末：「じゃんけん」不算。
   const janken = findHabitMisses({ source: "じゃんけんをしよう。", target: "来猜拳吧。", characters: [{ entry: tables.entries.find((entry) => entry.character === "丙山三郎"), activated: true }] });
   assert.deepEqual(janken, []);
-  const sentenceEnd = findHabitMisses({ source: "「本当に、じゃん」", target: "「真的吗。」", characters: [{ entry: tables.entries.find((entry) => entry.character === "丙山三郎"), activated: true }] });
+  const sentenceEnd = findHabitMisses({ source: "「本当に、じゃん☆」", target: "「真的吗☆」", characters: [{ entry: tables.entries.find((entry) => entry.character === "丙山三郎"), activated: true }] });
   assert.equal(sentenceEnd.length, 1);
   assert.equal(sentenceEnd[0].character, "丙山三郎");
 

@@ -63,7 +63,7 @@ test("构建期层记录章级命中、疑似流失行与表指纹", () => {
   assert.deepEqual(entry.summary.activatedCharacters.sort(), ["乙川次郎", "甲野一郎"]);
   // 第 1 行原文 オレ 未译出、第 2 行 ですの 未译出 → 两行疑似流失；第 3 行译出了「的说」。
   assert.deepEqual(entry.missIndexes, [1, 2]);
-  assert.match(entry.fingerprint, /^4\|habits\.csv:\d+:\d+#2$/);
+  assert.match(entry.fingerprint, /^5\|habits\.csv:\d+:\d+#2$/);
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["habits.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -231,10 +231,20 @@ test("同一角色的多条习惯不会被字典折叠", () => {
   assert.equal(entry.characterRecords.length, 3, "每条习惯都要保留");
   const context = contextFromLayerEntry(entry);
   const block = context.blocks.get("第一章").block;
-  // 两条可检测的习惯都要出现在块里；同形条目（力→力）没有“补回”可言，不进提示词。
+  // 多条规则都要出现在块里；同形条目（力→力）不参与补回检测，但仍要锁定为刻意写法。
+  assert.match(block, /名词后缀 「力」/);
   assert.match(block, /谓语形式 「ダゾ」/);
   assert.match(block, /第一人称 「オレ」/);
-  assert.doesNotMatch(block, /名词后缀 「力」/);
+  // 行级收窄按角色分组：只命中「ダゾ」也要把同角色的「力」锁定规则一起带上，
+  // 否则「問題力」会被模型当作错字或 OCR 瑕疵删掉。
+  const rowBlock = speechHabitBlockForRow({
+    chapter: "第一章",
+    row: { jp: "「問題力はない」と彼女はダゾ☆」", cn: "「没有问题力吧☆」她说道。" },
+    characters: context.blocks.get("第一章").characters_raw,
+  });
+  assert.match(rowBlock, /名词后缀 「力」/);
+  assert.match(rowBlock, /谓语形式 「ダゾ」/);
+  assert.match(rowBlock, /第一人称 「オレ」/);
   // 同一角色有多条习惯时，本章角色名只算一次（否则载荷里的 characters 看着像两个人）。
   assert.deepEqual(context.blocks.get("第一章").characters, ["多人角色"]);
 });
@@ -283,7 +293,7 @@ test("从快照重建页面时沿用落盘的说话习惯层", () => {
 
   const rebuilt = rebuildCompareHtmlFromSnapshot(dir);
   const html = fs.readFileSync(rebuilt.htmlFile, "utf8");
-  assert.match(html, /"speechHabits":\{"version":4/);
+  assert.match(html, /"speechHabits":\{"version":5/);
   assert.match(html, /"missIndexes":\[1,2\]/);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
   assert.match(html, /"files":\["habits\.csv"\]/);

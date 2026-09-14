@@ -45,7 +45,7 @@ const WORD_BOUNDARY = /[\s\u3000、。，．！？：；「」『』（）〈〉
 // 第一人称常直接接格助词或系助词（わらわから、オレは、あたしの）；不能只按前一个字判词界，
 // 否则「知っているわらわからすれば」会被前面的「る」挡住。
 const FIRST_PERSON_AFTER_PARTICLE = /^[はがをにへとでやのかもばねよぞさえこそまで]/;
-const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t";
+const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t☆★♪♡♥";
 
 function firstColumn(record, keys) {
   for (const key of keys) {
@@ -327,9 +327,9 @@ function activatedCharacterNames(items = []) {
 
 /**
  * 注入提示词的角色行：只保留系统真正会用它们做判断的条目。
- * 结构性特征（句式/称谓/「XX力」后缀）用不了、同形条目没有“补回”可言、没有目标写法的条目
- * 连比对基准都没有——把这些规则发给模型等于让它按一条无法执行的规则做事，故一律不进提示词
- * （判定与补回检测用的是同一把尺子 isHabitDetectable，两侧不会分叉）。
+ * `fixed` 用于补回特色，`no-special` 用于明确禁止套用旧版写法；
+ * `locked` 用于中日同形的既有写法（如食蜂操祈的「XX力」），它不参与流失检测，
+ * 但必须随角色一起注入，否则模型会把刻意保留的「问题力」当作错字或 OCR 瑕疵删掉。
  */
 function habitBlockLines(characters = []) {
   return characters
@@ -344,7 +344,7 @@ function chapterHabitBlock({ chapter, characters = [] } = {}) {
   const lines = habitBlockLines(characters);
   if (!lines.length) return "";
   return [
-    `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句或不自然，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
+    `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
     "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
@@ -358,7 +358,7 @@ function volumeHabitBlock({ volume, characters = [] } = {}) {
   if (!lines.length) return "";
   const label = volume?.code ? `本卷 ${volume.code}` : "本卷";
   return [
-    `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句或不自然，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
+    `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
     "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
@@ -400,13 +400,17 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
 }
 
 /**
- * 本行该拿到哪些角色的说话习惯规则（**行级收窄**）。
+ * 本行该拿到哪些角色的说话习惯规则（**按角色收窄**）。
  *
  * 章级判定回答的是“这一章出现了哪些角色”，但一行台词里通常只有一个角色在场：把整章的规则
  * 全塞进每一行，等于让 90% 的行背着与它无关的角色规则（本层是第 3 层之外唯一按章注入的段，
  * 也正是“无脑加进每一个句子”的第二个来源）。收窄判据两条，满足任一即保留：
  * 1. **本行文本提到了该角色**——原文或译文里出现该角色的全名别名（与对照表/译名表口径一致）；
- * 2. **本行原文出现了该角色的口癖**——说话人可能没被点名，规则必须留着，否则“特色流失”判不出来。
+ * 2. **本行原文出现了该角色的任一口癖**——说话人可能没被点名，规则必须留着，否则“特色流失”判不出来。
+ *
+ * 收窄单位是**角色，不是单条口癖**。一旦某条口癖或名字把角色定出来，该角色的全部可注入规则都要带上：
+ * 食蜂操祈的「ダゾ」可能确认了说话人，但这一行真正需要保护的是同形写法「問題力」；若只保留命中的
+ * 「ダゾ」条目，模型仍会把「力」当错字删掉。
  *
  * 兜底与其它裁剪同口径：**本行两侧都没有文本时全部保留**（判断不了就不裁剪）。
  * 收窄只影响这一行的注入内容：章级判定、页面徽标与落盘块（`speechHabits`）都不受影响，
@@ -419,12 +423,74 @@ function habitCharactersForRow({ row, characters = [] } = {}) {
   const cn = String(row?.cn || row?.target || "");
   if (!jp.trim() && !cn.trim()) return list;
   const text = `${jp}\n${cn}`;
-  return list.filter((item) => {
+  const byCharacter = new Map();
+  for (const item of list) {
     const entry = entryOf(item);
-    const aliases = entry.aliases?.strong || characterAliases(entry.character).strong;
-    if (aliases.some((alias) => alias && text.includes(alias))) return true;
-    return hasHabitOccurrence(jp, entry);
-  });
+    const character = entry.character || "";
+    if (!character) continue;
+    if (!byCharacter.has(character)) byCharacter.set(character, []);
+    byCharacter.get(character).push(item);
+  }
+  const matched = [];
+  for (const items of byCharacter.values()) {
+    const named = items.some((item) => {
+      const entry = entryOf(item);
+      const aliases = entry.aliases?.strong || characterAliases(entry.character).strong;
+      return aliases.some((alias) => alias && text.includes(alias));
+    });
+    const habitHit = items.some((item) => hasHabitOccurrence(jp, entryOf(item)));
+    if (named || habitHit) matched.push(...items);
+  }
+  return matched;
+}
+
+/**
+ * 中日文写法相同、但不适合拿来做“补回”检测的既有口癖（如「力」→「力」）。
+ * 它们仍必须进入提示词充当锁定写法，防止模型按普通中文习惯删掉刻意后缀。
+ */
+function isSameShapeWriting(entry) {
+  const x = String(entry?.versions?.x || "");
+  return Boolean(
+    entry?.hasLiteralHabit
+    && x
+    && x === entry.habit
+    && (entry.expectedWritings || []).length,
+  );
+}
+
+/**
+ * 说话习惯条目的提示词处置方式：
+ * - fixed：登记了不同的本项目写法，可做“特色流失”检测；
+ * - locked：本项目写法与日文同形，不参与流失检测，但必须注入锁定写法；
+ * - no-special：X版为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
+ * - clue-only：没有本项目写法，也只作为说话人线索；
+ * - none：缺少字面口癖或类型不可靠，不进提示词。
+ */
+function habitRuleMode(entry) {
+  if (!entry || !entry.hasLiteralHabit) return "none";
+  if (isSameShapeWriting(entry)) return "locked";
+  if (!DETECTABLE_TYPES.has(entry.type)) return "none";
+  if (String(entry.habit).length < 2) return "none";
+  if (entry.noSpecialHandling) return "no-special";
+  if (!entry.versions?.x) return "clue-only";
+  if (!(entry.expectedWritings || []).length) return "clue-only";
+  return "fixed";
+}
+
+function isHabitInjectable(entry) {
+  const mode = habitRuleMode(entry);
+  return mode === "fixed" || mode === "locked" || mode === "no-special";
+}
+
+/**
+ * 该条目是否适合做字面“流失”检测：
+ * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
+ * - 单字口癖（力、超、訳）会撞普通词，不检测；
+ * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
+ * - X版为 `-` 时是明确的不特殊处理；没有 X版写法时“译文少了这个特色”也无从判定。
+ */
+function isHabitDetectable(entry) {
+  return habitRuleMode(entry) === "fixed";
 }
 
 /**
@@ -481,40 +547,6 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
 }
 
 /**
- * 说话习惯条目的提示词处置方式：
- * - fixed：登记了本项目写法，可做“特色流失”检测；
- * - no-special：X版为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
- * - clue-only：没有本项目写法，也只作为说话人线索；
- * - none：缺少字面口癖或类型不可靠，不进提示词。
- */
-function habitRuleMode(entry) {
-  if (!entry || !entry.hasLiteralHabit) return "none";
-  if (!DETECTABLE_TYPES.has(entry.type)) return "none";
-  if (String(entry.habit).length < 2) return "none";
-  if (entry.noSpecialHandling) return "no-special";
-  if (!entry.versions?.x) return "clue-only";
-  if (entry.versions.x === entry.habit) return "none";
-  if (!(entry.expectedWritings || []).length) return "clue-only";
-  return "fixed";
-}
-
-function isHabitInjectable(entry) {
-  const mode = habitRuleMode(entry);
-  return mode === "fixed" || mode === "no-special";
-}
-
-/**
- * 该条目是否适合做字面“流失”检测：
- * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
- * - 单字口癖（力、超、訳）会撞普通词，不检测；
- * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
- * - X版为 `-` 时是明确的不特殊处理；没有 X版写法时“译文少了这个特色”也无从判定。
- */
-function isHabitDetectable(entry) {
-  return habitRuleMode(entry) === "fixed";
-}
-
-/**
  * 剥掉行内注音标记，只留基文：`<ruby>基文<rt>读音</rt></ruby>` 与稿件形态 `|基文[读音]` 都要处理。
  *
  * 为什么口癖定位必须用剥过标记的文本：位置判据看的是「口癖前面那个字是什么」，
@@ -531,7 +563,7 @@ function plainInlineText(text) {
 
 /**
  * 口癖在原文里的出现位置是否算“该用法的出现”：
- * - 句末语气词 / 谓语形式：必须落在句末（后接标点或行尾），「じゃん」不会被「じゃんけん」命中；
+ * - 句末语气词 / 谓语形式：必须落在句末（后接标点、引号、行尾或 ☆ 这类装饰符号），「じゃん」不会被「じゃんけん」命中；
  * - 单字汉字口癖（名词后缀「力」= XX力）：必须落在**词首**（前面是行首、空白、标点或成对标记）——
  *   这类后缀型口癖在正文里到处撞普通词（風力/火力/磁力/能力/压力…），只按“前面不是假名”判断会让
  *   整章叙述行都命中（实测某卷 37 个说话人候选行里 32 行是「力」撞普通词），说话人判断与特色流失
