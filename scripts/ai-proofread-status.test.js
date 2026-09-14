@@ -411,6 +411,42 @@ async function runProofreadAgainst({ label, rowCount, breaker, respond, rowsFor 
   }
 }
 
+test("原文短式先现在下一行同头重写时，基础轮主动带上下一行", async () => {
+  const payloads = [];
+  const { finished } = await runProofreadAgainst({
+    label: "continued-opening",
+    rowCount: 2,
+    rowsFor: (index) => index === 1
+      ? { jp: "それは。", cn: "虽然。" }
+      : {
+        jp: "それはとても<ruby>些細<rt>ささい</rt></ruby>な事ではあるけれど、どうしようもなく……",
+        cn: "虽然那只是一件微不足道的小事，但它却又如此甜美，让人欲罢不能……",
+      },
+    respond: (_count, response) => {
+      let body = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        payloads.push(JSON.parse(JSON.parse(body).messages[1].content));
+        response.end(passingDecisionBody);
+      });
+    },
+  });
+
+  const firstRow = payloads.find((payload) => payload.row.index === 1);
+  assert.ok(firstRow, "第一行没有发出基础轮请求");
+  assert.equal(firstRow.nearbyRows.length, 1);
+  assert.equal(firstRow.nearbyRows[0].index, 2);
+  assert.equal(firstRow.nearbyRows[0].relation, "next-row-same-opening");
+  assert.match(firstRow.nearbyRows[0].source, /^それはとても/);
+  assert.match(firstRow.contextPolicy, /同头承接/);
+  assert.match(firstRow.contextPolicy, /不能把本行当独立句改译/);
+  assert.equal(firstRow.continuation.relation, "next-row-same-opening");
+  assert.equal(firstRow.continuation.targetEcho, true);
+  assert.equal(finished.errors, 0);
+});
+
 test("raised circuit-breaker threshold lets a 50% failure rate run to completion", async () => {
   const { finished, rows } = await runProofreadAgainst({
     label: "raised-threshold",

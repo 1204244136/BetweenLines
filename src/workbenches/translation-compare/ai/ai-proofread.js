@@ -1036,6 +1036,15 @@ async function proofreadRow(row, allRows, config, labels) {
     contextMode: "none",
   };
   const contextState = createContextState(row.index, allRows, targetKey, counterpartKey, config.proofreadMode);
+  const continuation = findContinuationContext(row.index, allRows, targetKey);
+  if (continuation) {
+    includeContextRow(contextState, continuation.row, continuation.relative, continuation.relation);
+    basePayload.continuation = {
+      relation: continuation.relation,
+      targetEcho: continuation.targetEcho,
+    };
+    pushLog(`第 ${row.index} 行：原文短式开头在下一行同头重复，已自动带入下一行作承接上下文。`);
+  }
   // 低分归因层：极低分的行不能直接当“逐句误译”处理。基础轮一旦判出极低分，本轮起就按归因口径继续问，
   // 并把窗口一次扩到本行前后各 N 行（前后都没有行的行无从复核，自动跳过）。一旦触发就持续生效，
   // 保证同一行的判断口径前后一致。触发判断放在**拿到结论之后**：模型给出定论时主循环本来就要 break，
@@ -1524,6 +1533,63 @@ function isAlignFragmentRow(row, targetKey) {
   return isAlignFragmentText(row?.jp) || isAlignFragmentText(row?.[targetKey]);
 }
 
+// 承接重复开头：短行是下一行开头的先现（例如「それは。」→「それはとても……」）。
+// 它不是靠收尾形态能判出的片段行，而是必须拿下一行才能看见的跨行结构；检测到后基础轮就带上下一行，
+// 避免模型把先现行的「それは / 虽然」当成独立指示代词或让步连词另行改译。
+const CONTINUATION_MAX_OPENING_CHARS = 16;
+const continuationLeadingMarks = /^[\s「『“‘（(【[]+/u;
+const continuationTrailingMarks = /[\s」』”’）)】\]]+$/u;
+const continuationTerminalMarks = /[。！？!?…‥、，,：:；;]+$/u;
+
+function visibleInlineText(value) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/giu, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;|&#160;/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function continuationOpening(value) {
+  const text = visibleInlineText(value)
+    .replace(continuationLeadingMarks, "")
+    .replace(continuationTrailingMarks, "")
+    .replace(continuationTerminalMarks, "")
+    .trim();
+  if (!text || [...text].length > CONTINUATION_MAX_OPENING_CHARS) return "";
+  return /[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/u.test(text) ? text : "";
+}
+
+function repeatedOpening(currentText, nextText) {
+  const opening = continuationOpening(currentText);
+  if (!opening) return "";
+  const current = visibleInlineText(currentText);
+  const next = visibleInlineText(nextText).replace(continuationLeadingMarks, "");
+  if (!next || next === current || !next.startsWith(opening)) return "";
+  const remainder = next.slice(opening.length).replace(/^[\s、，,：:；;]+/u, "");
+  return remainder ? opening : "";
+}
+
+/**
+ * 找出当前短行的下一行是否以同一开头完整承接。
+ * 判定只以原文为准；目标列是否也保留重复开头作为 `targetEcho` 单独返回，供请求策略如实措辞。
+ */
+function findContinuationContext(rowIndex, rows, targetKey) {
+  const position = rows.findIndex((item) => Number(item.index) === Number(rowIndex));
+  if (position < 0 || position + 1 >= rows.length) return null;
+  const row = rows[position];
+  const nextRow = rows[position + 1];
+  const sourceOpening = repeatedOpening(row?.jp, nextRow?.jp);
+  if (!sourceOpening) return null;
+  return {
+    row: nextRow,
+    relative: 1,
+    relation: "next-row-same-opening",
+    sourceOpening,
+    targetEcho: Boolean(repeatedOpening(row?.[targetKey], nextRow?.[targetKey])),
+  };
+}
+
 function createContextState(rowIndex, rows, targetKey, counterpartKey, proofreadMode = "trilingual") {
   const position = rows.findIndex((item) => Number(item.index) === Number(rowIndex));
   return {
@@ -1540,6 +1606,21 @@ function createContextState(rowIndex, rows, targetKey, counterpartKey, proofread
   };
 }
 
+function includeContextRow(state, row, relative, relation = "") {
+  if (!row || state.items.length >= contextBudget.maxRows) return null;
+  const id = String(row.index);
+  if (state.included.has(id)) return null;
+  const item = contextRow(row, relative, state.targetKey, state.counterpartKey, state.proofreadMode);
+  if (relation) item.relation = relation;
+  const nextChars = state.chars + contextItemChars(item);
+  if (nextChars > contextBudget.maxChars && state.items.length > 0) return null;
+  state.included.add(id);
+  state.items.push(item);
+  state.items.sort((a, b) => a.index - b.index);
+  state.chars = nextChars;
+  return item;
+}
+
 function expandContextRing(state) {
   if (state.position < 0) return [];
   state.radius += 1;
@@ -1551,18 +1632,9 @@ function expandContextRing(state) {
 
   const added = [];
   for (const candidate of candidates) {
-    if (state.items.length >= contextBudget.maxRows) break;
-    const id = String(candidate.row.index);
-    if (state.included.has(id)) continue;
-    const item = contextRow(candidate.row, candidate.relative, state.targetKey, state.counterpartKey, state.proofreadMode);
-    const nextChars = state.chars + contextItemChars(item);
-    if (nextChars > contextBudget.maxChars && added.length) break;
-    state.included.add(id);
-    state.items.push(item);
-    state.chars = nextChars;
-    added.push(item);
+    const item = includeContextRow(state, candidate.row, candidate.relative);
+    if (item) added.push(item);
   }
-  state.items.sort((a, b) => a.index - b.index);
   return added;
 }
 
@@ -1955,6 +2027,12 @@ function buildMessages(payload, config = {}) {
         window: payload.lowScore.rows,
       },
     } : {}),
+    ...(payload.continuation ? {
+      continuation: {
+        relation: payload.continuation.relation,
+        targetEcho: payload.continuation.targetEcho === true,
+      },
+    } : {}),
     modePolicy: bilingualMode
       ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
       : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
@@ -1965,6 +2043,11 @@ function buildMessages(payload, config = {}) {
           ? "已补相邻上下文；仍不足返回 needsContext=true，足够则给出最终判断。"
           : "只提供目标行；不足则返回 needsContext=true，不要猜测或为保险索要上下文。",
       payload.context?.length ? "相邻行只作判断依据，不是修改对象；revisedText 只针对当前目标行。" : "",
+      payload.continuation
+        ? (payload.continuation.targetEcho
+          ? "本行与下一行构成同头承接：目标列已经沿用同一承接开头，必须把它当作上下句递进装置，不能把本行当独立句改译成另一个含义；revisedText 仍只写本行。"
+          : "本行原文是下一行开头的短式先现（同头承接）。目标列没有沿用同一开头时，要结合下一行判断能否自然承接；不能脱离下一行把本行当独立句改译。revisedText 仍只写本行。")
+        : "",
     ].filter(Boolean).join(" "),
     // contextBudget（轮数/行数/字符上限）与 contextExpansion 是程序内部参数，模型无法也无需据此判断，
     // 提示词已要求不得猜测上下文范围，因此不再随请求下发。
@@ -2583,6 +2666,7 @@ module.exports = {
   detectModelCapabilities,
   errorCircuitBreaker,
   extractClaudeText,
+  findContinuationContext,
   guardTargetScript,
   hasTargetScriptLeak,
   isGptModel,
