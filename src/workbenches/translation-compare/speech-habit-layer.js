@@ -29,8 +29,8 @@ const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
 const { tableFilesForProfile, tableSourceCandidates } = require("./layer-sources");
 const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
-// 3：X版成为唯一判定基准，`-` 不再回退到网翻/台版；旧快照必须按新口径重算。
-const LAYER_VERSION = 3;
+// 4：`-` 作为“明确不特殊处理”注入提示词；旧快照必须按新口径重算。
+const LAYER_VERSION = 4;
 
 /**
  * 表指纹：文件状态 + 条目数，任一变化都视为过期。
@@ -45,7 +45,8 @@ function speechTablesFingerprint(files = [], preloaded = null) {
 
 /**
  * 由「角色字典 + 章级条目」还原运行期用的表条目形态。
- * 必须与现算路径的 entry 字段一致（habit/type/versions/memo），否则拼出的提示词块会有差异。
+ * 必须与现算路径的 entry 字段一致（habit/type/versions/noSpecialHandling/memo），
+ * 否则拼出的提示词块会有差异。
  */
 function characterDescriptor(item, records = []) {
   const record = (Array.isArray(records) ? records[item.ref] : null) || {};
@@ -57,7 +58,8 @@ function characterDescriptor(item, records = []) {
     memo: record.memo || item.memo || "",
     hasLiteralHabit: Boolean(record.habit || item.habit),
     versions,
-    // 当前项目按 X版 对齐，只以 x 作为判定基准；网翻/台版不参与补回。
+    noSpecialHandling: Boolean(record.noSpecialHandling),
+    // 只有实际登记的项目写法参与补回；`-` 是明确的不特殊处理，不做字面流失检测。
     expectedWritings: versions.x ? [versions.x] : [],
   };
 }
@@ -75,6 +77,7 @@ function characterDictionary(summaries) {
       type: item.type || "",
       habit: item.habit || "",
       versions: item.versions || { x: item.expected || "", net: "", tw: "" },
+      noSpecialHandling: Boolean(item.noSpecialHandling),
       memo: item.memo || "",
     };
     const signature = JSON.stringify(record);
@@ -148,6 +151,7 @@ function buildSpeechHabitLayer({ rows = [], projectFiles = {}, profiles = null, 
           type: item.entry.type,
           habit: item.entry.habit,
           versions: { ...item.entry.versions },
+          noSpecialHandling: Boolean(item.entry.noSpecialHandling),
           memo: item.entry.memo || "",
         }),
         character: item.entry.character,

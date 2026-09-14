@@ -63,7 +63,7 @@ test("构建期层记录章级命中、疑似流失行与表指纹", () => {
   assert.deepEqual(entry.summary.activatedCharacters.sort(), ["乙川次郎", "甲野一郎"]);
   // 第 1 行原文 オレ 未译出、第 2 行 ですの 未译出 → 两行疑似流失；第 3 行译出了「的说」。
   assert.deepEqual(entry.missIndexes, [1, 2]);
-  assert.match(entry.fingerprint, /^3\|habits\.csv:\d+:\d+#2$/);
+  assert.match(entry.fingerprint, /^4\|habits\.csv:\d+:\d+#2$/);
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["habits.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -105,6 +105,35 @@ test("运行期复用的上下文与现算结果完全一致", () => {
     const layerMisses = match.entry.chapters.find((item) => item.chapter === group.chapter).misses.map((miss) => miss.index);
     assert.deepEqual([...new Set(liveMisses)], layerMisses);
   }
+});
+
+test("X版 `-` 的不特殊处理状态随落盘层还原并逐字一致", () => {
+  const file = writeTable("no-special.csv", [
+    "小说首次出现,角色,口癖,类型,x版,网翻,台版（转简中）,备注",
+    "S2_21,安娜·施普伦格尔,わらわ,第一人称,-,妾身,,古风化自称",
+  ].join("\n"));
+  const rows = [{
+    index: 1,
+    chapter: "行间〇",
+    jp: "真実を知っているわらわからすれば、これはマサイク状態だわ、と安娜·施普伦格尔は言った。",
+    cn: "在知晓真相的我看来，这已经是马赛克状态了呢。",
+  }];
+  const layer = buildSpeechHabitLayer({ rows, projectFiles: {}, profiles: [profile(file)] });
+  const entry = layer.byProfile.unit;
+  const record = entry.characterRecords.find((item) => item.habit === "わらわ");
+  assert.equal(record.noSpecialHandling, true);
+  assert.deepEqual(record.versions, { x: "", net: "妾身", tw: "" });
+
+  const context = contextFromLayerEntry(entry);
+  const snapshot = context.blocks.get("行间〇").block;
+  assert.match(snapshot, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「妾身」）/);
+
+  const liveTables = loadSpeechTables([file]);
+  const live = chapterHabitBlock({
+    chapter: "行间〇",
+    characters: detectCharacters({ rows, tables: liveTables }),
+  });
+  assert.equal(snapshot, live, "落盘块还原与现算必须产出逐字相同的不特殊处理规则");
 });
 
 test("行级收窄：角色规则只进到提到他、或出现他口癖的那些行", () => {
@@ -254,7 +283,7 @@ test("从快照重建页面时沿用落盘的说话习惯层", () => {
 
   const rebuilt = rebuildCompareHtmlFromSnapshot(dir);
   const html = fs.readFileSync(rebuilt.htmlFile, "utf8");
-  assert.match(html, /"speechHabits":\{"version":3/);
+  assert.match(html, /"speechHabits":\{"version":4/);
   assert.match(html, /"missIndexes":\[1,2\]/);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
   assert.match(html, /"files":\["habits\.csv"\]/);

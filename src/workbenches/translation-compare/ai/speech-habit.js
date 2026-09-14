@@ -9,8 +9,9 @@
  * - 角色：人物名（必填）
  * - 口癖：日文原词（如「オレ」「なの」），可为空（此时只有备注描述，如“句尾最后一个假名变为片假名”）
  * - 类型：第一人称 / 句末语气词 / 句首语气词 / 接续词 / 谓语形式 / 句式 / 称谓 / 名词前缀 / 名词后缀 / 短句
- * - x版：本项目（成品）的写法，是“补回”的唯一标准；`-` 表示本项目不作特殊处理
- * - 网翻 / 台版（转简中）：其他版本写法，只在 x版 已登记时用于提醒模型不要按旧译名回改
+ * - x版：本项目（成品）的写法，是“补回”的唯一标准；`-` 表示本项目明确不作特殊处理
+ * - 网翻 / 台版（转简中）：其他版本写法；固定写法条目用它提醒模型不要回改，
+ *   明确不作特殊处理的条目用它提醒模型不要套用旧译法
  * - 备注：说明
  * - 小说首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
  */
@@ -29,6 +30,7 @@ const COLUMN_CANDIDATES = {
 };
 
 const EMPTY_VALUES = new Set(["", "-", "—", "－", "/", "无", "n/a", "na", "none"]);
+const NO_SPECIAL_MARKERS = new Set(["-", "—", "－"]);
 const NAME_SEPARATORS = /[·・\s]/;
 // 只有这些类型的口癖适合做字面“流失”检测：它们是与具体词绑定的用法。
 // 句式、称谓、名词前缀/后缀等是结构性特征（如「〜然」「ちゃん」「XX力」），只能靠提示词说明，
@@ -40,6 +42,9 @@ const KANJI = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 // 「词首」的判据：行首、空白、中日文标点与成对标记（「」『』（）《》【】〔〕…—～・等）。
 // 反过来，前一个字是汉字/假名/字母数字时都算“落在更长的词里”，不算该用法的出现。
 const WORD_BOUNDARY = /[\s\u3000、。，．！？：；「」『』（）〈〉《》【】〔〕・…—～＝＠＃＄％＆＊＋／]/;
+// 第一人称常直接接格助词或系助词（わらわから、オレは、あたしの）；不能只按前一个字判词界，
+// 否则「知っているわらわからすれば」会被前面的「る」挡住。
+const FIRST_PERSON_AFTER_PARTICLE = /^[はがをにへとでやのかもばねよぞさえこそまで]/;
 const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t";
 
 function firstColumn(record, keys) {
@@ -61,6 +66,10 @@ function entryOf(item) {
 
 function isPlaceholder(value) {
   return EMPTY_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function isNoSpecialMarker(value) {
+  return NO_SPECIAL_MARKERS.has(String(value || "").trim());
 }
 
 function cleanVersion(value) {
@@ -116,22 +125,25 @@ function normalizeSpeechEntry(record) {
   const character = firstColumn(record, COLUMN_CANDIDATES.character);
   if (!character) return null;
   const habit = cleanVersion(firstColumn(record, COLUMN_CANDIDATES.habit));
+  const xVersion = firstColumn(record, COLUMN_CANDIDATES.xVersion);
   const entry = {
     character,
     habit,
     type: firstColumn(record, COLUMN_CANDIDATES.type),
     versions: {
-      x: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.xVersion)),
+      x: cleanVersion(xVersion),
       net: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.netVersion)),
       tw: cleanVersion(firstColumn(record, COLUMN_CANDIDATES.twVersion)),
     },
+    // `-` 是明确口径，不是空值/忽略；必须保留状态，才能把它作为硬规则注入提示词。
+    noSpecialHandling: isNoSpecialMarker(xVersion),
     memo: firstColumn(record, COLUMN_CANDIDATES.memo),
     firstWork: firstColumn(record, COLUMN_CANDIDATES.firstWork),
   };
   entry.firstWorkKey = volumeKey(entry.firstWork);
   entry.aliases = characterAliases(character);
-  // 当前项目按 X版 对齐：只有 x版 才能作为补回或“特色流失”的判定基准。
-  // `-` 表示不作特殊处理，不能退到网翻/台版；其他版本只保留作旧写法的对照。
+  // 只有实际登记的 x版 才能作为“特色流失”的判定基准。
+  // `-` 表示明确不特殊处理，版本列只用于提示模型不要套用那些写法，不参与补回。
   entry.expectedWritings = entry.versions.x ? [entry.versions.x] : [];
   entry.hasLiteralHabit = Boolean(entry.habit) && !isPlaceholder(entry.habit);
   return entry;
@@ -281,6 +293,14 @@ function describeHabit(entry) {
     writings.push(`本项目写作「${entry.versions.x}」`);
     const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
     if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
+  } else if (entry.noSpecialHandling) {
+    const forbidden = [
+      entry.versions.net ? `网翻「${entry.versions.net}」` : "",
+      entry.versions.tw ? `台版「${entry.versions.tw}」` : "",
+    ].filter(Boolean);
+    writings.push(forbidden.length
+      ? `不作特殊翻译处理，不得采用网翻版或台版写法（${forbidden.join("；")}）`
+      : "不作特殊翻译处理，不得采用网翻版或台版写法");
   }
   if (!writings.length && entry.memo) writings.push(`备注：${entry.memo}`);
   return `${entry.character}：${head}${writings.length ? ` → ${writings.join("；")}` : ""}`;
@@ -313,7 +333,7 @@ function activatedCharacterNames(items = []) {
  */
 function habitBlockLines(characters = []) {
   return characters
-    .filter((item) => item.activated !== false && isHabitDetectable(item.entry))
+    .filter((item) => item.activated !== false && isHabitInjectable(item.entry))
     .map((item) => `- ${describeHabit(item.entry)}`);
 }
 
@@ -325,7 +345,7 @@ function chapterHabitBlock({ chapter, characters = [] } = {}) {
   if (!lines.length) return "";
   return [
     `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句或不自然，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
-    "原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
+    "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
 }
@@ -339,7 +359,7 @@ function volumeHabitBlock({ volume, characters = [] } = {}) {
   const label = volume?.code ? `本卷 ${volume.code}` : "本卷";
   return [
     `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句或不自然，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
-    "原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
+    "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
 }
@@ -359,11 +379,19 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
     const entry = entryOf(item);
     if (!entry.hasLiteralHabit) continue;
     if (!hasHabitOccurrence(jp, entry)) continue;
+    const noSpecialHandling = habitRuleMode(entry) === "no-special";
     candidates.push({
       character: entry.character,
       type: entry.type,
       habit: entry.habit,
       expected: entry.versions.x || "",
+      noSpecialHandling,
+      forbiddenWritings: noSpecialHandling
+        ? [
+          entry.versions.net ? { version: "网翻", value: entry.versions.net } : null,
+          entry.versions.tw ? { version: "台版", value: entry.versions.tw } : null,
+        ].filter(Boolean)
+        : [],
       confidence: item.activated === false ? "low" : "high",
       detectable: isHabitDetectable(entry),
     });
@@ -424,7 +452,8 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
   if (!candidates.length) return "";
   const names = [...new Set(candidates.map((candidate) => candidate.character))];
   const writable = candidates.filter((candidate) => candidate.detectable);
-  const clueOnly = candidates.filter((candidate) => !candidate.detectable);
+  const noSpecial = candidates.filter((candidate) => candidate.noSpecialHandling);
+  const clueOnly = candidates.filter((candidate) => !candidate.detectable && !candidate.noSpecialHandling);
   const list = (items) => items.map((candidate) => `${candidate.character}「${candidate.habit}」`).join("、");
   const lines = [
     `【说话人判断（本章）】本行原文出现了说话习惯特征，候选说话人：${names.join("、")}（本章/本卷出现过该角色）。`,
@@ -435,27 +464,54 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
   if (writable.length) {
     lines.push(`可按本项目写法判断的口癖：${list(writable)}（只有译文完全没有该写法时才算说话特色流失，并按最小改动补回）。`);
   }
+  if (noSpecial.length) {
+    const noSpecialList = noSpecial.map((candidate) => {
+      const forbidden = candidate.forbiddenWritings || [];
+      const suffix = forbidden.length
+        ? `（不得采用网翻版或台版写法：${forbidden.map((item) => `${item.version}「${item.value}」`).join("；")}）`
+        : "（不得采用网翻版或台版写法）";
+      return `${candidate.character}「${candidate.habit}」${suffix}`;
+    }).join("、");
+    lines.push(`本项目明确不作特殊翻译处理的口癖：${noSpecialList}；不得据此判译文缺漏、扣分或要求补写。`);
+  }
   if (clueOnly.length) {
     lines.push(`只作说话人线索、不得据此判译文遗漏的口癖：${list(clueOnly)}（本项目尚未登记这些口癖的译法，缺少比对基准；不要因为译文里没有对应写法就判缺漏、扣分或要求补写）。`);
   }
   return lines.join("\n");
 }
+
+/**
+ * 说话习惯条目的提示词处置方式：
+ * - fixed：登记了本项目写法，可做“特色流失”检测；
+ * - no-special：X版为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
+ * - clue-only：没有本项目写法，也只作为说话人线索；
+ * - none：缺少字面口癖或类型不可靠，不进提示词。
+ */
+function habitRuleMode(entry) {
+  if (!entry || !entry.hasLiteralHabit) return "none";
+  if (!DETECTABLE_TYPES.has(entry.type)) return "none";
+  if (String(entry.habit).length < 2) return "none";
+  if (entry.noSpecialHandling) return "no-special";
+  if (!entry.versions?.x) return "clue-only";
+  if (entry.versions.x === entry.habit) return "none";
+  if (!(entry.expectedWritings || []).length) return "clue-only";
+  return "fixed";
+}
+
+function isHabitInjectable(entry) {
+  const mode = habitRuleMode(entry);
+  return mode === "fixed" || mode === "no-special";
+}
+
 /**
  * 该条目是否适合做字面“流失”检测：
  * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
  * - 单字口癖（力、超、訳）会撞普通词，不检测；
  * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
- * - 没有 X版 目标写法时（单元格为 `-` 或空）“译文少了这个特色”无从判定：
- *   备注写的是“通常放在句尾”这类说明，拿它去比对中文译文只会每行都报流失。
+ * - X版为 `-` 时是明确的不特殊处理；没有 X版写法时“译文少了这个特色”也无从判定。
  */
 function isHabitDetectable(entry) {
-  if (!entry || !entry.hasLiteralHabit) return false;
-  if (!DETECTABLE_TYPES.has(entry.type)) return false;
-  if (String(entry.habit).length < 2) return false;
-  if (!entry.versions?.x) return false;
-  if (entry.versions.x && entry.versions.x === entry.habit) return false;
-  if (!(entry.expectedWritings || []).length) return false;
-  return true;
+  return habitRuleMode(entry) === "fixed";
 }
 
 /**
@@ -480,7 +536,8 @@ function plainInlineText(text) {
  *   这类后缀型口癖在正文里到处撞普通词（風力/火力/磁力/能力/压力…），只按“前面不是假名”判断会让
  *   整章叙述行都命中（实测某卷 37 个说话人候选行里 32 行是「力」撞普通词），说话人判断与特色流失
  *   都成了误报。代价是「超能力」这类汉字连写的真用法也放过——宁可漏判，也不给整章塞错角色；
- * - 其余类型（第一人称 / 接续词 / 句首语气词 / 未分类）：前面不能是假名或汉字，避免落在更长的词中间。
+ * - 第一人称：后面必须接词界或常见助词，前一个字可以是日语语法的一部分（如「ているわらわから」）；
+ * - 其余类型（接续词 / 句首语气词 / 未分类）：前面不能是假名或汉字，避免落在更长的词中间。
  * 判定前先剥掉注音标记（`plainInlineText`），否则紧挨着的标签收尾符会被误当成词首。
  */
 function hasHabitOccurrence(text, entry) {
@@ -502,6 +559,10 @@ function hasHabitOccurrence(text, entry) {
     }
     if (kanjiHabit) {
       if (before === "" || WORD_BOUNDARY.test(before)) return true;
+      continue;
+    }
+    if (entry.type === "第一人称") {
+      if (after === "" || WORD_BOUNDARY.test(after) || FIRST_PERSON_AFTER_PARTICLE.test(after)) return true;
       continue;
     }
     if (before && (KANA.test(before) || KANJI.test(before))) continue;
@@ -577,6 +638,7 @@ function summarizeGroup({ name, rows = [], tables, volume = null, characters = n
         net: item.entry.versions.net || "",
         tw: item.entry.versions.tw || "",
       },
+      noSpecialHandling: Boolean(item.entry.noSpecialHandling),
       memo: item.entry.memo || "",
       detectedBy: item.detectedBy,
       activated: item.activated,

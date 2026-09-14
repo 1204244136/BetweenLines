@@ -13,10 +13,12 @@ const {
   detectCharacters,
   findHabitMisses,
   groupRowsByChapter,
+  habitCandidatesForRow,
   hasHabitOccurrence,
   isHabitDetectable,
   loadSpeechTables,
   normalizeSpeechEntry,
+  speakerCheckBlock,
   summarizeChapters,
   volumeHabitBlock,
   volumeKey,
@@ -34,6 +36,7 @@ const HABIT_CSV = [
   "S1_08,丙山三郎,じゃん,谓语形式,的吧,,,",,
   "-,丁原四郎,力,名词后缀,力,,,XX力",
   "S2_01,戊田五郎,なの,句末语气词,-,嗯,,通常放在句尾",
+  "S2_21,安娜·施普伦格尔,わらわ,第一人称,-,妾身,,古风化自称",
 ].join("\n");
 
 function loadFixture() {
@@ -46,7 +49,7 @@ function loadFixture() {
 
 test("说话习惯表按表头解析，并生成强/弱名字关键词", () => {
   const tables = loadFixture();
-  assert.equal(tables.entries.length, 5);
+  assert.equal(tables.entries.length, 6);
   const jiro = tables.entries.find((entry) => entry.character === "乙川次郎");
   assert.equal(jiro.habit, "ですの");
   assert.equal(jiro.type, "谓语形式");
@@ -60,17 +63,62 @@ test("说话习惯表按表头解析，并生成强/弱名字关键词", () => {
   assert.equal(describeHabit(loadFixture().entries[0]), "甲野一郎：第一人称 「オレ」 → 本项目写作「本大爷」；「俺」（旧写法，不要回改）");
 });
 
-test("X版写 `-` 表示不作特殊处理，不得回退到网翻或台版", () => {
+test("X版写 `-` 表示明确不作特殊处理，不得把网翻或台版当补回基准", () => {
   const tables = loadFixture();
   const go = tables.entries.find((entry) => entry.character === "戊田五郎");
   assert.deepEqual(go.versions, { x: "", net: "嗯", tw: "" });
+  assert.equal(go.noSpecialHandling, true);
   assert.deepEqual(go.expectedWritings, []);
   assert.equal(isHabitDetectable(go), false);
 
   const rows = [{ index: 1, chapter: "第一章", jp: "「なの」と戊田五郎。", cn: "「的说」戊田五郎说。" }];
   const characters = detectCharacters({ rows, tables });
   assert.deepEqual(findHabitMisses({ source: rows[0].jp, target: rows[0].cn, characters }), []);
-  assert.equal(chapterHabitBlock({ chapter: "第一章", characters }), "");
+  const block = chapterHabitBlock({ chapter: "第一章", characters });
+  assert.match(block, /戊田五郎：句末语气词 「なの」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「嗯」）/);
+  assert.doesNotMatch(block, /本项目写作「嗯」/);
+});
+
+test("`わらわ` 按不作特殊处理注入，不能让模型回改成「妾身」", () => {
+  const tables = loadFixture();
+  const rows = [{
+    index: 1,
+    chapter: "行间〇",
+    jp: "真実を知っているわらわからすれば、これはマサイク状態だわ、と安娜·施普伦格尔は言った。",
+    cn: "在知晓真相的我看来，这已经是马赛克状态了呢。",
+  }];
+  const characters = detectCharacters({ rows, tables });
+  const candidates = habitCandidatesForRow({ row: rows[0], characters });
+  assert.deepEqual(candidates.map((item) => item.character), ["安娜·施普伦格尔"]);
+  assert.equal(candidates[0].noSpecialHandling, true);
+  assert.deepEqual(candidates[0].forbiddenWritings, [{ version: "网翻", value: "妾身" }]);
+  assert.equal(candidates[0].detectable, false);
+
+  const block = chapterHabitBlock({ chapter: "行间〇", characters });
+  assert.match(block, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「妾身」）/);
+  assert.doesNotMatch(block, /本项目写作「妾身」/);
+  assert.deepEqual(findHabitMisses({ source: rows[0].jp, target: rows[0].cn, characters }), []);
+
+  const speaker = speakerCheckBlock({ chapter: "行间〇", candidates });
+  assert.match(speaker, /本项目明确不作特殊翻译处理的口癖/);
+  assert.match(speaker, /不得采用网翻版或台版写法：网翻「妾身」/);
+  assert.match(speaker, /不得据此判译文缺漏、扣分或要求补写/);
+});
+
+test("X版为 `-` 时同时禁止网翻版与台版写法", () => {
+  const entry = normalizeSpeechEntry({
+    角色: "测试角色",
+    口癖: "测试口癖",
+    类型: "第一人称",
+    x版: "-",
+    网翻: "网翻测试值",
+    "台版（转简中）": "台版测试值",
+    备注: "测试占位",
+  });
+  assert.match(
+    describeHabit(entry),
+    /不作特殊翻译处理，不得采用网翻版或台版写法（网翻「网翻测试值」；台版「台版测试值」）$/,
+  );
 });
 
 test("卷号比较与从输入路径推断当前卷", () => {
@@ -168,8 +216,7 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(isHabitDetectable(shiro), false);
   assert.equal(isHabitDetectable(jiro), true);
   assert.equal(isHabitDetectable(ichiro), true);
-  // 没有 X版 目标写法（单元格为 `-` 或空）时也没有“流失”可言：
-  // 备注写的是说明，不是译文里该出现的东西，拿它比对只会每行都报流失。
+  // X版为 `-` 时是明确的不特殊处理；不做字面流失检测，详情由提示词侧接管。
   assert.equal(isHabitDetectable(go), false);
 
   const characters = [ichiro, jiro, shiro, go].map((entry) => ({ entry, activated: true }));
@@ -192,6 +239,9 @@ test("补回检测只在可靠的类型与位置上生效", () => {
   assert.equal(hasHabitOccurrence("「力！」と叫んだ。", chikjo.entry), true, "引号后的独立用法算命中");
   assert.equal(hasHabitOccurrence("すごい力だ。", chikjo.entry), false, "前面是假名的「力」不算（属于普通词的一部分）");
   assert.equal(hasHabitOccurrence("彼女は<ruby>魔<rt>ま</rt></ruby>力を使った。", chikjo.entry), false, "注音标记不改变前一个字是汉字的事实");
+  const warawa = tables.entries.find((entry) => entry.habit === "わらわ");
+  assert.equal(hasHabitOccurrence("真実を知っているわらわからすれば。", warawa), true, "第一人称可紧跟在谓语后，再接格助词");
+  assert.equal(hasHabitOccurrence("わらわしい。", warawa), false, "后面的假名不构成助词时不算第一人称命中");
   // 只有译文使用 X版 登记写法才算译出；网翻/台版不是当前项目的判定基准。
   assert.deepEqual(findHabitMisses({ source: "オレは行く。", target: "本大爷要去。", characters }), []);
   assert.equal(findHabitMisses({ source: "オレは行く。", target: "俺要去。", characters }).length, 1);
