@@ -75,6 +75,35 @@ test("对照表解析：表头驱动、去装饰、分段与别名生成", () =>
   assert.equal(stripInlineMarkup("<ruby>東雲<rt>しののめ</rt></ruby>は笑った"), "東雲は笑った");
 });
 
+test("对照表展示与提示词保留标准译名里的间隔号", () => {
+  const file = path.join(tempDir, "separator-terms.csv");
+  fs.writeFileSync(file, [
+    "Base_Ori,Base_Trans,Type",
+    "イスラエル＝リガルディ,伊斯瑞·雷加第,人名/西式全名",
+  ].join("\n"), "utf8");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+
+  const entry = tables.entries[0];
+  assert.equal(entry.plainSource, "イスラエル＝リガルディ");
+  assert.equal(entry.plainTarget, "伊斯瑞·雷加第");
+  assert.equal(entry.targetText, "伊斯瑞·雷加第");
+  assert.equal(entry.compareKey, "伊斯瑞雷加第", "匹配仍忽略间隔号，不能因展示修复而漏掉已有写法");
+
+  const source = "「イスラエル＝リガルディの再来だ」";
+  const target = "「装成伊斯瑞·雷加帝回归的样子」";
+  const evaluation = evaluateTermRow({ source, target, tables });
+  assert.equal(evaluation.kind, "conflict");
+  const guidance = termGuidanceFor(
+    { index: 766, jp: source },
+    { evaluation, targetKey: "cn", targetLabel: "主文本（待修改文本）" },
+  );
+  assert.match(guidance.block, /- イスラエル＝リガルディ → 伊斯瑞·雷加第（人名\/西式全名）/);
+  assert.equal(guidance.terms[0].target, "伊斯瑞·雷加第");
+  assert.equal(guidance.terms[0].targetText, "伊斯瑞·雷加第");
+  assert.match(guidance.terms[0].text, /伊斯瑞·雷加第/);
+});
+
 test("注音按方括号分段顺序对应，整条基文与整串读音都能命中", () => {
   const tables = loadFixtureTables();
 

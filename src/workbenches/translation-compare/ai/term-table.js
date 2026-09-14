@@ -268,6 +268,20 @@ function stripMarks(value) {
   return String(value || "").replace(DECORATION, "");
 }
 
+/**
+ * 展示/注入用的去方括号：只拿掉表格用来标记注音位置的括号，保留术语本身的标点。
+ *
+ * 不能复用 stripMarks：它为了让 `伊斯瑞·雷加第` 与 `伊斯瑞雷加第` 命中同一个术语，会删掉
+ * 姓名间隔号等装饰符。若把同一结果拿去给模型看，标准译名会被改写成错的（真实回归：
+ * `伊斯瑞·雷加第` 在提示词里变成 `伊斯瑞雷加第`，模型据此写回了无间隔号的修订结果）。
+ */
+function stripBracketMarks(value) {
+  return BRACKET_PAIRS.reduce(
+    (text, [open, close]) => text.split(open).join("").split(close).join(""),
+    String(value || ""),
+  ).trim();
+}
+
 function normalizeForCompare(value) {
   return toCn(stripMarks(value)).toLowerCase();
 }
@@ -351,12 +365,13 @@ function normalizeTermEntry(record) {
   const entry = {
     source: source.trim(),
     sourceParts: splitBracketed(source),
-    // 展示与匹配都用去方括号的原文：正文里几乎不出现方括号（它只标记注音位置）。
-    plainSource: stripMarks(source) || source.trim(),
-    plainTarget: stripMarks(target) || target.trim(),
+    // 展示与注入只去掉标记注音位置的方括号，保留术语表里的间隔号/连字符等标点；
+    // 真正匹配仍走 aliases 与 compareKey 的无装饰归一形式。
+    plainSource: stripBracketMarks(source) || source.trim(),
+    plainTarget: stripBracketMarks(target) || target.trim(),
     ruby: firstColumn(record, COLUMN_CANDIDATES.ruby).trim(),
     target: target.trim(),
-    targetText: stripMarks(target),
+    targetText: stripBracketMarks(target) || target.trim(),
     rubyTarget: firstColumn(record, COLUMN_CANDIDATES.rubyTarget).trim(),
     other: firstColumn(record, COLUMN_CANDIDATES.other).trim(),
     type: firstColumn(record, COLUMN_CANDIDATES.type).trim(),
@@ -730,8 +745,8 @@ function evaluateTermRow({ source, target, tables, rejected = null, demoted = nu
  * 以为正文里真的有这些方括号。
  */
 function displayTermPair(entry = {}) {
-  const source = entry.plainSource || stripMarks(entry.source) || String(entry.source || "");
-  const target = entry.plainTarget || stripMarks(entry.target) || String(entry.target || "");
+  const source = entry.plainSource || stripBracketMarks(entry.source) || String(entry.source || "");
+  const target = entry.plainTarget || stripBracketMarks(entry.target) || String(entry.target || "");
   return `${source} → ${target}${entry.type ? `（${entry.type}）` : ""}`;
 }
 
@@ -851,6 +866,7 @@ module.exports = {
   rubyPairs,
   rubyStrictDefault,
   splitBracketed,
+  stripBracketMarks,
   stripInlineMarkup,
   stripMarks,
   targetRubyEvidenceMatches,

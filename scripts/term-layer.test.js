@@ -10,6 +10,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const {
+  TERM_LAYER_VERSION,
   buildTermLayer,
   describeTermLayerEntry,
   termLayerFor,
@@ -81,7 +82,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 5);
+  assert.equal(layer.version, 6);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -102,7 +103,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   assert.equal(variant.summary.rubySkipped, 0);
   // 降级为「只作一致性证据」的候选同样要如实报数（本夹具全是人名条目，不受注音口径约束）。
   assert.equal(variant.summary.rubyDemoted, 0);
-  assert.match(entry.fingerprint, /^5\|terms\.csv:\d+:\d+#2$/);
+  assert.match(entry.fingerprint, new RegExp(`^${TERM_LAYER_VERSION}\\|terms\\.csv:\\d+:\\d+#2$`));
   // 落盘块进快照与页面：只留表文件名，本机完整路径不出现。
   assert.deepEqual(entry.files, ["terms.csv"]);
   assert.equal(JSON.stringify(layer).includes(tempDir), false, "落盘块不得出现本机完整路径");
@@ -184,12 +185,53 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":5/);
+  assert.match(html, /"termPrefilter":\{"version":6/);
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.files, ["snapshot-terms.csv"]);
   assert.equal(html.includes(tempDir), false, "页面不得出现本机完整路径");
+});
+
+test("从旧版快照重建页面时按当前对照表重算术语对", () => {
+  const file = writeTable(
+    "rebuild-separator-terms.csv",
+    ["Base_Ori,Base_Trans,Type", "イスラエル＝リガルディ,伊斯瑞·雷加第,人名/西式全名"].join("\n"),
+  );
+  const rows = [{
+    index: 1,
+    chapter: "第一章",
+    jp: "イスラエル＝リガルディの再来だ。",
+    cn: "伊斯瑞·雷加帝的再来。",
+  }];
+  const projectContext = {
+    schemaVersion: 2,
+    projectKey: "term-layer-stale-rebuild",
+    snapshotKey: "term-layer-stale-rebuild-1",
+    rowsSignature: "rows-sig",
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    comparisonMode: "bilingual",
+    notesStorage: { key: "term-layer-stale-rebuild-notes" },
+  };
+  const dir = path.join(tempDir, "stale-rebuild");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "translation-compare.json"), JSON.stringify({
+    project: projectContext,
+    rowsSignature: "rows-sig",
+    termPrefilter: { version: 5, byProfile: {}, errors: [] },
+    rows,
+  }), "utf8");
+
+  const rebuilt = rebuildCompareHtmlFromSnapshot(dir, { profiles: [profile(file)] });
+  const html = fs.readFileSync(rebuilt.htmlFile, "utf8");
+  const compare = JSON.parse(fs.readFileSync(path.join(dir, "translation-compare.json"), "utf8"));
+  assert.equal(compare.termPrefilter.version, 6);
+  assert.deepEqual(
+    compare.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"],
+    ["イスラエル＝リガルディ → 伊斯瑞·雷加第（人名/西式全名）"],
+  );
+  assert.match(html, /イスラエル＝リガルディ → 伊斯瑞·雷加第（人名\/西式全名）/);
+  assert.equal(html.includes("イスラエル＝リガルディ → 伊斯瑞雷加第"), false);
 });
 
 test("页面按构建期判定给未跑过的行标出术语徽标，并跟随档案与目标列", () => {

@@ -39,7 +39,9 @@ const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerpr
 // 5：注音条目改成「中日两侧都注音才算表里那个专有名词」（见 ai/term-table.js 文件头）：
 //    只对上原文侧的候选降级为「只作一致性证据」——译文用了该译名才算命中，否则不算命中。
 //    影响的是命中集合本身（读音类条目重新参与判定），同样必须靠版本号判过期。
-const TERM_LAYER_VERSION = 5;
+// 6：展示与提示词改为只去方括号、保留标准译名里的间隔号等标点；旧块的术语对已丢掉这些标点，
+//    不能继续复用（真实回归：`伊斯瑞·雷加第` 被写成 `伊斯瑞雷加第`）。
+const TERM_LAYER_VERSION = 6;
 
 // 每行最多随页面带上这么多条术语：命中行平均 2~3 条，上限定得宽松但能挡住病态行（同一行命中几十条）。
 const TERMS_PER_ROW_CAP = 8;

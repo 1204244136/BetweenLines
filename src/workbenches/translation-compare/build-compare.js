@@ -4,7 +4,7 @@ const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
 const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
 const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles } = require("./ai/ai-proofread");
 const { buildSpeechHabitLayer } = require("./speech-habit-layer");
-const { buildTermLayer, describeTermLayerEntry } = require("./term-layer");
+const { TERM_LAYER_VERSION, buildTermLayer, describeTermLayerEntry } = require("./term-layer");
 const { createProjectContext, rowSignature } = require("../../core/project-context");
 const { publishProject } = require("../../storage/project-store");
 const { createNotesTools } = require("./notes-spaces");
@@ -1186,7 +1186,7 @@ function pickComparisonMode(...candidates) {
   return "trilingual";
 }
 
-function rebuildCompareHtmlFromSnapshot(snapshotDir) {
+function rebuildCompareHtmlFromSnapshot(snapshotDir, options = {}) {
   const dir = path.resolve(snapshotDir);
   const jsonFile = path.join(dir, "translation-compare.json");
   if (!fs.existsSync(jsonFile)) {
@@ -1212,12 +1212,28 @@ function rebuildCompareHtmlFromSnapshot(snapshotDir) {
   );
   const projectContext = compareData.project
     || createProjectContext({ ...selection, comparisonMode }, compareData.rows || []);
+  // 对照表层有版本语义：展示口径或命中口径升级后，旧快照里的术语对不能继续原样复用。
+  // 这里按当前档案里的表重新计算一次；算不出任何表时保留旧块，避免把页面退化成“无对照表”。
+  let termPrefilter = compareData.termPrefilter || null;
+  if ((termPrefilter?.version || 0) !== TERM_LAYER_VERSION && Array.isArray(compareData.rows) && compareData.rows.length) {
+    const rebuiltTerms = buildTermLayer({
+      rows: compareData.rows,
+      profiles: options.profiles || null,
+      envTables: String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
+      comparisonMode,
+    });
+    if (Object.keys(rebuiltTerms.byProfile || {}).length) {
+      termPrefilter = rebuiltTerms;
+      compareData.termPrefilter = rebuiltTerms;
+      fs.writeFileSync(jsonFile, JSON.stringify(compareData, null, 2), "utf8");
+    }
+  }
   const html = makeHtml(
     compareData.rows || [],
     { ...selection, comparisonMode, labels: selection.labels || compareData.labels || {} },
     projectContext,
     compareData.speechHabits || null,
-    compareData.termPrefilter || null,
+    termPrefilter,
   );
   const htmlFile = path.join(dir, "translation-compare.html");
   fs.writeFileSync(htmlFile, html, "utf8");
