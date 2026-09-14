@@ -1494,7 +1494,7 @@
       // 徽标必须聚成一组，否则 space-between 会把它们拉到备注列两端，中间空出一大片。
       const rowBadges = aiBadge + habitBadge;
       const verifyBadge = note.recoveredUnverified
-        ? '<button type="button" class="ai-confirm-badge is-unverified" data-verify="' + id + '" title="找回记录缺少完整内容证据；点击表示已核对本行内容">未校验</button>'
+        ? '<button type="button" class="ai-confirm-badge is-unverified" data-verify="' + id + '" title="找回记录缺少完整内容证据；点击只解除写回隔离，不会标记人工确认">未校验</button>'
         : "";
       const termChip = renderTermChipHtml(id, note.note || "");
       const classes = [row.cls, done ? "done" : "", activeRowId === id ? "active-row" : "", aiActiveIds.has(id) ? "ai-active" : ""]
@@ -3040,12 +3040,14 @@
       const current = notes[id];
       if (!current) return;
       delete current.recoveredUnverified;
-      current.manualDone = true;
-      current.done = true;
+      // 「核验内容」只解除该行的写回隔离；人工确认必须由用户单独勾选，或在写回成功后自动完成。
+      // 这里不能顺带设为已确认，否则“未人工确认”筛选会立刻把行移走，用户无法接着写回。
+      current.manualDone = false;
+      current.done = false;
       saveNotes({ immediate: true });
       updateDoneCount();
       applyFilters({ reset: false });
-      showToast("已核验第 " + id + " 行的找回记录，并标记为人工确认。", { tone: "success", durationMs: 6000 });
+      showToast("已核验第 " + id + " 行的找回记录，现在可以写回；尚未标记人工确认。", { tone: "success", durationMs: 8000 });
     });
 
     const notesPanelIds = {

@@ -30,17 +30,21 @@ test("备注面板按钮既写就地状态行，也弹浮动提示", async () =>
   assert.deepEqual(toastMessages(ui), ["本页没有可清空的备注记录。"]);
 });
 
-test("行内「未校验」徽标核验后弹提示并解除隔离", async () => {
+test("行内「未校验」徽标只解锁写回，不把行移出未人工确认筛选", async () => {
   const ui = createWorkbench();
-  ui.run('notes["1"] = { note: "按行号找回的记录", recoveredUnverified: true, manualDone: false, done: false }');
+  ui.run('notes["1"] = { note: "修改结果：改写后的译文。", revisionText: "改写后的译文。", revisionTarget: "cn", recoveredUnverified: true, manualDone: false, done: false }; doneMode = "open"; applyFilters({ reset: false });');
+  assert.equal(ui.run('filteredRows.some((row) => String(row.index) === "1")'), true);
   await ui.element("tbody").dispatch("click", {
     target: { closest: (selector) => (selector === "[data-verify]" ? { dataset: { verify: "1" } } : null) },
     preventDefault() {},
     stopPropagation() {},
   });
   assert.equal(ui.run('notes["1"].recoveredUnverified'), undefined);
-  assert.equal(ui.run('notes["1"].manualDone'), true);
-  assert.deepEqual(toastMessages(ui), ["已核验第 1 行的找回记录，并标记为人工确认。"]);
+  assert.equal(ui.run('notes["1"].manualDone'), false);
+  assert.equal(ui.run('notes["1"].done'), false);
+  assert.equal(ui.run('filteredRows.some((row) => String(row.index) === "1")'), true, "解除隔离后仍应留在未人工确认筛选中");
+  assert.equal(ui.run('currentRevisionEntries().map((entry) => entry.id).join(",")'), "1", "解除隔离后应进入写回候选集");
+  assert.deepEqual(toastMessages(ui), ["已核验第 1 行的找回记录，现在可以写回；尚未标记人工确认。"]);
 });
 
 test("同一条提示不叠加，超过上限淘汰最旧，也可以手动关闭", async () => {
