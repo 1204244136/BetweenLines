@@ -50,7 +50,8 @@ test("对照表解析：表头驱动、去装饰、分段与别名生成", () =>
   assert.equal(aliases["東雲（しののめ）"], "ruby");
   assert.equal(aliases["美琴（しののめ）"], undefined, "读音不能与不对应的分段组合");
 
-  // 短词（2 字）不算强证据，只能确认一致；读音与分段同样不判定。
+  // 2 字基文别名未达门槛（见 TERM_STRONG_MIN_LENGTH，现为 3 字）：只能确认一致，不能指控译名错误；
+  // 读音与分段别名同样不判定。
   const shortEntry = normalizeTermEntry({ base_ori: "【時代】", base_trans: "【时代】", type: "术语" });
   assert.equal(termAliases(shortEntry).every((item) => item.strong === false), true);
 
@@ -167,7 +168,7 @@ test("判定规则：命中整条术语才判，短词/读音/分段只确认或
   const rubyOnly = evaluateTermRow({ source: `それは${withRuby("結界装置", "バリアユニット")}だ。`, target: "那是名为结界装置的能力。", tables });
   assert.equal(rubyOnly.kind, "consistent");
   assert.equal(rubyOnly.hits[0].demoted, true, "没有双侧注音 → 降级为只作一致性证据");
-  // 冲突：整条术语没使用本项目译名（≥3 字强证据）——用无注音条目测：注音条目已不允许指控（见下一条测试）
+  // 冲突：整条术语没使用本项目译名（基文别名达到门槛）——用无注音条目测：注音条目已不允许指控（见下一条测试）
   const conflict = evaluateTermRow({ source: "召喚陣を使う。", target: "使用魔法阵。", tables });
   assert.equal(conflict.kind, "conflict");
   assert.equal(conflict.hits[0].consistent, false);
@@ -176,7 +177,7 @@ test("判定规则：命中整条术语才判，短词/读音/分段只确认或
   const replaced = evaluateTermRow({ source: "召喚陣を使う。", target: "使用Summon Circle。", tables });
   assert.equal(replaced.kind, "conflict");
   assert.equal(replaced.revisedText, "使用【召唤阵】。", "只替换术语，句子其余部分不动");
-  // 短词不算强证据：命中但不判定，交回后续流程
+  // 短词不算强证据：命中但不判定，交回后续流程（放宽到 2 字实测假差异偏多，见 term-table.js 的门槛注释）
   const shortTerm = evaluateTermRow({ source: "その時代の話だ。", target: "那是这年头的事。", tables });
   assert.equal(shortTerm, null);
   // 短词命中且译文一致：仍然可以确认一致

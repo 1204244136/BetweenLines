@@ -83,6 +83,21 @@ const HAS_EFFECTIVE_CHAR = /[^\p{P}\p{S}]/u;
 const TERM_ONLY_FREE_CHARS = 2;
 const TERM_ONLY_FREE_RATIO = 0.2;
 
+/**
+ * 判定门槛：够长的**基文别名**才允许由对照表指控“译名不一致”（`strong`）。
+ *
+ * 2 字词（時代、部屋、階層）在正文里常以普通词义出现，只能用来确认一致、不能指控译名错误；
+ * 1 字别名在 `isAliasUsable` 阶段就被排除（会和长词片段撞车）。
+ *
+ * 曾试过放宽到 2 字（当时等于“所有可用基文别名都能指控”），实测代价偏大，已回到 3 字：整卷
+ * 3350 行里新增 8 行冲突，多数是「短词与专有名词同名」的假差异——`薔薇 → 蔷薇（组织/结社）`
+ * 撞上花名的「玫瑰」、`白鳥 → 白鸟（科技/载具）` 撞上「天鹅」、`健康（组织）` 撞上普通词。
+ * 这些行会带冲突徽标、豁免相似度预筛，还会给模型递一条「译文未出现该译名」的误导线索，所以
+ * 宁可不判。要再调就改这里（这是唯一门槛），并同步递增 `term-layer.js` 的 TERM_LAYER_VERSION。
+ * 读音别名与分段别名不看这个门槛：它们本来就只能确认一致，分别由 `scope === "ruby"` / `"part"` 处理。
+ */
+const TERM_STRONG_MIN_LENGTH = 3;
+
 // 行文本里带内联标记（ruby/rt/b/sup）：注音 rt 是读音，不算正文，先剥掉再匹配，
 // 否则「ときわだい」这类读音会命中「ときわだいちゆうがく」之类的长读音串。
 function stripInlineMarkup(text) {
@@ -299,10 +314,9 @@ function termAliases(entry) {
     if (/^[\s\p{P}\p{S}]+$/u.test(value)) return;
     const existing = aliases.get(value);
     if (!existing || existing.weight < weight) {
-      // strong：3 字及以上的基文别名才够格判定“不一致”。2 字词（時代、部屋、階層）在
-      // 正文里常以普通词义出现，只能用来确认一致，不能用来指控译名错误。
+      // strong：基文别名达到门槛（见 TERM_STRONG_MIN_LENGTH）才够格判定“不一致”。
       // 读音别名永不算 strong：它只是发音证据。
-      aliases.set(value, { alias: value, scope, weight, strong: scope === "term" && value.length >= 3 });
+      aliases.set(value, { alias: value, scope, weight, strong: scope === "term" && value.length >= TERM_STRONG_MIN_LENGTH });
     }
   };
 
@@ -659,8 +673,10 @@ function measureTermCoverage(sourceText, hits) {
  * 所以分段命中只被记录、不参与判定，也不参与覆盖率。
  *
  * 保守判定规则：
- * 1. 只有“强证据”（3 字及以上的基文别名）才能判“译名不一致”，并把线索写进提示词交给模型；
- * 2. 2 字词、读音别名、分段别名只能“确认一致”，不能指控译名错误——它们常以普通词义出现；
+ * 1. 只有“强证据”（达到 `TERM_STRONG_MIN_LENGTH` 的基文别名，现为 3 字）才能判“译名不一致”，
+ *    并把线索写进提示词交给模型；
+ * 2. 2 字词、读音别名、分段别名只能“确认一致”，不能指控译名错误——2 字词常以普通词义出现，
+ *    读音与基文可能对应不同中文，分段写法（只写姓或名）也说不清本行用的是哪一条；
  * 3. 一行若既没有强证据、也没被确认一致，就不由对照表处理，继续走 AI；
  * 4. 非人名条目声明了注音时，还要**中日两侧都注音**才算“表里那个专有名词”（见文件头）：
  *    只对上原文侧的候选**降级为只作一致性证据**——译文用了该译名才算命中，否则不算命中；
@@ -752,8 +768,9 @@ function displayTermPair(entry = {}) {
 
 /**
  * 基文别名全是假名（グループ、メンバー、トリック、チャネル…）的情形：这类别名常常只是普通词或
- * 音译名，而术语表里它可能只是某个组织名/招式名的写法之一。判定仍在（strong 由长度决定），
- * 但措辞不能写成“请确认是否需要替换”那种指令口吻——没有证据表明这处不是普通词义。
+ * 音译名，而术语表里它可能只是某个组织名/招式名的写法之一。判定仍在（strong 由基文别名的
+ * 长度门槛决定，见 `TERM_STRONG_MIN_LENGTH`），但措辞不能写成“请确认是否需要替换”那种指令口吻
+ * ——没有证据表明这处不是普通词义。
  */
 const KANA_ONLY_BASE = /^[\u3041-\u3096\u30a1-\u30f6\u30fc\u30fb]+$/u;
 
@@ -772,9 +789,10 @@ function describeTermHit(result) {
     return `${pair}：原文与译文没有同时注音，只作一致性证据（译文已使用该译名，不据此判定译名对错）。`;
   }
   if (!strong) {
+    // 兜底分支：门槛以下的基文写法（1 字，`isAliasUsable` 已经排除，正常走不到这里）不指控译名对错。
     return consistent
-      ? `${pair}：译文已使用该译名（短词，只作为一致性证据）。`
-      : `${pair}：原文命中的是短词，不足以判定译名错误，交由后续判断。`;
+      ? `${pair}：译文已使用该译名（写法未达指控门槛，只作为一致性证据）。`
+      : `${pair}：原文命中的写法未达指控门槛，不足以判定译名错误，交由后续判断。`;
   }
   if (consistent === true) {
     return via === "part"
@@ -800,7 +818,7 @@ function termHitGroupLabel(result) {
   if (scope === "ruby") return "原文为读音写法";
   // 降级命中（原文/译文没有同时注音）单独成群：它只是“译文用了该项目译名”的证据。
   if (result.demoted) return "未双侧注音，只作一致性证据";
-  if (!strong) return "短词证据";
+  if (!strong) return "未达指控门槛";
   if (consistent === true) return via === "part" ? "译文用分段写法" : "译文已用译名";
   return "未确认";
 }
@@ -843,6 +861,7 @@ function normalizeTermTablePaths(paths = []) {
 module.exports = {
   COLUMN_CANDIDATES,
   PERSON_TYPE,
+  TERM_STRONG_MIN_LENGTH,
   TERM_ONLY_FREE_CHARS,
   TERM_ONLY_FREE_RATIO,
   describeTermHit,

@@ -82,7 +82,7 @@ test("构建期给出每个变体的命中判定与摘要", () => {
   const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
 
   assert.equal(layer.errors.length, 0);
-  assert.equal(layer.version, 6);
+  assert.equal(layer.version, TERM_LAYER_VERSION);
   const entry = layer.byProfile.unit;
   assert.equal(entry.entries, 2);
   assert.equal(entry.defaultVariant, "bilingual:cn");
@@ -185,7 +185,7 @@ test("构建期层不写进行数据，不影响行签名", () => {
 
 test("从快照重建页面时沿用落盘的对照表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
-  assert.match(html, /"termPrefilter":\{"version":6/);
+  assert.match(html, new RegExp(`"termPrefilter":\\{"version":${TERM_LAYER_VERSION}`));
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
   assert.equal(pageMeta.termPrefilter.byProfile.unit.summary.hits, 3);
   // 页面嵌的也是文件名：分享页面不会带出本机目录结构。
@@ -225,7 +225,7 @@ test("从旧版快照重建页面时按当前对照表重算术语对", () => {
   const rebuilt = rebuildCompareHtmlFromSnapshot(dir, { profiles: [profile(file)] });
   const html = fs.readFileSync(rebuilt.htmlFile, "utf8");
   const compare = JSON.parse(fs.readFileSync(path.join(dir, "translation-compare.json"), "utf8"));
-  assert.equal(compare.termPrefilter.version, 6);
+  assert.equal(compare.termPrefilter.version, TERM_LAYER_VERSION);
   assert.deepEqual(
     compare.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"],
     ["イスラエル＝リガルディ → 伊斯瑞·雷加第（人名/西式全名）"],
