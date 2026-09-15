@@ -99,6 +99,10 @@ function payload(overrides = {}) {
 // 但各自独立裁剪与断言。成对标记（引号/括号）内侧句末点号的位置是中文规范问题，
 // 不能用 A（日文）的标点当判据——见下面的假阳性回归（第 898 行的引号、第 1087 行的括号）。
 const PAIR_PUNCT_MARKER = "内侧的句末点号按 B 的中文规范定位置";
+// 引号有无不是缺陷判据（真实假阳性第 1683 行：原文「野戦病院。」、译文「战地医院」。，全卷同形状 27 行），
+// 以及「标记内只是词/短语时句末点号落在外侧是常规写法」：这两条与「引号用途」共用 quote 特征注入。
+const QUOTE_EVIDENCE_MARKER = "A 无引号不得判 B「误加引号」";
+const PAIR_PUNCT_SCOPE_MARKER = "标记内只是半句话、一个词、短语或拟声";
 // 注音条目同样补了一句证据边界：只能评价 B 里实际出现的注音。
 const RUBY_EVIDENCE_MARKER = "判断只能针对 B 里实际出现的注音";
 // 标点写法既约束判断也约束**改写**：真实回归是模型在 revisedText 里把「……」打成「......」，
@@ -255,6 +259,38 @@ test("成对标记内侧的句末点号：A 在 」/） 前省略它，不代表
 
   // 页面预填的默认提示词（全量）必须也带上它，人工读得到完整规范。
   assert.equal(proofreadPromptFor("bilingual", "novel").system.includes(PAIR_PUNCT_MARKER), true);
+});
+
+test("A 无引号不等于 B 误加引号：被提及的词用「」是成品写法，点号也不必挪进标记内", () => {
+  // 真实假阳性（第 1683 行）：原文「野戦病院。」、译文「战地医院」。——模型在 summary 里写
+  // 「译文误加引号且句末点号外置」，revisedText 里却只把句末点号挪进了引号内侧，分析与结果对不上。
+  // 原因不是程序改的：输出侧三步（格式门禁/标点规范化/语言护栏）在这一行都是空操作，
+  // `restoreTerminalPunctuation` 也没有补回引号的能力。模型只落地了提示词明确授权的那一半，
+  // 所以缺的是规范：中文成品用直角引号标记被提及的词、心声、拟声与招牌，A 在这些位置常不加引号。
+  const row = { source: "野戦病院。", target: "「战地医院」。" };
+  const hit = detectRowFeatures(row);
+  assert.equal(hit.has("quote"), true, "目标列用直角引号的行必须命中 quote 特征");
+  const system = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: hit });
+  assert.equal(system.includes(QUOTE_EVIDENCE_MARKER), true, "带引号的行必须拿到「A 无引号不算误加引号」这条证据边界");
+  assert.equal(system.includes("也不得据此在 revisedText 里增删引号"), true);
+  assert.equal(system.includes("被提及的词、短语、心声、拟声或招牌"), true);
+  // 同一条特征带进来的点号规范必须限定范围：标记内只是词/短语时，点号落在外侧是常规写法。
+  assert.equal(system.includes(PAIR_PUNCT_SCOPE_MARKER), true, "不限定范围时，被提及的词也会被挪点号");
+  assert.equal(system.includes("也不必在 revisedText 里把它挪进标记内"), true);
+
+  // 两条都是按行条目：不带引号的叙述行不背这两条。
+  const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+  const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
+  assert.equal(trimmed.includes(QUOTE_EVIDENCE_MARKER), false, "叙述行不该拿到引号证据边界");
+  assert.equal(trimmed.includes(PAIR_PUNCT_SCOPE_MARKER), false, "叙述行不该拿到成对标记的点号范围");
+  // 每行常驻的那条证据边界必须把引号与标点算进枚举：只写「注音、傍点、分页」时，
+  // 「A 看不到某标记不得判 B 多出该写法是缺陷」这条原则覆盖不到引号，模型照样会自造缺陷。
+  assert.equal(trimmed.includes("注音、傍点、分页、引号与标点等信息可能缺失"), true, "证据边界枚举要常驻并包含引号与标点");
+
+  // 页面预填的默认提示词（全量）同样带上，人工读得到完整规范。
+  const full = proofreadPromptFor("bilingual", "novel").system;
+  assert.equal(full.includes(QUOTE_EVIDENCE_MARKER), true);
+  assert.equal(full.includes(PAIR_PUNCT_SCOPE_MARKER), true);
 });
 
 test("注音规范只评价 B 里实际出现的注音：不得凭 A 里普通词的假名读音指控 B 保留注音", () => {
@@ -528,9 +564,11 @@ test("真实行样本保持压缩后的请求预算", () => {
     context: [],
     contextMode: "none",
   }, { proofreadMode: "bilingual", profileId: "demo" });
-  assert.ok(messages[0].content.length <= 4000, `system 前缀仍过长：${messages[0].content.length}`);
+  // 预算按实测最坏行（带成对标记的 demo 行）定基线。第 1683 行的两处证据边界（引号有无不算缺陷、
+  // 成对标记内的点号规范只对完整引述/整行括注生效）让这一行 +148 字符；每行常驻的只有证据边界枚举 +6。
+  assert.ok(messages[0].content.length <= 4200, `system 前缀仍过长：${messages[0].content.length}`);
   assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
-  assert.ok(messages[0].content.length + messages[1].content.length <= 4900, "单行请求总长度超过预算");
+  assert.ok(messages[0].content.length + messages[1].content.length <= 5100, "单行请求总长度超过预算");
 });
 
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {
