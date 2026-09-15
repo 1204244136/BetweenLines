@@ -72,7 +72,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     }
     return elements.get(id);
   };
-  const html = makeHtml(ROWS, {
+  const html = makeHtml(options.rows || ROWS, {
     comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" },
   }, { projectKey, rowsSignature: "rows", notesStorage: { key: currentKey } });
   element("rowData").textContent = html.match(/<script id="rowData" type="application\/json">([\s\S]*?)<\/script>/)[1];

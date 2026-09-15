@@ -71,6 +71,58 @@
     // 恢复通告：{ message, tone }——找回成功与「一条都对不上」是两种语气，写在赋值处而不是猜文案。
     let notesRecovery = null;
 
+    /**
+     * 内容确实变过、当初只能按文本锚点搬来的行（旧规则会把这类行标成「需逐行核验」并清掉人工确认）：
+     * 旧记录里的「修改结果」与这一行现在的正文逐字相同，说明这一行现在的正文就是人工批准并写回的成品。
+     * 只有旧记录本来就带人工确认时才还回去；来源空间里没确认过的记录不受影响。
+     */
+    function healApprovedRows(space, plan) {
+      let healed = 0;
+      for (const pair of plan.approved || []) {
+        const current = notes[String(pair.to)];
+        const source = space.data[String(pair.from)];
+        if (!current || !current.recoveredUnverified || !source?.manualDone) continue;
+        delete current.recoveredUnverified;
+        current.manualDone = true;
+        current.done = true;
+        const signature = rowsById.get(String(pair.to))?.signature;
+        if (signature) current.rowSig = String(signature);
+        healed += 1;
+      }
+      return healed;
+    }
+
+    /**
+     * 旧版找回规则漏掉的两类行在这里自愈：内容在书里重复的短行整条搬不过来，
+     * 写回后内容变过的行被清掉人工确认。挨过这一轮损伤的空间会留下未校验记录，
+     * 所以本页空间只要还有这种记录，就按同一套内容证据把缺的记录补回、把能证明的人工确认还回去。
+     * 只补本页没有的行，不动本页已有记录；补完就是正常状态，不需要用户再想起「找回」这件事。
+     */
+    function selfHealDamagedSpace() {
+      const spaces = notesTools.inventory(localStorage, storageKey, notes)
+        .filter((item) => !item.current && item.sameProject && item.entries && !item.parseFailed);
+      let restored = 0;
+      let healed = 0;
+      for (const space of spaces) {
+        const plan = notesTools.plan(space.data, allRows, notes, { sameSnapshot: space.sameSnapshot, revisionTextFor });
+        healed += healApprovedRows(space, plan);
+        for (const pair of plan.pairs) {
+          if (!pair.verified) continue;
+          notes[String(pair.to)] = normalizeStoredNote(space.data[String(pair.from)]);
+          restored += 1;
+        }
+      }
+      if (restored || healed) {
+        // 与自动找回同一条落盘通道：这一步发生在脚本求值期，saveNotes 的防抖句柄还没就绪。
+        const saved = persistNotes();
+        notesRecovery = {
+          tone: "success",
+          message: `已修复旧版找回规则漏掉的记录：补回 ${restored} 条、恢复人工确认 ${healed} 条`
+            + (saved === false ? "（尚未写入浏览器存储，请先导出本页记录）" : "。"),
+        };
+      }
+    }
+
     function recoveryPlan(space, byIndex = false) {
       const plan = notesTools.plan(space.data, allRows, notes, {
         sameSnapshot: space.sameSnapshot, byIndex, revisionTextFor,
@@ -97,9 +149,11 @@
           merged += 1;
         }
         // 合并结果照常按防抖落盘：这一步不经过「应用找回」，用户取消预览也不该丢掉刚保住的人工确认。
-        if (merged) {
+        const healed = healApprovedRows(space, plan);
+        if (merged || healed) {
           saveNotes();
-          plan.merged = merged;
+          if (merged) plan.merged = merged;
+          if (healed) plan.approvedRestored = healed;
         }
       }
       return plan;
@@ -219,6 +273,11 @@
         notesRecovery = { tone: "watch", message: "发现历史备注，但没有任何一条能按行内容对上本页——历史记录仍保留在「备注空间与找回」中，可用「按行号找回」逐行核验。" };
       }
     }
+
+    // 旧版规则造成的损失已经落在浏览器存储里：本页空间少了记录、人工确认被清成未校验，
+    // 光修匹配规则救不回已经生成的这一页。只要本页还留着未校验记录，就说明它挨过这一轮损伤，
+    // 载入时按同一套内容证据自愈一次；正常的空间（没有未校验记录）不受任何影响。
+    if (initialRaw !== null && Object.values(notes).some((item) => item.recoveredUnverified)) selfHealDamagedSpace();
 
     function announceNotesRecovery() {
       if (notesRecovery) showToast(notesRecovery.message, { tone: notesRecovery.tone, durationMs: 12000 });
@@ -3169,10 +3228,12 @@
       notesPanelIds.preview.innerHTML = '<p class="notes-preview-source">' + escapeHtml(notesSpaceTitle(space)) + ' · ' + action + '</p>'
         + '<div class="notes-preview-stats"><span><strong>' + plan.verified + '</strong>内容匹配</span><span><strong>' + plan.unverified
         + '</strong>需核验</span><span><strong>' + plan.occupied + '</strong>本页已有</span><span><strong>' + plan.unmatched + '</strong>未匹配</span>'
-        + (plan.merged ? '<span><strong>' + plan.merged + '</strong>已合并</span>' : '') + '</div>'
+        + (plan.merged ? '<span><strong>' + plan.merged + '</strong>已合并</span>' : '')
+        + (plan.approvedRestored ? '<span><strong>' + plan.approvedRestored + '</strong>恢复确认</span>' : '') + '</div>'
         + (plan.merged ? '<p>其中 ' + plan.merged + ' 条本页已有记录、但历史记录里带人工确认：已按行内容签名逐字段合并（人工确认保留），不需要再点找回。</p>' : '')
+        + (plan.approvedRestored ? '<p>其中 ' + plan.approvedRestored + ' 条本页记录当初只能按文本锚点搬来（这一行内容被改动过）：旧记录里的「修改结果」与这一行现在的正文逐字相同，已恢复人工确认，不需要再逐行核验。</p>' : '')
         + '<p>' + (byIndex ? '仅将旧第 N 行对应到当前第 N 行，行内容可能已经变化。所有条目都需核验。'
-          : '优先匹配行集或行内容签名。旧版文本锚点只作为行序推断，相关条目仍需核验。') + '</p>'
+          : '优先按行内容匹配：行签名对得上，或记录里的「修改结果」与这一行现在的正文逐字相同。仅靠文本锚点推断行序的条目仍需核验。') + '</p>'
         + '<p>保留本页已有记录。需核验的条目会清除人工确认状态，逐行确认后才能写回。来源空间始终保留。</p>'
         + (samples ? '<ol class="notes-preview-samples">' + samples + '</ol>' : '<p class="notes-space-empty">没有可新增的匹配记录。按行号找回可从空间详情单独选择。</p>');
       notesPanelIds.dialog.showModal();

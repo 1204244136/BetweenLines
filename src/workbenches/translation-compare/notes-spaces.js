@@ -74,16 +74,21 @@ function createNotesTools(alignLegacyNotes) {
       })), rows);
       pairs = result.pairs.map((pair) => {
         const item = sourceMap.get(pair.from);
-        return { ...pair, verified: !item.recoveredUnverified && Boolean(item.rowSig)
-          && item.rowSig === rowMap.get(pair.to)?.signature };
+        // 两条都是确定性证据：行签名对得上，或记录里的「修改结果」与目标行正文逐字相同
+        // （那一行现在的正文就是人工批准并写回的成品）。证据成立就不该退回「需逐行核验」。
+        return { ...pair, verified: !item.recoveredUnverified && (Boolean(pair.textConfirmed)
+          || (Boolean(item.rowSig) && item.rowSig === rowMap.get(pair.to)?.signature)) };
       });
     }
-    const occupied = pairs.filter((pair) => Object.hasOwn(currentNotes, String(pair.to))).length;
+    const occupiedPairs = pairs.filter((pair) => Object.hasOwn(currentNotes, String(pair.to)));
     const available = pairs.filter((pair) => !Object.hasOwn(currentNotes, String(pair.to)));
     return {
-      pairs: available, occupied, unmatched: items.length - pairs.length,
+      pairs: available, occupied: occupiedPairs.length, unmatched: items.length - pairs.length,
       verified: available.filter((pair) => pair.verified).length,
       unverified: available.filter((pair) => !pair.verified).length,
+      // 本页已有记录、但旧记录里的「修改结果」就是这一行现在的正文：可证明的人工确认由调用方还回去。
+      approved: occupiedPairs.filter((pair) => pair.verified && pair.textConfirmed)
+        .map((pair) => ({ from: pair.from, to: pair.to })),
     };
   }
 

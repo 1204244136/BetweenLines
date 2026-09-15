@@ -468,7 +468,9 @@ test("legacy notes between conflicting anchors are dropped instead of guessed", 
     { from: 10, signature: "", text: "锚点丙aaaaaaaaaaaaaaaa" },
     { from: 6, signature: "", text: "" },
   ], rows);
-  assert.deepEqual(result.pairs, [{ from: 3, to: 1 }, { from: 4, to: 2 }, { from: 10, to: 3 }]);
+  // 这三条都是文本锚点下的配对（记录里的「修改结果」就是目标行现在的正文），中间那一行照旧不猜。
+  assert.deepEqual(result.pairs.map((pair) => `${pair.from}->${pair.to}`), ["3->1", "4->2", "10->3"]);
+  assert.equal(result.pairs.every((pair) => pair.textConfirmed), true);
   assert.equal(result.unmatched, 1);
 });
 
@@ -534,4 +536,27 @@ test("workbench ships the notes space panel with export, import and index restor
   assert.match(html, /id="exportAllNotes"/);
   assert.match(html, /id="importNotesFile"[^>]*type="file"/);
   assert.equal(html.includes("function alignNotesByIndex(entryIds, rows, occupiedIds)"), true);
+});
+
+test("重复内容的短行靠「同一行号 + 同一签名」认领，行集位移时不认领", () => {
+  // 「……」这类短行在书里反复出现 → 行签名不唯一 → 老实现只能整条丢弃（真实回归：重新生成后少 84 条人工确认）。
+  const build = (shift) => Array.from({ length: 24 }, (_, offset) => ({
+    index: offset + 1 + shift,
+    cn: offset === 7 || offset === 19 ? "「……」" : `第${offset + 1}段译文内容占位文本长度足够`,
+    signature: offset === 7 || offset === 19 ? "dup" : `row-${offset + 1}`,
+  }));
+  const notes = Array.from({ length: 24 }, (_, offset) => ({
+    from: offset + 1, signature: offset === 7 || offset === 19 ? "dup" : `row-${offset + 1}`, text: "",
+  }));
+
+  const stable = alignLegacyNotes(notes, build(0));
+  assert.equal(stable.sameIndex, 2);
+  assert.equal(stable.pairs.length, 24);
+  assert.deepEqual(stable.pairs.filter((pair) => pair.sameIndex).map((pair) => pair.to), [8, 20]);
+
+  // 行集整体位移时行号不再代表同一行：宁可不搬，也不把记录接到别的行上。
+  const shifted = alignLegacyNotes(notes, build(3));
+  assert.equal(shifted.sameIndex, 0);
+  assert.equal(shifted.pairs.length, 22);
+  assert.equal(shifted.unmatched, 2);
 });

@@ -246,3 +246,35 @@ test("低分归因与线上查证属于分析栏，不会被并进可写回的�
   assert.equal(ui.run('isNoteProseLine("格式自动规范化：删除模型插入的换行 1 处")'), true);
   assert.equal(ui.run('isNoteProseLine("修改结果：不如说越来越大了。")'), false);
 });
+
+test("记录里的「修改结果」就是当前行正文时按文本证据找回，不再退回需核验", () => {
+  // 写回改过的行内容真的变了、行签名对不上，但记录里的「修改结果」与这一行现在的正文逐字相同：
+  // 那一行现在的正文就是人工批准并写回的成品，不该再要求逐行复核。
+  const rows = Array.from({ length: 9 }, (_, offset) => {
+    const index = offset + 1;
+    const rewritten = index === 3 || index === 5 || index === 7 || index === 9;
+    return {
+      index,
+      cn: rewritten ? `第${index}段写回后的正文内容占位文本` : `第${index}段原文正文内容占位文本够长`,
+      signature: rewritten ? `row-${index}-new` : `row-${index}`,
+    };
+  });
+  const notes = {};
+  for (let index = 1; index <= 9; index += 1) {
+    const rewritten = index === 3 || index === 5 || index === 7;
+    notes[index] = {
+      note: "旧记录", manualDone: true,
+      rowSig: index === 3 || index === 5 || index === 7 || index === 9 ? `row-${index}-old` : `row-${index}`,
+      revisionText: rewritten ? `第${index}段写回后的正文内容占位文本` : "",
+    };
+  }
+  const plan = helpers.plan(notes, rows, {});
+  assert.equal(plan.pairs.length, 8);
+  assert.equal(plan.verified, 8, "写回过的三行靠文本证据找回，其余靠行签名");
+  assert.equal(plan.unverified, 0);
+  assert.equal(plan.unmatched, 1, "内容变过、又没有修改结果作证的行走不了任何通道，只能留给用户逐行处理");
+  for (const index of [3, 5, 7]) {
+    assert.equal(plan.pairs.find((pair) => pair.to === index).verified, true, `第 ${index} 行的人工确认必须保留`);
+  }
+  assert.equal(plan.pairs.some((pair) => pair.to === 9), false, "没有修改结果的行不能只按行号搬回来");
+});
