@@ -373,6 +373,7 @@ module.exports = {
   callChatCompletions,
   cleanJsonPayload,
   listProviderModels,
+  isGptModel,
   TEXT_INTENSITY_TEMPERATURE_MAP,
   normalizeNonGptTemperature,
 };

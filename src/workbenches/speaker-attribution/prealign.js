@@ -2,19 +2,10 @@ const {
   alignmentScore,
   compareTexts,
   joinTextItems,
-  normalizeText,
 } = require("./text-comparison");
 
 const ALIGNMENT_VERSION = "monotonic-evidence-v5";
 const NEGATIVE_INFINITY = -1e9;
-
-function comparable(text) {
-  return normalizeText(text).replace(/[\s\p{P}\p{S}]/gu, "");
-}
-
-function similarity(left, right) {
-  return compareTexts(left, right).score;
-}
 
 function clampBand(sourceCount, parallelCount, requested) {
   const distance = Math.abs(sourceCount - parallelCount);
@@ -300,7 +291,5 @@ function prealignLineUnits(sourceUnits = [], parallelUnits = [], options = {}) {
 module.exports = {
   ALIGNMENT_VERSION,
   alignMonotonic,
-  comparable,
   prealignLineUnits,
-  similarity,
 };

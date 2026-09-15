@@ -31,7 +31,14 @@ const {
   CLAUDE_THINKING_BUDGETS,
   loadModelsDev,
 } = require("./model-capabilities");
-const { TEXT_INTENSITY_TEMPERATURE_MAP, normalizeNonGptTemperature } = require("../../../ai/llm-client");
+const {
+  TEXT_INTENSITY_TEMPERATURE_MAP,
+  buildApiUrl,
+  buildProviderHeaders,
+  extractClaudeText,
+  isGptModel,
+  normalizeNonGptTemperature,
+} = require("../../../ai/llm-client");
 const toTw = OpenCC.Converter({ from: "cn", to: "tw" });
 const { loadGlossary, glossaryPrompt } = require("./glossary");
 const {
@@ -97,9 +104,7 @@ const knownModelFallbacks = [
 
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-function isGptModel(model) {
-  return /(?:^|\/)gpt(?:-|$)/i.test(String(model || "").trim());
-}
+// isGptModel 与共享传输层 (src/ai/llm-client.js) 同源，那里是唯一事实来源。
 
 function normalizeReasoningEffort(value, model, modelMeta = null) {
   const effort = String(value || "").trim().toLowerCase();
@@ -799,41 +804,7 @@ function buildModelUrlCandidates(baseUrl) {
   return [buildApiUrl(trimmed, "/v1/models")];
 }
 
-function buildApiUrl(baseUrl, endpoint) {
-  const base = String(baseUrl || "").trim().replace(/\/+$/, "");
-  const path = `/${String(endpoint || "").trim().replace(/^\/+/, "")}`;
-  if (!base) return path;
-  const endpointSuffix = path.replace(/^\/v\d+(?=\/|$)/i, "");
-  try {
-    const url = new URL(base);
-    const currentPath = url.pathname.replace(/\/+$/, "");
-    const existingEndpoint = currentPath.match(/\/(?:chat\/completions|messages|models)$/i);
-    if (existingEndpoint) {
-      url.pathname = `${currentPath.slice(0, -existingEndpoint[0].length)}${endpointSuffix}`;
-    } else if (/\/v\d+$/i.test(currentPath)) {
-      url.pathname = `${currentPath}${endpointSuffix}`;
-    } else {
-      url.pathname = `${currentPath}${path}`;
-    }
-    return url.toString();
-  } catch {
-    const existingEndpoint = base.match(/\/(?:chat\/completions|messages|models)$/i);
-    if (existingEndpoint) return `${base.slice(0, -existingEndpoint[0].length)}${endpointSuffix}`;
-    if (/\/v\d+$/i.test(base)) return `${base}${endpointSuffix}`;
-    return `${base}${path}`;
-  }
-}
-
-function buildProviderHeaders(config = {}) {
-  const headers = { "content-type": "application/json" };
-  if (config.provider === "claude") {
-    headers["anthropic-version"] = "2023-06-01";
-    if (config.apiKey) headers["x-api-key"] = config.apiKey;
-  } else if (config.apiKey) {
-    headers.authorization = `Bearer ${config.apiKey}`;
-  }
-  return headers;
-}
+// buildApiUrl / buildProviderHeaders 与共享传输层 (src/ai/llm-client.js) 同源。
 
 function modelFallbackForBaseUrl(baseUrl) {
   const value = String(baseUrl || "");
@@ -2171,14 +2142,9 @@ function buildClaudeMessageBody(messages, config = {}, modelMeta = null) {
   return body;
 }
 
-function extractClaudeText(data = {}) {
-  if (typeof data.content === "string") return data.content;
-  if (!Array.isArray(data.content)) return "";
-  return data.content
-    .filter((block) => block?.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
-    .join("");
-}
+// extractClaudeText 与共享传输层 (src/ai/llm-client.js) 同源。
+// 注意：下面两个 body 构造函数不是共享层的副本——共享层读 config.temperature ?? config.reasoningEffort，
+// 而 AI 校对只接受语义强度档位（reasoningEffort），两者不要合并。
 
 function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
   const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
