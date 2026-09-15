@@ -2,8 +2,8 @@
  * 行特征探测：按行裁剪提示词的**唯一依据**。
  *
  * 为什么需要它：特化档案里有一批“只在特定版式或文字现象上才有意义”的规范——注音、
- * 傍点加粗、译注标记、分页与图片、省略号写法、「！？」顺序、引号用途与成对标记内的句末点号、连接词衔接、
- * 拟声词与语气词选词、数字与单位、片段与原文外内容。每行都注入它们既贵（占前缀的一半以上），
+ * 傍点加粗、译注标记、分页与图片、省略号写法、「！？」顺序、引号用途与成对标记内的句末点号、方向敏感的通信标识、
+ * 连接词衔接、拟声词与语气词选词、数字与单位、片段与原文外内容。每行都注入它们既贵（占前缀的一半以上），
  * 又会把注意力从“这一行到底哪里有问题”上稀释掉；只有当前行真的出现对应现象时才需要。
  *
  * 三条纪律（改这个文件前先读）：
@@ -30,6 +30,7 @@ const FEATURE_IDS = Object.freeze([
   "interrobang",   // 「！？」顺序与数量
   "quote",         // 引号层级与用途、引号内句末点号（「」/『』/书名号）
   "parenthesis",   // 括号（括注与心声的成对标记，句末点号位置规范要它）
+  "directionalSymbol", // 通信标识符、箭头与方向标记（竖排/横排的旋转变体）
   "conjunction",   // 连接词独立成段与衔接
   "repeat",        // 重复字/符号、长串假名
   "speechEffect",  // 拟声词、被打断、异口同声、断续
@@ -45,6 +46,10 @@ const PARTICLE_WORDS = /チッ|ちっ|まあ|やれやれ|あら|おや|ふむ|�
 const PARTICLE_TARGETS = /啧|呀嘞|啊啦|嘛|嘞/u;
 const TERMINAL_PUNCTUATION = /[。！？…」』）)\]】]$/u;
 const FRAGMENT_ENDING = /(?:しかし|だが|でも|そして|また|つまり|ただし|だから|そこで|すると|ゆえに|なぜなら|けれども|けれど|けど|なお)[、,，]?\s*$/u;
+// 方向敏感的符号：竖排原文中的旋转形态与横排成品的旋转形态都算命中。
+// 半角 <> 只在左右紧邻中日文时命中，避免把 HTML 标签或普通比较符误当成通信标识。
+const DIRECTIONAL_SYMBOL = /[∨∧﹀︿＞＜«»‹›≪≫←↑→↓↔↕↖↗↘↙]/u;
+const ASCII_DIRECTIONAL_SYMBOL = /(?:[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}）】」』])\s*[<>]\s*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}（【「『])/u;
 
 function looksLikeFragment(value) {
   const text = String(value || "").trim();
@@ -85,6 +90,10 @@ const RULES = {
   // 只列全角形态：半角括号在中日文语境里属于标点宽度问题，由排版层常驻的「标点全角化」管。
   parenthesis: ({ source, target }) =>
     /[（）【】〔〕]/u.test(`${source}\n${target}`),
+  directionalSymbol: ({ source, target }) => {
+    const text = `${source}\n${target}`;
+    return DIRECTIONAL_SYMBOL.test(text) || ASCII_DIRECTIONAL_SYMBOL.test(text);
+  },
   conjunction: ({ source, target }) =>
     /(しかし|だが|でも|そして|また|つまり|ただし|だから|そこで|すると|ゆえに|なぜなら|けれども|けれど|けど|なお)[、,，]?\s*$/u.test(source)
     || /——|--/u.test(target),

@@ -72,6 +72,7 @@ const FEATURE_SAMPLES = {
   interrobang: { source: "本当に！？", target: "真的？！" },
   quote: { source: "「そうか」と彼は言った。", target: "「是吗」他说。" },
   parenthesis: { source: "（ふうん。……）", target: "（嗯。……）" },
+  directionalSymbol: { source: "『半蔵∨浜面、聞こえるか？』", target: "「半藏＞滨面，听得到吗？」" },
   conjunction: { source: "しかし、", target: "然而——" },
   repeat: { source: "あああ、そうか。", target: "啊啊啊，是吗。" },
   speechEffect: { source: "ドキドキした。", target: "心跳不已。" },
@@ -125,6 +126,7 @@ const ROW_LINE_MARKERS = {
   quote: "引号用途：背景音与非人声",
   // 括号与引号共用那条「成对标记内侧的句末点号」规范，所以这里的辨识短语与 quote 的不同。
   parenthesis: PAIR_PUNCT_MARKER,
+  directionalSymbol: "通信标识符、箭头与方向标记会随版式方向改变朝向",
   conjunction: "连接词独立成段",
   repeat: "重复出现的字或符号",
   speechEffect: "拟声词后的「と」不译",
@@ -291,6 +293,41 @@ test("A 无引号不等于 B 误加引号：被提及的词用「」是成品写
   const full = proofreadPromptFor("bilingual", "novel").system;
   assert.equal(full.includes(QUOTE_EVIDENCE_MARKER), true);
   assert.equal(full.includes(PAIR_PUNCT_SCOPE_MARKER), true);
+});
+
+test("方向敏感的通信标识：竖排「∨」转横排「＞」不算擅改，且只在出现时注入", () => {
+  const row = {
+    source: "『<ruby>半蔵<rt>はんぞう</rt></ruby>∨<ruby>浜面<rt>はまづら</rt></ruby>お前今どこにいる？』",
+    target: "「半藏＞滨面，你现在在哪？」",
+  };
+  const hit = detectRowFeatures(row);
+  assert.equal(hit.has("directionalSymbol"), true, "竖排通信标识与横排旋转变体必须命中");
+  const system = buildProofreadSystemPrompt({
+    mode: "bilingual",
+    profileId: "novel",
+    rowFeatures: hit,
+  });
+  assert.equal(system.includes(ROW_LINE_MARKERS.directionalSymbol), true);
+  assert.equal(system.includes("不得据此判擅改、漏译或误译"), true);
+  assert.equal(system.includes("功能与位置、数量一致"), true);
+
+  // 半角 >/< 只有在两侧是中日文文本时才算通信符号；HTML 标签本身不能触发这条。
+  assert.equal(detectRowFeatures({ source: "甲>乙", target: "甲＜乙" }).has("directionalSymbol"), true);
+  assert.equal(
+    detectRowFeatures({
+      source: "<ruby>半蔵<rt>はんぞう</rt></ruby>。",
+      target: "半藏。",
+    }).has("directionalSymbol"),
+    false,
+    "<ruby> 这类标签里的尖括号不是通信标识",
+  );
+  // 箭头等同类方向标记也走同一条按需规则，避免只对固定的一个字符开例外。
+  assert.equal(detectRowFeatures({ source: "矢印→", target: "箭头↓" }).has("directionalSymbol"), true);
+
+  const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+  const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
+  assert.equal(trimmed.includes(ROW_LINE_MARKERS.directionalSymbol), false);
+  assert.equal(proofreadPromptFor("bilingual", "novel").system.includes(ROW_LINE_MARKERS.directionalSymbol), true);
 });
 
 test("注音规范只评价 B 里实际出现的注音：不得凭 A 里普通词的假名读音指控 B 保留注音", () => {
