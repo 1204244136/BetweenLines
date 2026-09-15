@@ -1,5 +1,5 @@
 /**
- * 目标列标点的确定性规范化（半角 ↔ 全角）：结论产出之后的最后一道工序，只动标点。
+ * 目标列标点的确定性规范化（半角 ↔ 全角、引号体例）：结论产出之后的最后一道工序，只动标点。
  *
  * 为什么需要：成品规范（`profiles/novel.js` 的排版层）要求中文正文用全角标点，但提示词只能“要求”，
  * 做不到“保证”——实测模型会在自己的 revisedText 里打出「......」（第 1040 行真实回归），
@@ -18,11 +18,12 @@
  *   同样只按位置判断（被删的是不是一个单独的点号、它后面在不在成对标记的收尾符号前），
  *   不判断“这句话该不该有点号”这种语义问题。
  * - **内联标记整段跳过**：`<ruby>基文<rt>注文</rt></ruby>`、`<a epub:type="noteref">` 这类标签
- *   先摘出来再按序还原，标签内部的标点（属性里的 `:`、`"`）不会被改写；引号本身
- *   （`"` `'` → 「」『』）也不在这里处理——配对与撇号判断交给提示词，硬转换会改坏英文缩写。
+ *   先摘出来再按序还原，标签内部的标点（属性里的 `:`、`"`）不会被改写。双引号只处理能确定配对的
+ *   形态：中文语境里的 `“…”` 与 `"…"` 统一成 `「…」`；英文语境里的直双引号保持不动，留存的弯引号
+ *   由调用方作废转人工。单引号与撇号不在这里处理，避免把英文缩写里的 `'`/`’` 改坏。
  *
- * 计数口径：`toFull`/`toHalf`/`restored` 都是**处**（一次规范化动作：连续同类标点算一处、
- * 成对括号算一处、补回一个句末点号算一处），不是字符数。
+ * 计数口径：`toFull`/`toHalf`/`restored`/`quotes` 都是**处**（一次规范化动作：连续同类标点算一处、
+ * 成对括号算一处、补回一个句末点号算一处、一对引号算一处），不是字符数。
  */
 const { diffChars } = require("diff");
 
@@ -87,6 +88,70 @@ function isLatinContext(text, start, end) {
 
 function isCjkSide(ch) {
   return Boolean(ch) && CJK_CONTEXT.test(ch);
+}
+
+/** 同一段文本里找出指定引号的开闭配对；直双引号按出现次序成对。 */
+function collectQuotePairs(text, openChar, closeChar) {
+  const pairs = [];
+  if (openChar === closeChar) {
+    let open = -1;
+    for (let i = 0; i < text.length; i += 1) {
+      if (text[i] !== openChar) continue;
+      if (open === -1) {
+        open = i;
+      } else {
+        pairs.push([open, i]);
+        open = -1;
+      }
+    }
+    return pairs;
+  }
+
+  const stack = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === openChar) {
+      stack.push(i);
+    } else if (text[i] === closeChar && stack.length) {
+      pairs.push([stack.pop(), i]);
+    }
+  }
+  return pairs;
+}
+
+/** 只有配对内容或紧邻语境确实属于中文时才换引号体例，英文整句里的英文引号不动。 */
+function quotePairIsChineseContext(text, start, end) {
+  const context = [
+    neighbourBefore(text, start),
+    text.slice(start + 1, end),
+    neighbourAfter(text, end + 1),
+  ].join("");
+  return CJK_CONTEXT.test(context);
+}
+
+/**
+ * 双引号体例：中文语境里可确定配对的弯引号 `“…”` 与直双引号 `"…"` 统一成直角引号 `「…」`。
+ * 弯引号没有安全配对时计入 `unresolved`，由标点规范化调用方作废转人工，不让它写回成品。
+ */
+function normalizeQuoteMarks(text, stats) {
+  const replacements = new Map();
+  for (const [openChar, closeChar] of [["“", "”"], ['"', '"']]) {
+    for (const [start, end] of collectQuotePairs(text, openChar, closeChar)) {
+      if (!quotePairIsChineseContext(text, start, end)) continue;
+      replacements.set(start, "「");
+      replacements.set(end, "」");
+      stats.quotes += 1;
+    }
+  }
+
+  let unresolved = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if ((text[i] === "“" || text[i] === "”") && !replacements.has(i)) unresolved += 1;
+  }
+  if (!replacements.size) return { text, unresolved };
+
+  let out = "";
+  for (let i = 0; i < text.length; i += 1) out += replacements.get(i) || text[i];
+  return { text: out, unresolved };
 }
 
 function matchingCloser(text, start) {
@@ -278,14 +343,15 @@ function neighbourInRevised(parts, index) {
  * 目标列文本的标点宽度规范化（纯函数，不读配置、不写日志）。
  *
  * @param {string} value 模型给出的 revisedText（或任何要写回成品的文本）
- * @returns {{text: string, changed: boolean, toFull: number, toHalf: number}}
- *   `toFull`/`toHalf` 是半角→全角、全角→半角的**处**数；`changed` 为 false 时 text 与入参逐字相同。
+ * @returns {{text: string, changed: boolean, toFull: number, toHalf: number, quotes: number, unresolvedQuotes: number}}
+ *   `toFull`/`toHalf` 是半角→全角、全角→半角的**处**数，`quotes` 是改正的引号**对**数；
+ *   `unresolvedQuotes` 是无法确定性转换、必须由调用方转人工的残留弯引号数量。
  */
 
 function normalizeTargetPunctuation(value) {
   const original = String(value == null ? "" : value);
-  const stats = { toFull: 0, toHalf: 0 };
-  if (!original) return { text: original, changed: false, ...stats };
+  const stats = { toFull: 0, toHalf: 0, quotes: 0 };
+  if (!original) return { text: original, changed: false, ...stats, unresolvedQuotes: 0 };
 
   const tags = [];
   const guarded = original.replace(TAG_PATTERN, (tag) => {
@@ -295,10 +361,12 @@ function normalizeTargetPunctuation(value) {
   let text = normalizeBrackets(guarded, stats);
   text = normalizeEllipsis(text, stats);
   text = normalizeSingleMarks(text, stats);
+  const quoteResult = normalizeQuoteMarks(text, stats);
+  text = quoteResult.text;
   let cursor = 0;
   text = text.replace(new RegExp(TAG_SENTINEL, "gu"), () => (cursor < tags.length ? tags[cursor++] : TAG_SENTINEL));
 
-  return { text, changed: text !== original, ...stats };
+  return { text, changed: text !== original, ...stats, unresolvedQuotes: quoteResult.unresolved };
 }
 
 module.exports = {

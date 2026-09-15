@@ -676,6 +676,60 @@ test("修订结果的标点按语境自动规范化：中文全角、英文半�
   assert.equal(/标点自动规范化/.test(english.note), false, "没改动就不留痕");
 });
 
+test("修订结果的弯引号转成直角引号；无法配对的弯引号作废转人工", async () => {
+  const decide = (revisedText) => JSON.stringify({
+    semanticSame: false,
+    needsEdit: true,
+    needsContext: false,
+    decision: "replace",
+    score: 70,
+    penalty: 30,
+    grade: "good",
+    severity: "minor",
+    summary: "需要修改：拟声词引号体例不符合成品规范。",
+    revisedText,
+  });
+  const { finished, rows } = await runProofreadAgainst({
+    label: "punct-quotes",
+    rowCount: 2,
+    respond: (_count, response) => {
+      let raw = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { raw += chunk; });
+      request.on("end", () => {
+        const user = JSON.parse(JSON.parse(raw).messages[1].content);
+        const index = Number(user.row.index);
+        const revised = index === 1
+          ? "传来了“咔哒”一声。"
+          : "传来了“咔哒一声。";
+        response.end(JSON.stringify({ choices: [{ message: { content: decide(revised) } }] }));
+      });
+    },
+  });
+
+  assert.equal(finished.running, false);
+  assert.equal(finished.errors, 0);
+  assert.equal(finished.punctFixes, 1, "只有可确定转换的第 1 行计入标点修正");
+  assert.equal(finished.punctQuotes, 1);
+  assert.equal(finished.punctQuoteVoids, 1, "未配对的弯引号不能进入写回候选");
+  assert.match(finished.logs.join("\n"), /第 1 行：修改结果的标点已按成品写法统一（双引号→直角引号 1 处）/);
+  assert.match(finished.logs.join("\n"), /标点规范化：把 1 处中文语境的双引号统一成直角引号「」。/);
+  assert.match(finished.logs.join("\n"), /标点规范化：1 行的修改结果含无法确定性配对的弯引号，已作废并转人工确认。/);
+
+  const results = clientStatus().results.filter((item) => item.status !== "error");
+  assert.equal(results.length, rows.length);
+  const converted = results.find((item) => item.index === 1);
+  assert.match(converted.note, /修改结果：传来了「咔哒」一声。/);
+  assert.match(converted.note, /标点自动规范化：弯引号\/直双引号→直角引号 1 处/);
+
+  const voided = results.find((item) => item.index === 2);
+  assert.equal(voided.status, "suggestion");
+  assert.equal(voided.done, false);
+  assert.equal(voided.note.includes("修改结果："), false, "作废的弯引号文本不能留给写回");
+  assert.match(voided.note, /无法确定性转换为「」的弯引号/);
+});
+
 test("模型删掉成对标记内侧的句末点号时按目标列规范补回，并在备注与统计里留痕", async () => {
   // 真实回归（第 1087 行）：目标列整行括注，点号落在括号内，模型判「括号内句末添加了多余的句号」
   // 并在改写里删掉了它。句末点号的位置是目标列语言的规范问题，原文省略不等于译文该省。

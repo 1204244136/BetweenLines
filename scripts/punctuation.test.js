@@ -27,6 +27,32 @@ test("中文语境里的半角标点整体转全角", () => {
   assert.equal(fix("沉默。。。"), "沉默……");
   assert.equal(fix("(测试)通过"), "（测试）通过");
   assert.equal(fix("他(test)说"), "他（test）说", "括号前紧邻中文 → 整对转全角，不留半对");
+  assert.equal(fix("传来了“咔哒”一声。"), "传来了「咔哒」一声。");
+  assert.equal(fix('他说"这样吗"?'), "他说「这样吗」？");
+});
+
+test("中文语境的弯引号与直双引号统一成直角引号，英文语境与撇号不动", () => {
+  const curly = normalizeTargetPunctuation("传来了“咔哒”一声。");
+  assert.equal(curly.text, "传来了「咔哒」一声。");
+  assert.equal(curly.quotes, 1);
+  assert.equal(curly.unresolvedQuotes, 0);
+  assert.equal(curly.changed, true);
+  assert.equal(curly.toFull, 0, "引号体例不是标点宽度");
+
+  const straight = normalizeTargetPunctuation('他说"这样吗"?');
+  assert.equal(straight.text, "他说「这样吗」？");
+  assert.equal(straight.quotes, 1);
+
+  const englishCurly = normalizeTargetPunctuation("He said “hello”.");
+  assert.equal(englishCurly.text, "He said “hello”.", "英文整句里的英文引号不硬转");
+  assert.equal(englishCurly.quotes, 0);
+  assert.equal(englishCurly.unresolvedQuotes, 2, "残留弯引号交给调用方作废转人工");
+
+  const englishStraight = normalizeTargetPunctuation('He said "hello".');
+  assert.equal(englishStraight.text, 'He said "hello".');
+  assert.equal(englishStraight.changed, false);
+  assert.equal(englishStraight.unresolvedQuotes, 0, "英文直双引号不属于成品弯引号门禁");
+  assert.equal(fix("don't change"), "don't change", "撇号不当作单引号处理");
 });
 
 test("整行只有标点或拟声符号时不被当成英文（整卷实测过的误判）", () => {
@@ -92,7 +118,14 @@ test("空值与纯文本不受影响", () => {
     assert.equal(result.text, text);
     assert.equal(result.changed, false);
   }
-  assert.deepEqual(normalizeTargetPunctuation(null), { text: "", changed: false, toFull: 0, toHalf: 0 });
+  assert.deepEqual(normalizeTargetPunctuation(null), {
+    text: "",
+    changed: false,
+    toFull: 0,
+    toHalf: 0,
+    quotes: 0,
+    unresolvedQuotes: 0,
+  });
 });
 
 test("被删掉的成对标记内侧句末点号要补回来", () => {

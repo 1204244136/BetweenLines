@@ -183,11 +183,14 @@ const status = {
   formatParagraphs: 0,
   formatNoteFields: 0,
   formatVoids: 0,
-  // 标点规范化：多少行的修改结果被统一过标点宽度/补回过句末点号、各多少处（见 punctuation.js）。
+  // 标点规范化：多少行的修改结果被统一过标点宽度/引号体例/补回过句末点号、各多少处（见 punctuation.js）。
   punctEnabled: true,
   punctFixes: 0,
   punctToFull: 0,
   punctToHalf: 0,
+  punctQuotes: 0,
+  // 无法确定性配对的弯引号会作废整条修订结果并转人工，不让它进入成品。
+  punctQuoteVoids: 0,
   // 补回成对标记（引号/括号）内侧被模型删掉的句末点号的处数——原文省略不等于译文该省。
   punctRestored: 0,
   termTables: { files: [], entries: 0 },
@@ -285,11 +288,13 @@ function clientStatus(options = {}) {
     formatParagraphs: status.formatParagraphs,
     formatNoteFields: status.formatNoteFields,
     formatVoids: status.formatVoids,
-    // 标点规范化：这一层是否启用、多少行的修改结果被改过、宽度两个方向与补回句末点号各多少处。
+    // 标点规范化：这一层是否启用、多少行的修改结果被改过、宽度/引号与补回句末点号各多少处。
     punctEnabled: status.punctEnabled,
     punctFixes: status.punctFixes,
     punctToFull: status.punctToFull,
     punctToHalf: status.punctToHalf,
+    punctQuotes: status.punctQuotes,
+    punctQuoteVoids: status.punctQuoteVoids,
     punctRestored: status.punctRestored,
     webLookups: status.webLookups,
     webLookupResolved: status.webLookupResolved,
@@ -511,6 +516,8 @@ function resetStatus(config, rowsLength) {
   status.punctFixes = 0;
   status.punctToFull = 0;
   status.punctToHalf = 0;
+  status.punctQuotes = 0;
+  status.punctQuoteVoids = 0;
   status.punctRestored = 0;
   // 线上查询层：多少行模型判断不了而进入查证、一共问了几轮、其中多少行据此得出结论。
   status.webLookups = 0;
@@ -932,13 +939,19 @@ function finish() {
     if (!status.formatFixes && !status.formatVoids && status.formatEnabled === false) {
       pushLog("成品格式门禁：已关闭。");
     }
-    if (status.punctFixes) {
+    if (status.punctToFull || status.punctToHalf) {
       pushLog(`标点规范化：${status.punctFixes} 行的修改结果统一了标点宽度（半角→全角 ${status.punctToFull} 处，全角→半角 ${status.punctToHalf} 处）；英文句子保持半角。`);
+    }
+    if (status.punctQuotes) {
+      pushLog(`标点规范化：把 ${status.punctQuotes} 处中文语境的双引号统一成直角引号「」。`);
+    }
+    if (status.punctQuoteVoids) {
+      pushLog(`标点规范化：${status.punctQuoteVoids} 行的修改结果含无法确定性配对的弯引号，已作废并转人工确认。`);
     }
     if (status.punctRestored) {
       pushLog(`标点规范化：补回 ${status.punctRestored} 处被删掉的句末点号（引号/括号内侧的句末点号是中文规范写法，原文省略不等于译文该省）。`);
     }
-    if (!status.punctFixes && !status.punctRestored && status.punctEnabled === false) {
+    if (!status.punctFixes && !status.punctQuoteVoids && !status.punctRestored && status.punctEnabled === false) {
       pushLog("标点规范化：已关闭。");
     }
   }
@@ -1119,8 +1132,8 @@ async function proofreadRow(row, allRows, config, labels) {
   // 换行/`<br>`，段结构或 noteref 标记对不上就作废转人工。放在标点规范化之前，因为它会改变文本结构
   // （标点工序的内联标记“先摘后还原”也要求标记结构已经稳定）。
   decision = applyFormatGuard(decision, row, config, targetText);
-  // 标点规范化（确定性工序）：中文语境的标点统一成全角、英文句子保持半角，并补回被删掉的
-  // 成对标记内侧句末点号。放在护栏之前，因为它只动标点、不改字符集；
+  // 标点规范化（确定性工序）：中文语境的标点统一成全角、英文句子保持半角，双引号统一成直角引号，
+  // 并补回被删掉的成对标记内侧句末点号。放在护栏之前，因为它只动标点、不改字符集；
   // 改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
   decision = normalizeDecisionPunctuation(decision, row, config, targetText);
   // 输出侧兜底（最后一关）：模型把原文文字写进修订结果时作废它——这种文本会被人工直接写回成品。
@@ -1653,7 +1666,8 @@ function contextItemChars(item) {
 
 /**
  * 标点规范化层：把模型给出的修订结果按语境统一标点宽度（中文全角、英文半角），
- * 并补回被模型删掉的成对标记内侧句末点号，见 `punctuation.js`。
+ * 把中文语境的可配对双引号统一成直角引号，并补回被模型删掉的成对标记内侧句末点号，
+ * 见 `punctuation.js`。
  *
  * 为什么要有这一层：成品规范要求中文正文全角标点、完整句的句末点号落在引号/括号内侧，
  * 而提示词只能“要求”做不到“保证”——实测模型会在自己的 revisedText 里打出「......」，
@@ -1661,28 +1675,49 @@ function contextItemChars(item) {
  * （真实回归：第 898 行与第 1087 行）。备注里的「修改结果：」会被人工直接写回成品，
  * 所以这里做一次确定性统一与补回。
  *
- * 三条纪律：**只动标点**（不动任何其他字符，也不重排语序）；**英文句子保持半角**
+ * 四条纪律：**只动标点**（不动任何其他字符，也不重排语序）；**英文句子保持半角**
  * （反向还原要求正向 ASCII 证据，见 `punctuation.js` 的 `isLatinContext`）；
- * **改了什么必须留痕**——计数走 `status.punctFixes`/`punctToFull`/`punctToHalf`/`punctRestored`，
+ * **无法确定性配对的弯引号作废转人工**；**改了什么必须留痕**——计数走
+ * `status.punctFixes`/`punctToFull`/`punctToHalf`/`punctQuotes`/`punctQuoteVoids`/`punctRestored`，
  * 备注的分析栏里写一行「标点自动规范化：…」（说明行必须排在「修改结果：」之前，见 `analysisLines`）。
  */
 function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
   if (!config?.punctNormalize || !decision?.revisedText) return decision;
   const width = normalizeTargetPunctuation(decision.revisedText);
+  if (width.unresolvedQuotes) {
+    status.punctQuoteVoids += 1;
+    pushLog(`第 ${row.index} 行：修改结果含无法确定性配对的弯引号，已作废并转人工确认。`);
+    return {
+      ...decision,
+      revisedText: "",
+      suggestion: "",
+      punctFix: null,
+      quoteVoid: true,
+      needsContext: true,
+      better: "unclear",
+      severity: "none",
+      summary: [
+        String(decision.summary || "").trim(),
+        "模型给出的修改结果含无法确定性转换为「」的弯引号（可能未配对或处在英文语境），已作废并转人工确认——成品引号必须使用「」/『』。",
+      ].filter(Boolean).join(" "),
+    };
+  }
   const terminal = restoreTerminalPunctuation(targetText, width.text);
   if (!width.changed && !terminal.changed) return decision;
   status.punctFixes += 1;
   status.punctToFull += width.toFull;
   status.punctToHalf += width.toHalf;
+  status.punctQuotes += width.quotes;
   status.punctRestored += terminal.restored;
   const detail = [];
   if (width.toFull || width.toHalf) detail.push(`半角→全角 ${width.toFull} 处，全角→半角 ${width.toHalf} 处`);
+  if (width.quotes) detail.push(`双引号→直角引号 ${width.quotes} 处`);
   if (terminal.restored) detail.push(`补回引号/括号内的句末点号 ${terminal.restored} 处`);
   pushLog(`第 ${row.index} 行：修改结果的标点已按成品写法统一（${detail.join("；")}）。`);
   return {
     ...decision,
     revisedText: terminal.text,
-    punctFix: { toFull: width.toFull, toHalf: width.toHalf, restored: terminal.restored },
+    punctFix: { toFull: width.toFull, toHalf: width.toHalf, quotes: width.quotes, restored: terminal.restored },
   };
 }
 
@@ -2612,6 +2647,7 @@ function punctFixLine(decision) {
   const parts = [];
   if (fix.toFull) parts.push(`半角→全角 ${fix.toFull} 处`);
   if (fix.toHalf) parts.push(`全角→半角 ${fix.toHalf} 处`);
+  if (fix.quotes) parts.push(`弯引号/直双引号→直角引号 ${fix.quotes} 处`);
   if (fix.restored) parts.push(`补回引号/括号内的句末点号 ${fix.restored} 处`);
   if (!parts.length) return "";
   // 宽度口径的括注只在真的动过宽度时才出现；只补回句末点号时那句话与它无关。
