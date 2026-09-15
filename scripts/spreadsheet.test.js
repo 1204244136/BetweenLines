@@ -88,3 +88,42 @@ test("术语表复用同一读取器：稀疏 xlsx 不错位，csv 引号字段�
   fs.writeFileSync(csv, 'Base_Ori,Ruby_Ori,Base_Trans\n【乙】【丙】,"おつ,へい",乙丙\n', "utf8");
   assert.deepEqual(loadGlossary(csv).map((entry) => [entry.original, entry.rubyOriginal, entry.translation]), [["【乙】【丙】", "おつ,へい", "乙丙"]]);
 });
+
+// 模拟 ASCII-only 导出的 xlsx：非 ASCII 字符写成数字字符引用，`&`/`<`/`>` 写成命名实体
+// （真实故障表就是 openpyxl 写出的这种文件：`sheet1.xml` 里 >127 的字节数为 0）。
+function asciiOnlyEscape(text) {
+  return [...String(text)].map((char) => {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    if (char === ">") return "&gt;";
+    return char.charCodeAt(0) > 127 ? `&#${char.charCodeAt(0)};` : char;
+  }).join("");
+}
+
+test("ASCII-only 导出的 xlsx：数字字符引用要解回真实字符", async () => {
+  const file = path.join(tempDir, "ascii-only.xlsx");
+  await writeSparseXlsx(file, [
+    HEADERS,
+    ["甲系列", "【魔術】", "まじゅつ", "魔法", "", "", "术语", "", ""].map(asciiOnlyEscape),
+    // 正文真想写「&#39764;」时 XML 里是 `&amp;#39764;`：只解一次，不能再退成「魔」。
+    ["甲系列", asciiOnlyEscape("&#39764;"), "", "假词条", "", "", "术语", "", ""],
+  ]);
+
+  const { rows } = readSpreadsheet(file);
+  assert.equal(rows[1][1], "【魔術】");
+  assert.equal(rows[1][3], "魔法");
+  assert.equal(rows[2][1], "&#39764;", "转义在解析时就解完了，不能再解第二次");
+
+  const { records } = readRecords(file);
+  assert.equal(records[0].base_ori, "【魔術】");
+  assert.equal(records[0].base_trans, "魔法");
+
+  // 端到端：对照表靠「按原文首字分桶 + 字面包含」匹配，未解码时条目会整体落进 `&` 桶，
+  // 正文里没有任何 `&`，于是中日文条目一条都命中不了（这正是术语段整段为空的根因）。
+  const { loadTermTables, findTermHits } = require("../src/workbenches/translation-compare/ai/term-table");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+  assert.equal(tables.entries.some((entry) => entry.plainSource === "魔術" && entry.plainTarget === "魔法"), true);
+  const hits = findTermHits("魔術を使う。", tables, { target: "使用魔法。" });
+  assert.equal(hits.some((hit) => hit.entry.plainSource === "魔術"), true);
+});

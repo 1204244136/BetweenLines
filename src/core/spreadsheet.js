@@ -11,6 +11,16 @@ const path = require("path");
 const zlib = require("zlib");
 const { XMLParser } = require("fast-xml-parser");
 
+// xlsx 的单元格文本可能整表被 ASCII-only 转义：`魔術師` 写成 `&#39764;&#34899;&#24072;`
+// （真实故障的译名对照表是 openpyxl 写出的：`sheet1.xml` 1,622,103 字节里 >127 的字节数为 0，
+// 17,602 个文本单元格里 14,894 个是这种数字字符引用）。fast-xml-parser 默认只解 XML 预定义实体
+// （`&amp;`/`&lt;`…），数字字符引用原样返回——读出来的「原文」形如 `&#39764;&#34899;&#24072;`，
+// 按首字分桶全落进 `&` 桶，中日文条目一条也匹配不上（表现是术语段整段为空、模型只能按通用词典
+// 猜译名；整卷 3350 行的命中数为 5，解码后是 824）。
+// 库里的开关就是 `htmlEntities`（内部正是作为 `numericAllowed` 传给实体解码器的）：打开后
+// 数字字符引用与 `&nbsp;`/`&mdash;` 这类 HTML 命名实体一起解掉。解码与命名实体处理在同一次
+// 扫描里完成，所以正文真想写 `&#39764;` 时 XML 里的 `&amp;#39764;` 只会退成字面量 `&#39764;`，
+// 不会被二次解码成 `魔`——这一点由 `scripts/spreadsheet.test.js` 的用例守着。
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
@@ -19,6 +29,7 @@ const parser = new XMLParser({
   trimValues: true,
   parseTagValue: false,
   parseAttributeValue: false,
+  htmlEntities: true,
 });
 
 const asArray = (value) => (value == null ? [] : (Array.isArray(value) ? value : [value]));
