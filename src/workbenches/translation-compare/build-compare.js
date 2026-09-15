@@ -630,12 +630,25 @@ function pivotRangeOf(group) {
   };
 }
 
+/** 一张表格行只能包含一段原文；旧快照仍带多段原文组时要求重新对齐，不能猜测配对。 */
+function assertSingleJpParagraphGroups(groups) {
+  for (const group of groups) {
+    const items = Array.isArray(group.items) ? group.items : [];
+    if (items.length <= 1) continue;
+    throw new Error(
+      `原文对齐组 ${group.jpStart}:${group.jpEnd} 包含 ${items.length} 个原文段落；`
+      + "工作台要求一张表格行只对应一段原文，请重新运行 npm run align:jp。"
+    );
+  }
+  return groups;
+}
+
 function loadJpGroupAlignmentList(jp) {
   const alignFile = path.join(outputDir, "jp-align.json");
   if (!fs.existsSync(alignFile)) return [];
 
   const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
-  return (data.groups || [])
+  const groups = (data.groups || [])
     .map((group) => ({ group, range: pivotRangeOf(group) }))
     .filter(({ range }) => range.start != null && range.end != null && range.start !== range.end)
     .filter(({ group }) => group.jpStart !== group.jpEnd)
@@ -652,6 +665,7 @@ function loadJpGroupAlignmentList(jp) {
         (_, index) => ({ sourceIndex: range.start + index })
       ),
     }));
+  return assertSingleJpParagraphGroups(groups);
 }
 
 function loadJpPivotLang(comparisonMode = "trilingual") {
@@ -1255,6 +1269,7 @@ module.exports = {
   restorableModelOptions,
   resolveModelOptions,
   rowFieldsFor,
+  assertSingleJpParagraphGroups,
   toCsv,
   workbenchClientRows,
 };

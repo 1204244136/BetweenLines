@@ -17,6 +17,7 @@ const {
   restorableModelOptions,
   resolveModelOptions,
   rowFieldsFor,
+  assertSingleJpParagraphGroups,
   toCsv,
   workbenchClientRows,
 } = require("./build-compare");
@@ -53,6 +54,18 @@ test("model option cache is restored only for the API base URL that produced it"
   assert.deepEqual(restorableModelOptions(cached), ["new-model"]);
   assert.deepEqual(restorableModelOptions({ ...cached, baseUrl: "https://other.example/v1" }), []);
   assert.deepEqual(restorableModelOptions({ ...cached, modelOptionsBaseUrl: undefined }), []);
+});
+
+test("旧快照里的多段原文对齐组要求重新对齐，不猜测逐段配对", () => {
+  assert.throws(() => assertSingleJpParagraphGroups([{
+    relation: "2:2",
+    jpStart: 10,
+    jpEnd: 12,
+    pivotStart: 20,
+    pivotEnd: 22,
+    items: [{ text: "原文一" }, { text: "原文二" }],
+    pivotItems: [{ sourceIndex: 21 }, { sourceIndex: 20 }],
+  }]), /一张表格行只对应一段原文/);
 });
 
 test("bilingual workbench fixes AI target to B and omits C", () => {

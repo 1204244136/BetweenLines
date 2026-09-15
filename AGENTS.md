@@ -38,8 +38,8 @@ index-X 结构与命名规范契约：
 
 ## 不变量
 
-- 原文段落不可拆分。原文只能以完整段落为单位参与 `1:1`、`1:2`、`2:1`、`2:2` 或更大合并组。
-- 非原文段落可以为对齐、diff 和展示进行拆分或合并。
+- 表格行与原文段落保持 `1:1`：一张表格行只允许包含一个原文段落，原文不得拆分、合并或跨行复用。
+- 非原文段落可以为对齐、diff 和展示进行拆分或合并，因此一份原文段落仍可对应多段译文。
 - 产物必须按比较模式生成：双语模式的 `input-selection.json`、`paragraphs.json`、`jp-align.json`、`translation-compare.{json,csv,html}`、AI 提示词和控制台日志里都不允许出现第三列（`tw`、`台版`、`参考文本`、`非原文 C`）的键、标签、空占位或 hidden 控件；三语模式则必须完整保留三列。判断依据是"该模式是否真的有这一列"，不是"有没有值"。
 - 上述模式裁剪不得改变 `projectKey`、`rowsSignature` 或 `signature`：它们是浏览器备注与写回定位的键，只能因源文本或对齐结果真实变化而变化。
 - 不要重新引入没有 reuse tracking 的 naive paragraph-number fallback。
@@ -76,13 +76,14 @@ index-X 结构与命名规范契约：
 
 5. `src/workbenches/translation-compare/align_jp.py`（`scripts/align_jp.py` 为兼容 CLI 入口）
    - 使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` 做跨语言语义对齐。
+   - 对齐移动只允许 `1:1`、`1:2`、`1:0`、`0:1`：每张表格行最多包含一个原文段落；译文侧仍可一段拆成多段。
    - 当 `torch.cuda.is_available()` 为 true 时使用 CUDA/ROCm 暴露的加速后端，否则使用 CPU，除非 accelerator guard 阻止。
    - 写入当前构建目录的 `jp-align.json`，其中 `groups` 是唯一对齐数据；组内区间只用 `pivotStart`/`pivotEnd` 命名（不再有 `tw*` 别名，也不再写无消费方的段落级 `mapping`）。
    - 双语模式 pivot 固定为 `cn`，日志按模式称呼该列（译文 / 非原文）。
 
 6. `src/workbenches/translation-compare/build-compare.js`
    - 三语模式对齐两份非原文文本；双语模式不做该步，直接把主文本段落作为技术 pivot 单元。
-   - 读取跨语言 `groups`（`pivotStart`/`pivotEnd`，兼容旧快照的 `twStart`/`twEnd`）。
+   - 读取跨语言 `groups`（`pivotStart`/`pivotEnd`，兼容旧快照的 `twStart`/`twEnd`）。旧快照里的同数量多段原文组按原顺序拆成 `1:1`；原文段数多于目标段数时拒绝构建并提示重新运行 `npm run align:jp`。
    - 按技术 pivot interval 合并不同方向的对齐组。
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`，页面也不渲染不属于该模式的控件（不是 `hidden`）。裁剪只删字段，不改变 `signature`/`rowsSignature` 的取值。
    - 输出 HTML、CSV、JSON。

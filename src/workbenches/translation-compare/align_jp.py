@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from itertools import permutations
 from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -32,10 +33,12 @@ PROGRESS_ENV = os.environ.get("TRANS_COMPARATOR_PROGRESS")
 SHOW_PROGRESS = PROGRESS_ENV.lower() not in ("0", "false", "no") if PROGRESS_ENV is not None else sys.stderr.isatty()
 MACHINE_PROGRESS = os.environ.get("TRANS_COMPARATOR_MACHINE_PROGRESS") == "1"
 PROGRESS_PREFIX = "@@transcomparator-progress@@"
+# 原文段落是表格行的最小单位：一张表格行只对应一段原文。
+# 2:2 只作为“相邻两段发生换序”的暂存组，随后按逐段相似度配成两个 1:1；
+# 译文侧仍允许多段对应一段原文（1:2），但不能把多段原文合成一行。
 MOVES = (
     (1, 1),
     (1, 2),
-    (2, 1),
     (2, 2),
     (1, 0),
     (0, 1),
@@ -226,7 +229,47 @@ def align_groups(jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
         j = pivot_start
 
     groups.reverse()
-    return groups
+    return split_reordered_groups(groups, jp_vecs, pivot_vecs)
+
+
+def split_reordered_groups(groups: list[dict], jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
+    """把 2:2 换序组配成两个 1:1，确保一张表格行只对应一段原文。"""
+    split_groups = []
+    for group in groups:
+        jp_size = int(group["jpEnd"]) - int(group["jpStart"])
+        pivot_size = int(group["pivotEnd"]) - int(group["pivotStart"])
+        if jp_size <= 1:
+            split_groups.append(group)
+            continue
+        if jp_size != pivot_size:
+            raise ValueError(f"原文对齐组 {group['jpStart']}:{group['jpEnd']} 无法保证一段原文一行")
+
+        jp_start = int(group["jpStart"])
+        pivot_start = int(group["pivotStart"])
+        offsets = range(jp_size)
+        best = max(
+            permutations(offsets),
+            key=lambda assignment: sum(
+                float(jp_vecs[jp_start + jp_offset] @ pivot_vecs[pivot_start + pivot_offset])
+                for jp_offset, pivot_offset in enumerate(assignment)
+            ),
+        )
+        for jp_offset, pivot_offset in enumerate(best):
+            jp_index = jp_start + jp_offset
+            pivot_index = pivot_start + pivot_offset
+            split_groups.append(
+                {
+                    "jpStart": jp_index,
+                    "jpEnd": jp_index + 1,
+                    "pivotStart": pivot_index,
+                    "pivotEnd": pivot_index + 1,
+                    "score": round(float(jp_vecs[jp_index] @ pivot_vecs[pivot_index]), 4),
+                    "relation": "1:1",
+                }
+            )
+
+    split_groups.sort(key=lambda group: (int(group["jpStart"]), int(group["pivotStart"])))
+    return split_groups
 
 
 
