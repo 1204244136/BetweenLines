@@ -379,12 +379,17 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
     const entry = entryOf(item);
     if (!entry.hasLiteralHabit) continue;
     if (!hasHabitOccurrence(jp, entry)) continue;
-    const noSpecialHandling = habitRuleMode(entry) === "no-special";
+    const mode = habitRuleMode(entry);
+    const noSpecialHandling = mode === "no-special";
     candidates.push({
       character: entry.character,
       type: entry.type,
       habit: entry.habit,
       expected: entry.versions.x || "",
+      // 处置方式随之带出，供 `speakerCheckBlock` 按**真实原因**分组说明“为什么只作线索”：
+      // 这一层不重新推一遍判据（口径只有 `habitRuleMode` 一处），`ai-proofread.js` 的 user 载荷
+      // 也不转述它——模型只需要事实（谁、什么类型、期望写法、可不可判流失）。
+      mode,
       noSpecialHandling,
       forbiddenWritings: noSpecialHandling
         ? [
@@ -465,6 +470,9 @@ function isSameShapeWriting(entry) {
  * - no-special：X版为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
  * - clue-only：没有本项目写法，也只作为说话人线索；
  * - none：缺少字面口癖或类型不可靠，不进提示词。
+ *
+ * 这个取值同时作为候选的 `mode`（`habitCandidatesForRow`）与 `speakerCheckBlock` 给线索候选分组
+ * 说明“为什么只作线索”的唯一依据：判据只在这一处，拼块那侧不得再推一遍（否则两处必然漂移）。
  */
 function habitRuleMode(entry) {
   if (!entry || !entry.hasLiteralHabit) return "none";
@@ -510,9 +518,16 @@ function speechHabitBlockForRow({ chapter = "", row = null, characters = [], vol
 /**
  * 说话人判断与习惯处理的提示块：附在章级习惯之后，只在有候选时出现。
  *
- * 候选分两类，口径必须写清：表里已经登记「本项目写法」的口癖才拿来判断译文是否流失这个特色；
- * 没有写法的条目（例如只填了备注“通常放在句尾”）只说明“这句可能是谁在说”，**不能**用来判
- * 译文遗漏——没有比对基准，模型只能凭感觉补一句，那是误报的源头。两类都保留，但要求分开处理。
+ * 候选按**能不能判译文遗漏**分三类：① 登记了本项目写法且类型可靠（`fixed`）→ 可按写法判特色流失
+ * 并给最小补回；② X版为 `-`（`no-special`）→ 注入“不得采用网翻/台版写法”，但不判缺漏；③ 其余
+ * （`locked` 同形锁定写法 / `clue-only` 未登记写法 / `none` 类型或长度不适合逐字比对）只说明
+ * “这句可能是谁在说”，**不能**用来判译文遗漏——没有可比对的基准，模型只能凭感觉补一句，
+ * 那是误报的源头。三类都保留，但要求分开处理。
+ *
+ * 第 ③ 类内部还必须**按真实原因分组**（分组键就是条目自己的 `mode`，这里不重推判据）：它们的
+ * “不能判缺漏”理由各不相同，混成一句就必然对其中一部分说出不成立的理由——表里登记了写法的条目
+ * （`locked`、`none`）被告知“本项目尚未登记这些口癖的译法”时，与同一请求里章级块的
+ * 「本项目写作「力」」以及 user 载荷里的 `expected` 直接矛盾，模型会按“没登记”去处理本该保留的写法。
  */
 function speakerCheckBlock({ chapter, candidates = [] } = {}) {
   if (!candidates.length) return "";
@@ -520,6 +535,12 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
   const writable = candidates.filter((candidate) => candidate.detectable);
   const noSpecial = candidates.filter((candidate) => candidate.noSpecialHandling);
   const clueOnly = candidates.filter((candidate) => !candidate.detectable && !candidate.noSpecialHandling);
+  // 线索候选按真实原因分组。认不出原因时（`mode` 缺失，例如调用方手工造候选）走兜底那一行：
+  // 一条候选都不许被静默丢掉，但也不给它编一个不成立的理由。
+  const unregistered = clueOnly.filter((candidate) => candidate.mode === "clue-only");
+  const unreliable = clueOnly.filter((candidate) => candidate.mode === "none");
+  const sameShape = clueOnly.filter((candidate) => candidate.mode === "locked");
+  const unattributed = clueOnly.filter((candidate) => !["clue-only", "none", "locked"].includes(candidate.mode));
   const list = (items) => items.map((candidate) => `${candidate.character}「${candidate.habit}」`).join("、");
   const lines = [
     `【说话人判断（本章）】本行原文出现了说话习惯特征，候选说话人：${names.join("、")}（本章/本卷出现过该角色）。`,
@@ -540,8 +561,17 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
     }).join("、");
     lines.push(`本项目明确不作特殊翻译处理的口癖：${noSpecialList}；不得据此判译文缺漏、扣分或要求补写。`);
   }
-  if (clueOnly.length) {
-    lines.push(`只作说话人线索、不得据此判译文遗漏的口癖：${list(clueOnly)}（本项目尚未登记这些口癖的译法，缺少比对基准；不要因为译文里没有对应写法就判缺漏、扣分或要求补写）。`);
+  if (unregistered.length) {
+    lines.push(`只作说话人线索、不得据此判译文遗漏的口癖：${list(unregistered)}（本项目尚未登记这些口癖的译法，缺少比对基准；不要因为译文里没有对应写法就判缺漏、扣分或要求补写）。`);
+  }
+  if (unreliable.length) {
+    lines.push(`类型或长度不足以按字面比对、因而只作说话人线索的口癖：${list(unreliable)}（这类用法要么不以字面出现为准（句式、称谓、短句等靠结构体现），要么类型尚未确认，要么是单字口癖会撞上普通词；本项目即使登记了写法也不能据此判译文缺漏、扣分或要求补写）。`);
+  }
+  if (sameShape.length) {
+    lines.push(`与日文同形、只用于保留既有写法的口癖：${list(sameShape)}（写法和日文一致，保留它不算错字或译错；不要因为译文里没有别的写法就判缺漏、扣分或要求补写）。`);
+  }
+  if (unattributed.length) {
+    lines.push(`只作说话人线索、不得据此判译文遗漏的口癖：${list(unattributed)}（不要因为译文里没有对应写法就判缺漏、扣分或要求补写）。`);
   }
   return lines.join("\n");
 }

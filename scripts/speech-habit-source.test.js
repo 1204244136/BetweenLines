@@ -38,6 +38,15 @@ function loadFixture() {
   return loadSpeechTables([file]);
 }
 
+// 单个用例专用的独立表（不干扰 loadFixture 的固定夹具）。
+function loadHabitCsv(lines, name) {
+  const file = path.join(tempDir, name);
+  fs.writeFileSync(file, lines.join("\n"), "utf8");
+  const tables = loadSpeechTables([file]);
+  assert.deepEqual(tables.errors, []);
+  return tables;
+}
+
 // 造一棵最小 index-X 日文原文树：<root>/.cache/epub-work/japanese-text/[S3_01]…/item/xhtml/*.xhtml
 function writeFakeJapaneseSource(root, { volumeCode = "S3_01", files }) {
   const dir = path.join(root, ".cache", "epub-work", "japanese-text", `[${volumeCode}]某作品(01)`);
@@ -114,6 +123,51 @@ test("说话人判断段落要求先定人、再处理习惯", () => {
   assert.match(block, /speaker 字段/);
   assert.match(block, /甲野一郎「オレ」/);
   assert.equal(speakerCheckBlock({ chapter: "第一章", candidates: [] }), "");
+});
+
+test("只作线索的候选按真实原因分组：登记了写法的条目不会被说成“尚未登记译法”", () => {
+  const tables = loadHabitCsv([
+    "小说首次出现,角色,口癖,类型,x版,网翻,台版（转简中）,备注",
+    // 类型留空：登记了写法，但这类用法不以字面出现为准
+    "S1_01,己川六郎,やめてよね,,可别啦,,,有变体：やめてよ",
+    // 真正没有登记写法
+    "S1_01,庚川七郎,あたし,第一人称,,,,",
+    // 写法与日文同形的锁定写法
+    "S1_01,辛川八郎,力,名词后缀,力,,,XX力",
+  ], "habits-clue-reasons.csv");
+  const row = {
+    index: 1,
+    chapter: "第一章",
+    jp: "「やめてよね」と己川六郎。「あたし」と庚川七郎。「力」と辛川八郎。",
+    cn: "「住手啦」己川六郎说。「我」庚川七郎说。「力」辛川八郎说。",
+  };
+  const candidates = habitCandidatesForRow({ row, characters: detectCharacters({ rows: [row], tables }) });
+  const modeOf = (name) => candidates.find((candidate) => candidate.character === name).mode;
+  assert.equal(modeOf("己川六郎"), "none", "类型留空 → 不以字面出现为准");
+  assert.equal(modeOf("庚川七郎"), "clue-only", "没有 X版 写法 → 未登记");
+  assert.equal(modeOf("辛川八郎"), "locked", "写法与日文同形 → 锁定写法");
+  assert.equal(candidates.every((candidate) => candidate.detectable === false), true, "三者都不能用来判特色流失");
+
+  const block = speakerCheckBlock({ chapter: row.chapter, candidates });
+  // 取「角色「口癖」」那一行（首行的候选名单里也有名字，不能用它来断言）
+  const lineOf = (name) => block.split("\n").find((line) => line.includes(`${name}「`));
+  // 一条都不许被静默丢掉
+  for (const candidate of candidates) {
+    assert.ok(lineOf(candidate.character), `${candidate.character} 必须出现在说话人判断段里`);
+  }
+  // 三类原因各说各的：只有真正未登记写法的条目才能被说成“尚未登记译法”
+  assert.match(lineOf("庚川七郎"), /尚未登记这些口癖的译法/);
+  assert.doesNotMatch(lineOf("己川六郎"), /尚未登记/);
+  assert.match(lineOf("己川六郎"), /己川六郎「やめてよね」/);
+  assert.doesNotMatch(lineOf("辛川八郎"), /尚未登记/);
+  assert.match(lineOf("辛川八郎"), /写法和日文一致/);
+  // 三行是互不相同的分组，且都保留“不得据此判缺漏”
+  assert.notEqual(lineOf("己川六郎"), lineOf("庚川七郎"));
+  assert.notEqual(lineOf("己川六郎"), lineOf("辛川八郎"));
+  assert.notEqual(lineOf("庚川七郎"), lineOf("辛川八郎"));
+  for (const name of ["己川六郎", "庚川七郎", "辛川八郎"]) {
+    assert.match(lineOf(name), /判缺漏|判译文缺漏/);
+  }
 });
 
 test("说话人判断随请求注入，并写入结果备注", () => {

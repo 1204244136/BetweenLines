@@ -1969,7 +1969,9 @@ function buildMessages(payload, config = {}) {
     profile: { id: contract.profileId, name: contract.profileName },
     // 说话习惯层：完整规则与说话人判断口径都在系统提示词的【说话习惯】【说话人判断】段落里，
     // 这里只给出本行/本卷的范围与候选事实（谁、什么类型、期望写法、能否用于判断流失），
-    // 不再复述规则句子。detectable=false 的候选只作说话人线索：表里没登记写法，不能判译文遗漏。
+    // 不再复述规则句子。detectable=false 的候选只作说话人线索：理由有三种（未登记写法 /
+    // 类型或长度不适合逐字比对 / 与日文同形的锁定写法），由系统提示词的说话人判断段按真实原因
+    // 分开说明；这里只给事实（含 expected），不要把原因压成一句转述给模型。
     ...(payload.speechHabit?.speakerCheck ? {
       speakerCheck: {
         chapter: payload.speechHabit.speakerCheck.chapter,
