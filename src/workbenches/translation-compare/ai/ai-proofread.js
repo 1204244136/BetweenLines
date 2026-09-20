@@ -1029,6 +1029,17 @@ async function proofreadRow(row, allRows, config, labels) {
     };
     pushLog(`第 ${row.index} 行：原文短式开头在下一行同头重复，已自动带入下一行作承接上下文。`);
   }
+  const inferredSubject = findInferredSubjectContext(row.index, allRows, targetKey);
+  if (inferredSubject) {
+    for (const candidate of inferredSubject.candidates) {
+      includeContextRow(contextState, candidate.row, candidate.relative, inferredSubject.relation);
+    }
+    basePayload.inferredSubject = {
+      relation: inferredSubject.relation,
+      pronoun: inferredSubject.pronoun,
+    };
+    pushLog(`第 ${row.index} 行：译文引入原文未直接给出的人称代词「${inferredSubject.pronoun}」，已自动带入前序上下文作指代依据。`);
+  }
   // 低分归因层：极低分的行不能直接当“逐句误译”处理。基础轮一旦判出极低分，本轮起就按归因口径继续问，
   // 并把窗口一次扩到本行前后各 N 行（前后都没有行的行无从复核，自动跳过）。一旦触发就持续生效，
   // 保证同一行的判断口径前后一致。触发判断放在**拿到结论之后**：模型给出定论时主循环本来就要 break，
@@ -1574,6 +1585,47 @@ function findContinuationContext(rowIndex, rows, targetKey) {
   };
 }
 
+const CHINESE_THIRD_PERSON_PRONOUNS = /(?<![其吉维利排自])([他她它](?:们)?)(?![人])/u;
+const JAPANESE_THIRD_PERSON_PRONOUNS = /(?:彼(?:ら|女(?:ら)?)?|あいつ(?:ら)?|やつ(?:ら)?|奴(?:ら)?|こいつ(?:ら)?|そいつ(?:ら)?|アイツ(?:ラ)?|ヤツ(?:ラ)?|コイツ(?:ラ)?|ソイツ(?:ラ)?)/u;
+
+/**
+ * 找出当前行是否在原文未直接给出第三人称代词的情况下，译文补充了第三人称代词（如「他/她/它/他们/她们/它们」）。
+ * 若成立，则将同章前序 1~2 行作为指代依据主动带入基础轮请求，掐灭模型脱离前文脑补主体的空间。
+ */
+function findInferredSubjectContext(rowIndex, rows, targetKey) {
+  const position = rows.findIndex((item) => Number(item.index) === Number(rowIndex));
+  if (position <= 0) return null;
+  const row = rows[position];
+  const targetText = visibleInlineText(row?.[targetKey]);
+  const sourceText = visibleInlineText(row?.jp);
+  if (!targetText) return null;
+  const pronounMatch = targetText.match(CHINESE_THIRD_PERSON_PRONOUNS);
+  if (!pronounMatch) return null;
+  if (JAPANESE_THIRD_PERSON_PRONOUNS.test(sourceText)) return null;
+
+  const chapter = String(row?.chapter || "").trim();
+  const candidates = [];
+  const prevRow = rows[position - 1];
+  if (!prevRow || String(prevRow.chapter || "").trim() !== chapter) return null;
+  candidates.push({ row: prevRow, relative: -1 });
+
+  // 若前一行是纯对话（以引号包裹）或过短（<= 12 字符），且再前一行仍在同章，可额外带上前第二行
+  const prevSource = visibleInlineText(prevRow.jp);
+  const isQuoteOnly = /^[\s「『“‘（(【[][\s\S]*[」』”’）)】\]]$/u.test(prevSource);
+  if ((isQuoteOnly || [...prevSource].length <= 12) && position >= 2) {
+    const prevPrevRow = rows[position - 2];
+    if (prevPrevRow && String(prevPrevRow.chapter || "").trim() === chapter) {
+      candidates.unshift({ row: prevPrevRow, relative: -2 });
+    }
+  }
+
+  return {
+    candidates,
+    relation: "prev-row-inferred-subject",
+    pronoun: pronounMatch[1],
+  };
+}
+
 function createContextState(rowIndex, rows, targetKey, counterpartKey, proofreadMode = "trilingual") {
   const position = rows.findIndex((item) => Number(item.index) === Number(rowIndex));
   return {
@@ -2041,6 +2093,12 @@ function buildMessages(payload, config = {}) {
         targetEcho: payload.continuation.targetEcho === true,
       },
     } : {}),
+    ...(payload.inferredSubject ? {
+      inferredSubject: {
+        relation: payload.inferredSubject.relation,
+        pronoun: payload.inferredSubject.pronoun,
+      },
+    } : {}),
     modePolicy: bilingualMode
       ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
       : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
@@ -2055,6 +2113,9 @@ function buildMessages(payload, config = {}) {
         ? (payload.continuation.targetEcho
           ? "本行与下一行构成同头承接：目标列已经沿用同一承接开头，必须把它当作上下句递进装置，不能把本行当独立句改译成另一个含义；revisedText 仍只写本行。"
           : "本行原文是下一行开头的短式先现（同头承接）。目标列没有沿用同一开头时，要结合下一行判断能否自然承接；不能脱离下一行把本行当独立句改译。revisedText 仍只写本行。")
+        : "",
+      payload.inferredSubject
+        ? `目标列使用了原文未直接给出的代词「${payload.inferredSubject.pronoun}」，已自动带入前序上下文作为指代依据；请结合前文判断代词所指的行为主体是否成立，不得脱离前文臆测主体或误判为擅改主体。revisedText 仍只写本行。`
         : "",
     ].filter(Boolean).join(" "),
     // contextBudget（轮数/行数/字符上限）与 contextExpansion 是程序内部参数，模型无法也无需据此判断，
@@ -2671,6 +2732,7 @@ module.exports = {
   errorCircuitBreaker,
   extractClaudeText,
   findContinuationContext,
+  findInferredSubjectContext,
   guardTargetScript,
   hasTargetScriptLeak,
   isGptModel,

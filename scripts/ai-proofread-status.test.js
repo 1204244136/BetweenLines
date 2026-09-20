@@ -12,6 +12,7 @@ process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
 const {
   clearProofreadCache,
   clientStatus,
+  findInferredSubjectContext,
   guardTargetScript,
   hasTargetScriptLeak,
   startProofread,
@@ -444,6 +445,79 @@ test("原文短式先现在下一行同头重写时，基础轮主动带上下�
   assert.match(firstRow.contextPolicy, /不能把本行当独立句改译/);
   assert.equal(firstRow.continuation.relation, "next-row-same-opening");
   assert.equal(firstRow.continuation.targetEcho, true);
+  assert.equal(finished.errors, 0);
+});
+
+test("findInferredSubjectContext 准确识别代词与排除非代词，并按章节边界收窄", () => {
+  const rows = [
+    { index: 1, chapter: "第一章", jp: "おじさんはあちこちに視線を投げ、唇を嚙んで、俯いた。", cn: "大叔四处张望，咬着嘴唇，低下了头。" },
+    { index: 2, chapter: "第一章", jp: "それから白井黒子の体をそっと寝かせると、弾かれたように走り出す。", cn: "然后他轻轻放下了白井黑子的身体，像弹簧一样猛地跑了出去。" },
+    { index: 3, chapter: "第一章", jp: "彼は走り出した。", cn: "他跑了出去。" }, // 原文已有彼
+    { index: 4, chapter: "第一章", jp: "他の人達は皆帰ってしまった。", cn: "其他的人都离开了。" }, // 其他
+    { index: 5, chapter: "第一章", jp: "ギターを弾く少年がいる。", cn: "有一个弹吉他的少年。" }, // 吉他
+    { index: 6, chapter: "第二章", jp: "彼女の容態を確認する。", cn: "她摇了摇头。" }, // 跨章节
+  ];
+
+  // 行 2：中文补他、日文无代词、同章上一行在大叔 → 命中
+  const res2 = findInferredSubjectContext(2, rows, "cn");
+  assert.ok(res2);
+  assert.equal(res2.pronoun, "他");
+  assert.equal(res2.relation, "prev-row-inferred-subject");
+  assert.equal(res2.candidates.length, 1);
+  assert.equal(res2.candidates[0].row.index, 1);
+  assert.equal(res2.candidates[0].relative, -1);
+
+  // 行 3：原文已有「彼」→ 不判定为推断代词
+  assert.equal(findInferredSubjectContext(3, rows, "cn"), null);
+
+  // 行 4、5：「其他」「吉他」非代词 → 不触发
+  assert.equal(findInferredSubjectContext(4, rows, "cn"), null);
+  assert.equal(findInferredSubjectContext(5, rows, "cn"), null);
+
+  // 行 6：上一行在第一章，本行在第二章 → 跨章不带入
+  assert.equal(findInferredSubjectContext(6, rows, "cn"), null);
+});
+
+test("译文引入原文未直接给出的第三人称代词时，基础轮主动带上前序上下文作指代依据", async () => {
+  const payloads = [];
+  const { finished } = await runProofreadAgainst({
+    label: "inferred-subject",
+    rowCount: 2,
+    rowsFor: (index) => index === 1
+      ? {
+        chapter: "第一章",
+        jp: "おじさんはあちこちに視線を投げ、唇を嚙んで、俯いた。",
+        cn: "大叔四处张望，咬着嘴唇，低下了头。",
+      }
+      : {
+        chapter: "第一章",
+        jp: "それから白井黒子の体をそっと寝かせると、弾かれたように走り出す。",
+        cn: "然后他轻轻放下了白井黑子的身体，像弹簧一样猛地跑了出去。",
+      },
+    respond: (_count, response) => {
+      let body = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        payloads.push(JSON.parse(JSON.parse(body).messages[1].content));
+        response.end(passingDecisionBody);
+      });
+    },
+  });
+
+  const secondRow = payloads.find((payload) => payload.row.index === 2);
+  assert.ok(secondRow, "第二行没有发出基础轮请求");
+  assert.equal(secondRow.nearbyRows.length, 1);
+  assert.equal(secondRow.nearbyRows[0].index, 1);
+  assert.equal(secondRow.nearbyRows[0].relative, -1);
+  assert.equal(secondRow.nearbyRows[0].relation, "prev-row-inferred-subject");
+  assert.match(secondRow.nearbyRows[0].source, /^おじさんは/);
+  assert.match(secondRow.nearbyRows[0].target, /^大叔四处张望/);
+  assert.match(secondRow.contextPolicy, /目标列使用了原文未直接给出的代词「他」/);
+  assert.match(secondRow.contextPolicy, /请结合前文判断代词所指的行为主体是否成立/);
+  assert.equal(secondRow.inferredSubject.relation, "prev-row-inferred-subject");
+  assert.equal(secondRow.inferredSubject.pronoun, "他");
   assert.equal(finished.errors, 0);
 });
 
