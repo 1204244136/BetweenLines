@@ -66,7 +66,7 @@ test("bilingual and trilingual workbenches use different default prompts", () =>
   assert.match(bilingual, /不要假设存在另一份译文/);
   // 日文常省略主语，中文需要按习惯补出：该要求在双语契约里必须始终存在。
   assert.match(bilingual, /按中文习惯适当补上缺失的主语/);
-  assert.match(bilingual, /不得新增原文没有的行为主体/);
+  assert.match(bilingual, /只要其指代符合前文已确立的行为主体/);
   assert.match(bilingual, /EPUB 注释标记/);
   assert.match(trilingual, /B、C 是同级非原文材料/);
   assert.match(trilingual, /better=counterpart/);
