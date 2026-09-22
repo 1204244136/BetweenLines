@@ -1042,6 +1042,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
         <div id="notesRecoveryPreview"></div>
         <div class="notes-dialog-actions"><button id="cancelNotesRecovery" class="btn btn--ghost" type="button" autofocus>取消</button><button id="applyNotesRecovery" class="btn btn--primary" type="button">找回记录</button></div>
       </dialog>
+      <dialog id="aiConfirmDialog" class="notes-recovery-dialog ai-confirm-dialog" aria-labelledby="aiConfirmTitle">
+        <h2 id="aiConfirmTitle">启动 AI 校对</h2>
+        <p id="aiConfirmMessage" class="ai-confirm-message"></p>
+        <div class="notes-dialog-actions">
+          <button id="aiConfirmCancel" class="btn btn--ghost" type="button" autofocus>取消</button>
+          <button id="aiConfirmKeep" class="btn btn--subtle" type="button">保留并开始</button>
+          <button id="aiConfirmClear" class="btn btn--primary" type="button">清空并开始</button>
+        </div>
+      </dialog>
     </div>
     <main class="wrap">
       <div class="table-frame">

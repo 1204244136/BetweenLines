@@ -346,6 +346,13 @@
       confirm: document.getElementById("prefilterConfirm"),
       stop: document.getElementById("prefilterStop"),
     };
+    const aiConfirmIds = {
+      dialog: document.getElementById("aiConfirmDialog"),
+      message: document.getElementById("aiConfirmMessage"),
+      cancel: document.getElementById("aiConfirmCancel"),
+      keep: document.getElementById("aiConfirmKeep"),
+      clear: document.getElementById("aiConfirmClear"),
+    };
     const appliedAiResults = new Set();
     const aiActiveIds = new Set();
     const clearedAiRunIds = new Set();
@@ -2840,7 +2847,66 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) flushNotes();
     });
-    aiIds.start.addEventListener("click", async () => {
+    function hasUnconfirmedAiProofreadNote(item) {
+      if (!item || item.manualDone) return false;
+      const note = String(item.note || "").trim();
+      if (!note) return false;
+      if (automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note)) return true;
+      return note.split(/\n\n+/).some((part) => part.trim().startsWith("[AI校对]"));
+    }
+
+    function countUnconfirmedAiProofreadNotes() {
+      let count = 0;
+      for (const [, item] of Object.entries(notes)) {
+        if (hasUnconfirmedAiProofreadNote(item)) count += 1;
+      }
+      return count;
+    }
+
+    function clearUnconfirmedAiProofreadNotes() {
+      let clearedCount = 0;
+      for (const [id, item] of Object.entries(notes)) {
+        if (!item || item.manualDone) continue;
+        const note = String(item.note || "").trim();
+        if (!note) continue;
+        const isFullAiNote = automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note);
+        if (isFullAiNote) {
+          item.note = "";
+          item.revisionText = "";
+          item.revisionTarget = "";
+          item.aiDone = false;
+          cleanAiFailureState(item);
+          pruneEmptyNote(id);
+          clearedCount += 1;
+        } else if (note.split(/\n\n+/).some((part) => part.trim().startsWith("[AI校对]"))) {
+          const remainingParts = note.split(/\n\n+/).filter((part) => !part.trim().startsWith("[AI校对]"));
+          item.note = remainingParts.join("\n\n").trim();
+          const remainingAutomated = parseAutomatedNote(item.note);
+          if (remainingAutomated?.revision) {
+            item.revisionText = remainingAutomated.revision;
+          } else {
+            item.revisionText = "";
+            item.revisionTarget = "";
+          }
+          item.aiDone = Boolean(hasAutomatedDecisionNote(item.note));
+          cleanAiFailureState(item);
+          pruneEmptyNote(id);
+          clearedCount += 1;
+        }
+      }
+      if (clearedCount > 0) {
+        if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
+        appliedAiResults.clear();
+        aiActiveIds.clear();
+        updateRenderedAiActive();
+        saveNotes();
+        applyFilters({ reset: false });
+        updateDoneCount();
+      }
+      return clearedCount;
+    }
+
+    async function startAiProofread() {
       aiIds.start.disabled = true;
       aiIds.status.dataset.cacheCleared = "";
       aiIds.panel.open = true;
@@ -2859,6 +2925,50 @@
         showToast(error.message, { tone: "error", durationMs: 12000 });
         aiIds.start.disabled = false;
       }
+    }
+
+    if (aiConfirmIds.dialog) {
+      if (aiConfirmIds.clear) {
+        aiConfirmIds.clear.addEventListener("click", async () => {
+          aiConfirmIds.dialog.close();
+          const cleared = clearUnconfirmedAiProofreadNotes();
+          if (cleared > 0) {
+            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
+          }
+          await startAiProofread();
+        });
+      }
+      if (aiConfirmIds.keep) {
+        aiConfirmIds.keep.addEventListener("click", async () => {
+          aiConfirmIds.dialog.close();
+          await startAiProofread();
+        });
+      }
+      if (aiConfirmIds.cancel) {
+        aiConfirmIds.cancel.addEventListener("click", () => {
+          aiConfirmIds.dialog.close();
+        });
+      }
+    }
+
+    aiIds.start.addEventListener("click", async () => {
+      const unconfirmedCount = countUnconfirmedAiProofreadNotes();
+      if (unconfirmedCount > 0) {
+        if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
+          if (aiConfirmIds.message) {
+            aiConfirmIds.message.innerHTML = `检测到之前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。<br>是否在开始本次校对前清空这些信息？`;
+          }
+          aiConfirmIds.dialog.showModal();
+          return;
+        }
+        if (confirm(`是否清空之前未人工确认的 ${unconfirmedCount} 条 AI 校对信息？\n\n点击「确定」：清空未确认信息后开始校对\n点击「取消」：保留现有信息直接开始校对`)) {
+          const cleared = clearUnconfirmedAiProofreadNotes();
+          if (cleared > 0) {
+            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
+          }
+        }
+      }
+      await startAiProofread();
     });
     aiIds.stop.addEventListener("click", async () => {
       aiIds.stop.disabled = true;

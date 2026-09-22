@@ -384,6 +384,9 @@
     .notes-preview-samples span { margin-left: var(--space-2); color: var(--muted); font-size: var(--fs-caption); }
     .notes-preview-samples p { margin: var(--space-1) 0 0; overflow-wrap: anywhere; font-size: 13px; }
     .notes-dialog-actions { justify-content: flex-end; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+    .ai-confirm-dialog { width: min(480px, calc(100vw - 32px)); }
+    .ai-confirm-message { margin: var(--space-4) 0; font-size: 14px; line-height: 1.6; color: var(--text); }
+    .ai-confirm-message strong { color: var(--accent); }
     @media (max-width: 760px) {
       .notes-space-row { grid-template-columns: 1fr; gap: var(--space-2); }
       .notes-space-actions { justify-content: flex-start; }
