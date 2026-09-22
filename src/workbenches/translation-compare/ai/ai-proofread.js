@@ -38,6 +38,7 @@ const {
   extractClaudeText,
   isGptModel,
   normalizeNonGptTemperature,
+  testModelConnectivity,
 } = require("../../../ai/llm-client");
 const toTw = OpenCC.Converter({ from: "cn", to: "tw" });
 const { loadGlossary, glossaryPrompt } = require("./glossary");
@@ -905,6 +906,30 @@ async function listModels(input = {}) {
     }
     throw error;
   }
+}
+
+async function testModel(input = {}) {
+  const model = String(input.model || "").trim();
+  const config = cleanConfig({ ...input, model: model || "placeholder" });
+  if (!model) {
+    return {
+      ok: false,
+      provider: config.provider,
+      model: "",
+      latencyMs: 0,
+      error: "未选择或填写模型名称，请先选择或输入模型。",
+      code: "MISSING_MODEL",
+      httpStatus: null,
+      message: "模型连通失败：未选择或填写模型名称，请先选择或输入模型。",
+    };
+  }
+  return testModelConnectivity({
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model,
+    reasoningEffort: config.reasoningEffort,
+  });
 }
 
 function normalizeModelList(items, provider, modelsDevData = null) {
@@ -3548,4 +3573,5 @@ module.exports = {
   runStage3Arbiter,
   finalizeRowResult,
   proofreadRow,
+  testModel,
 };

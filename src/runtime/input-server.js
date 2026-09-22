@@ -25,6 +25,7 @@ const {
   startPrefilter,
   startProofread,
   stopProofread,
+  testModel,
 } = require("../workbenches/translation-compare/ai/ai-proofread");
 const {
   activateProject,
@@ -50,6 +51,7 @@ const {
 } = require("../workbenches/speaker-attribution/ai/speaker-inference");
 const {
   listProviderModels,
+  testModelConnectivity,
 } = require("../ai/llm-client");
 
 const rootDir = path.join(__dirname, "..", "..");
@@ -732,6 +734,17 @@ async function handleApi(req, res, pathname, searchParams) {
       return;
     }
 
+    if (req.method === "POST" && pathname === "/api/ai-proofread/test") {
+      try {
+        const payload = await readJson(req);
+        const result = await testModel(payload);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error.message || String(error) });
+      }
+      return;
+    }
+
     if (req.method === "POST" && pathname === "/api/ai-proofread/start") {
       const payload = await readJson(req);
       try {
@@ -776,6 +789,17 @@ async function handleApi(req, res, pathname, searchParams) {
         const payload = await readJson(req);
         const models = await listProviderModels(payload);
         sendJson(res, 200, { ok: true, models });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error.message || String(error) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/speaker-ai/test") {
+      try {
+        const payload = await readJson(req);
+        const result = await testModelConnectivity(payload);
+        sendJson(res, 200, result);
       } catch (error) {
         sendJson(res, 400, { ok: false, error: error.message || String(error) });
       }

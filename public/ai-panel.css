@@ -309,8 +309,17 @@ details[open] > summary .details-toggle::before {
 }
 .ai-model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+.ai-model-actions {
+  display: flex;
+  gap: 6px;
+}
+.ai-model-actions button {
+  min-width: 48px;
+  padding: 0 10px;
+  white-space: nowrap;
 }
 /* 并发与智能并发设置 */
 .ai-concurrency-inputs,

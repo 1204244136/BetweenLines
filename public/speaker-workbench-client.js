@@ -738,6 +738,7 @@
   const aiBaseUrl = document.getElementById("speakerAiBaseUrl");
   const aiApiKey = document.getElementById("speakerAiApiKey");
   const aiModel = document.getElementById("speakerAiModel");
+  const aiTestModelBtn = document.getElementById("speakerAiTestModel");
   const aiRefreshModelsBtn = document.getElementById("speakerAiRefreshModels");
   const aiReasoningField = document.getElementById("speakerAiReasoningField");
   const aiReasoningEffort = document.getElementById("speakerAiReasoningEffort");
@@ -1308,6 +1309,46 @@
     }
   }
 
+  async function testAiModel() {
+    if (!aiBaseUrl || !aiBaseUrl.value.trim()) {
+      showModelHint("请先填写 API 地址 (Base URL)。", { isError: true });
+      return;
+    }
+    const requestedModel = aiModel?.value?.trim() || "";
+    if (!requestedModel) {
+      showModelHint("请先选择或输入模型名称。", { isError: true });
+      return;
+    }
+    if (aiTestModelBtn) aiTestModelBtn.disabled = true;
+    showModelHint("正在测试模型连通性...", { timeout: 0 });
+
+    try {
+      const resp = await apiFetch("/api/speaker-ai/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: aiProvider?.value || "compatible",
+          baseUrl: aiBaseUrl.value.trim(),
+          apiKey: aiApiKey?.value || "",
+          model: requestedModel,
+          reasoningEffort: aiReasoningEffort?.value || "",
+        }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        const preview = data.replyPreview ? " 回复：「" + data.replyPreview.slice(0, 20) + "」" : "";
+        showModelHint("连通成功（" + data.latencyMs + "ms）：" + (data.model || requestedModel) + " 响应正常。" + preview, { timeout: 8000 });
+      } else {
+        const lat = data.latencyMs ? "耗时 " + data.latencyMs + "ms，" : "";
+        showModelHint("连通失败（" + lat + (data.error || "未知错误") + "）", { isError: true, timeout: 12000 });
+      }
+    } catch (err) {
+      showModelHint("连通测试请求异常：" + (err.message || String(err)), { isError: true, timeout: 12000 });
+    } finally {
+      if (aiTestModelBtn) aiTestModelBtn.disabled = false;
+    }
+  }
+
   function clearAiPredictions() {
     if (aiRunning) stopAiInference();
     localStorage.removeItem(AI_PREDICTIONS_KEY);
@@ -1321,6 +1362,7 @@
     renderVisibleRows(false);
   }
 
+  if (aiTestModelBtn) aiTestModelBtn.addEventListener("click", testAiModel);
   if (aiRefreshModelsBtn) aiRefreshModelsBtn.addEventListener("click", refreshAiModels);
   if (aiStartBtn) aiStartBtn.addEventListener("click", startAiInference);
   if (aiStopBtn) aiStopBtn.addEventListener("click", stopAiInference);

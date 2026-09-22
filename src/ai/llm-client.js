@@ -362,6 +362,228 @@ async function listProviderModels(config = {}, options = {}) {
   return models;
 }
 
+function diagnoseConnectivityError(error, context = {}) {
+  const rawMessage = error?.message || String(error || "");
+  const httpStatus = error?.httpStatus || (rawMessage.match(/HTTP (\d+)/i) ? Number(RegExp.$1) : null);
+  const code = error?.code || error?.cause?.code || "";
+
+  if (code === "ECONNREFUSED" || error?.cause?.code === "ECONNREFUSED" || /ECONNREFUSED/i.test(rawMessage)) {
+    return {
+      message: "无法连接到接口服务（连接被拒绝），请检查服务是否已启动、端口是否正确。",
+      code: "CONNECTION_REFUSED",
+      httpStatus,
+    };
+  }
+  if (code === "ENOTFOUND" || error?.cause?.code === "ENOTFOUND" || /ENOTFOUND/i.test(rawMessage)) {
+    return {
+      message: "域名解析失败（ENOTFOUND），请检查接口地址的主机名是否正确。",
+      code: "DNS_RESOLUTION_FAILED",
+      httpStatus,
+    };
+  }
+  if (code === "REQUEST_TIMEOUT" || error?.name === "TimeoutError" || /超时/i.test(rawMessage)) {
+    return {
+      message: "请求超时，网络连接超时或模型响应过慢。",
+      code: "REQUEST_TIMEOUT",
+      httpStatus,
+    };
+  }
+  if (httpStatus === 401) {
+    return {
+      message: "认证失败（HTTP 401）：API Key 无效或未提供，请检查 API Key 配置。",
+      code: "UNAUTHORIZED",
+      httpStatus: 401,
+    };
+  }
+  if (httpStatus === 403) {
+    return {
+      message: "访问受限（HTTP 403）：没有权限访问该接口/模型或所在地区受限。",
+      code: "FORBIDDEN",
+      httpStatus: 403,
+    };
+  }
+  if (httpStatus === 404) {
+    const modelHint = context.model ? `「${context.model}」` : "";
+    return {
+      message: `模型或端点不存在（HTTP 404）：请确认模型名称${modelHint}是否正确，或接口路径是否匹配。`,
+      code: "NOT_FOUND",
+      httpStatus: 404,
+    };
+  }
+  if (httpStatus === 429) {
+    return {
+      message: "请求受限或额度不足（HTTP 429）：遭遇并发频控（Rate Limit）或账户余额不足。",
+      code: "RATE_LIMITED",
+      httpStatus: 429,
+    };
+  }
+  if (httpStatus >= 500) {
+    return {
+      message: `模型服务端异常（HTTP ${httpStatus}）：服务提供方内部发生错误，请稍后重试。`,
+      code: "SERVER_ERROR",
+      httpStatus,
+    };
+  }
+  if (code === "INVALID_JSON_RESPONSE") {
+    return {
+      message: "接口返回了非 JSON 响应，可能是网关、反向代理或登录页拦截并返回了 HTML。",
+      code: "INVALID_JSON_RESPONSE",
+      httpStatus,
+    };
+  }
+  return {
+    message: rawMessage || "连通性测试失败，未知错误。",
+    code: code || "UNKNOWN_ERROR",
+    httpStatus,
+  };
+}
+
+async function testModelConnectivity(config = {}, options = {}) {
+  const provider = config.provider === "claude" ? "claude" : "compatible";
+  const baseUrl = String(config.baseUrl || "").trim().replace(/\/+$/, "");
+  const model = String(config.model || "").trim();
+  const apiKey = String(config.apiKey || "").trim();
+  const timeoutMs = options.timeoutMs || config.timeoutMs || 15000;
+  const signal = options.signal || config.signal || null;
+
+  if (!baseUrl) {
+    return {
+      ok: false,
+      provider,
+      model,
+      latencyMs: 0,
+      error: "未填写接口地址，请先输入接口地址。",
+      code: "MISSING_BASE_URL",
+      httpStatus: null,
+      message: "模型连通失败：未填写接口地址，请先输入接口地址。",
+    };
+  }
+
+  if (!model) {
+    return {
+      ok: false,
+      provider,
+      model,
+      latencyMs: 0,
+      error: "未选择或填写模型名称，请先选择或输入模型。",
+      code: "MISSING_MODEL",
+      httpStatus: null,
+      message: "模型连通失败：未选择或填写模型名称，请先选择或输入模型。",
+    };
+  }
+
+  const startTime = Date.now();
+  const probeMessages = [{ role: "user", content: "Hi" }];
+
+  try {
+    if (provider === "claude") {
+      const endpoint = buildApiUrl(baseUrl || "https://api.anthropic.com", "/v1/messages");
+      const headers = buildProviderHeaders({ provider: "claude", apiKey });
+      const body = {
+        model,
+        max_tokens: 5,
+        messages: probeMessages,
+      };
+      const data = await fetchJson(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }, { timeoutMs, signal });
+
+      const latencyMs = Date.now() - startTime;
+      const replyPreview = extractClaudeText(data).trim();
+      const usage = {
+        promptTokens: Number(data.usage?.input_tokens) || 0,
+        completionTokens: Number(data.usage?.output_tokens) || 0,
+        totalTokens: (Number(data.usage?.input_tokens) || 0) + (Number(data.usage?.output_tokens) || 0),
+      };
+
+      return {
+        ok: true,
+        provider: "claude",
+        model,
+        latencyMs,
+        replyPreview,
+        usage,
+        message: `模型连通成功（耗时 ${latencyMs}ms）`,
+      };
+    }
+
+    const endpoint = buildApiUrl(baseUrl || "http://127.0.0.1:11434/v1", "/v1/chat/completions");
+    const headers = buildProviderHeaders({ provider: "compatible", apiKey });
+    const caps = detectModelCapabilities(model, provider);
+
+    const makeProbeBody = (useCompletionTokens) => {
+      const body = {
+        model,
+        messages: probeMessages,
+        stream: false,
+      };
+      if (useCompletionTokens) {
+        body.max_completion_tokens = 16;
+      } else {
+        body.max_tokens = 5;
+      }
+      return body;
+    };
+
+    const preferCompletionTokens = caps.reasoning || isGptModel(model);
+    let data;
+
+    try {
+      data = await fetchJson(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(makeProbeBody(preferCompletionTokens)),
+      }, { timeoutMs, signal });
+    } catch (err) {
+      const errText = String(err?.message || "");
+      const isTokenParamError = err?.httpStatus === 400 && (/max_tokens/i.test(errText) || /max_completion_tokens/i.test(errText));
+      if (isTokenParamError) {
+        data = await fetchJson(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(makeProbeBody(!preferCompletionTokens)),
+        }, { timeoutMs, signal: options.signal });
+      } else {
+        throw err;
+      }
+    }
+
+    const latencyMs = Date.now() - startTime;
+    const replyPreview = String(data.choices?.[0]?.message?.content || "").trim();
+    const usage = {
+      promptTokens: Number(data.usage?.prompt_tokens) || 0,
+      completionTokens: Number(data.usage?.completion_tokens) || 0,
+      totalTokens: Number(data.usage?.total_tokens) || 0,
+    };
+
+    return {
+      ok: true,
+      provider: "compatible",
+      model,
+      latencyMs,
+      replyPreview,
+      usage,
+      message: `模型连通成功（耗时 ${latencyMs}ms）`,
+    };
+  } catch (error) {
+    const latencyMs = Date.now() - startTime;
+    const diag = diagnoseConnectivityError(error, { model, baseUrl, provider });
+    return {
+      ok: false,
+      provider,
+      model,
+      latencyMs,
+      error: diag.message,
+      rawError: error.message || String(error),
+      httpStatus: diag.httpStatus || null,
+      code: diag.code || "UNKNOWN_ERROR",
+      message: `模型连通失败：${diag.message}`,
+    };
+  }
+}
+
 module.exports = {
   assertSafeOutboundUrl,
   buildApiUrl,
@@ -373,6 +595,8 @@ module.exports = {
   callChatCompletions,
   cleanJsonPayload,
   listProviderModels,
+  diagnoseConnectivityError,
+  testModelConnectivity,
   isGptModel,
   TEXT_INTENSITY_TEMPERATURE_MAP,
   normalizeNonGptTemperature,

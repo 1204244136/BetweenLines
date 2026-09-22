@@ -324,6 +324,7 @@
       model: document.getElementById("aiModel"),
       reasoningField: document.getElementById("aiReasoningField"),
       reasoningEffort: document.getElementById("aiReasoningEffort"),
+      testModel: document.getElementById("aiTestModel"),
       refreshModels: document.getElementById("aiRefreshModels"),
       apiKey: document.getElementById("aiApiKey"),
       proofreadMode: document.getElementById("aiProofreadMode"),
@@ -3111,6 +3112,55 @@
       updateInferenceSettingOptions();
     }
 
+    async function testAiModel() {
+      if (!aiIds.testModel) return;
+      aiIds.testModel.disabled = true;
+      const modelVal = String(aiIds.model?.value || "").trim();
+      const requestedProvider = aiIds.provider?.value || "";
+      const requestedBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl?.value || "");
+      const pendingToast = showToast("正在测试模型连通性...", { durationMs: 0 });
+      const finishTestHint = (message, options) => {
+        dismissToast(pendingToast);
+        showToast(message, options);
+      };
+      try {
+        const response = await apiFetch("/api/ai-proofread/test", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            provider: aiIds.provider?.value || "local",
+            baseUrl: aiIds.baseUrl?.value || "",
+            apiKey: aiIds.apiKey?.value || "",
+            model: modelVal,
+            reasoningEffort: aiIds.reasoningEffort?.value || "",
+          }),
+        });
+        const data = await response.json();
+        const currentBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl?.value || "");
+        if (aiIds.provider?.value !== requestedProvider || currentBaseUrl !== requestedBaseUrl) {
+          finishTestHint("接口配置已变更，已忽略旧配置的连通性测试结果。", { tone: "watch", durationMs: 8000 });
+          return;
+        }
+        if (data.ok) {
+          const detail = data.replyPreview ? ` 回复：「${data.replyPreview.slice(0, 24)}」` : "";
+          finishTestHint(`模型连通成功（${data.latencyMs}ms）：${data.model || modelVal} 响应正常。${detail}`, {
+            tone: "success",
+            durationMs: 8000,
+          });
+        } else {
+          const latencyMsg = data.latencyMs ? `耗时 ${data.latencyMs}ms，` : "";
+          finishTestHint(`模型连通失败（${latencyMsg}${data.error || "无法连通"}）`, {
+            tone: "error",
+            durationMs: 12000,
+          });
+        }
+      } catch (error) {
+        finishTestHint("测试连通性请求异常：" + error.message, { tone: "error", durationMs: 12000 });
+      } finally {
+        if (aiIds.testModel) aiIds.testModel.disabled = false;
+      }
+    }
+
     async function refreshAiModels() {
       aiIds.refreshModels.disabled = true;
       const requestedProvider = aiIds.provider.value;
@@ -3422,6 +3472,7 @@
       const selected = aiIds.profile.selectedOptions[0];
       showToast("特化规范：" + ((selected && selected.textContent) || aiIds.profile.value), { tone: "info", durationMs: 6000 });
     });
+    if (aiIds.testModel) aiIds.testModel.addEventListener("click", testAiModel);
     aiIds.refreshModels.addEventListener("click", refreshAiModels);
     prefilterIds.start.addEventListener("click", async () => {
       prefilterIds.start.disabled = true;
