@@ -212,10 +212,19 @@ details[open] > summary .details-toggle::before {
   white-space: nowrap;
 }
 
-.ai-preset-control select {
-  min-width: 160px;
+.ai-preset-control select,
+.ai-preset-control .select-combobox {
+  min-width: 210px;
   max-width: 320px;
   flex: 1 1 auto;
+}
+
+.ai-preset-control select {
+  height: 28px;
+  font-size: 12px;
+}
+
+.ai-preset-control .select-trigger {
   height: 28px;
   font-size: 12px;
 }
