@@ -333,6 +333,7 @@
       stop: document.getElementById("aiStop"),
       clearCache: document.getElementById("clearAiLog"),
       status: document.getElementById("aiStatus"),
+      panelState: document.getElementById("aiPanelState"),
       progressWrap: document.getElementById("aiProgressWrap"),
       progress: document.getElementById("aiProgress"),
       prompt: document.getElementById("aiPrompt"),
@@ -340,6 +341,7 @@
     };
     const prefilterIds = {
       panel: document.getElementById("prefilterPanel"),
+      panelState: document.getElementById("prefilterPanelState"),
       similarity: document.getElementById("prefilterSimilarity"),
       stats: document.getElementById("prefilterStats"),
       start: document.getElementById("prefilterStart"),
@@ -1027,6 +1029,11 @@
       prefilterIds.confirm.disabled = true;
       prefilterIds.stop.disabled = true;
       prefilterIds.stats.textContent = "尚未运行预筛选。";
+      if (prefilterIds.panelState) prefilterIds.panelState.textContent = "尚未运行";
+      if (aiIds.panelState) {
+        aiIds.panelState.textContent = "就绪";
+        aiIds.panelState.className = "ai-status-badge";
+      }
       aiIds.status.dataset.cacheCleared = "1";
       setRuntimeStatus(message);
       aiIds.progress.style.width = "0%";
@@ -1835,6 +1842,12 @@
       filteredRows = allRows.filter((row) => matchesFilter(row, q));
       renderVisibleRows({ reset });
       updatePrefilterConfirmButton();
+      const filterPanelState = document.getElementById("filterPanelState");
+      if (filterPanelState) {
+        filterPanelState.textContent = filteredRows.length === allRows.length
+          ? "未筛选"
+          : "筛选 " + filteredRows.length + "/" + allRows.length + " 行";
+      }
     }
 
     function scheduleFilter() {
@@ -2518,6 +2531,30 @@
         setRuntimeStatus(finishedStatus);
       } else if (ai.error) {
         setRuntimeStatus(ai.error);
+      }
+      if (aiIds.panelState) {
+        if (ai.running) {
+          aiIds.panelState.textContent = isPrefilter ? "预筛选中..." : "校对中...";
+          aiIds.panelState.className = "ai-status-badge is-running";
+        } else if (ai.finishedAt) {
+          aiIds.panelState.textContent = isPrefilter
+            ? (ai.stopRequested ? "预筛选已终止" : "预筛选完成")
+            : (ai.stopRequested ? "已终止" : "校对完成");
+          aiIds.panelState.className = "ai-status-badge";
+        } else if (ai.error) {
+          aiIds.panelState.textContent = "调用异常";
+          aiIds.panelState.className = "ai-status-badge";
+        } else {
+          aiIds.panelState.textContent = "就绪";
+          aiIds.panelState.className = "ai-status-badge";
+        }
+      }
+      if (prefilterIds.panelState && isPrefilter) {
+        if (ai.running) {
+          prefilterIds.panelState.textContent = "预筛选中...";
+        } else if (ai.finishedAt) {
+          prefilterIds.panelState.textContent = ai.stopRequested ? "预筛选已终止" : "预筛选完成";
+        }
       }
       // 抽屉默认折叠：一轮跑完时固定状态行可能根本没进过视野，所以同一轮结束再补一次浮动提示。
       // 只提示「本页看着它跑起来」的那一轮——打开页面时从服务端认领到的历史轮次不弹。

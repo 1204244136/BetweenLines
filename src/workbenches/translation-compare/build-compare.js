@@ -858,7 +858,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           </div>
         </details>
         <details id="aiPanel" class="panel-details ai-panel" aria-label="AI 校对">
-          <summary class="ai-panel-title"><span>AI 辅助校对 <span id="aiPanelState" class="ai-panel-state">尚未启动</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
+          <summary class="ai-panel-title"><span>AI 辅助校对</span><span id="aiPanelState" class="ai-status-badge">就绪</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
           <details id="aiConfigSection" class="ai-config-details" open><summary class="ai-section-summary">服务与任务设置</summary><div class="ai-config-stack">
             <section class="ai-config-band ai-service-band" aria-labelledby="aiServiceLabel">
               <div id="aiServiceLabel" class="ai-config-label">AI 服务</div>

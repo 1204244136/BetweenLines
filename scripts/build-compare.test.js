@@ -7,6 +7,7 @@ const vm = require("node:vm");
 
 const { createProjectContext } = require("./project-context");
 const { createNotesTools } = require("../src/workbenches/translation-compare/notes-spaces");
+const { createWorkbench } = require("./workbench-fixture");
 
 const {
   alignLegacyNotes,
@@ -172,7 +173,9 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(html, /<span[^>]*data-panel-group-state[^>]*>/, "父摘要应带状态字段供客户端同步");
   // 摘要行带实时状态字段（属性顺序不固定）
   assert.match(html, /<span[^>]*(?:id="prefilterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="prefilterPanelState")[^>]*>/);
-  assert.match(html, /<span[^>]*(?:id="aiPanelState"[^>]*class="ai-panel-state"|class="ai-panel-state"[^>]*id="aiPanelState")[^>]*>/);
+  assert.match(html, /<span[^>]*(?:id="aiPanelState"[^>]*class="ai-status-badge"|class="ai-status-badge"[^>]*id="aiPanelState")[^>]*>/);
+  assert.match(html, /<summary class="ai-panel-title"><span>AI 辅助校对<\/span>\s*<span[^>]*id="aiPanelState"[^>]*class="ai-status-badge"[^>]*>就绪<\/span>/, "栏位标题与状态徽章解耦，标题自身不包含状态标识");
+  assert.doesNotMatch(html, /<span>AI 辅助校对\s*<span/, "栏位标题内部不直接嵌套状态元素");
   assert.match(html, /<span[^>]*(?:id="filterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="filterPanelState")[^>]*>/);
   // 「筛选与批处理」收纳了搜索、筛选分段、显示开关与批量按钮：筛选在前、显示在中、批量落盘在后
   const filterPanel = html.slice(filterIdx, notesIdx);
@@ -557,4 +560,23 @@ test("重复内容的短行靠「同一行号 + 同一签名」认领，行集�
   assert.equal(shifted.sameIndex, 0);
   assert.equal(shifted.pairs.length, 22);
   assert.equal(shifted.unmatched, 2);
+});
+
+test("AI 辅助校对栏位标题与状态解耦，且状态徽章随任务运行动态更新", () => {
+  const ui = createWorkbench();
+
+  // 任务运行时动态切换为运行中状态，并赋予高亮类名
+  ui.run('renderAiStatus({ kind: "ai", running: true, queued: 10, modelProcessed: 1, total: 10, results: [] })');
+  assert.equal(ui.element("aiPanelState").textContent, "校对中...");
+  assert.equal(ui.element("aiPanelState").className, "ai-status-badge is-running");
+
+  // 任务完成时动态切换为完成状态
+  ui.run('renderAiStatus({ kind: "ai", running: false, finishedAt: "2026-01-01T00:00:00.000Z", queued: 10, modelProcessed: 10, total: 10, results: [] })');
+  assert.equal(ui.element("aiPanelState").textContent, "校对完成");
+  assert.equal(ui.element("aiPanelState").className, "ai-status-badge");
+
+  // 清除 AI 记录时恢复为就绪
+  ui.run("renderClearedAiStatus()");
+  assert.equal(ui.element("aiPanelState").textContent, "就绪");
+  assert.equal(ui.element("aiPanelState").className, "ai-status-badge");
 });
