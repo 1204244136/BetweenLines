@@ -986,7 +986,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               <span id="aiStageFastPassRate" class="ai-stage-badge" title="Fast Pass 高置信度直接通过率">Fast Pass: 0%</span>
             </div>
             <div class="ai-stage-cards">
-              <div class="ai-stage-card" title="Stage 1 Gatekeeper：事实性硬伤审查与直接通过">
+              <div class="ai-stage-card" id="stage1Card" data-filter-stage="1" title="Stage 1 Gatekeeper：事实性硬伤审查与直接通过（点击筛选通过行）">
                 <div class="ai-stage-card-head">
                   <span class="ai-stage-card-label">Stage 1 事实初审</span>
                   <select id="stage1PresetSelect" class="ai-stage-preset-select" title="Stage 1 模型预设（默认使用主配置）">
@@ -996,7 +996,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
                 <div class="ai-stage-card-sub">Fast Pass: <span id="metricFastPassHits">0</span></div>
               </div>
-              <div class="ai-stage-card" id="stage2Card" title="Stage 2 Stylist：文学责编复审与同行评议（不填代表不启用）">
+              <div class="ai-stage-card" id="stage2Card" data-filter-stage="2" title="Stage 2 Stylist：文学责编复审与同行评议（点击筛选复审行）">
                 <div class="ai-stage-card-head">
                   <span class="ai-stage-card-label">Stage 2 文学复审</span>
                   <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择 Stage 2 模型预设（不填代表不启用）">
@@ -1008,7 +1008,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
                 </div>
               </div>
-              <div class="ai-stage-card" id="stage3Card" title="Stage 3 Arbiter：初审与复审分歧仲裁（需先启用 Stage 2，不填代表不启用）">
+              <div class="ai-stage-card" id="stage3Card" data-filter-stage="3" title="Stage 3 Arbiter：初审与复审分歧仲裁（点击筛选仲裁行）">
                 <div class="ai-stage-card-head">
                   <span class="ai-stage-card-label">Stage 3 终审仲裁</span>
                   <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在 Stage 2 选择预设启用后，方可配置 Stage 3">

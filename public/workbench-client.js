@@ -643,7 +643,13 @@
      */
     function isNoteProseLine(line) {
       const text = String(line || "").trim();
-      return text.startsWith("格式自动规范化：") || text.startsWith("低分归因：") || text.startsWith("线上查证：") || text.startsWith("标点自动规范化：");
+      return text.startsWith("格式自动规范化：")
+        || text.startsWith("低分归因：")
+        || text.startsWith("线上查证：")
+        || text.startsWith("标点自动规范化：")
+        || text.startsWith("Gatekeeper初审：")
+        || text.startsWith("Stylist复审")
+        || text.startsWith("Arbiter仲裁");
     }
 
     function normalizeStoredNote(value) {
@@ -1545,7 +1551,19 @@
       const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
       if (!automatedNoteMarker(lines[0])) return null;
       if (isAiFailureNote(note)) return null;
-      const data = { semantic: "", modify: "", severity: "", grade: "", score: null, penalty: null, revision: "", analysis: "" };
+      const data = {
+        semantic: "",
+        modify: "",
+        severity: "",
+        grade: "",
+        score: null,
+        penalty: null,
+        revision: "",
+        analysis: "",
+        stage1: "",
+        stage2: null,
+        stage3: null,
+      };
       let currentField = "";
       for (const line of lines.slice(1)) {
         if (line.startsWith("语义是否相同：")) {
@@ -1553,6 +1571,27 @@
           currentField = "";
         } else if (line.startsWith("是否需要修改：")) {
           data.modify = line.slice("是否需要修改：".length).trim();
+          currentField = "";
+        } else if (line.startsWith("Gatekeeper初审：")) {
+          data.stage1 = line.slice("Gatekeeper初审：".length).trim();
+          currentField = "";
+        } else if (line.startsWith("Stylist复审")) {
+          const match = line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/);
+          if (match) {
+            data.stage2 = {
+              attitude: match[1] || "复审",
+              text: match[2]?.trim() || "",
+            };
+          }
+          currentField = "";
+        } else if (line.startsWith("Arbiter仲裁")) {
+          const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/);
+          if (match) {
+            data.stage3 = {
+              winner: match[1] || "裁决",
+              text: match[2]?.trim() || "",
+            };
+          }
           currentField = "";
         } else if (line.startsWith("质量评分：") || line.startsWith("评分：") || line.startsWith("翻译得分：")) {
           const match = line.match(/(\d+)\s*分?(?:（扣\s*(\d+)\s*分?）|\(扣\s*(\d+)\s*分?\))?/);
@@ -1644,6 +1683,31 @@
       const noteText = item?.note || "";
       const note = parseAutomatedNote(noteText);
       if (!note) return '<div class="note-summary" hidden></div>';
+
+      let pipelineHtml = "";
+      if (note.stage2 || note.stage3) {
+        const s2Attitude = note.stage2?.attitude || "复审";
+        let attCls = "is-stylist";
+        if (s2Attitude.includes("采纳")) attCls = "is-accept";
+        else if (s2Attitude.includes("调整")) attCls = "is-modify";
+        else if (s2Attitude.includes("驳回")) attCls = "is-reject";
+
+        const s3Winner = note.stage3?.winner || "仲裁";
+
+        pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" title="点击展开/收起多阶段审核轨迹">' +
+          '<span class="pipeline-step is-gk">初审</span>' +
+          '<span class="pipeline-arrow">➔</span>' +
+          '<span class="pipeline-step ' + attCls + '">复审·' + escapeHtml(s2Attitude) + '</span>' +
+          (note.stage3 ? '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-arbiter">仲裁·' + escapeHtml(s3Winner) + '</span>' : '') +
+          '<span class="pipeline-expand-hint">审核轨迹 ▾</span>' +
+        '</div>' +
+        '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '" hidden>' +
+          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ Stage 1: 事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
+          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ Stage 2: 文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
+          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ Stage 3: 终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
+        '</div>';
+      }
+
       const analysis = note.analysis
         ? '<div class="note-detail note-reason"><div class="note-detail-head"><span class="note-summary-key">分析</span></div><div class="note-summary-value">' + escapeHtml(note.analysis) + '</div></div>'
         : "";
@@ -1669,6 +1733,7 @@
         : "";
 
       return '<div class="note-summary">' +
+        pipelineHtml +
         '<div class="note-summary-line"><span class="note-summary-key">语义</span><span class="note-summary-value">' + escapeHtml(note.semantic || "待人工判定") + '</span></div>' +
         '<div class="note-summary-line"><span class="note-summary-key">修改</span><span class="note-summary-value">' + escapeHtml(note.modify || "待人工判定") + '</span></div>' +
         ratingLine +
@@ -2041,8 +2106,13 @@
         doneMode === "all" ||
         (doneMode === "open" && !isDone) ||
         (doneMode === "done" && isDone);
+      const rawNote = notes[id]?.note || "";
+      const matchesStage = !activeStageFilter ||
+        (activeStageFilter === "1" && (hasNote || isDone)) ||
+        (activeStageFilter === "2" && rawNote.includes("Stylist复审")) ||
+        (activeStageFilter === "3" && rawNote.includes("Arbiter仲裁"));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
-      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult;
+      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesStage;
     }
 
     function applyFilters({ reset = true } = {}) {
@@ -2136,6 +2206,18 @@
     });
 
     tbody.addEventListener("click", (event) => {
+      const pipelineBtn = event.target.closest("[data-pipeline-toggle]");
+      if (pipelineBtn) {
+        const rowId = pipelineBtn.dataset.pipelineToggle;
+        const details = document.getElementById("pipelineDetails_" + rowId);
+        if (details) {
+          details.hidden = !details.hidden;
+          const hint = pipelineBtn.querySelector(".pipeline-expand-hint");
+          if (hint) hint.textContent = details.hidden ? "审核轨迹 ▾" : "收起 ▴";
+          syncVisibleRowLayout();
+        }
+        return;
+      }
       const row = event.target.closest("tbody tr");
       if (!row) return;
       const previous = activeRowId ? renderedRow(activeRowId) : null;
@@ -2186,6 +2268,33 @@
       doneFilter.textContent = "未人工确认";
       applyFilters();
     });
+
+    let activeStageFilter = null;
+
+    function bindStageCardFilters() {
+      const cards = ["stage1Card", "stage2Card", "stage3Card"]
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+      cards.forEach((card) => {
+        card.addEventListener("click", (event) => {
+          if (event?.target?.closest && event.target.closest("select")) return;
+          const stage = card.dataset.filterStage;
+          if (activeStageFilter === stage) {
+            activeStageFilter = null;
+            card.classList.remove("is-active-filter");
+            showToast("已取消阶段筛选，展示全部行", { tone: "info", durationMs: 2500 });
+          } else {
+            cards.forEach((c) => c.classList.remove("is-active-filter"));
+            activeStageFilter = stage;
+            card.classList.add("is-active-filter");
+            const names = { "1": "Stage 1 事实初审", "2": "Stage 2 文学复审", "3": "Stage 3 终审仲裁" };
+            showToast("已筛选 " + names[stage] + " 相关行", { tone: "info", durationMs: 3000 });
+          }
+          applyFilters({ reset: true });
+        });
+      });
+    }
+    bindStageCardFilters();
     showSource.addEventListener("change", () => {
       document.documentElement.classList.toggle("hide-source", !showSource.checked);
       syncVisibleRowLayout();

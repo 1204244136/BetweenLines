@@ -649,6 +649,163 @@ details[open] > summary .details-toggle::before {
   text-overflow: ellipsis;
 }
 
+.ai-stage-card[data-filter-stage] {
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.ai-stage-card[data-filter-stage]:hover {
+  border-color: var(--ai-focus);
+}
+
+.ai-stage-card.is-active-filter {
+  border-color: var(--ai-focus) !important;
+  background: var(--ai-surface-selected) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ai-focus) 20%, transparent);
+}
+
+/* ---- 行内多阶段审核流转胶囊与展开卡片 ----------------------------------- */
+
+.stage-pipeline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  margin-bottom: 6px;
+  border-radius: 999px;
+  background: var(--ai-surface-subtle);
+  border: 1px solid var(--ai-line);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.stage-pipeline-badge:hover {
+  border-color: var(--ai-focus);
+  background: var(--ai-surface-selected);
+}
+
+.pipeline-step {
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.pipeline-step.is-gk {
+  color: var(--ai-muted);
+}
+
+.pipeline-step.is-stylist {
+  color: #6941c6;
+  background: #f9f5ff;
+}
+
+.pipeline-step.is-stylist.is-modify {
+  color: #b54708;
+  background: #fffaeb;
+}
+
+.pipeline-step.is-stylist.is-reject {
+  color: #c01048;
+  background: #fff1f3;
+}
+
+.pipeline-step.is-arbiter {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.pipeline-arrow {
+  font-size: 10px;
+  color: var(--ai-muted-2);
+}
+
+.pipeline-expand-hint {
+  font-size: 10px;
+  color: var(--ai-muted);
+  margin-left: 2px;
+}
+
+.stage-pipeline-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--ai-line-strong);
+  border-radius: var(--ai-radius-sm);
+  background: var(--ai-surface);
+}
+
+.stage-pipeline-details[hidden] {
+  display: none !important;
+}
+
+.stage-report-card {
+  padding: 6px 8px;
+  border-radius: var(--ai-radius-sm);
+  border: 1px solid var(--ai-line);
+  background: var(--ai-surface-subtle);
+}
+
+.stage-report-card.is-gk {
+  border-left: 3px solid #667085;
+}
+
+.stage-report-card.is-stylist {
+  border-left: 3px solid #7f56d9;
+}
+
+.stage-report-card.is-arbiter {
+  border-left: 3px solid #d97706;
+}
+
+.stage-report-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ai-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.stage-report-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+}
+
+.stage-report-tag.is-accept {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.stage-report-tag.is-modify {
+  background: #fffaeb;
+  color: #b54708;
+}
+
+.stage-report-tag.is-reject {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.stage-report-tag.is-arbiter {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.stage-report-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ai-text);
+  word-break: break-word;
+}
+
 /* ---- 响应式 ------------------------------------------------------------- */
 
 @media (max-width: 1100px) {
