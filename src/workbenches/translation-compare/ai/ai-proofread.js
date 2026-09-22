@@ -1012,6 +1012,15 @@ async function proofreadRow(row, allRows, config, labels) {
     };
     pushLog(`第 ${row.index} 行：译文引入原文未直接给出的人称代词「${inferredSubject.pronoun}」，已自动带入前序上下文作指代依据。`);
   }
+  const speechMerge = findSpeechMergeContext(row.index, allRows, targetKey);
+  if (speechMerge) {
+    includeContextRow(contextState, speechMerge.row, speechMerge.relative, speechMerge.relation);
+    basePayload.speechMerge = {
+      relation: speechMerge.relation,
+      verb: speechMerge.verb,
+    };
+    pushLog(`第 ${row.index} 行：原文为接续片段且译文含引述动词「${speechMerge.verb}」，已自动带入下一行作跨行核对依据。`);
+  }
   // 低分归因层：极低分的行不能直接当“逐句误译”处理。基础轮一旦判出极低分，本轮起就按归因口径继续问，
   // 并把窗口一次扩到本行前后各 N 行（前后都没有行的行无从复核，自动跳过）。一旦触发就持续生效，
   // 保证同一行的判断口径前后一致。触发判断放在**拿到结论之后**：模型给出定论时主循环本来就要 break，
@@ -1042,7 +1051,9 @@ async function proofreadRow(row, allRows, config, labels) {
       pushLog(`第 ${row.index} 行：扣分达到阈值（≥${config.lowScorePenalty} 分），转入低分归因复核（先解释低分原因再修，跨行错位为必查项，窗口 ±${config.lowScoreRows} 行）。`);
       continue;
     }
-    if (isAlignFragmentRow(row, targetKey)) {
+    const isPureFragment = isPureSymmetricFragmentRow(row, targetKey);
+    const hasGivenContext = contextState.items.length > 0;
+    if (isPureFragment || (isAlignFragmentRow(row, targetKey) && hasGivenContext)) {
       pushLog(`第 ${row.index} 行：判定为对齐片段行，不再扩展上下文，直接转人工确认。`);
       break;
     }
@@ -1434,6 +1445,35 @@ function isAlignFragmentRow(row, targetKey) {
   return isAlignFragmentText(row?.jp) || isAlignFragmentText(row?.[targetKey]);
 }
 
+const CHINESE_FRAGMENT_CONJUNCTION = /^(?:可是|但是|不过|不過|然而|而且|并且|並且|因此|所以|于是|於是|只是|但|可|若|如果|即使|虽然|雖然|尽管|儘管|另外|此外|同时|同時|那么|那麼|便|就)[。！？!?、，,]?$/u;
+const PURE_FRAGMENT_MAX_CHARS = 12;
+
+function isPureFragmentText(text, lang = "jp") {
+  const value = visibleInlineText(text);
+  if (!value) return true;
+  const stripped = value.replace(/^[\s「『“‘（(【[]+/u, "").replace(/[\s」』”’）)】\]。！？!?…‥、，,：:；;]+$/u, "").trim();
+  if (!stripped) return true;
+  if (lang === "jp") {
+    if (fragmentTrailingConjunction.test(stripped)) return true;
+  } else {
+    if (CHINESE_FRAGMENT_CONJUNCTION.test(stripped)) return true;
+  }
+  if (isAlignFragmentText(value) && [...value].length <= PURE_FRAGMENT_MAX_CHARS) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 纯对称片段行：两侧均为极短的残片或接续词（如「しかし、」↔「可是。」）。
+ * 这类行无论补多少上下文都不改变其片段本质，索要上下文时直接终局转人工。
+ */
+function isPureSymmetricFragmentRow(row, targetKey) {
+  const sourceIsPure = isPureFragmentText(row?.jp, "jp");
+  const targetIsPure = isPureFragmentText(row?.[targetKey], "cn");
+  return sourceIsPure && targetIsPure;
+}
+
 // 承接重复开头：短行是下一行开头的先现（例如「それは。」→「それはとても……」）。
 // 它不是靠收尾形态能判出的片段行，而是必须拿下一行才能看见的跨行结构；检测到后基础轮就带上下一行，
 // 避免模型把先现行的「それは / 虽然」当成独立指示代词或让步连词另行改译。
@@ -1529,6 +1569,50 @@ function findInferredSubjectContext(rowIndex, rows, targetKey) {
     candidates,
     relation: "prev-row-inferred-subject",
     pronoun: pronounMatch[1],
+  };
+}
+
+const SPEECH_MERGE_CHINESE_VERBS = /(?:问道|说道|喊道|答道|叹道|笑道|冷笑道|苦笑道|怒道|喝道|骂道|反问道|追问道|质问道|低语道|自语道|喃喃道|嘀咕道|心想|暗想|寻思|反问|询问|追问)[。！？!?]?\s*$/u;
+const SPEECH_MERGE_COLON_VERBS = /(?:说|问|道|想|喊|答|叹|叫)[：:]\s*$/u;
+const JAPANESE_EXPLICIT_SPEECH_VERBS = /(?:[言話訊尋問叫呟答述][っいたう]|思っ|考え)/u;
+const JAPANESE_SUSPENDED_TRAILING = /(?:[てで]|ながら|つつ|たり)[、,]?\s*$/u;
+
+/**
+ * 找出当前行是否在原文为悬挂接续片段（如以连用形「て、/で、」或顿号「、」收尾、且未直接给出言语动词），
+ * 而译文末尾包含了引述/言语动作动词（如「问道/说道/喊道/答道/反问」等）。
+ * 若成立，则将同章下一行作为跨行引语合并的核对依据主动带入基础轮，
+ * 避免模型因单行无法确证后文而停留在 needsContext 或被片段规则直接转人工。
+ */
+function findSpeechMergeContext(rowIndex, rows, targetKey) {
+  const position = rows.findIndex((item) => Number(item.index) === Number(rowIndex));
+  if (position < 0 || position + 1 >= rows.length) return null;
+  const row = rows[position];
+  const targetText = visibleInlineText(row?.[targetKey]);
+  const sourceText = visibleInlineText(row?.jp);
+  if (!targetText || !sourceText) return null;
+
+  // 1. 译文末尾需含有言语/引述动词（或冒号引导）
+  const verbMatch = targetText.match(SPEECH_MERGE_CHINESE_VERBS) || targetText.match(SPEECH_MERGE_COLON_VERBS);
+  if (!verbMatch) return null;
+  const verb = verbMatch[0].replace(/[。！？!?：:\s]+$/u, "");
+
+  // 2. 原文必须呈现未完结的接续形态，且原文自身并未明确写出引述动词
+  const isSuspended = fragmentTrailingPunctuation.test(sourceText)
+    || JAPANESE_SUSPENDED_TRAILING.test(sourceText)
+    || fragmentTrailingConjunction.test(sourceText);
+  if (!isSuspended) return null;
+  if (JAPANESE_EXPLICIT_SPEECH_VERBS.test(sourceText)) return null;
+
+  // 3. 下一行必须在同一章节内
+  const chapter = String(row?.chapter || "").trim();
+  const nextRow = rows[position + 1];
+  if (!nextRow || String(nextRow.chapter || "").trim() !== chapter) return null;
+
+  return {
+    row: nextRow,
+    relative: 1,
+    relation: "next-row-speech-merge",
+    verb,
   };
 }
 
@@ -2005,6 +2089,12 @@ function buildMessages(payload, config = {}) {
         pronoun: payload.inferredSubject.pronoun,
       },
     } : {}),
+    ...(payload.speechMerge ? {
+      speechMerge: {
+        relation: payload.speechMerge.relation,
+        verb: payload.speechMerge.verb,
+      },
+    } : {}),
     modePolicy: bilingualMode
       ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
       : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
@@ -2022,6 +2112,9 @@ function buildMessages(payload, config = {}) {
         : "",
       payload.inferredSubject
         ? `目标列使用了原文未直接给出的代词「${payload.inferredSubject.pronoun}」，已自动带入前序上下文作为指代依据；请结合前文判断代词所指的行为主体是否成立，不得脱离前文臆测主体或误判为擅改主体。revisedText 仍只写本行。`
+        : "",
+      payload.speechMerge
+        ? `原文为未完结的接续片段，而目标列末尾出现了引述动词「${payload.speechMerge.verb}」，疑似发生跨行引语合并；已自动提供下一行上下文作为核对依据。若下一行确实对应该说话内容或动作，属于合理的跨行语流调整，不应误判为擅自增译；revisedText 仍只针对当前目标行。`
         : "",
     ].filter(Boolean).join(" "),
     // contextBudget（轮数/行数/字符上限）与 contextExpansion 是程序内部参数，模型无法也无需据此判断，
@@ -2639,11 +2732,13 @@ module.exports = {
   extractClaudeText,
   findContinuationContext,
   findInferredSubjectContext,
+  findSpeechMergeContext,
   guardTargetScript,
   hasTargetScriptLeak,
   isGptModel,
   isAlignFragmentRow,
   isAlignFragmentText,
+  isPureSymmetricFragmentRow,
   isReasoningModel,
   listModels,
   loadModelsDev,

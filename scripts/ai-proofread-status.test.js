@@ -13,8 +13,10 @@ const {
   clearProofreadCache,
   clientStatus,
   findInferredSubjectContext,
+  findSpeechMergeContext,
   guardTargetScript,
   hasTargetScriptLeak,
+  isPureSymmetricFragmentRow,
   startProofread,
 } = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
@@ -518,6 +520,97 @@ test("译文引入原文未直接给出的第三人称代词时，基础轮主�
   assert.match(secondRow.contextPolicy, /请结合前文判断代词所指的行为主体是否成立/);
   assert.equal(secondRow.inferredSubject.relation, "prev-row-inferred-subject");
   assert.equal(secondRow.inferredSubject.pronoun, "他");
+  assert.equal(finished.errors, 0);
+});
+
+test("findSpeechMergeContext 准确识别接续片段与引述动词，并按章节边界收窄", () => {
+  const rows = [
+    {
+      index: 1229,
+      chapter: "第二章 「暗部」Ghost,Android,and......",
+      jp: "<ruby>警備員<rt>アンチスキル</rt></ruby>はヘルメットの中でため息をついて、",
+      cn: "戴着头盔的<ruby>警备员<rt>Anti-Skill</rt></ruby>叹了口气问道。",
+    },
+    {
+      index: 1230,
+      chapter: "第二章 「暗部」Ghost,Android,and......",
+      jp: "「おい、大丈夫か」",
+      cn: "“喂，没事吧？”",
+    },
+    {
+      index: 1231,
+      chapter: "第二章 「暗部」Ghost,Android,and......",
+      jp: "「ええ」と尋ねた。",
+      cn: "“嗯。”他问道。",
+    },
+    {
+      index: 1232,
+      chapter: "第三章",
+      jp: "走って、",
+      cn: "跑着问道。",
+    },
+  ];
+
+  const res1229 = findSpeechMergeContext(1229, rows, "cn");
+  assert.ok(res1229);
+  assert.equal(res1229.verb, "问道");
+  assert.equal(res1229.relation, "next-row-speech-merge");
+  assert.equal(res1229.row.index, 1230);
+  assert.equal(res1229.relative, 1);
+
+  assert.equal(findSpeechMergeContext(1231, rows, "cn"), null);
+  assert.equal(findSpeechMergeContext(1232, rows, "cn"), null);
+});
+
+test("isPureSymmetricFragmentRow 准确区分纯对称片段与非对称完整句", () => {
+  assert.equal(isPureSymmetricFragmentRow({ jp: "しかし、", cn: "可是。" }, "cn"), true);
+  assert.equal(isPureSymmetricFragmentRow({ jp: "だが、", cn: "但是，" }, "cn"), true);
+  assert.equal(isPureSymmetricFragmentRow({
+    jp: "警備員はヘルメットの中でため息をついて、",
+    cn: "戴着头盔的警备员叹了口气问道。",
+  }, "cn"), false);
+});
+
+test("译文在原文接续片段末尾引入引述动词时，基础轮主动带入下一行作跨行核对依据", async () => {
+  const payloads = [];
+  const { finished } = await runProofreadAgainst({
+    label: "speech-merge",
+    rowCount: 2,
+    rowsFor: (index) => index === 1
+      ? {
+        chapter: "第二章 「暗部」Ghost,Android,and......",
+        jp: "<ruby>警備員<rt>アンチスキル</rt></ruby>はヘルメットの中でため息をついて、",
+        cn: "戴着头盔的<ruby>警备员<rt>Anti-Skill</rt></ruby>叹了口气问道。",
+      }
+      : {
+        chapter: "第二章 「暗部」Ghost,Android,and......",
+        jp: "「おい、大丈夫か」",
+        cn: "“喂，没事吧？”",
+      },
+    respond: (_count, response) => {
+      let body = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        payloads.push(JSON.parse(JSON.parse(body).messages[1].content));
+        response.end(passingDecisionBody);
+      });
+    },
+  });
+
+  const firstRow = payloads.find((payload) => payload.row.index === 1);
+  assert.ok(firstRow, "第一行没有发出基础轮请求");
+  assert.equal(firstRow.nearbyRows.length, 1);
+  assert.equal(firstRow.nearbyRows[0].index, 2);
+  assert.equal(firstRow.nearbyRows[0].relative, 1);
+  assert.equal(firstRow.nearbyRows[0].relation, "next-row-speech-merge");
+  assert.match(firstRow.nearbyRows[0].source, /「おい、大丈夫か」/);
+  assert.match(firstRow.contextPolicy, /引述动词「问道」/);
+  assert.match(firstRow.contextPolicy, /跨行引语合并/);
+  assert.equal(firstRow.speechMerge.relation, "next-row-speech-merge");
+  assert.equal(firstRow.speechMerge.verb, "问道");
+  assert.match(finished.logs.join("\n"), /第 1 行：原文为接续片段且译文含引述动词「问道」，已自动带入下一行作跨行核对依据。/);
   assert.equal(finished.errors, 0);
 });
 
