@@ -139,28 +139,25 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.doesNotMatch(html, /class="filter-panel"/);
   assert.doesNotMatch(html, /class="toolbar-actions"/);
 
-  // 控制栈五个抽屉按数据流序自上而下，默认全部折叠；红框内容已并入抽屉
+  // 控制栈四个抽屉按数据流序自上而下，默认全部折叠；红框内容已并入抽屉
   assert.match(html, /<details id="prefilterPanel" class="panel-details" aria-label="预筛选">/);
   assert.match(html, /<details id="aiPanel" class="panel-details ai-panel" aria-label="AI 校对">/);
-  assert.match(html, /<details id="filterPanel" class="panel-details" aria-label="筛选与显示">/);
-  assert.match(html, /<details id="batchPanel" class="panel-details" aria-label="批量操作">/);
+  assert.match(html, /<details id="filterPanel" class="panel-details" aria-label="筛选与批处理">/);
+  assert.doesNotMatch(html, /id="batchPanel"/, "批量操作已并入「筛选与批处理」，不再单独成抽屉");
   assert.match(html, /<details id="notesPanel" class="panel-details" aria-label="备注空间与找回">/);
   const prefilterIdx = html.indexOf('id="prefilterPanel"');
   const aiIdx = html.indexOf('id="aiPanel"');
   const filterIdx = html.indexOf('id="filterPanel"');
-  const batchIdx = html.indexOf('id="batchPanel"');
   const notesIdx = html.indexOf('id="notesPanel"');
   assert.ok(prefilterIdx >= 0 && prefilterIdx < aiIdx, "预筛选应在 AI 辅助校对之前");
-  assert.ok(aiIdx < filterIdx, "AI 辅助校对应在筛选与显示之前");
-  assert.ok(filterIdx < batchIdx, "筛选与显示应在批量操作之前");
-  assert.ok(batchIdx < notesIdx, "批量操作应在备注空间与找回之前");
-  // 五个新 details 都默认折叠（summary 上无 open 属性，且 details 标签本体也未打开）
+  assert.ok(aiIdx < filterIdx, "AI 辅助校对应在筛选与批处理之前");
+  assert.ok(filterIdx < notesIdx, "筛选与批处理应在备注空间与找回之前");
+  // 四个 details 都默认折叠（summary 上无 open 属性，且 details 标签本体也未打开）
   assert.match(html, /<details id="prefilterPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="预筛选">/);
   assert.match(html, /<details id="aiPanel" class="panel-details ai-panel"(?![^>]*\bopen\b) aria-label="AI 校对">/);
-  assert.match(html, /<details id="filterPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="筛选与显示">/);
-  assert.match(html, /<details id="batchPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="批量操作">/);
+  assert.match(html, /<details id="filterPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="筛选与批处理">/);
   assert.match(html, /<details id="notesPanel" class="panel-details"(?![^>]*\bopen\b) aria-label="备注空间与找回">/);
-  // 五个面板抽屉统辖于父抽屉之下，用于整组折叠；父级默认展开，不改变子级默认折叠
+  // 面板抽屉统辖于父抽屉之下，用于整组折叠；父级默认展开，不改变子级默认折叠
   assert.match(html, /<details id="controlStackPanel" class="panel-group" data-panel-group open aria-label="控制面板组">/);
   const groupIdx = html.indexOf('id="controlStackPanel"');
   const groupBodyIdx = html.indexOf('<div class="panel-group-body">');
@@ -168,7 +165,7 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.ok(groupIdx >= 0 && groupIdx < prefilterIdx, "父抽屉应在第一个面板抽屉之前");
   assert.ok(groupBodyIdx > groupIdx && groupBodyIdx < prefilterIdx, "面板容器应在父抽屉内且先于第一个面板");
   const groupPanelSlice = html.slice(groupBodyIdx, groupEndIdx);
-  ["prefilterPanel", "aiPanel", "filterPanel", "batchPanel", "notesPanel"].forEach((id) => {
+  ["prefilterPanel", "aiPanel", "filterPanel", "notesPanel"].forEach((id) => {
     assert.ok(groupPanelSlice.includes('id="' + id + '"'), id + " 应位于父抽屉面板容器内");
   });
   assert.match(groupPanelSlice, /<\/details>\s*<\/div>\s*<\/details>\s*$/, "面板容器与父抽屉应在最后一个面板抽屉之后闭合，且容器内不含非面板节点");
@@ -177,22 +174,20 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(html, /<span[^>]*(?:id="prefilterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="prefilterPanelState")[^>]*>/);
   assert.match(html, /<span[^>]*(?:id="aiPanelState"[^>]*class="ai-panel-state"|class="ai-panel-state"[^>]*id="aiPanelState")[^>]*>/);
   assert.match(html, /<span[^>]*(?:id="filterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="filterPanelState")[^>]*>/);
-  assert.match(html, /<span[^>]*(?:id="batchPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="batchPanelState")[^>]*>/);
-  // 「筛选与显示」收纳了搜索、筛选分段与显示开关
-  const filterPanel = html.slice(filterIdx, batchIdx);
+  // 「筛选与批处理」收纳了搜索、筛选分段、显示开关与批量按钮：筛选在前、显示在中、批量落盘在后
+  const filterPanel = html.slice(filterIdx, notesIdx);
   assert.match(filterPanel, /<div class="filter-bar" aria-label="筛选">/);
   assert.match(filterPanel, /id="query" class="filter-search"/);
   assert.match(filterPanel, /id="showSource" type="checkbox" checked>原文/);
   assert.match(filterPanel, /id="showRevisionDiff" type="checkbox" checked>修改差异/);
-  // 「批量操作」只装修改结果按钮，不含显示开关
-  const batchPanel = html.slice(batchIdx, notesIdx);
-  assert.match(batchPanel, /<div class="action-bar">/);
-  assert.match(batchPanel, /id="acceptAiSame" class="btn btn--success" type="button">确认自动不改/);
-  assert.match(batchPanel, /id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回/);
-  assert.match(batchPanel, /id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认/);
-  assert.doesNotMatch(batchPanel, /id="showSource"/);
-  assert.doesNotMatch(batchPanel, /id="showTranslationDiff"/);
-  assert.doesNotMatch(batchPanel, /id="showRevisionDiff"/);
+  assert.match(filterPanel, /<div class="action-bar">/);
+  assert.match(filterPanel, /id="acceptAiSame" class="btn btn--success" type="button">确认自动不改/);
+  assert.match(filterPanel, /id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回/);
+  assert.match(filterPanel, /id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认/);
+  const displayIdx = filterPanel.indexOf('aria-label="显示设置"');
+  const batchGroupIdx = filterPanel.indexOf('aria-label="修改结果操作"');
+  assert.ok(filterPanel.indexOf('id="query"') < displayIdx, "筛选应在显示设置之前");
+  assert.ok(displayIdx >= 0 && displayIdx < batchGroupIdx, "显示设置应在批量按钮之前，会改源文件的按钮放最后");
 
   const script = html.split("<script>")[1].split("</script>")[0];
   // 浮动提示容器：一次性按钮回执的落点，在控制面板之外（整组收起、抽屉滚出视野时仍然可见）

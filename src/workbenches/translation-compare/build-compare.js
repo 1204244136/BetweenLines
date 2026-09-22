@@ -974,8 +974,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             </div>
           </details>
         </details>
-        <details id="filterPanel" class="panel-details" aria-label="筛选与显示">
-          <summary class="panel-summary"><span>筛选与显示 <span class="panel-summary-state" id="filterPanelState">未筛选</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开筛选与显示"></button></summary>
+        <details id="filterPanel" class="panel-details" aria-label="筛选与批处理">
+          <summary class="panel-summary"><span>筛选与批处理 <span class="panel-summary-state" id="filterPanelState">未筛选</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开筛选与批处理"></button></summary>
           <div class="filter-bar" aria-label="筛选">
             <input id="query" class="filter-search" type="search" placeholder="搜索原文、译文、备注">
             <div class="filter-groups">
@@ -1014,11 +1014,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               ${bilingual ? "" : '<label class="toggle-inline"><input id="showTranslationDiff" type="checkbox" checked>译文差异</label>'}
               <label class="toggle-inline"><input id="showRevisionDiff" type="checkbox" checked>修改差异</label>
             </div>
-          </div>
-        </details>
-        <details id="batchPanel" class="panel-details" aria-label="批量操作">
-          <summary class="panel-summary"><span>批量操作 <span class="panel-summary-state" id="batchPanelState">当前筛选 0 行</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开批量操作"></button></summary>
-          <div class="action-bar">
             <div class="action-group" aria-label="修改结果操作">
               <span class="action-group__label">修改结果</span>
               <button id="acceptAiSame" class="btn btn--success" type="button">确认自动不改</button>
