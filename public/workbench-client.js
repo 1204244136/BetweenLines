@@ -2590,8 +2590,53 @@
       hint.title = [files.join("\n"), ...errors].join("\n");
     }
 
+    function renderStageMetricsDashboard(stageMetrics = {}) {
+      const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
+      const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
+      const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
+      const cAccept = Math.max(0, Number(stageMetrics.critiqueAccept) || 0);
+      const cModify = Math.max(0, Number(stageMetrics.critiqueModify) || 0);
+      const cReject = Math.max(0, Number(stageMetrics.critiqueReject) || 0);
+      const cEscalate = Math.max(0, Number(stageMetrics.critiqueEscalate) || 0);
+      const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
+
+      const elS1 = document.getElementById("metricStage1Passed");
+      if (elS1) elS1.textContent = s1Passed;
+      const elFp = document.getElementById("metricFastPassHits");
+      if (elFp) elFp.textContent = fpHits;
+      const elS2 = document.getElementById("metricStage2Reviewed");
+      if (elS2) elS2.textContent = s2Reviewed;
+      const elCAccept = document.getElementById("metricCritiqueAccept");
+      if (elCAccept) elCAccept.textContent = cAccept;
+      const elCModify = document.getElementById("metricCritiqueModify");
+      if (elCModify) elCModify.textContent = cModify;
+      const elCReject = document.getElementById("metricCritiqueReject");
+      if (elCReject) elCReject.textContent = cReject;
+      const elCEscalate = document.getElementById("metricCritiqueEscalate");
+      if (elCEscalate) elCEscalate.textContent = cEscalate;
+      const elS3 = document.getElementById("metricStage3Arbitrated");
+      if (elS3) elS3.textContent = s3Arbitrated;
+
+      const elRate = document.getElementById("aiStageFastPassRate");
+      if (elRate) {
+        const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) : 0;
+        elRate.textContent = "Fast Pass: " + rate + "%";
+      }
+    }
+
     function renderAiStatus(ai) {
       if (!ai) return;
+      const stageMetrics = ai.stageMetrics || {};
+      const stageMetricsSummary = [
+        ["stage1Passed", "Gatekeeper通过"],
+        ["stage2Reviewed", "Stylist审阅"],
+        ["stage3Arbitrated", "仲裁"],
+        ["fastPassHits", "Fast Pass"],
+        ["lowScoreHits", "低分归因"],
+        ["webLookupHits", "线上查证"],
+      ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
+      aiIds.status.dataset.stageMetrics = stageMetricsSummary;
+      renderStageMetricsDashboard(stageMetrics);
       const aiRunId = ai.runId || "";
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
@@ -2662,6 +2707,7 @@
         setRuntimeStatus(ai.error);
       }
       if (aiIds.panelState) {
+        aiIds.panelState.title = stageMetricsSummary;
         if (ai.running) {
           aiIds.panelState.textContent = isPrefilter
             ? "预筛选中..."

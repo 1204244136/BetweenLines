@@ -953,12 +953,14 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                   </div>
                 </div>
-                <div class="ai-field">
-                  <label for="aiBreakerThreshold">熔断阈值</label>
-                  <div class="ai-breaker-row">
+                <div class="ai-field" id="aiBreakerField">
+                  <div class="ai-field-head">
+                    <label for="aiBreakerThreshold">熔断阈值</label>
+                    <label class="ai-breaker-off" for="aiBreakerDisabled" title="关闭后 AI 调用失败不再自动终止任务；接口配置或响应异常仍会终止。"><input id="aiBreakerDisabled" type="checkbox">关闭</label>
+                  </div>
+                  <div class="ai-breaker-inputs">
                     <input id="aiBreakerThreshold" type="text" inputmode="decimal" value="${Math.round(errorCircuitBreaker.errorRate * 100)}%"
                       title="最近 ${errorCircuitBreaker.windowSize} 次 AI 调用中失败占比达到该比例时自动终止任务；累计满 ${errorCircuitBreaker.minimumSamples} 次结果后开始判定。范围 ${Math.round(errorCircuitBreaker.minErrorRate * 100)}%–100%。">
-                    <label class="ai-breaker-off" for="aiBreakerDisabled" title="关闭后 AI 调用失败不再自动终止任务；接口配置或响应异常仍会终止。"><input id="aiBreakerDisabled" type="checkbox">关闭</label>
                   </div>
                 </div>
               </div>
@@ -976,6 +978,31 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               <button id="aiStart" class="btn btn--primary" type="button">开始</button>
               <button id="aiStop" class="btn btn--danger" type="button" disabled>停止</button>
               <button id="clearAiLog" class="btn btn--subtle" type="button">清AI记录</button>
+            </div>
+          </div>
+          <div id="aiStageDashboard" class="ai-stage-dashboard" aria-label="审核流水线阶段统计">
+            <div class="ai-stage-dashboard-header">
+              <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
+              <span id="aiStageFastPassRate" class="ai-stage-badge" title="Fast Pass 高置信度直接通过率">Fast Pass: 0%</span>
+            </div>
+            <div class="ai-stage-cards">
+              <div class="ai-stage-card" title="Stage 1 Gatekeeper：事实性硬伤审查与直接通过">
+                <div class="ai-stage-card-label">Stage 1 事实初审</div>
+                <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
+                <div class="ai-stage-card-sub">Fast Pass: <span id="metricFastPassHits">0</span></div>
+              </div>
+              <div class="ai-stage-card" title="Stage 2 Stylist：文学责编复审与同行评议（Critique）">
+                <div class="ai-stage-card-label">Stage 2 文学复审</div>
+                <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
+                <div class="ai-stage-card-sub">
+                  采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
+                </div>
+              </div>
+              <div class="ai-stage-card" title="Stage 3 Arbiter：初审与复审分歧仲裁与终审定案">
+                <div class="ai-stage-card-label">Stage 3 终审仲裁</div>
+                <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
+                <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
+              </div>
             </div>
           </div>
           <details id="aiPromptSection" class="ai-section">
