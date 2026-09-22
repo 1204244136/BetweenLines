@@ -11,9 +11,19 @@ const { publishProject } = require("../../storage/project-store");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
 
-const workbenchStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "workbench-style.css"), "utf8");
-const aiPanelStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "ai-panel.css"), "utf8");
-const workbenchClient = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "workbench-client.js"), "utf8");
+function readWorkbenchAssets() {
+  const publicDir = path.join(__dirname, "..", "..", "..", "public");
+  return {
+    workbenchStyle: fs.readFileSync(path.join(publicDir, "workbench-style.css"), "utf8"),
+    aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
+    workbenchClient: fs.readFileSync(path.join(publicDir, "workbench-client.js"), "utf8"),
+  };
+}
+
+const initialWorkbenchAssets = readWorkbenchAssets();
+const workbenchStyle = initialWorkbenchAssets.workbenchStyle;
+const aiPanelStyle = initialWorkbenchAssets.aiPanelStyle;
+const workbenchClient = initialWorkbenchAssets.workbenchClient;
 const progressPrefix = "@@transcomparator-progress@@";
 
 function reportProgress(percent, label, current = 0, total = 0) {
@@ -807,6 +817,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   const defaultProofreadMode = comparisonMode;
   const clientRows = workbenchClientRows(rows, comparisonMode);
   const rowsJson = JSON.stringify(clientRows).replace(/</g, "\\u003c");
+  const assets = readWorkbenchAssets();
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1216,7 +1227,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 
     const storageKey = ${JSON.stringify(storageKey)};
     const pageMeta = ${JSON.stringify(clientMeta).replace(/</g, "\\u003c")};
-${workbenchClient}</script>
+${assets.workbenchClient}</script>
 </body>
 </html>`;
 }
@@ -1393,6 +1404,7 @@ module.exports = {
   exportRows,
   main,
   makeHtml,
+  readWorkbenchAssets,
   rebuildCompareHtmlFromSnapshot,
   restorableModelOptions,
   resolveModelOptions,

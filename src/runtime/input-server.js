@@ -618,8 +618,8 @@ async function handleApi(req, res, pathname, searchParams) {
           apiVersion: consoleApiVersion,
           project: rebuilt.project,
           message: notesSpace
-            ? `页面布局已更新，未重新进行文件比对。本页读取的备注空间：${notesSpace}（备注与人工确认都在浏览器本地）`
-            : "页面布局已更新，未重新进行文件比对，已有数据与备注保持完整。",
+            ? `页面布局已更新，已热加载最新样式与代码（未重新进行文件比对）。本页读取的备注空间：${notesSpace}。请在工作台页面按 F5 刷新查看。`
+            : "页面布局已更新，已热加载最新样式与代码（未重新进行文件比对）。请在工作台页面按 F5 刷新查看。",
           ...listProjects({ adoptCurrent: false }),
         });
       } catch (error) {

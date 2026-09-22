@@ -332,7 +332,23 @@ function discardStaging(stagingDir, options = {}) {
   fs.rmSync(resolved, { recursive: true, force: true });
 }
 
+function invalidateWorkbenchModuleCache() {
+  const targetPrefixes = [
+    path.resolve(__dirname, "../workbenches"),
+    path.resolve(__dirname, "../core"),
+  ];
+  for (const modulePath of Object.keys(require.cache)) {
+    try {
+      const resolved = path.resolve(modulePath);
+      if (targetPrefixes.some((prefix) => resolved.startsWith(prefix))) {
+        delete require.cache[modulePath];
+      }
+    } catch {}
+  }
+}
+
 function rebuildProjectHtml(projectKey, options = {}) {
+  invalidateWorkbenchModuleCache();
   const layout = storageLayout(options.dataDir);
   const key = safeProjectKey(projectKey);
   const descriptor = findSnapshot(layout, key, options);
@@ -392,6 +408,7 @@ module.exports = {
   deleteProject,
   discardStaging,
   getActiveProject,
+  invalidateWorkbenchModuleCache,
   listProjects,
   projectArtifacts,
   publishProject,

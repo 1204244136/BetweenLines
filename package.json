@@ -15,6 +15,7 @@
     "align:jp": "npm run check:accelerator && npm run export:paragraphs && .\\.venv\\Scripts\\python.exe src\\workbenches\\translation-compare\\align_jp.py",
     "build": "node src/workbenches/translation-compare/build-compare.js",
     "build:speaker": "node src/workbenches/speaker-attribution/build-workbench.js",
+    "layout": "node scripts/rebuild-layout.js",
     "test": "node --test scripts/*.test.js"
   },
   "dependencies": {

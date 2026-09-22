@@ -48,8 +48,8 @@ index-X 结构与命名规范契约：
 - 源文本文件和生成物不应提交到仓库，除非用户明确要求。
 - **改动层级与刷新提示契约**：编码代理在完成修改后，必须根据本次改动的具体层级，在回复中明确告知用户对应的**最小必要操作**，严禁不加区分地要求深层重建，避免浪费时间：
   1. 🟢 **纯实时静态资源/无需改动快照**：**只需 F5 刷新页面**（如直接生效的动态样式或浏览器视图）。
-  2. 🟡 **工作台页面结构 / 样式 / 客户端脚本微调**（改动了 `build-compare.js` 的 HTML 模板、`public/workbench-client.js`、`public/*.css`）：工作台 HTML 内嵌了这些资源但行集数据未变，**只需在控制台点击「应用新布局」（或执行 `npm run layout`），然后 F5 刷新页面**，绝不需要耗时重跑对齐！
-  3. 🔵 **纯服务端接口与 AI 校对逻辑**（改动了 `ai-proofread.js`、`scheduler-profile.js`、`arbiter.js`、`term-table.js` 等）：下一次请求或重启服务即生效，页面未改动时**无需应用新布局**。
+  2. 🟡 **工作台页面结构 / 样式 / 客户端脚本微调**（改动了 `build-compare.js` 的 HTML 模板、`public/workbench-client.js`、`public/*.css`、`notes-spaces.js` 等）：底层已支持工作台模块缓存热失效与静态资源动态重载，**只需在控制台点击「应用新布局」（或在终端执行 `npm run layout`），然后 F5 刷新页面即可即时生效**，绝不需要重启 `start-setup.bat`，也绝不需要耗时重跑对齐！
+  3. 🔵 **纯服务端接口与常驻服务逻辑**（改动了 `src/runtime/input-server.js`、`ai-proofread.js` 后端服务分发、`arbiter.js` 等常驻 Node 进程代码）：控制台服务为常驻进程，修改后**需重启控制台服务（重新运行根目录下的 `start-setup.bat` 或在终端重启 `npm run setup`）**，页面未改动时**无需应用新布局**，严禁误告用户“下一次请求会自动生效”。
   4. 🔴 **源文本解析 / 正文过滤 / 跨语言对齐算法**（改动了 `src/ingest/`、`align_jp.py` 等直接影响行集和对齐组的内容）：**才必须重新对齐与重建工作台**（`npm run align:jp && npm run build`）。
 
 ## 当前 Pipeline

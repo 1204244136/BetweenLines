@@ -28,9 +28,19 @@ const outputDir = path.resolve(
   process.env.BETWEENLINES_SPEAKER_OUTPUT_DIR
     || path.join(storageLayout().runtimeDir, "speaker-attribution"),
 );
-const workbenchStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "speaker-workbench-style.css"), "utf8");
-const aiPanelStyle = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "ai-panel.css"), "utf8");
-const workbenchClient = fs.readFileSync(path.join(__dirname, "..", "..", "..", "public", "speaker-workbench-client.js"), "utf8");
+function readSpeakerWorkbenchAssets() {
+  const publicDir = path.join(__dirname, "..", "..", "..", "public");
+  return {
+    workbenchStyle: fs.readFileSync(path.join(publicDir, "speaker-workbench-style.css"), "utf8"),
+    aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
+    workbenchClient: fs.readFileSync(path.join(publicDir, "speaker-workbench-client.js"), "utf8"),
+  };
+}
+
+const initialSpeakerAssets = readSpeakerWorkbenchAssets();
+const workbenchStyle = initialSpeakerAssets.workbenchStyle;
+const aiPanelStyle = initialSpeakerAssets.aiPanelStyle;
+const workbenchClient = initialSpeakerAssets.workbenchClient;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -337,9 +347,11 @@ function renderHtml(model) {
     ? `<dl><div><dt>原文行</dt><dd>${model.sourceLineCount}</dd></div><div><dt>主文本行</dt><dd>${model.parallelLineCount}</dd></div><div><dt>对齐版本</dt><dd>${escapeHtml(model.alignment.version)}</dd></div></dl>`
     : `<dl><div><dt>主文本行</dt><dd>${model.sourceLineCount}</dd></div><div><dt>发话行</dt><dd>${model.rows.length}</dd></div></dl>`;
 
+  const assets = readSpeakerWorkbenchAssets();
+
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="transcomparator-session-token" content="">
-<title>说话人归属工作台</title><style>${workbenchStyle}${aiPanelStyle}</style></head>
+<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}</style></head>
 <body><div class="speaker-app${bilingual ? " is-bilingual" : " is-monolingual"}">
   <header class="speaker-header"><div class="speaker-topbar">
     <div><p class="speaker-kicker">BetweenLines / 说话人归属</p><h1>说话人归属工作台</h1>
@@ -459,7 +471,7 @@ function renderHtml(model) {
 </div><script id="rowData" type="application/json">${rowsJson}</script><script>
 window.speakerStorageKey = ${safeJson(`between-lines:speaker-attribution:${model.analysisKey}:v2`)};
 window.speakerPageMeta = ${safeJson(pageMeta)};
-${workbenchClient}
+${assets.workbenchClient}
 </script></body></html>`;
 }
 
@@ -492,6 +504,7 @@ module.exports = {
   emptyAlignment,
   loadUnits,
   main,
+  readSpeakerWorkbenchAssets,
   renderHtml,
   writeModel,
   writeSpeakerModel: writeModel,
