@@ -1100,8 +1100,19 @@ async function runQueue(queue, allRows, config, labels) {
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
 
-  const pending = [...queue];
-  let inFlight = 0;
+  // 流水线阶段解耦队列（Staged Pipelining Queues）
+  // Stage 1 事实初审一产出建议，立刻推入 Stage 2 队列，Stylist 无需等待后续行的初审！
+  const stage1Pending = [...queue];
+  const stage2Pending = [];
+  const stage3Pending = [];
+
+  let stage1InFlight = 0;
+  let stage2InFlight = 0;
+  let stage3InFlight = 0;
+
+  const stage2Concurrency = Math.max(1, Math.min(config.concurrencyMax || config.concurrency || 3, 4));
+  const stage3Concurrency = 2;
+
   let consecutiveSuccesses = 0;
   let consecutiveLimits = 0;
   let lastAdjustmentAt = Date.now();
@@ -1118,7 +1129,11 @@ async function runQueue(queue, allRows, config, labels) {
 
     function checkDone() {
       if (settled) return;
-      if (status.stopRequested || (pending.length === 0 && inFlight === 0)) {
+      const allEmpty = stage1Pending.length === 0 && stage1InFlight === 0
+        && stage2Pending.length === 0 && stage2InFlight === 0
+        && stage3Pending.length === 0 && stage3InFlight === 0;
+
+      if (status.stopRequested || allEmpty) {
         settled = true;
         if (backoffTimer) {
           clearTimeout(backoffTimer);
@@ -1144,32 +1159,46 @@ async function runQueue(queue, allRows, config, labels) {
         return;
       }
 
-      const now = Date.now();
-      if (now < backoffUntil) {
-        if (!backoffTimer) {
-          const waitMs = Math.max(10, backoffUntil - now);
-          backoffTimer = setTimeout(() => {
-            backoffTimer = null;
-            dispatch();
-          }, waitMs);
-        }
-        return;
+      // 1. 优先调度 Stage 3 (Arbiter 终审仲裁)，尽快完成已产生分歧的行
+      while (stage3InFlight < stage3Concurrency && stage3Pending.length > 0 && !status.stopRequested && !settled) {
+        const s2Item = stage3Pending.shift();
+        stage3InFlight += 1;
+        executeStage3(s2Item);
       }
 
-      while (inFlight < currentConcurrency && pending.length > 0 && !status.stopRequested && !settled) {
-        const row = pending.shift();
-        inFlight += 1;
-        executeRow(row);
+      // 2. 调度 Stage 2 (Stylist 文学复审)，消费 Stage 1 已经初审完且建议修改的行
+      while (stage2InFlight < stage2Concurrency && stage2Pending.length > 0 && !status.stopRequested && !settled) {
+        const s1Item = stage2Pending.shift();
+        stage2InFlight += 1;
+        executeStage2(s1Item);
+      }
+
+      // 3. 调度 Stage 1 (Gatekeeper 事实初审)
+      const now = Date.now();
+      const inBackoff = now < backoffUntil;
+      if (inBackoff && !backoffTimer) {
+        const waitMs = Math.max(10, backoffUntil - now);
+        backoffTimer = setTimeout(() => {
+          backoffTimer = null;
+          dispatch();
+        }, waitMs);
+      }
+
+      if (!inBackoff) {
+        while (stage1InFlight < currentConcurrency && stage1Pending.length > 0 && !status.stopRequested && !settled) {
+          const row = stage1Pending.shift();
+          stage1InFlight += 1;
+          executeStage1(row);
+        }
       }
 
       checkDone();
     }
 
-    async function executeRow(row) {
+    async function executeStage1(row) {
       status.active.push(row.index);
       try {
-        const result = await proofreadRow(row, allRows, config, labels);
-        addResult(result);
+        const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
           recordModelOutcome(false, config);
           if (isSmart) {
@@ -1188,6 +1217,20 @@ async function runQueue(queue, allRows, config, labels) {
             }
           }
         }
+
+        const isFastPass = !s1.decision.needsEdit && isFastPassDecision(s1.decision);
+        const isMultiStage = Boolean(config.multiStageEnabled || config.challengerEnabled || config.singleModelPersona);
+
+        if (isFastPass || !isMultiStage) {
+          // 命中 Fast Pass 或单阶段：无需 Stage 2，直接完成输出
+          const result = finalizeRowResult(s1, config);
+          addResult(result);
+          status.active = status.active.filter((idx) => idx !== row.index);
+        } else {
+          // 提出修改：立即推入 Stage 2 队列，Stylist 可以立刻并发启动，不阻塞 Stage 1 审后续行！
+          stage2Pending.push(s1);
+          pushLog(`第 ${row.index} 行：事实初审完成，移交 Stage 2 (Stylist 文学复审队列)。`);
+        }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
@@ -1198,6 +1241,7 @@ async function runQueue(queue, allRows, config, labels) {
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
+          status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
           status.concurrencyLimits += 1;
           consecutiveSuccesses = 0;
@@ -1232,7 +1276,7 @@ async function runQueue(queue, allRows, config, labels) {
 
           if (retries <= maxRowRetries && !status.stopRequested) {
             pushLog(`[智能并发] 第 ${row.index} 行遭遇${parseRateLimitReason(error)}，并发下调至 ${currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
-            pending.unshift(row);
+            stage1Pending.unshift(row);
           } else {
             pushLog(`[智能并发] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             addResult({
@@ -1245,6 +1289,7 @@ async function runQueue(queue, allRows, config, labels) {
             });
             recordModelOutcome(true, config);
           }
+          status.active = status.active.filter((idx) => idx !== row.index);
         } else {
           addResult({
             runId: status.runId,
@@ -1259,10 +1304,50 @@ async function runQueue(queue, allRows, config, labels) {
           } else if (!status.stopRequested) {
             recordModelOutcome(true, config);
           }
+          status.active = status.active.filter((idx) => idx !== row.index);
         }
       } finally {
-        status.active = status.active.filter((index) => index !== row.index);
-        inFlight -= 1;
+        stage1InFlight -= 1;
+        dispatch();
+      }
+    }
+
+    async function executeStage2(s1Item) {
+      try {
+        const s2 = await runStage2Stylist(s1Item, config, labels);
+        if (s2.arbCheck?.triggered && config.arbiterEnabled !== false) {
+          // 产生分歧，触发终审仲裁，推入 Stage 3 队列！
+          stage3Pending.push(s2);
+          pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
+        } else {
+          // 未产生分歧：采纳复审结论，直接完成
+          const result = finalizeRowResult(s2, config);
+          addResult(result);
+          status.active = status.active.filter((idx) => idx !== s2.row.index);
+        }
+      } catch (error) {
+        pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
+        const result = finalizeRowResult(s1Item, config);
+        addResult(result);
+        status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+      } finally {
+        stage2InFlight -= 1;
+        dispatch();
+      }
+    }
+
+    async function executeStage3(s2Item) {
+      try {
+        const s3 = await runStage3Arbiter(s2Item, config, labels);
+        const result = finalizeRowResult(s3, config);
+        addResult(result);
+      } catch (error) {
+        pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
+        const result = finalizeRowResult(s2Item, config);
+        addResult(result);
+      } finally {
+        status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+        stage3InFlight -= 1;
         dispatch();
       }
     }
@@ -1419,7 +1504,7 @@ function recordModelOutcome(failed, config = {}) {
   for (const controller of controllers) controller.abort();
 }
 
-async function proofreadRow(row, allRows, config, labels) {
+async function runStage1Gatekeeper(row, allRows, config, labels) {
   const bilingual = config.proofreadMode === "bilingual";
   const targetKey = bilingual ? "cn" : config.target;
   const counterpartKey = bilingual ? "jp" : (targetKey === "cn" ? "tw" : "cn");
@@ -1529,9 +1614,6 @@ async function proofreadRow(row, allRows, config, labels) {
     };
   }
   // 线上查询层（最后一层，排在“转人工”之前）：模型明确判断不了、相邻行也补过之后，按顺序去官方站点查证。
-  // 一轮只给**一个**站点入口（不给直达词条链接——猜条目名容易错），拿到能定论的关键信息立即停止，
-  // 后面的站点与“自行检索”一轮都不再发；官方站点都试完仍无结果，才让模型自行检索；再不行转人工。
-  // 只有 advisory（假名写法存疑）行会走到这里：conflict 由对照表直接给结论、consistent/term-only 没进这一轮。
   if (config.webLookup && config.wikiSites.length && shouldRetryWithContext(decision)) {
     const entries = webLookupEntries({
       termGuidance: basePayload.termGuidance,
@@ -1542,12 +1624,10 @@ async function proofreadRow(row, allRows, config, labels) {
       status.webLookups += 1;
       const queries = entries.flatMap((item) => item.terms).join("、");
       const triedLabels = [];
-      // round 0..sites.length-1 依次走官方站点；round === sites.length 是“自行检索”那一轮。
       const lastRound = config.wikiSites.length;
       for (let round = 0; round <= lastRound; round += 1) {
         const site = config.wikiSites[round];
         const label = site ? site.label : "自行检索";
-        // 分母只数“站点”：自行检索不是第 4 个站点，单独措辞（与提示词里的“第 N/M 站”保持一致）。
         const stageLabel = site
           ? `线上查证 ${round + 1}/${config.wikiSites.length}（${label}）`
           : "线上查证（自行检索）";
@@ -1563,7 +1643,6 @@ async function proofreadRow(row, allRows, config, labels) {
         const next = parseDecision(content, { proofreadMode: config.proofreadMode });
         status.webLookupAttempts += 1;
         if (!shouldRetryWithContext(next)) {
-          // 拿到关键信息：立即定稿，不再查剩下的站点（这正是“按顺序、拿到就停”的落点）。
           decision = { ...next, webLookup: { concluded: true, siteLabel: site ? site.label : "", triedLabels: [...triedLabels] } };
           status.webLookupResolved += 1;
           pushLog(`第 ${row.index} 行：${label} 获得依据并给出结论（依据已写入备注）。`);
@@ -1577,104 +1656,139 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
+  return {
+    row,
+    decision,
+    targetKey,
+    counterpartKey,
+    targetLabel,
+    counterpartLabel,
+    targetText,
+    counterpartText,
+    lowScore,
+  };
+}
 
-  // 多阶段认知审核：Stage 2 Stylist 与 Stage 3 Arbiter
-  const isFastPass = !decision.needsEdit && isFastPassDecision(decision);
-  if (!isFastPass && (config.multiStageEnabled || config.challengerEnabled || config.singleModelPersona)) {
-    pushLog(`第 ${row.index} 行：初审进入多阶段审查，转入 Stage 2 (Stylist 文学复审)。`);
+async function runStage2Stylist(stage1Result, config, labels) {
+  const { row, targetLabel, lowScore } = stage1Result;
+  let decision = { ...stage1Result.decision };
 
-    let sConf = config.stylistConfig;
-    if (!sConf) {
-      if (config.singleModelPersona) {
-        const pCtx = createPersonaContext("stylist", config);
-        sConf = pCtx.config;
-      } else {
-        sConf = config;
-      }
-    }
+  pushLog(`第 ${row.index} 行：初审建议修改，转入 Stage 2 (Stylist 文学复审)。`);
 
-    const stylistMessages = buildStylistMessages(row, decision, {
-      targetLabel,
-      basePrompt: config.systemPrompt,
-    });
-
-    try {
-      const stylistRaw = await callModel(stylistMessages, sConf);
-      const stylistReview = parseStylistResponse(stylistRaw);
-      decision.stylistReview = stylistReview;
-      decision.stylistModelId = sConf.model;
-
-      pushLog(`第 ${row.index} 行：Stylist 复审完成（attitude: ${stylistReview.critique.attitude}）。`);
-
-      const arbCheck = shouldTriggerArbitration({
-        gatekeeperDecision: decision,
-        stylistReview,
-        signals: {
-          termConflict: isTermConflictRow(config, row.index),
-          lowScoreUncertain: lowScore.active,
-        },
-      });
-
-      if (arbCheck.triggered && config.arbiterEnabled !== false) {
-        pushLog(`第 ${row.index} 行：触发 Stage 3 (Arbiter 终审仲裁)：${arbCheck.reason}`);
-
-        let aConf = config.arbiterConfig;
-        if (!aConf) {
-          if (config.singleModelPersona) {
-            const pCtx = createPersonaContext("arbiter", config);
-            aConf = pCtx.config;
-          } else {
-            aConf = config;
-          }
-        }
-
-        const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
-          targetLabel,
-          basePrompt: config.systemPrompt,
-        });
-
-        const arbiterRaw = await callModel(arbiterMessages, aConf);
-        const arbiterParsed = parseArbiterResponse(arbiterRaw);
-
-        const applied = applyArbitrationDecision({
-          arbitration: arbiterParsed.arbitration,
-          gatekeeperDecision: decision,
-          stylistReview,
-          targetText,
-          adjudicatedRevisedText: arbiterParsed.revisedText,
-        });
-
-        decision.arbitration = applied.arbitration;
-        decision.arbitrationModelId = aConf.model;
-        if (applied.revisedText) {
-          decision.revisedText = applied.revisedText;
-        }
-        decision.needsEdit = applied.needsEdit;
-        decision.stage = "arbiter";
-        pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
-      } else {
-        if (stylistReview.critique.attitude === "modify" && stylistReview.revisedText) {
-          decision.revisedText = stylistReview.revisedText;
-        } else if (stylistReview.critique.attitude === "reject") {
-          decision.needsEdit = false;
-          decision.revisedText = "";
-        }
-        decision.stage = "stylist";
-      }
-    } catch (stylistErr) {
-      pushLog(`第 ${row.index} 行：多阶段审阅过程中异常（${stylistErr.message}），回退至 Gatekeeper 初审方案。`);
+  let sConf = config.stylistConfig;
+  if (!sConf) {
+    if (config.singleModelPersona) {
+      const pCtx = createPersonaContext("stylist", config);
+      sConf = pCtx.config;
+    } else {
+      sConf = config;
     }
   }
 
-  // 成品格式门禁（确定性工序，输出侧的第一关）：revisedText 必须与目标列同段数、不带模型自己插入的
-  // 换行/`<br>`，段结构或 noteref 标记对不上就作废转人工。放在标点规范化之前，因为它会改变文本结构
-  // （标点工序的内联标记“先摘后还原”也要求标记结构已经稳定）。
+  const stylistMessages = buildStylistMessages(row, decision, {
+    targetLabel,
+    basePrompt: config.systemPrompt,
+  });
+
+  let arbCheck = { triggered: false };
+  try {
+    const stylistRaw = await callModel(stylistMessages, sConf);
+    const stylistReview = parseStylistResponse(stylistRaw);
+    decision.stylistReview = stylistReview;
+    decision.stylistModelId = sConf.model;
+
+    pushLog(`第 ${row.index} 行：Stylist 复审完成（attitude: ${stylistReview.critique.attitude}）。`);
+
+    arbCheck = shouldTriggerArbitration({
+      gatekeeperDecision: decision,
+      stylistReview,
+      signals: {
+        termConflict: isTermConflictRow(config, row.index),
+        lowScoreUncertain: lowScore?.active,
+      },
+    });
+
+    if (!arbCheck.triggered || config.arbiterEnabled === false) {
+      if (stylistReview.critique.attitude === "modify" && stylistReview.revisedText) {
+        decision.revisedText = stylistReview.revisedText;
+      } else if (stylistReview.critique.attitude === "reject") {
+        decision.needsEdit = false;
+        decision.revisedText = "";
+      }
+      decision.stage = "stylist";
+    }
+  } catch (stylistErr) {
+    pushLog(`第 ${row.index} 行：Stylist 审阅过程中异常（${stylistErr.message}），回退至 Gatekeeper 初审方案。`);
+  }
+
+  return {
+    ...stage1Result,
+    decision,
+    arbCheck,
+  };
+}
+
+async function runStage3Arbiter(stage2Result, config, labels) {
+  const { row, targetLabel, targetText } = stage2Result;
+  let decision = { ...stage2Result.decision };
+  const stylistReview = decision.stylistReview || {};
+
+  pushLog(`第 ${row.index} 行：触发 Stage 3 (Arbiter 终审仲裁)：${stage2Result.arbCheck?.reason || "分歧仲裁"}`);
+
+  let aConf = config.arbiterConfig;
+  if (!aConf) {
+    if (config.singleModelPersona) {
+      const pCtx = createPersonaContext("arbiter", config);
+      aConf = pCtx.config;
+    } else {
+      aConf = config;
+    }
+  }
+
+  const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
+    targetLabel,
+    basePrompt: config.systemPrompt,
+  });
+
+  try {
+    const arbiterRaw = await callModel(arbiterMessages, aConf);
+    const arbiterParsed = parseArbiterResponse(arbiterRaw);
+
+    const applied = applyArbitrationDecision({
+      arbitration: arbiterParsed.arbitration,
+      gatekeeperDecision: decision,
+      stylistReview,
+      targetText,
+      adjudicatedRevisedText: arbiterParsed.revisedText,
+    });
+
+    decision.arbitration = applied.arbitration;
+    decision.arbitrationModelId = aConf.model;
+    if (applied.revisedText) {
+      decision.revisedText = applied.revisedText;
+    }
+    decision.needsEdit = applied.needsEdit;
+    decision.stage = "arbiter";
+    pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
+  } catch (arbiterErr) {
+    pushLog(`第 ${row.index} 行：Arbiter 仲裁过程中异常（${arbiterErr.message}），回退至复审方案。`);
+  }
+
+  return {
+    ...stage2Result,
+    decision,
+  };
+}
+
+function finalizeRowResult(stageResult, config) {
+  const { row, targetKey, counterpartKey, targetLabel, counterpartLabel, targetText, lowScore } = stageResult;
+  let decision = stageResult.decision;
+
+  // 成品格式门禁（确定性工序，输出侧的第一关）
   decision = applyFormatGuard(decision, row, config, targetText);
-  // 标点规范化（确定性工序）：中文语境的标点统一成全角、英文句子保持半角，双引号统一成直角引号，
-  // 并补回被删掉的成对标记内侧句末点号。放在护栏之前，因为它只动标点、不改字符集；
-  // 改了几处写进备注的分析栏与日志，人工能看出改动来自程序而非模型。
+  // 标点规范化（确定性工序）
   decision = normalizeDecisionPunctuation(decision, row, config, targetText);
-  // 输出侧兜底（最后一关）：模型把原文文字写进修订结果时作废它——这种文本会被人工直接写回成品。
+  // 输出侧兜底（最后一关）
   const guarded = guardTargetScript(decision, targetText);
   if (guarded !== decision) {
     status.scriptLeaks += 1;
@@ -1682,10 +1796,24 @@ async function proofreadRow(row, allRows, config, labels) {
   }
   const result = decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
   result.stageSignals = {
-    lowScore: lowScore.active,
+    lowScore: Boolean(lowScore?.active),
     webLookup: Boolean(guarded.webLookup?.concluded),
   };
   return result;
+}
+
+async function proofreadRow(row, allRows, config, labels) {
+  const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
+  const isFastPass = !s1.decision.needsEdit && isFastPassDecision(s1.decision);
+  if (isFastPass || !(config.multiStageEnabled || config.challengerEnabled || config.singleModelPersona)) {
+    return finalizeRowResult(s1, config);
+  }
+  const s2 = await runStage2Stylist(s1, config, labels);
+  if (s2.arbCheck?.triggered && config.arbiterEnabled !== false) {
+    const s3 = await runStage3Arbiter(s2, config, labels);
+    return finalizeRowResult(s3, config);
+  }
+  return finalizeRowResult(s2, config);
 }
 
 function shouldRetryWithContext(decision) {
@@ -3415,4 +3543,9 @@ module.exports = {
   scheduleModels,
   getModelProfile,
   createPersonaContext,
+  runStage1Gatekeeper,
+  runStage2Stylist,
+  runStage3Arbiter,
+  finalizeRowResult,
+  proofreadRow,
 };
