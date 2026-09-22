@@ -272,6 +272,14 @@ function clientStatus(options = {}) {
     termPrefiltered: status.termPrefiltered,
     termConflicts: status.termConflicts,
     termInjected: status.termInjected,
+    concurrency: status.concurrency,
+    smartConcurrency: status.smartConcurrency,
+    currentConcurrency: status.currentConcurrency,
+    concurrencyMax: status.concurrencyMax,
+    concurrencyUps: status.concurrencyUps,
+    concurrencyDowns: status.concurrencyDowns,
+    concurrencyLimits: status.concurrencyLimits,
+    peakConcurrency: status.peakConcurrency,
     termRubySkipped: status.termRubySkipped,
     termRubyDemoted: status.termRubyDemoted,
     // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
@@ -359,7 +367,12 @@ function cleanConfig(input = {}) {
   const defaults = providerDefaults[provider];
   const target = input.target === "tw" ? "tw" : "cn";
   const proofreadMode = input.proofreadMode === "trilingual" ? "trilingual" : "bilingual";
+  const envSmart = process.env.TRANSCOMPARATOR_SMART_CONCURRENCY === "1";
+  const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : envSmart;
   const concurrency = clampInteger(input.concurrency, 1, 12, 3);
+  const envMax = process.env.TRANSCOMPARATOR_CONCURRENCY_MAX ? Number(process.env.TRANSCOMPARATOR_CONCURRENCY_MAX) : null;
+  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : (envMax ?? 10);
+  const concurrencyMax = Math.max(concurrency, clampInteger(rawConcurrencyMax, 1, 20, 10));
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
   const circuitBreakerErrorRate = clampNumber(
     input.circuitBreakerErrorRate,
@@ -420,6 +433,8 @@ function cleanConfig(input = {}) {
     // 模型插入的换行与 `<br>` 一并并回本行；段数与 noteref 标记对不上时作废转人工（见 format-guard.js）。
     formatGuard: input.formatGuard !== false && process.env.TRANSCOMPARATOR_FORMAT !== "0",
     concurrency,
+    smartConcurrency,
+    concurrencyMax,
     similarityThreshold,
     circuitBreakerErrorRate,
     circuitBreakerEnabled: input.circuitBreakerEnabled !== false,
@@ -476,6 +491,14 @@ function resetStatus(config, rowsLength) {
   status.reasoningEffort = config.reasoningEffort;
   status.projectKey = config.projectKey;
   status.rowsSignature = config.rowsSignature;
+  status.concurrency = config.concurrency;
+  status.smartConcurrency = Boolean(config.smartConcurrency);
+  status.currentConcurrency = config.concurrency;
+  status.concurrencyMax = config.concurrencyMax;
+  status.concurrencyUps = 0;
+  status.concurrencyDowns = 0;
+  status.concurrencyLimits = 0;
+  status.peakConcurrency = config.concurrency;
   status.total = rowsLength;
   status.queued = 0;
   status.processed = 0;
@@ -708,6 +731,9 @@ async function startProofread(input) {
 
   status.queued = queue.length;
   pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对。`);
+  pushLog(config.smartConcurrency
+    ? `智能并发：已开启，初始并发 ${config.concurrency}，上限 ${config.concurrencyMax}。稳定请求自动上探，遭遇频控限制自动退避降速。`
+    : `并发设置：固定并发 ${config.concurrency}。`);
   pushLog(config.circuitBreakerEnabled
     ? `错误率熔断：最近 ${errorCircuitBreaker.windowSize} 次调用中失败占比达到 ${Math.round(config.circuitBreakerErrorRate * 100)}% 时自动终止。`
     : "错误率熔断：已关闭，调用失败不会自动终止任务。");
@@ -802,6 +828,9 @@ function stopProofread() {
   status.stopRequested = true;
   pushLog(status.kind === "prefilter" ? "收到终止请求，正在停止预筛选。" : "收到终止请求，正在停止新的 AI 调用。");
   for (const controller of controllers) controller.abort();
+  if (typeof currentQueueWakeup === "function") {
+    currentQueueWakeup();
+  }
   return clientStatus({ includeResults: false });
 }
 
@@ -818,6 +847,14 @@ function clearProofreadCache() {
   status.finishedAt = null;
   status.projectKey = "";
   status.rowsSignature = "";
+  status.concurrency = 3;
+  status.smartConcurrency = false;
+  status.currentConcurrency = 3;
+  status.concurrencyMax = 10;
+  status.concurrencyUps = 0;
+  status.concurrencyDowns = 0;
+  status.concurrencyLimits = 0;
+  status.peakConcurrency = 3;
   status.total = 0;
   status.queued = 0;
   status.processed = 0;
@@ -855,27 +892,237 @@ function clearProofreadCache() {
   return clientStatus();
 }
 
+let currentQueueWakeup = null;
+
+function isConcurrencyOrRateLimitError(error) {
+  if (!error) return false;
+  if (isModelRefusalError(error)) return false;
+
+  const httpStatus = Number(error.httpStatus || error.status || error.statusCode);
+  if (httpStatus === 429 || httpStatus === 503 || httpStatus === 529) return true;
+
+  const code = String(error.code || "").toUpperCase();
+  if (
+    code === "RATE_LIMIT" ||
+    code === "RATE_LIMIT_EXCEEDED" ||
+    code === "TOO_MANY_REQUESTS" ||
+    code === "RESOURCE_EXHAUSTED" ||
+    code === "OVERLOADED" ||
+    code === "CONCURRENCY_LIMIT"
+  ) {
+    return true;
+  }
+
+  const textToCheck = [
+    error.message,
+    error.responseBody,
+    error.error?.message,
+    typeof error.cause === "object" ? error.cause?.message : "",
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const rateLimitPatterns = [
+    "rate_limit",
+    "rate limit",
+    "ratelimit",
+    "too many requests",
+    "requests per minute",
+    "requests per second",
+    "requests per day",
+    "requests per hour",
+    "tokens per minute",
+    "concurrency limit",
+    "concurrency exceeded",
+    "exceeded concurrency",
+    "quota exceeded",
+    "exceeded your quota",
+    "exceeded your current quota",
+    "resource_exhausted",
+    "resource exhausted",
+    "overloaded",
+    "temporarily overloaded",
+    "server is overloaded",
+    "service is overloaded",
+    "slow down",
+    "try again in ",
+  ];
+
+  return rateLimitPatterns.some((pattern) => textToCheck.includes(pattern));
+}
+
+function parseRateLimitReason(error) {
+  if (!error) return "频控限制";
+  if (error.httpStatus === 429) return "HTTP 429 请求频次超限";
+  if (error.httpStatus === 529) return "HTTP 529 服务过载";
+  if (error.httpStatus === 503) return "HTTP 503 服务暂时不可用";
+  const text = [error.message, error.responseBody].filter(Boolean).join(" ");
+  if (/concurrency/i.test(text)) return "并发超限";
+  if (/tokens? per minute|tpm/i.test(text)) return "Token 速率限制 (TPM)";
+  if (/requests? per|rpm/i.test(text)) return "请求速率限制 (RPM)";
+  if (/quota/i.test(text)) return "额度频控限制";
+  if (/overloaded/i.test(text)) return "服务端负载过高";
+  return "接口频控限制";
+}
+
 async function runQueue(queue, allRows, config, labels) {
-  let next = 0;
-  async function worker() {
-    while (!status.stopRequested) {
-      const offset = next;
-      next += 1;
-      if (offset >= queue.length) return;
-      const row = queue[offset];
+  const isSmart = Boolean(config.smartConcurrency);
+  let currentConcurrency = config.concurrency;
+  const maxConcurrency = isSmart ? config.concurrencyMax : config.concurrency;
+  const minConcurrency = 1;
+
+  status.smartConcurrency = isSmart;
+  status.concurrency = config.concurrency;
+  status.currentConcurrency = currentConcurrency;
+  status.concurrencyMax = maxConcurrency;
+  status.peakConcurrency = currentConcurrency;
+  status.concurrencyUps = 0;
+  status.concurrencyDowns = 0;
+  status.concurrencyLimits = 0;
+
+  const pending = [...queue];
+  let inFlight = 0;
+  let consecutiveSuccesses = 0;
+  let consecutiveLimits = 0;
+  let lastAdjustmentAt = Date.now();
+  let lastScaleDownAt = 0;
+  let backoffUntil = 0;
+  let backoffTimer = null;
+  const rowRetryCounts = new Map();
+  const maxRowRetries = 3;
+  const scaleUpThreshold = 5;
+  const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    function checkDone() {
+      if (settled) return;
+      if (status.stopRequested || (pending.length === 0 && inFlight === 0)) {
+        settled = true;
+        if (backoffTimer) {
+          clearTimeout(backoffTimer);
+          backoffTimer = null;
+        }
+        currentQueueWakeup = null;
+        finish();
+        resolve();
+      }
+    }
+
+    currentQueueWakeup = () => {
+      if (backoffTimer) {
+        clearTimeout(backoffTimer);
+        backoffTimer = null;
+      }
+      dispatch();
+    };
+
+    function dispatch() {
+      if (status.stopRequested || settled) {
+        checkDone();
+        return;
+      }
+
+      const now = Date.now();
+      if (now < backoffUntil) {
+        if (!backoffTimer) {
+          const waitMs = Math.max(10, backoffUntil - now);
+          backoffTimer = setTimeout(() => {
+            backoffTimer = null;
+            dispatch();
+          }, waitMs);
+        }
+        return;
+      }
+
+      while (inFlight < currentConcurrency && pending.length > 0 && !status.stopRequested && !settled) {
+        const row = pending.shift();
+        inFlight += 1;
+        executeRow(row);
+      }
+
+      checkDone();
+    }
+
+    async function executeRow(row) {
       status.active.push(row.index);
       try {
         const result = await proofreadRow(row, allRows, config, labels);
         addResult(result);
-        if (!status.stopRequested) recordModelOutcome(false, config);
+        if (!status.stopRequested) {
+          recordModelOutcome(false, config);
+          if (isSmart) {
+            consecutiveLimits = 0;
+            consecutiveSuccesses += 1;
+            const elapsed = Date.now() - lastAdjustmentAt;
+            if (consecutiveSuccesses >= scaleUpThreshold && elapsed >= minProbeIntervalMs && currentConcurrency < maxConcurrency) {
+              const prev = currentConcurrency;
+              currentConcurrency = Math.min(maxConcurrency, currentConcurrency + 1);
+              status.currentConcurrency = currentConcurrency;
+              status.peakConcurrency = Math.max(status.peakConcurrency, currentConcurrency);
+              status.concurrencyUps += 1;
+              consecutiveSuccesses = 0;
+              lastAdjustmentAt = Date.now();
+              pushLog(`[智能并发] 连续 ${scaleUpThreshold} 次请求正常，并发从 ${prev} 上探至 ${currentConcurrency}（上限 ${maxConcurrency}）。`);
+            }
+          }
+        }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const fatalRequestError = !isRefusal && isFatalRequestError(error) && !status.stopRequested;
+        const isRateLimit = isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
+
         if (isRefusal) {
           status.modelRefusals += 1;
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
+        } else if (isRateLimit) {
+          status.concurrencyLimits += 1;
+          consecutiveSuccesses = 0;
+          consecutiveLimits += 1;
+
+          const now = Date.now();
+          if (now - lastScaleDownAt > 800) {
+            const prev = currentConcurrency;
+            const next = prev > 3
+              ? Math.max(minConcurrency, Math.floor(prev * 0.7))
+              : Math.max(minConcurrency, prev - 1);
+            if (next < prev) {
+              currentConcurrency = next;
+              status.currentConcurrency = currentConcurrency;
+              status.concurrencyDowns += 1;
+              lastScaleDownAt = now;
+              lastAdjustmentAt = now;
+            }
+          }
+
+          const retries = (rowRetryCounts.get(row.index) || 0) + 1;
+          rowRetryCounts.set(row.index, retries);
+
+          let delayMs = Math.min(10000, 1500 * Math.pow(1.5, Math.min(4, consecutiveLimits - 1))) + Math.floor(Math.random() * 500);
+          if (error.retryAfter) {
+            const parsed = parseFloat(error.retryAfter);
+            if (Number.isFinite(parsed) && parsed > 0) {
+              delayMs = Math.min(15000, parsed * 1000);
+            }
+          }
+          backoffUntil = Math.max(backoffUntil, Date.now() + delayMs);
+
+          if (retries <= maxRowRetries && !status.stopRequested) {
+            pushLog(`[智能并发] 第 ${row.index} 行遭遇${parseRateLimitReason(error)}，并发下调至 ${currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
+            pending.unshift(row);
+          } else {
+            pushLog(`[智能并发] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
+            addResult({
+              runId: status.runId,
+              index: row.index,
+              signature: rowSignature(row),
+              status: "error",
+              done: false,
+              note: `[AI校对]\n调用失败（频控限制已达重试上限）：${error.message || String(error)}`,
+            });
+            recordModelOutcome(true, config);
+          }
         } else {
           addResult({
             runId: status.runId,
@@ -885,17 +1132,21 @@ async function runQueue(queue, allRows, config, labels) {
             done: false,
             note: `[AI校对]\n${status.stopRequested && !fatalRequestError ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
           });
-          if (fatalRequestError) stopForFatalRequestError(error);
-          else if (!status.stopRequested) recordModelOutcome(true, config);
+          if (fatalRequestError) {
+            stopForFatalRequestError(error);
+          } else if (!status.stopRequested) {
+            recordModelOutcome(true, config);
+          }
         }
       } finally {
         status.active = status.active.filter((index) => index !== row.index);
+        inFlight -= 1;
+        dispatch();
       }
     }
-  }
 
-  await Promise.all(Array.from({ length: config.concurrency }, worker));
-  finish();
+    dispatch();
+  });
 }
 
 function finish() {
@@ -939,6 +1190,9 @@ function finish() {
     }
     if (!status.punctFixes && !status.punctQuoteVoids && !status.punctRestored && status.punctEnabled === false) {
       pushLog("标点规范化：已关闭。");
+    }
+    if (status.smartConcurrency) {
+      pushLog(`智能并发统计：初始并发 ${status.concurrency || 3}，峰值并发 ${status.peakConcurrency || status.concurrency || 3}，并发下调 ${status.concurrencyDowns || 0} 次，并发上探 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
     }
   }
   if (status.stopRequested) {
@@ -1012,6 +1266,7 @@ function makeRefusalResult(row, error, targetKey = "") {
 
 function isFatalRequestError(error) {
   if (isModelRefusalError(error)) return false;
+  if (isConcurrencyOrRateLimitError(error)) return false;
   return error?.code === "INVALID_JSON_RESPONSE"
     || [400, 401, 403, 404, 405, 415, 422].includes(error?.httpStatus);
 }
@@ -2375,6 +2630,10 @@ async function fetchJson(url, options, fetchOptions = {}) {
       error.code = "HTTP_ERROR";
       error.httpStatus = response.status;
       error.responseBody = text;
+      const retryAfter = response.headers?.get?.("retry-after");
+      if (retryAfter) {
+        error.retryAfter = retryAfter;
+      }
       throw error;
     }
     if (!text) return {};
@@ -2829,6 +3088,8 @@ module.exports = {
   findSpeechMergeContext,
   guardTargetScript,
   hasTargetScriptLeak,
+  isConcurrencyOrRateLimitError,
+  parseRateLimitReason,
   isGptModel,
   isModelRefusalError,
   isAlignFragmentRow,

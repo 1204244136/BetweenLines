@@ -332,6 +332,10 @@
       termTableHint: document.getElementById("aiTermTableHint"),
       speechHabitHint: document.getElementById("aiSpeechHabitHint"),
       concurrency: document.getElementById("aiConcurrency"),
+      concurrencyLabel: document.getElementById("aiConcurrencyLabel"),
+      smartConcurrency: document.getElementById("aiSmartConcurrency"),
+      concurrencyMax: document.getElementById("aiConcurrencyMax"),
+      concurrencyMaxWrap: document.getElementById("aiConcurrencyMaxWrap"),
       breakerThreshold: document.getElementById("aiBreakerThreshold"),
       breakerDisabled: document.getElementById("aiBreakerDisabled"),
       promptVisible: document.getElementById("aiPromptVisible"),
@@ -571,6 +575,19 @@
 
     function updateBreakerControls() {
       aiIds.breakerThreshold.disabled = aiIds.breakerDisabled.checked;
+    }
+
+    function updateConcurrencyControls() {
+      const isSmart = Boolean(aiIds.smartConcurrency?.checked);
+      if (aiIds.concurrencyMaxWrap) {
+        aiIds.concurrencyMaxWrap.hidden = !isSmart;
+      }
+      if (aiIds.concurrencyLabel) {
+        aiIds.concurrencyLabel.textContent = isSmart ? "初始并发" : "并发";
+      }
+      if (aiIds.concurrency) {
+        aiIds.concurrency.title = isSmart ? "初始并发数（默认 3，遇到频控可退避至 1）" : "并发数（1~12）";
+      }
     }
 
     function updateProofreadModeHint() {
@@ -862,6 +879,13 @@
       if (preset.concurrency != null) {
         aiIds.concurrency.value = preset.concurrency;
       }
+      if (preset.smartConcurrency != null && aiIds.smartConcurrency) {
+        aiIds.smartConcurrency.checked = Boolean(preset.smartConcurrency);
+      }
+      if (preset.concurrencyMax != null && aiIds.concurrencyMax) {
+        aiIds.concurrencyMax.value = preset.concurrencyMax;
+      }
+      updateConcurrencyControls();
       if (preset.breakerThreshold != null) {
         aiIds.breakerThreshold.value = formatPercentRatio(preset.breakerThreshold, 0.5, 0.1);
       }
@@ -893,6 +917,8 @@
         target: aiIds.target.value,
         profileId: aiIds.profile.value,
         concurrency: aiIds.concurrency.value,
+        smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
+        concurrencyMax: aiIds.concurrencyMax ? aiIds.concurrencyMax.value : 10,
         breakerThreshold: formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         breakerDisabled: aiIds.breakerDisabled.checked,
         similarity: formatPercentRatio(prefilterIds.similarity.value),
@@ -954,6 +980,13 @@
         aiIds.profile.value = saved.profileId;
       }
       if (saved.concurrency != null) aiIds.concurrency.value = saved.concurrency;
+      if (saved.smartConcurrency != null && aiIds.smartConcurrency) {
+        aiIds.smartConcurrency.checked = Boolean(saved.smartConcurrency);
+      }
+      if (saved.concurrencyMax != null && aiIds.concurrencyMax) {
+        aiIds.concurrencyMax.value = saved.concurrencyMax;
+      }
+      updateConcurrencyControls();
       if (saved.breakerThreshold != null) aiIds.breakerThreshold.value = formatPercentRatio(saved.breakerThreshold, 0.5, 0.1);
       aiIds.breakerDisabled.checked = Boolean(saved.breakerDisabled);
       updateBreakerControls();
@@ -2455,6 +2488,8 @@
         target: aiIds.target.value,
         profileId: aiIds.profile.value,
         concurrency: Number(aiIds.concurrency.value),
+        smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
+        concurrencyMax: aiIds.concurrencyMax ? Number(aiIds.concurrencyMax.value) : 10,
         circuitBreakerErrorRate: parsePercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         circuitBreakerEnabled: !aiIds.breakerDisabled.checked,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
@@ -2614,7 +2649,10 @@
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
         : "尚未运行预筛选。";
-      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中：实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
+      const concurrencyInfo = ai.smartConcurrency && ai.currentConcurrency
+        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || 10) + "）"
+        : "";
+      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
       const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
       if (ai.running) {
         setRuntimeStatus(runningStatus);
@@ -2625,7 +2663,9 @@
       }
       if (aiIds.panelState) {
         if (ai.running) {
-          aiIds.panelState.textContent = isPrefilter ? "预筛选中..." : "校对中...";
+          aiIds.panelState.textContent = isPrefilter
+            ? "预筛选中..."
+            : ("校对中" + (ai.smartConcurrency && ai.currentConcurrency ? " (" + ai.currentConcurrency + ")" : "") + "...");
           aiIds.panelState.className = "ai-status-badge is-running";
         } else if (ai.finishedAt) {
           aiIds.panelState.textContent = isPrefilter
@@ -2910,6 +2950,8 @@
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,
           concurrency: aiIds.concurrency.value,
+          smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
+          concurrencyMax: aiIds.concurrencyMax?.value || 10,
           breakerThreshold: aiIds.breakerThreshold.value,
           breakerDisabled: aiIds.breakerDisabled.checked,
         };
@@ -2951,6 +2993,8 @@
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,
           concurrency: aiIds.concurrency.value,
+          smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
+          concurrencyMax: aiIds.concurrencyMax?.value || 10,
           breakerThreshold: aiIds.breakerThreshold.value,
           breakerDisabled: aiIds.breakerDisabled.checked,
         };
@@ -2989,7 +3033,7 @@
         }
       });
     }
-    [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].forEach((input) => {
+    [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.concurrencyMax, aiIds.proofreadMode, aiIds.reasoningEffort].filter(Boolean).forEach((input) => {
       input.addEventListener("input", saveAiConfig);
       input.addEventListener("change", () => {
         saveAiConfig();
@@ -3001,6 +3045,12 @@
         }
       });
     });
+    if (aiIds.smartConcurrency) {
+      aiIds.smartConcurrency.addEventListener("change", () => {
+        updateConcurrencyControls();
+        saveAiConfig();
+      });
+    }
     aiIds.proofreadMode.addEventListener("change", updateProofreadModeHint);
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
     prefilterIds.similarity.addEventListener("change", () => {

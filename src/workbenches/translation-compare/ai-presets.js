@@ -25,6 +25,12 @@ function createPresetTools() {
       ? rawConcurrency
       : 3;
 
+    const smartConcurrency = Boolean(item.smartConcurrency);
+    const rawConcurrencyMax = Number(item.concurrencyMax);
+    const concurrencyMax = Number.isSafeInteger(rawConcurrencyMax) && rawConcurrencyMax >= 1 && rawConcurrencyMax <= 20
+      ? rawConcurrencyMax
+      : 10;
+
     const breakerThreshold = typeof item.breakerThreshold === "string" && item.breakerThreshold.trim()
       ? item.breakerThreshold.trim()
       : "50%";
@@ -50,6 +56,8 @@ function createPresetTools() {
       gptReasoningEffort,
       nonGptIntensity,
       concurrency,
+      smartConcurrency,
+      concurrencyMax,
       breakerThreshold,
       breakerDisabled,
       createdAt,

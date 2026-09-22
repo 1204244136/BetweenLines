@@ -940,9 +940,18 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
                   <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
                 </div>
-                <div class="ai-field">
-                  <label for="aiConcurrency">并发</label>
-                  <input id="aiConcurrency" type="number" min="1" max="12" value="3">
+                <div class="ai-field" id="aiConcurrencyField">
+                  <div class="ai-field-head">
+                    <label for="aiConcurrency" id="aiConcurrencyLabel">并发</label>
+                    <label class="ai-concurrency-smart" for="aiSmartConcurrency" title="开启智能并发：以初始并发启动，连续请求稳定后自动向上试探，遇到并发/频控限制（HTTP 429 等）自动降低并发并退避重试。"><input id="aiSmartConcurrency" type="checkbox">智能并发</label>
+                  </div>
+                  <div class="ai-concurrency-inputs">
+                    <input id="aiConcurrency" type="number" min="1" max="12" value="3" title="并发数（开启智能并发时为初始并发，默认 3）">
+                    <div id="aiConcurrencyMaxWrap" class="ai-concurrency-max-wrap" hidden>
+                      <span class="ai-concurrency-sep">上限</span>
+                      <input id="aiConcurrencyMax" type="number" min="1" max="20" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10）">
+                    </div>
+                  </div>
                 </div>
                 <div class="ai-field">
                   <label for="aiBreakerThreshold">熔断阈值</label>

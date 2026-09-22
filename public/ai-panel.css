@@ -296,6 +296,45 @@ details[open] > summary .details-toggle::before {
   grid-template-columns: minmax(0, 1fr) 92px;
   gap: 8px;
 }
+/* 并发与智能并发设置 */
+.ai-concurrency-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-concurrency-inputs input {
+  flex: 1 1 0;
+  min-width: 44px;
+}
+.ai-concurrency-max-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+}
+.ai-concurrency-sep {
+  font-size: 11px;
+  color: var(--ai-muted);
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ai-concurrency-smart {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ai-muted);
+  cursor: pointer;
+}
+.ai-concurrency-smart input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--ai-focus);
+}
 /* 熔断阈值：百分比输入 + 就近的停用开关 */
 .ai-breaker-row {
   display: grid;
