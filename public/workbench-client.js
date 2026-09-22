@@ -339,6 +339,11 @@
       breakerThreshold: document.getElementById("aiBreakerThreshold"),
       breakerDisabled: document.getElementById("aiBreakerDisabled"),
       promptVisible: document.getElementById("aiPromptVisible"),
+      stage1Preset: document.getElementById("stage1PresetSelect"),
+      stage2Preset: document.getElementById("stage2PresetSelect"),
+      stage3Preset: document.getElementById("stage3PresetSelect"),
+      stage2Card: document.getElementById("stage2Card"),
+      stage3Card: document.getElementById("stage3Card"),
       start: document.getElementById("aiStart"),
       stop: document.getElementById("aiStop"),
       clearCache: document.getElementById("clearAiLog"),
@@ -841,6 +846,72 @@
       currentPresetId = aiIds.presetSelect.value;
       syncEnhancedSelect(aiIds.presetSelect);
       updatePresetActionButtons();
+
+      if (aiIds.stage1Preset) {
+        const currentStage1 = aiIds.stage1Preset.value;
+        const s1Options = [
+          { id: "", name: "使用主配置" },
+          ...presets.map((p) => ({ id: p.id, name: p.name })),
+        ];
+        aiIds.stage1Preset.replaceChildren(...s1Options.map((opt) => {
+          const option = document.createElement("option");
+          option.value = opt.id;
+          option.textContent = opt.name;
+          if (opt.id === currentStage1) option.selected = true;
+          return option;
+        }));
+        if (currentStage1) aiIds.stage1Preset.value = currentStage1;
+      }
+
+      if (aiIds.stage2Preset) {
+        const currentStage2 = aiIds.stage2Preset.value;
+        const s2Options = [
+          { id: "", name: "未启用" },
+          ...presets.map((p) => ({ id: p.id, name: p.name })),
+        ];
+        aiIds.stage2Preset.replaceChildren(...s2Options.map((opt) => {
+          const option = document.createElement("option");
+          option.value = opt.id;
+          option.textContent = opt.name;
+          if (opt.id === currentStage2) option.selected = true;
+          return option;
+        }));
+        if (currentStage2) aiIds.stage2Preset.value = currentStage2;
+      }
+
+      if (aiIds.stage3Preset) {
+        const currentStage3 = aiIds.stage3Preset.value;
+        const s3Options = [
+          { id: "", name: "未启用" },
+          ...presets.map((p) => ({ id: p.id, name: p.name })),
+        ];
+        aiIds.stage3Preset.replaceChildren(...s3Options.map((opt) => {
+          const option = document.createElement("option");
+          option.value = opt.id;
+          option.textContent = opt.name;
+          if (opt.id === currentStage3) option.selected = true;
+          return option;
+        }));
+        if (currentStage3) aiIds.stage3Preset.value = currentStage3;
+      }
+
+      updateStagePresetDependencies();
+    }
+
+    function updateStagePresetDependencies() {
+      const hasStage2 = Boolean(aiIds.stage2Preset?.value);
+      if (aiIds.stage3Preset) {
+        if (!hasStage2) {
+          aiIds.stage3Preset.value = "";
+          aiIds.stage3Preset.disabled = true;
+          aiIds.stage3Preset.title = "需先在 Stage 2 选择预设启用后，方可配置 Stage 3";
+          aiIds.stage3Card?.classList.add("is-disabled");
+        } else {
+          aiIds.stage3Preset.disabled = false;
+          aiIds.stage3Preset.title = "选择 Stage 3 模型预设（不填代表不启用）";
+          aiIds.stage3Card?.classList.remove("is-disabled");
+        }
+      }
     }
 
     function applyPreset(preset) {
@@ -924,6 +995,9 @@
         similarity: formatPercentRatio(prefilterIds.similarity.value),
         promptVisible: aiIds.promptVisible.checked,
         currentPresetId: currentPresetId || "",
+        stage1PresetId: aiIds.stage1Preset?.value || "",
+        stage2PresetId: aiIds.stage2Preset?.value || "",
+        stage3PresetId: aiIds.stage3Preset?.value || "",
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
     }
@@ -1006,6 +1080,16 @@
       normalizeSimilarityInput();
       updateProofreadModeHint();
       updateInferenceSettingOptions();
+      if (saved.stage1PresetId && aiIds.stage1Preset) {
+        aiIds.stage1Preset.value = saved.stage1PresetId;
+      }
+      if (saved.stage2PresetId && aiIds.stage2Preset) {
+        aiIds.stage2Preset.value = saved.stage2PresetId;
+      }
+      if (saved.stage3PresetId && aiIds.stage3Preset) {
+        aiIds.stage3Preset.value = saved.stage3PresetId;
+      }
+      updateStagePresetDependencies();
     }
 
     function bindDetailsToggle(scope = document) {
@@ -2478,15 +2562,49 @@
     });
 
     function aiConfig() {
+      const s1PresetId = aiIds.stage1Preset?.value || "";
+      const s2PresetId = aiIds.stage2Preset?.value || "";
+      const s3PresetId = aiIds.stage3Preset?.value || "";
+
+      let mainProvider = aiIds.provider.value;
+      let mainBaseUrl = aiIds.baseUrl.value;
+      let mainModel = aiIds.model.value;
+      let mainReasoningEffort = aiIds.reasoningEffort.value;
+      let mainApiKey = aiIds.apiKey.value;
+
+      if (s1PresetId) {
+        const s1Preset = presetTools.getPreset(localStorage, s1PresetId);
+        if (s1Preset) {
+          mainProvider = s1Preset.provider || mainProvider;
+          mainBaseUrl = s1Preset.baseUrl || mainBaseUrl;
+          mainModel = s1Preset.model || mainModel;
+          mainReasoningEffort = s1Preset.reasoningEffort || mainReasoningEffort;
+          mainApiKey = s1Preset.apiKey || mainApiKey;
+        }
+      }
+
+      // 不填代表不启用；启用前阶段才能启动后阶段
+      const multiStageEnabled = Boolean(s2PresetId);
+      const challengerEnabled = Boolean(s2PresetId);
+      const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
+      const arbiterEnabled = Boolean(s2PresetId && s3PresetId);
+      const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
+
       return {
-        provider: aiIds.provider.value,
-        baseUrl: aiIds.baseUrl.value,
-        model: aiIds.model.value,
-        reasoningEffort: aiIds.reasoningEffort.value,
-        apiKey: aiIds.apiKey.value,
+        provider: mainProvider,
+        baseUrl: mainBaseUrl,
+        model: mainModel,
+        reasoningEffort: mainReasoningEffort,
+        apiKey: mainApiKey,
         proofreadMode: aiIds.proofreadMode.value,
         target: aiIds.target.value,
         profileId: aiIds.profile.value,
+        multiStageEnabled,
+        singleModelPersona: false,
+        challengerEnabled,
+        arbiterEnabled,
+        stylistConfig,
+        arbiterConfig,
         concurrency: Number(aiIds.concurrency.value),
         smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
         concurrencyMax: aiIds.concurrencyMax ? Number(aiIds.concurrencyMax.value) : 10,
@@ -3091,6 +3209,18 @@
         }
       });
     });
+    if (aiIds.stage1Preset) {
+      aiIds.stage1Preset.addEventListener("change", saveAiConfig);
+    }
+    if (aiIds.stage2Preset) {
+      aiIds.stage2Preset.addEventListener("change", () => {
+        updateStagePresetDependencies();
+        saveAiConfig();
+      });
+    }
+    if (aiIds.stage3Preset) {
+      aiIds.stage3Preset.addEventListener("change", saveAiConfig);
+    }
     if (aiIds.smartConcurrency) {
       aiIds.smartConcurrency.addEventListener("change", () => {
         updateConcurrencyControls();

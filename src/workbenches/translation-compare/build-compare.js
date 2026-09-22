@@ -987,19 +987,34 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             </div>
             <div class="ai-stage-cards">
               <div class="ai-stage-card" title="Stage 1 Gatekeeper：事实性硬伤审查与直接通过">
-                <div class="ai-stage-card-label">Stage 1 事实初审</div>
+                <div class="ai-stage-card-head">
+                  <span class="ai-stage-card-label">Stage 1 事实初审</span>
+                  <select id="stage1PresetSelect" class="ai-stage-preset-select" title="Stage 1 模型预设（默认使用主配置）">
+                    <option value="">使用主配置</option>
+                  </select>
+                </div>
                 <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
                 <div class="ai-stage-card-sub">Fast Pass: <span id="metricFastPassHits">0</span></div>
               </div>
-              <div class="ai-stage-card" title="Stage 2 Stylist：文学责编复审与同行评议（Critique）">
-                <div class="ai-stage-card-label">Stage 2 文学复审</div>
+              <div class="ai-stage-card" id="stage2Card" title="Stage 2 Stylist：文学责编复审与同行评议（不填代表不启用）">
+                <div class="ai-stage-card-head">
+                  <span class="ai-stage-card-label">Stage 2 文学复审</span>
+                  <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择 Stage 2 模型预设（不填代表不启用）">
+                    <option value="">未启用</option>
+                  </select>
+                </div>
                 <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
                 <div class="ai-stage-card-sub">
                   采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
                 </div>
               </div>
-              <div class="ai-stage-card" title="Stage 3 Arbiter：初审与复审分歧仲裁与终审定案">
-                <div class="ai-stage-card-label">Stage 3 终审仲裁</div>
+              <div class="ai-stage-card" id="stage3Card" title="Stage 3 Arbiter：初审与复审分歧仲裁（需先启用 Stage 2，不填代表不启用）">
+                <div class="ai-stage-card-head">
+                  <span class="ai-stage-card-label">Stage 3 终审仲裁</span>
+                  <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在 Stage 2 选择预设启用后，方可配置 Stage 3">
+                    <option value="">未启用</option>
+                  </select>
+                </div>
                 <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
                 <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
               </div>
