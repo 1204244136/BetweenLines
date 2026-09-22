@@ -65,11 +65,44 @@ function adaptPersonaReasoningEffort(persona, baseEffort, modelCapabilities = {}
 }
 
 /**
+ * Extract applicable rules from basePrompt for downstream personas (stylist/arbiter).
+ * Strips out Gatekeeper-specific JSON schema declarations and grading rules to prevent contract conflicts.
+ */
+function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
+  if (!basePrompt) return "";
+  if (persona === "gatekeeper") return basePrompt;
+
+  const lines = basePrompt.split("\n");
+  const filtered = [];
+  let skippingJsonFormat = false;
+
+  for (const line of lines) {
+    if (/【输出格式约定】|```json|JSON 格式如下|请输出合法的 JSON|输出字段说明/i.test(line)) {
+      skippingJsonFormat = true;
+      continue;
+    }
+    if (skippingJsonFormat) {
+      if (line.startsWith("【") || line.startsWith("#") || /^\s*$/.test(line)) {
+        skippingJsonFormat = false;
+      } else {
+        continue;
+      }
+    }
+    if (/needsEdit|score|better.*target|counterpart/i.test(line) && /字段|必须包含|返回/i.test(line)) {
+      continue;
+    }
+    filtered.push(line);
+  }
+  return filtered.join("\n").trim();
+}
+
+/**
  * Build the system prompt tailored specifically for the given persona.
  */
 function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
   const def = PERSONA_DEFINITIONS[persona] || PERSONA_DEFINITIONS.gatekeeper;
   const customRules = options.customRules ? `\n【附加特定规则】\n${options.customRules}` : "";
+  const specializedBase = extractSpecializedRules(basePrompt, persona);
 
   if (persona === "gatekeeper") {
     return [
@@ -78,7 +111,7 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "1. 核心审查范围：错译、漏译、无依据加译、数字单位错误、否定翻转、主客体颠倒、专有名词与人名错乱。",
       "2. 绝对纪律：宁可不改，绝不擅自为了修辞美感而重写译文；若译文语义准确且无硬伤，必须判定无需修改（needsEdit=false）。",
       "3. 保持客观中立，指出硬伤时给出确凿证据。",
-      basePrompt ? `\n${basePrompt}` : "",
+      specializedBase ? `\n${specializedBase}` : "",
       customRules,
     ].filter(Boolean).join("\n");
   }
@@ -94,7 +127,7 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "   - reject: 认为 Gatekeeper 属于过度挑刺/将原作者意图误判为错误，建议维持原译；",
       "   - escalate: 双方存在深层歧义或上下文不足，需提交终审仲裁。",
       "3. 必须输出合法 JSON，包含 critique 结构：attitude, rationale, acceptedChanges, rejectedChanges，以及 revisedText（修改结果）。",
-      basePrompt ? `\n${basePrompt}` : "",
+      specializedBase ? `\n${specializedBase}` : "",
       customRules,
     ].filter(Boolean).join("\n");
   }
@@ -108,7 +141,7 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "   - 避免无谓重述：不重新翻译，只裁决已有方案最优解，优先在【原译】、【Gatekeeper方案】、【Stylist方案】之间裁定胜出者（winner: 'gatekeeper' | 'stylist' | 'original' | 'neither'）；",
       "   - 只有当既有方案全部存在致命硬伤时，才给出极简修复方案。",
       "2. 必须输出合法 JSON，包含：winner, reason, finalDecision ('keep'|'replace'|'unclear'), riskFlags, revisedText。",
-      basePrompt ? `\n${basePrompt}` : "",
+      specializedBase ? `\n${specializedBase}` : "",
       customRules,
     ].filter(Boolean).join("\n");
   }

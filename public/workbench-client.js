@@ -919,6 +919,17 @@
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
       }
+      const pill2 = document.getElementById("stage2StatusPill");
+      if (pill2 && pill2.dataset.state !== "running") {
+        pill2.dataset.state = hasStage2 ? "idle" : "disabled";
+        pill2.textContent = hasStage2 ? "待命" : "未启用";
+      }
+      const pill3 = document.getElementById("stage3StatusPill");
+      if (pill3 && pill3.dataset.state !== "running") {
+        const hasStage3 = hasStage2 && Boolean(aiIds.stage3Preset?.value);
+        pill3.dataset.state = hasStage3 ? "idle" : "disabled";
+        pill3.textContent = hasStage3 ? "待命" : "未启用";
+      }
     }
 
     function applyPreset(preset) {
@@ -2852,7 +2863,7 @@
       hint.title = [files.join("\n"), ...errors].join("\n");
     }
 
-    function renderStageMetricsDashboard(stageMetrics = {}) {
+    function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
       const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
       const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
@@ -2884,6 +2895,109 @@
         const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) : 0;
         elRate.textContent = "快速直通: " + rate + "%";
       }
+
+      // 实时阶段状态指示（动态胶囊与活跃行提示）
+      const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
+      const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
+      const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
+
+      // Stage 1
+      const pill1 = document.getElementById("stage1StatusPill");
+      const active1 = document.getElementById("stage1ActiveInfo");
+      const activeText1 = document.getElementById("stage1ActiveRowsText");
+      if (pill1) {
+        if (aiRunning) {
+          if (p1.inFlight > 0) {
+            pill1.dataset.state = "running";
+            pill1.textContent = p1.inFlight + "在飞" + (p1.pending > 0 ? " · " + p1.pending + "待审" : "");
+          } else if (p1.pending > 0) {
+            pill1.dataset.state = "queued";
+            pill1.textContent = p1.pending + "排队";
+          } else {
+            pill1.dataset.state = "idle";
+            pill1.textContent = "初审完毕";
+          }
+        } else {
+          pill1.dataset.state = s1Passed > 0 ? "done" : "idle";
+          pill1.textContent = s1Passed > 0 ? "就绪" : "待命";
+        }
+      }
+      if (active1 && activeText1) {
+        if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
+          active1.hidden = false;
+          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "");
+        } else {
+          active1.hidden = true;
+        }
+      }
+
+      // Stage 2
+      const s2Enabled = Boolean(aiIds.stage2Preset?.value || s2Reviewed > 0 || p2.inFlight > 0 || p2.pending > 0);
+      const pill2 = document.getElementById("stage2StatusPill");
+      const active2 = document.getElementById("stage2ActiveInfo");
+      const activeText2 = document.getElementById("stage2ActiveRowsText");
+      if (pill2) {
+        if (!s2Enabled) {
+          pill2.dataset.state = "disabled";
+          pill2.textContent = "未启用";
+        } else if (aiRunning) {
+          if (p2.inFlight > 0) {
+            pill2.dataset.state = "running";
+            pill2.textContent = p2.inFlight + "在飞" + (p2.pending > 0 ? " · " + p2.pending + "排队" : "");
+          } else if (p2.pending > 0) {
+            pill2.dataset.state = "queued";
+            pill2.textContent = p2.pending + "排队";
+          } else {
+            pill2.dataset.state = "idle";
+            pill2.textContent = "待命";
+          }
+        } else {
+          pill2.dataset.state = s2Reviewed > 0 ? "done" : "idle";
+          pill2.textContent = s2Reviewed > 0 ? "就绪" : "待命";
+        }
+      }
+      if (active2 && activeText2) {
+        if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
+          active2.hidden = false;
+          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "");
+        } else {
+          active2.hidden = true;
+        }
+      }
+
+      // Stage 3
+      const s3Enabled = Boolean((aiIds.stage3Preset?.value && s2Enabled) || s3Arbitrated > 0 || p3.inFlight > 0 || p3.pending > 0);
+      const pill3 = document.getElementById("stage3StatusPill");
+      const active3 = document.getElementById("stage3ActiveInfo");
+      const activeText3 = document.getElementById("stage3ActiveRowsText");
+      if (pill3) {
+        if (!s3Enabled) {
+          pill3.dataset.state = "disabled";
+          pill3.textContent = "未启用";
+        } else if (aiRunning) {
+          if (p3.inFlight > 0) {
+            pill3.dataset.state = "running";
+            pill3.textContent = p3.inFlight + "在飞" + (p3.pending > 0 ? " · " + p3.pending + "排队" : "");
+          } else if (p3.pending > 0) {
+            pill3.dataset.state = "queued";
+            pill3.textContent = p3.pending + "排队";
+          } else {
+            pill3.dataset.state = "idle";
+            pill3.textContent = "待命";
+          }
+        } else {
+          pill3.dataset.state = s3Arbitrated > 0 ? "done" : "idle";
+          pill3.textContent = s3Arbitrated > 0 ? "就绪" : "待命";
+        }
+      }
+      if (active3 && activeText3) {
+        if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
+          active3.hidden = false;
+          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "");
+        } else {
+          active3.hidden = true;
+        }
+      }
     }
 
     function renderAiStatus(ai) {
@@ -2898,7 +3012,7 @@
         ["webLookupHits", "线上查证"],
       ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
       aiIds.status.dataset.stageMetrics = stageMetricsSummary;
-      renderStageMetricsDashboard(stageMetrics);
+      renderStageMetricsDashboard(stageMetrics, ai.stagePipelines, Boolean(ai.running));
       const aiRunId = ai.runId || "";
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
@@ -2959,8 +3073,50 @@
       const concurrencyInfo = ai.smartConcurrency && ai.currentConcurrency
         ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || 10) + "）"
         : "";
-      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
-      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") + (isPrefilter ? "" : skipText + "，") + prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0));
+      const isMultiStage = Boolean(
+        (ai.stagePipelines && (
+          (ai.stagePipelines.stage2 && (ai.stagePipelines.stage2.inFlight > 0 || ai.stagePipelines.stage2.pending > 0)) ||
+          (ai.stagePipelines.stage3 && (ai.stagePipelines.stage3.inFlight > 0 || ai.stagePipelines.stage3.pending > 0))
+        )) ||
+        (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
+        aiIds.stage2Preset?.value
+      );
+
+      let pipelineText = "";
+      if (isMultiStage && ai.stagePipelines) {
+        const p1 = ai.stagePipelines.stage1 || {};
+        const p2 = ai.stagePipelines.stage2 || {};
+        const p3 = ai.stagePipelines.stage3 || {};
+        const s1Part = "S1初审 " + (p1.inFlight > 0 ? p1.inFlight + "在飞" : (p1.pending > 0 ? p1.pending + "排队" : "完毕"));
+        const s2Part = "S2复审 " + (p2.inFlight > 0 ? p2.inFlight + "在飞" + (p2.pending > 0 ? "(" + p2.pending + "排队)" : "") : (p2.pending > 0 ? p2.pending + "排队" : "空闲"));
+        const s3Part = "S3仲裁 " + (p3.inFlight > 0 ? p3.inFlight + "在飞" : (p3.pending > 0 ? p3.pending + "排队" : "空闲"));
+        pipelineText = " ｜ " + s1Part + " ➔ " + s2Part + " ➔ " + s3Part;
+      }
+
+      let pipelineDoneText = "";
+      if (isMultiStage && stageMetrics) {
+        const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
+        const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
+        const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
+        const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
+        pipelineDoneText = " ｜ 初审 " + s1Passed + (fpHits ? " (直通 " + fpHits + ")" : "") + " ➔ 复审 " + s2Reviewed + " ➔ 仲裁 " + s3Arbitrated;
+      }
+
+      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") +
+        (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
+        (isMultiStage
+          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0) + pipelineText
+          : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
+
+      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") +
+        (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
+        (isMultiStage
+          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0) + pipelineDoneText
+          : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
+
+      if (aiIds.status) {
+        aiIds.status.title = "调用进度 " + queueText + "；" + skipText + "；" + prefilterText + (stageMetricsSummary ? "\n阶段指标：" + stageMetricsSummary : "");
+      }
       if (ai.running) {
         setRuntimeStatus(runningStatus);
       } else if (ai.finishedAt) {
@@ -3454,6 +3610,28 @@
       saveAiPrompt();
       showToast("已恢复当前特化规范的默认提示词。", { tone: "success", durationMs: 6000 });
     });
+
+    function bindPromptTabs() {
+      const tabs = document.querySelectorAll(".ai-prompt-tab");
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          tabs.forEach((t) => t.classList.remove("is-active"));
+          tab.classList.add("is-active");
+          const targetTab = tab.dataset.promptTab;
+          const panes = {
+            stage1: document.getElementById("promptTabStage1"),
+            stage2: document.getElementById("promptTabStage2"),
+            stage3: document.getElementById("promptTabStage3"),
+          };
+          Object.entries(panes).forEach(([key, pane]) => {
+            if (!pane) return;
+            pane.hidden = key !== targetTab;
+            pane.classList.toggle("is-active", key === targetTab);
+          });
+        });
+      });
+    }
+    bindPromptTabs();
     aiIds.profile.addEventListener("change", () => {
       // 换特化规范：只替换没有手改过的提示词，手改过的提示词由服务端按“是否已带该档案”决定补不补。
       const nextDefault = defaultPromptForProfile(aiIds.profile.value);

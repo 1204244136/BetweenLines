@@ -69,6 +69,7 @@ const {
 } = require("./low-score");
 const {
   createStageMetrics,
+  createStagePipelines,
   normalizeCritiqueResult,
   normalizeReviewStageResult,
   normalizeArbitrationResult,
@@ -243,6 +244,7 @@ const status = {
   active: [],
   error: "",
   stageMetrics: createStageMetrics(),
+  stagePipelines: createStagePipelines(),
   metrics: {
     promptTokens: 0,
     completionTokens: 0,
@@ -380,6 +382,7 @@ function clientStatus(options = {}) {
     active: status.active,
     error: status.error,
     stageMetrics: { ...status.stageMetrics },
+    stagePipelines: createStagePipelines(status.stagePipelines),
     metrics: { ...status.metrics },
     feedbackStats: globalFeedbackCollector.getStatistics(),
     logs: options.includeLogs === false ? [] : status.logs,
@@ -631,6 +634,7 @@ function resetStatus(config, rowsLength) {
   status.active = [];
   status.error = "";
   status.stageMetrics = createStageMetrics();
+  status.stagePipelines = createStagePipelines();
   status.metrics = {
     promptTokens: 0,
     completionTokens: 0,
@@ -1030,6 +1034,7 @@ function clearProofreadCache() {
   status.active = [];
   status.error = "";
   status.stageMetrics = createStageMetrics();
+  status.stagePipelines = createStagePipelines();
   status.logs = [];
   status.results = new Map();
   status.resultChanges = [];
@@ -1135,6 +1140,16 @@ async function runQueue(queue, allRows, config, labels) {
   let stage2InFlight = 0;
   let stage3InFlight = 0;
 
+  function syncStagePipelineQueues() {
+    status.stagePipelines.stage1.pending = stage1Pending.length;
+    status.stagePipelines.stage1.inFlight = stage1InFlight;
+    status.stagePipelines.stage2.pending = stage2Pending.length;
+    status.stagePipelines.stage2.inFlight = stage2InFlight;
+    status.stagePipelines.stage3.pending = stage3Pending.length;
+    status.stagePipelines.stage3.inFlight = stage3InFlight;
+  }
+  syncStagePipelineQueues();
+
   const stage2Concurrency = Math.max(1, Math.min(config.concurrencyMax || config.concurrency || 3, 4));
   const stage3Concurrency = 2;
 
@@ -1188,6 +1203,7 @@ async function runQueue(queue, allRows, config, labels) {
       while (stage3InFlight < stage3Concurrency && stage3Pending.length > 0 && !status.stopRequested && !settled) {
         const s2Item = stage3Pending.shift();
         stage3InFlight += 1;
+        syncStagePipelineQueues();
         executeStage3(s2Item);
       }
 
@@ -1195,6 +1211,7 @@ async function runQueue(queue, allRows, config, labels) {
       while (stage2InFlight < stage2Concurrency && stage2Pending.length > 0 && !status.stopRequested && !settled) {
         const s1Item = stage2Pending.shift();
         stage2InFlight += 1;
+        syncStagePipelineQueues();
         executeStage2(s1Item);
       }
 
@@ -1213,6 +1230,7 @@ async function runQueue(queue, allRows, config, labels) {
         while (stage1InFlight < currentConcurrency && stage1Pending.length > 0 && !status.stopRequested && !settled) {
           const row = stage1Pending.shift();
           stage1InFlight += 1;
+          syncStagePipelineQueues();
           executeStage1(row);
         }
       }
@@ -1222,6 +1240,8 @@ async function runQueue(queue, allRows, config, labels) {
 
     async function executeStage1(row) {
       status.active.push(row.index);
+      status.stagePipelines.stage1.activeRows.push(row.index);
+      syncStagePipelineQueues();
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
@@ -1254,6 +1274,7 @@ async function runQueue(queue, allRows, config, labels) {
         } else {
           // 提出修改：立即推入 Stage 2 队列，Stylist 可以立刻并发启动，不阻塞 Stage 1 审后续行！
           stage2Pending.push(s1);
+          syncStagePipelineQueues();
           pushLog(`第 ${row.index} 行：事实初审完成，移交 Stage 2 (Stylist 文学复审队列)。`);
         }
       } catch (error) {
@@ -1302,6 +1323,7 @@ async function runQueue(queue, allRows, config, labels) {
           if (retries <= maxRowRetries && !status.stopRequested) {
             pushLog(`[智能并发] 第 ${row.index} 行遭遇${parseRateLimitReason(error)}，并发下调至 ${currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
             stage1Pending.unshift(row);
+            syncStagePipelineQueues();
           } else {
             pushLog(`[智能并发] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             addResult({
@@ -1332,17 +1354,22 @@ async function runQueue(queue, allRows, config, labels) {
           status.active = status.active.filter((idx) => idx !== row.index);
         }
       } finally {
+        status.stagePipelines.stage1.activeRows = status.stagePipelines.stage1.activeRows.filter((idx) => idx !== row.index);
         stage1InFlight -= 1;
+        syncStagePipelineQueues();
         dispatch();
       }
     }
 
     async function executeStage2(s1Item) {
+      status.stagePipelines.stage2.activeRows.push(s1Item.row.index);
+      syncStagePipelineQueues();
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels);
         if (s2.arbCheck?.triggered && config.arbiterEnabled !== false) {
           // 产生分歧，触发终审仲裁，推入 Stage 3 队列！
           stage3Pending.push(s2);
+          syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
           // 未产生分歧：采纳复审结论，直接完成
@@ -1356,12 +1383,16 @@ async function runQueue(queue, allRows, config, labels) {
         addResult(result);
         status.active = status.active.filter((idx) => idx !== s1Item.row.index);
       } finally {
+        status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
         stage2InFlight -= 1;
+        syncStagePipelineQueues();
         dispatch();
       }
     }
 
     async function executeStage3(s2Item) {
+      status.stagePipelines.stage3.activeRows.push(s2Item.row.index);
+      syncStagePipelineQueues();
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels);
         const result = finalizeRowResult(s3, config);
@@ -1371,8 +1402,10 @@ async function runQueue(queue, allRows, config, labels) {
         const result = finalizeRowResult(s2Item, config);
         addResult(result);
       } finally {
+        status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
         status.active = status.active.filter((idx) => idx !== s2Item.row.index);
         stage3InFlight -= 1;
+        syncStagePipelineQueues();
         dispatch();
       }
     }
@@ -1385,6 +1418,7 @@ function finish() {
   if (!status.running) return;
   status.running = false;
   status.finishedAt = new Date().toISOString();
+  status.stagePipelines = createStagePipelines();
   const isPrefilter = status.kind === "prefilter";
   if (!isPrefilter) {
     const summary = promptTrimSummary();

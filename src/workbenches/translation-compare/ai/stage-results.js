@@ -70,6 +70,19 @@ function createStageMetrics(value = {}) {
   };
 }
 
+function createStagePipelines(value = {}) {
+  const normalizeStageState = (stage = {}) => ({
+    inFlight: Math.max(0, Number(stage.inFlight) || 0),
+    pending: Math.max(0, Number(stage.pending) || 0),
+    activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
+  });
+  return {
+    stage1: normalizeStageState(value.stage1),
+    stage2: normalizeStageState(value.stage2),
+    stage3: normalizeStageState(value.stage3),
+  };
+}
+
 function incrementStageMetric(metrics, key, amount = 1) {
   if (!metrics || !Object.prototype.hasOwnProperty.call(metrics, key)) return metrics;
   metrics[key] = Math.max(0, metrics[key] + (Number(amount) || 0));
@@ -94,6 +107,7 @@ module.exports = {
   reviewStageResultFromLegacy,
   normalizeCritiqueResult,
   createStageMetrics,
+  createStagePipelines,
   incrementStageMetric,
   isFastPassDecision,
 };

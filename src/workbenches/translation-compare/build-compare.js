@@ -3,6 +3,7 @@ const path = require("path");
 const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
 const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
 const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles } = require("./ai/ai-proofread");
+const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { buildSpeechHabitLayer } = require("./speech-habit-layer");
 const { TERM_LAYER_VERSION, buildTermLayer, describeTermLayerEntry } = require("./term-layer");
 const { createProjectContext, rowSignature } = require("../../core/project-context");
@@ -756,6 +757,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   const comparisonMode = selection.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   const bilingual = comparisonMode === "bilingual";
   const proofreadPrompt = proofreadPromptFor(comparisonMode);
+  const stylistContractPrompt = buildPersonaSystemPrompt("stylist", "");
+  const arbiterContractPrompt = buildPersonaSystemPrompt("arbiter", "");
   // 特化侧档案由 profiles/ 注册表提供，界面下拉只列出注册过的档案。
   const profileOptions = listProfiles();
   const generatedAt = new Date(projectContext.generatedAt).toLocaleString("zh-CN", { hour12: false });
@@ -991,7 +994,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" data-filter-stage="1" title="阶段一 事实初审：事实性硬伤审查与直接通过">
                 <div class="ai-stage-card-head" title="配置阶段一模型预设（默认使用主配置）">
-                  <span class="ai-stage-card-label">阶段一 事实初审</span>
+                  <div class="ai-stage-card-title-row">
+                    <span class="ai-stage-card-label">阶段一 事实初审</span>
+                    <span id="stage1StatusPill" class="ai-stage-status-pill" data-state="idle">待命</span>
+                  </div>
                   <select id="stage1PresetSelect" class="ai-stage-preset-select" title="阶段一模型预设（默认使用主配置）">
                     <option value="">使用主配置</option>
                   </select>
@@ -999,11 +1005,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
                   <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
                   <div class="ai-stage-card-sub">快速直通: <span id="metricFastPassHits">0</span></div>
+                  <div id="stage1ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage1ActiveRowsText"></span></div>
                 </div>
               </div>
               <div class="ai-stage-card" id="stage2Card" data-filter-stage="2" title="阶段二 文学复审：文学责编复审与同行评议">
                 <div class="ai-stage-card-head" title="配置阶段二模型预设（未启用时不执行复审）">
-                  <span class="ai-stage-card-label">阶段二 文学复审</span>
+                  <div class="ai-stage-card-title-row">
+                    <span class="ai-stage-card-label">阶段二 文学复审</span>
+                    <span id="stage2StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
+                  </div>
                   <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二模型预设（不填代表不启用）">
                     <option value="">未启用</option>
                   </select>
@@ -1013,11 +1023,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <div class="ai-stage-card-sub">
                     采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
                   </div>
+                  <div id="stage2ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage2ActiveRowsText"></span></div>
                 </div>
               </div>
               <div class="ai-stage-card" id="stage3Card" data-filter-stage="3" title="阶段三 终审仲裁：初审与复审分歧仲裁">
                 <div class="ai-stage-card-head" title="配置阶段三模型预设（需先在阶段二选择预设启用）">
-                  <span class="ai-stage-card-label">阶段三 终审仲裁</span>
+                  <div class="ai-stage-card-title-row">
+                    <span class="ai-stage-card-label">阶段三 终审仲裁</span>
+                    <span id="stage3StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
+                  </div>
                   <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二选择预设启用后，方可配置阶段三">
                     <option value="">未启用</option>
                   </select>
@@ -1025,19 +1039,40 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段三仲裁行">
                   <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
                   <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
+                  <div id="stage3ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage3ActiveRowsText"></span></div>
                 </div>
               </div>
             </div>
           </div>
           <details id="aiPromptSection" class="ai-section">
-            <summary><span>内置提示词</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开内置提示词"></button></summary>
+            <summary><span>内置提示词与阶段契约</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开内置提示词与阶段契约"></button></summary>
             <div class="ai-prompt-box">
-            <div class="ai-prompt-head">
-              <div class="ai-prompt-actions">
-                <button id="aiPromptReset" type="button">恢复默认</button>
+              <div class="ai-prompt-tabs" role="tablist" aria-label="提示词与阶段契约切换">
+                <button type="button" class="ai-prompt-tab is-active" data-prompt-tab="stage1">初审与全局规范</button>
+                <button type="button" class="ai-prompt-tab" data-prompt-tab="stage2">阶段二 文学复审契约</button>
+                <button type="button" class="ai-prompt-tab" data-prompt-tab="stage3">阶段三 终审仲裁契约</button>
               </div>
-            </div>
-            <textarea id="aiPrompt" spellcheck="false">${escapeHtml(proofreadPrompt.system)}</textarea>
+              <div id="promptTabStage1" class="ai-prompt-tab-pane is-active">
+                <div class="ai-prompt-head">
+                  <span class="ai-prompt-note">Stage 1 事实质检与全局规则（严查硬伤、漏译、加译与术语）：</span>
+                  <div class="ai-prompt-actions">
+                    <button id="aiPromptReset" type="button">恢复默认</button>
+                  </div>
+                </div>
+                <textarea id="aiPrompt" spellcheck="false">${escapeHtml(proofreadPrompt.system)}</textarea>
+              </div>
+              <div id="promptTabStage2" class="ai-prompt-tab-pane" hidden>
+                <div class="ai-prompt-head">
+                  <span class="ai-prompt-note">Stage 2 文学责编契约（同行评审与文学润色规则）：</span>
+                </div>
+                <textarea id="aiPromptStage2" spellcheck="false" readonly>${escapeHtml(stylistContractPrompt)}</textarea>
+              </div>
+              <div id="promptTabStage3" class="ai-prompt-tab-pane" hidden>
+                <div class="ai-prompt-head">
+                  <span class="ai-prompt-note">Stage 3 终审法官契约（中立客观裁决初审与复审分歧）：</span>
+                </div>
+                <textarea id="aiPromptStage3" spellcheck="false" readonly>${escapeHtml(arbiterContractPrompt)}</textarea>
+              </div>
             </div>
           </details>
         </details>
