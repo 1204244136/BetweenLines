@@ -61,6 +61,8 @@
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
     const renderedRowsById = new Map();
     const notesTools = createNotesTools(alignLegacyNotes);
+    const presetTools = createPresetTools();
+    let currentPresetId = "";
     const notes = {};
     const initialRaw = localStorage.getItem(storageKey);
     const initialData = initialRaw === null ? {} : notesTools.parse(initialRaw);
@@ -310,6 +312,10 @@
     const doneCount = document.getElementById("doneCount");
     const aiDoneCount = document.getElementById("aiDoneCount");
     const aiIds = {
+      presetSelect: document.getElementById("aiPresetSelect"),
+      presetSave: document.getElementById("aiPresetSave"),
+      presetSaveAs: document.getElementById("aiPresetSaveAs"),
+      presetDelete: document.getElementById("aiPresetDelete"),
       provider: document.getElementById("aiProvider"),
       panel: document.getElementById("aiPanel"),
       promptSection: document.getElementById("aiPromptSection"),
@@ -794,6 +800,82 @@
       }
     }
 
+    function updatePresetActionButtons() {
+      const hasSelected = Boolean(currentPresetId && presetTools.getPreset(localStorage, currentPresetId));
+      if (aiIds.presetSave) aiIds.presetSave.disabled = !hasSelected;
+      if (aiIds.presetDelete) aiIds.presetDelete.disabled = !hasSelected;
+    }
+
+    function renderPresetOptions(selectedId = currentPresetId) {
+      if (!aiIds.presetSelect) return;
+      const presets = presetTools.listPresets(localStorage);
+      const options = [
+        { id: "", name: "-- 自定义 / 未选择预设 --" },
+        ...presets.map((p) => ({ id: p.id, name: p.name })),
+      ];
+      aiIds.presetSelect.replaceChildren(...options.map((opt) => {
+        const option = document.createElement("option");
+        option.value = opt.id;
+        option.textContent = opt.name;
+        if (opt.id === selectedId) option.selected = true;
+        return option;
+      }));
+      aiIds.presetSelect.value = selectedId || "";
+      currentPresetId = aiIds.presetSelect.value;
+      syncEnhancedSelect(aiIds.presetSelect);
+      updatePresetActionButtons();
+    }
+
+    function applyPreset(preset) {
+      if (!preset) return;
+      if (preset.provider && ["local", "claude", "compatible"].includes(preset.provider)) {
+        aiIds.provider.value = preset.provider;
+        syncEnhancedSelect(aiIds.provider);
+      }
+      if (typeof preset.baseUrl === "string") {
+        aiIds.baseUrl.value = preset.baseUrl;
+        aiIds.baseUrl.dataset.touched = "1";
+      }
+      if (typeof preset.apiKey === "string") {
+        aiIds.apiKey.value = preset.apiKey;
+      }
+      const options = Array.isArray(preset.modelOptions) && preset.modelOptions.length
+        ? preset.modelOptions
+        : (preset.model ? [preset.model] : []);
+      setModelOptions(options, { selected: preset.model || "" });
+      aiIds.model.dataset.touched = "1";
+
+      const validGptValues = gptReasoningOptions.map(([value]) => value);
+      const validIntensityValues = nonGptIntensityOptions.map(([value]) => value);
+      if (preset.gptReasoningEffort && validGptValues.includes(preset.gptReasoningEffort)) {
+        savedGptReasoningEffort = preset.gptReasoningEffort;
+      }
+      if (preset.nonGptIntensity && validIntensityValues.includes(preset.nonGptIntensity)) {
+        savedNonGptIntensity = preset.nonGptIntensity;
+      }
+      updateInferenceSettingOptions();
+      if (preset.reasoningEffort) {
+        aiIds.reasoningEffort.value = preset.reasoningEffort;
+        rememberInferenceSetting();
+        syncEnhancedSelect(aiIds.reasoningEffort);
+      }
+      if (preset.concurrency != null) {
+        aiIds.concurrency.value = preset.concurrency;
+      }
+      if (preset.breakerThreshold != null) {
+        aiIds.breakerThreshold.value = formatPercentRatio(preset.breakerThreshold, 0.5, 0.1);
+      }
+      if (preset.breakerDisabled != null) {
+        aiIds.breakerDisabled.checked = Boolean(preset.breakerDisabled);
+      }
+      updateBreakerControls();
+      currentPresetId = preset.id;
+      if (aiIds.presetSelect) aiIds.presetSelect.value = preset.id;
+      syncEnhancedSelect(aiIds.presetSelect);
+      updatePresetActionButtons();
+      saveAiConfig();
+    }
+
     function saveAiConfig() {
       rememberInferenceSetting();
       const config = {
@@ -815,6 +897,7 @@
         breakerDisabled: aiIds.breakerDisabled.checked,
         similarity: formatPercentRatio(prefilterIds.similarity.value),
         promptVisible: aiIds.promptVisible.checked,
+        currentPresetId: currentPresetId || "",
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
     }
@@ -827,8 +910,15 @@
     }
 
     function restoreAiConfig() {
+      renderPresetOptions();
       const saved = loadSavedAiConfig();
       const savedPrompt = loadSavedAiPrompt();
+      if (saved && saved.currentPresetId && presetTools.getPreset(localStorage, saved.currentPresetId)) {
+        currentPresetId = saved.currentPresetId;
+        if (aiIds.presetSelect) aiIds.presetSelect.value = currentPresetId;
+        syncEnhancedSelect(aiIds.presetSelect);
+        updatePresetActionButtons();
+      }
       if (!saved || typeof saved !== "object") return;
       if (saved.provider && providerDefaults[saved.provider]) aiIds.provider.value = saved.provider;
       if (typeof saved.baseUrl === "string") {
@@ -2770,6 +2860,135 @@
       updateInferenceSettingOptions();
       saveAiConfig();
     });
+    if (aiIds.presetSelect) {
+      aiIds.presetSelect.addEventListener("change", () => {
+        const selectedId = aiIds.presetSelect.value;
+        if (!selectedId) {
+          currentPresetId = "";
+          updatePresetActionButtons();
+          saveAiConfig();
+          showToast("已切换到自定义配置", { tone: "info", durationMs: 3000 });
+          return;
+        }
+        const preset = presetTools.getPreset(localStorage, selectedId);
+        if (preset) {
+          applyPreset(preset);
+          showToast("已应用模型预设「" + preset.name + "」", { tone: "success", durationMs: 4000 });
+        }
+      });
+    }
+    if (aiIds.presetSaveAs) {
+      aiIds.presetSaveAs.addEventListener("click", () => {
+        const defaultName = (aiIds.model.value || aiIds.provider.value || "新模型预设").trim();
+        const promptFn = typeof window !== "undefined" && typeof window.prompt === "function"
+          ? window.prompt.bind(window)
+          : (typeof prompt === "function" ? prompt : null);
+        const confirmFn = typeof window !== "undefined" && typeof window.confirm === "function"
+          ? window.confirm.bind(window)
+          : (typeof confirm === "function" ? confirm : () => true);
+
+        const name = promptFn ? (promptFn("请输入模型预设名称：", defaultName) || "").trim() : defaultName;
+        if (!name) return;
+
+        const presets = presetTools.listPresets(localStorage);
+        const existing = presets.find((p) => p.name === name);
+        if (existing) {
+          if (!confirmFn("已存在名为「" + name + "」的预设，是否覆盖更新？")) {
+            return;
+          }
+        }
+
+        const presetData = {
+          id: existing ? existing.id : undefined,
+          name,
+          provider: aiIds.provider.value,
+          baseUrl: aiIds.baseUrl.value,
+          apiKey: aiIds.apiKey.value,
+          model: aiIds.model.value,
+          modelOptions: aiModelOptions,
+          reasoningEffort: aiIds.reasoningEffort.value,
+          gptReasoningEffort: savedGptReasoningEffort,
+          nonGptIntensity: savedNonGptIntensity,
+          concurrency: aiIds.concurrency.value,
+          breakerThreshold: aiIds.breakerThreshold.value,
+          breakerDisabled: aiIds.breakerDisabled.checked,
+        };
+
+        const saved = presetTools.savePreset(localStorage, presetData);
+        if (saved) {
+          currentPresetId = saved.id;
+          renderPresetOptions(saved.id);
+          saveAiConfig();
+          showToast("已保存模型预设「" + saved.name + "」", { tone: "success", durationMs: 5000 });
+        } else {
+          showToast("保存模型预设失败", { tone: "error", durationMs: 5000 });
+        }
+      });
+    }
+    if (aiIds.presetSave) {
+      aiIds.presetSave.addEventListener("click", () => {
+        if (!currentPresetId) return;
+        const current = presetTools.getPreset(localStorage, currentPresetId);
+        if (!current) return;
+
+        const confirmFn = typeof window !== "undefined" && typeof window.confirm === "function"
+          ? window.confirm.bind(window)
+          : (typeof confirm === "function" ? confirm : () => true);
+
+        if (!confirmFn("确定要将当前修改保存到预设「" + current.name + "」吗？")) {
+          return;
+        }
+
+        const presetData = {
+          id: current.id,
+          name: current.name,
+          provider: aiIds.provider.value,
+          baseUrl: aiIds.baseUrl.value,
+          apiKey: aiIds.apiKey.value,
+          model: aiIds.model.value,
+          modelOptions: aiModelOptions.length ? aiModelOptions : current.modelOptions,
+          reasoningEffort: aiIds.reasoningEffort.value,
+          gptReasoningEffort: savedGptReasoningEffort,
+          nonGptIntensity: savedNonGptIntensity,
+          concurrency: aiIds.concurrency.value,
+          breakerThreshold: aiIds.breakerThreshold.value,
+          breakerDisabled: aiIds.breakerDisabled.checked,
+        };
+
+        const saved = presetTools.savePreset(localStorage, presetData);
+        if (saved) {
+          showToast("已更新模型预设「" + saved.name + "」", { tone: "success", durationMs: 5000 });
+        } else {
+          showToast("更新模型预设失败", { tone: "error", durationMs: 5000 });
+        }
+      });
+    }
+    if (aiIds.presetDelete) {
+      aiIds.presetDelete.addEventListener("click", () => {
+        if (!currentPresetId) return;
+        const current = presetTools.getPreset(localStorage, currentPresetId);
+        if (!current) return;
+
+        const confirmFn = typeof window !== "undefined" && typeof window.confirm === "function"
+          ? window.confirm.bind(window)
+          : (typeof confirm === "function" ? confirm : () => true);
+
+        if (!confirmFn("确定要删除模型预设「" + current.name + "」吗？")) {
+          return;
+        }
+
+        const deleted = presetTools.deletePreset(localStorage, current.id);
+        if (deleted) {
+          const deletedName = current.name;
+          currentPresetId = "";
+          renderPresetOptions("");
+          saveAiConfig();
+          showToast("已删除模型预设「" + deletedName + "」", { tone: "watch", durationMs: 5000 });
+        } else {
+          showToast("删除模型预设失败", { tone: "error", durationMs: 5000 });
+        }
+      });
+    }
     [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].forEach((input) => {
       input.addEventListener("input", saveAiConfig);
       input.addEventListener("change", () => {

@@ -91,6 +91,8 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     window: {
       addEventListener() {}, requestAnimationFrame() {},
       setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout,
+      prompt: options.prompt || ((msg, def) => def || ""),
+      confirm: options.confirm || (() => true),
     },
     navigator: {}, location: { protocol: "file:" },
     fetch(url, request = {}) {
@@ -105,7 +107,9 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       return Promise.resolve({ ok: true, json: async () => payload });
     },
     setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout, setInterval() {},
-    confirm() { return true; }, requestAnimationFrame() {},
+    confirm: options.confirm || (() => true),
+    prompt: options.prompt || ((msg, def) => def || ""),
+    requestAnimationFrame() {},
   });
   vm.runInContext(script, context);
   return {
