@@ -9,7 +9,31 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import numpy as np
 import torch
 
-from sentence_transformers import SentenceTransformer
+
+def _shield_broken_torchvision() -> None:
+    """Alignment never uses torchvision, but transformers imports it whenever it is installed.
+
+    A torchvision wheel built against a different torch (e.g. CUDA wheel next to ROCm torch)
+    raises ``RuntimeError: operator torchvision::nms does not exist`` at import time and takes
+    ``sentence_transformers`` down with it. Probe it once; if it is broken, mark it as absent
+    so ``importlib.util.find_spec("torchvision")`` returns None and transformers skips it.
+    """
+    try:
+        import torchvision  # noqa: F401
+    except ImportError:
+        return
+    except Exception as exc:  # RuntimeError / OSError from mismatched native ops
+        sys.modules["torchvision"] = None  # type: ignore[assignment]
+        print(
+            f"warning: torchvision is installed but unusable ({type(exc).__name__}: {exc}); "
+            "continuing without it (alignment does not need torchvision).",
+            file=sys.stderr,
+        )
+
+
+_shield_broken_torchvision()
+
+from sentence_transformers import SentenceTransformer  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_DIR = ROOT / "scripts"

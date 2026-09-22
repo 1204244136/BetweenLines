@@ -699,11 +699,22 @@
       height: 180px;
       overflow: auto;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      user-select: text;
+      -webkit-user-select: text;
+      cursor: text;
       background: var(--surface-subtle);
       color: var(--text);
       border-color: var(--line);
       line-height: 1.55;
     }
+    .log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .btn--small { padding: 4px 10px; font-size: 12px; }
     .progress-panel {
       display: grid;
       gap: 7px;
@@ -998,7 +1009,8 @@
             <div id="progressBar" class="progress-bar"></div>
           </div>
         </div>
-        <div id="log" class="status mono log">生成日志会显示在这里。</div>
+        <div class="log-head"><span class="subtle">生成日志</span><button type="button" id="copyLog" class="btn btn--ghost btn--small" title="复制全部日志">复制日志</button></div>
+        <div id="log" class="status mono log" tabindex="0">生成日志会显示在这里。</div>
       </div>
       <div class="panel stack" id="aiPanel">
         <h2>后台任务</h2>
@@ -1094,6 +1106,7 @@
       progressTrack: document.querySelector(".progress-track"),
       progressBar: document.getElementById("progressBar"),
       log: document.getElementById("log"),
+      copyLog: document.getElementById("copyLog"),
       aiStatus: document.getElementById("aiStatus"),
       aiStopButton: document.getElementById("aiStopButton"),
       jpDropzone: document.getElementById("jpDropzone"),
@@ -1120,6 +1133,50 @@
     function setRunStatus(message, type = "") {
       ids.runStatus.className = `status ${type}`.trim();
       ids.runStatus.textContent = message;
+    }
+
+    function logHasActiveSelection() {
+      const selection = window.getSelection?.();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      return ids.log.contains(range.startContainer) || ids.log.contains(range.endContainer);
+    }
+
+    // 日志每 700ms 轮询一次；无差别重写 textContent 会在用户拖选时清掉选区，
+    // 导致复制到的是空串或半截。只在文本真的变化、且用户没有在选区中时重写。
+    function renderLog(lines) {
+      const logs = lines?.length ? lines.join("\n") : "生成日志会显示在这里。";
+      state.pendingLogText = logs;
+      if (ids.log.textContent === logs) return;
+      if (logHasActiveSelection()) return;
+      const stickToBottom = ids.log.scrollHeight - ids.log.scrollTop - ids.log.clientHeight <= 24;
+      ids.log.textContent = logs;
+      if (stickToBottom) ids.log.scrollTop = ids.log.scrollHeight;
+    }
+
+    async function copyLogText() {
+      const text = state.pendingLogText ?? ids.log.textContent ?? "";
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.opacity = "0";
+          document.body.append(area);
+          area.select();
+          const ok = document.execCommand("copy");
+          area.remove();
+          if (!ok) throw new Error("copy failed");
+        }
+        const original = ids.copyLog.textContent;
+        ids.copyLog.textContent = "已复制";
+        setTimeout(() => { ids.copyLog.textContent = original; }, 1200);
+      } catch {
+        setRunStatus("复制日志失败，请手动选中日志文本复制。", "error");
+      }
     }
 
     function formatSize(bytes) {
@@ -1601,10 +1658,7 @@
       ids.runButton.disabled = Boolean(pipeline.running) || !state.inputsReady || state.serverApiVersion < minimumApiVersion;
       updateProjectSelection();
       updateProgress(pipeline.progress || { step: pipeline.step });
-      const stickToBottom = ids.log.scrollHeight - ids.log.scrollTop - ids.log.clientHeight <= 24;
-      const logs = pipeline.logs?.length ? pipeline.logs.join("\n") : "生成日志会显示在这里。";
-      ids.log.textContent = logs;
-      if (stickToBottom) ids.log.scrollTop = ids.log.scrollHeight;
+      renderLog(pipeline.logs);
       if (pipeline.outputExists && pipeline.outputUrl) {
         setOutputUrl(pipeline.outputUrl);
       }
@@ -1660,10 +1714,7 @@
       state.speakerPipeline = pipeline;
       ids.runButton.disabled = Boolean(pipeline.running) || !state.inputsReady || state.serverApiVersion < minimumApiVersion;
       updateProgress(pipeline.progress || { step: pipeline.step });
-      const stickToBottom = ids.log.scrollHeight - ids.log.scrollTop - ids.log.clientHeight <= 24;
-      const logs = pipeline.logs?.length ? pipeline.logs.join("\n") : "生成日志会显示在这里。";
-      ids.log.textContent = logs;
-      if (stickToBottom) ids.log.scrollTop = ids.log.scrollHeight;
+      renderLog(pipeline.logs);
       if (pipeline.outputExists && pipeline.outputUrl) setOutputUrl(pipeline.outputUrl);
       if (pipeline.running) {
         setRunStatus("正在生成说话人归属工作台...", "warn");
@@ -1985,6 +2036,11 @@
     renderComparisonMode();
     renderRoleFiles();
     renderFiles();
+    ids.copyLog.addEventListener("click", copyLogText);
+    // 选区释放后立即把轮询期间被推迟的日志补上。
+    document.addEventListener("selectionchange", () => {
+      if (state.pendingLogText != null && !logHasActiveSelection()) renderLog(state.pendingLogText.split("\n"));
+    });
     validateUnique();
     refreshPipeline();
     refreshAiStatus();
