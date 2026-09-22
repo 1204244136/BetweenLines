@@ -312,7 +312,6 @@
     const aiIds = {
       provider: document.getElementById("aiProvider"),
       panel: document.getElementById("aiPanel"),
-      monitorSection: document.getElementById("aiMonitorSection"),
       promptSection: document.getElementById("aiPromptSection"),
       serviceFields: document.getElementById("aiServiceFields"),
       baseUrl: document.getElementById("aiBaseUrl"),
@@ -329,7 +328,6 @@
       concurrency: document.getElementById("aiConcurrency"),
       breakerThreshold: document.getElementById("aiBreakerThreshold"),
       breakerDisabled: document.getElementById("aiBreakerDisabled"),
-      monitorEnabled: document.getElementById("aiMonitorEnabled"),
       promptVisible: document.getElementById("aiPromptVisible"),
       start: document.getElementById("aiStart"),
       stop: document.getElementById("aiStop"),
@@ -337,8 +335,6 @@
       status: document.getElementById("aiStatus"),
       progressWrap: document.getElementById("aiProgressWrap"),
       progress: document.getElementById("aiProgress"),
-      monitorState: document.getElementById("aiMonitorState"),
-      requestList: document.getElementById("aiRequestList"),
       prompt: document.getElementById("aiPrompt"),
       promptReset: document.getElementById("aiPromptReset"),
     };
@@ -352,7 +348,6 @@
     };
     const appliedAiResults = new Set();
     const aiActiveIds = new Set();
-    const aiRequestCache = new Map();
     const clearedAiRunIds = new Set();
     const prefilterResultIds = new Set();
     const diffHtmlCache = new Map();
@@ -367,7 +362,6 @@
     let prefilterResultFilterActive = false;
     let prefilterResultsCatchingUp = false;
     let lastAiResultRevision = 0;
-    let aiMonitorRenderKey = "";
     let aiStatusRefreshInFlight = false;
     let aiCatchupTimer = 0;
     let notesSavePending = false;
@@ -442,7 +436,6 @@
       return (entry && entry.prompt) || "";
     }
     let aiModelOptions = [];
-    aiIds.monitorSection.hidden = !aiIds.monitorEnabled.checked;
     aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
 
     function serializeNotes() {
@@ -812,7 +805,6 @@
         breakerThreshold: formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         breakerDisabled: aiIds.breakerDisabled.checked,
         similarity: formatPercentRatio(prefilterIds.similarity.value),
-        monitorEnabled: aiIds.monitorEnabled.checked,
         promptVisible: aiIds.promptVisible.checked,
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
@@ -867,7 +859,6 @@
       aiIds.breakerDisabled.checked = Boolean(saved.breakerDisabled);
       updateBreakerControls();
       if (saved.similarity != null) prefilterIds.similarity.value = formatPercentRatio(saved.similarity);
-      aiIds.monitorEnabled.checked = Boolean(saved.monitorEnabled);
       aiIds.promptVisible.checked = Boolean(saved.promptVisible);
       if (typeof savedPrompt.systemPrompt === "string" && savedPrompt.systemPrompt) {
         if (savedPrompt.promptTouched) {
@@ -879,7 +870,6 @@
           aiIds.prompt.dataset.touched = "";
         }
       }
-      aiIds.monitorSection.hidden = !aiIds.monitorEnabled.checked;
       aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
       normalizeSimilarityInput();
       updateProofreadModeHint();
@@ -1018,19 +1008,14 @@
       activeRowId = "";
       lastAiRunId = "";
       lastAiResultRevision = 0;
-      aiMonitorRenderKey = "";
-      aiRequestCache.clear();
       aiIds.progress.style.width = "0%";
       aiIds.progressWrap.hidden = true;
-      aiIds.monitorState.textContent = "尚未启动";
-      aiIds.requestList.innerHTML = '<div class="ai-request-empty">启动 AI 校对后，这里会显示程序发给模型的问题和接口等待状态。</div>';
       updateRenderedAiActive();
     }
 
-    function renderClearedAiStatus(message = "已清除 AI 运行记录和对话监控；备注与人工确认已保留。") {
+    function renderClearedAiStatus(message = "已清除 AI 运行记录；备注与人工确认已保留。") {
       aiIds.start.disabled = false;
       aiIds.stop.disabled = true;
-      aiIds.monitorEnabled.disabled = false;
       prefilterIds.start.disabled = false;
       prefilterIds.confirm.disabled = true;
       prefilterIds.stop.disabled = true;
@@ -1039,9 +1024,6 @@
       setRuntimeStatus(message);
       aiIds.progress.style.width = "0%";
       aiIds.progressWrap.hidden = true;
-      aiIds.monitorState.textContent = "尚未启动";
-      aiIds.requestList.innerHTML = '<div class="ai-request-empty">启动 AI 校对后，这里会显示程序发给模型的问题和接口等待状态。</div>';
-      aiMonitorRenderKey = "";
       aiActiveIds.clear();
       prefilterResultIds.clear();
       prefilterRunId = "";
@@ -1990,16 +1972,6 @@
       document.documentElement.classList.toggle("hide-revision-diff", !showRevisionDiff.checked);
       syncVisibleRowLayout();
     });
-    aiIds.monitorEnabled.addEventListener("change", () => {
-      aiIds.monitorSection.hidden = !aiIds.monitorEnabled.checked;
-      if (!aiIds.monitorEnabled.checked) {
-        aiIds.monitorState.textContent = "未启用";
-        aiIds.requestList.innerHTML = "";
-        aiMonitorRenderKey = "";
-      }
-      saveAiConfig();
-      syncVisibleRowLayout();
-    });
     aiIds.promptVisible.addEventListener("change", () => {
       aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
       if (aiIds.promptVisible.checked) aiIds.promptSection.open = true;
@@ -2384,7 +2356,6 @@
           .filter(([, item]) => item?.manualDone)
           .map(([id]) => Number(id))
           .filter((id) => Number.isInteger(id) && id > 0))],
-        monitorEnabled: aiIds.monitorEnabled.checked,
       };
     }
 
@@ -2407,145 +2378,6 @@
         setModelOptions([defaults.model], { selected: defaults.model || "" });
       }
       setProviderHint(defaults);
-    }
-
-    function formatDuration(ms) {
-      const value = Math.max(0, Number(ms) || 0);
-      const seconds = Math.floor(value / 1000);
-      if (seconds < 60) return seconds + " 秒";
-      const minutes = Math.floor(seconds / 60);
-      return minutes + " 分 " + String(seconds % 60).padStart(2, "0") + " 秒";
-    }
-
-    function requestStateLabel(request) {
-      if (request.state === "waiting") return "等待接口返回";
-      if (request.state === "done") return "已返回";
-      if (request.state === "error") return "调用失败";
-      if (request.state === "stopped") return "已终止";
-      return request.state || "未知";
-    }
-
-    function renderAiMonitor(ai) {
-      const enabled = Boolean(ai.monitorEnabled);
-      aiIds.monitorSection.hidden = !enabled;
-      if (!enabled) {
-        aiIds.monitorState.textContent = "未启用";
-        if (aiMonitorRenderKey) aiIds.requestList.innerHTML = "";
-        aiMonitorRenderKey = "";
-        aiRequestCache.clear();
-        return;
-      }
-      const hydrateRequest = (request) => {
-        const id = String(request.id || "");
-        const hydrated = { ...(aiRequestCache.get(id) || {}), ...request };
-        if (id) aiRequestCache.set(id, hydrated);
-        return hydrated;
-      };
-      const active = (ai.activeRequests || []).map(hydrateRequest);
-      const recent = (ai.recentRequests || []).map(hydrateRequest);
-      const retainedIds = new Set([...active, ...recent].map((request) => String(request.id || "")));
-      for (const id of aiRequestCache.keys()) {
-        if (!retainedIds.has(id)) aiRequestCache.delete(id);
-      }
-      const items = [...active, ...recent].slice(0, 10);
-      const sharedSystemMessage = findSharedSystemMessage(items);
-      if (active.length) {
-        const slow = active.filter((request) => (request.elapsedMs || 0) > 30000).length;
-        aiIds.monitorState.textContent = slow
-          ? active.length + " 个请求等待中，" + slow + " 个超过 30 秒"
-          : active.length + " 个请求等待中";
-      } else if (recent.length) {
-        aiIds.monitorState.textContent = ai.running ? "暂无等待中的接口请求" : "最近请求已完成";
-      } else {
-        aiIds.monitorState.textContent = ai.running ? "正在准备请求" : "尚未启动";
-      }
-      if (!items.length) {
-        const emptyKey = "empty:" + String(ai.running);
-        if (aiMonitorRenderKey !== emptyKey) {
-          aiIds.requestList.innerHTML = '<div class="ai-request-empty">启动 AI 校对后，这里会显示程序发给模型的问题和接口等待状态。</div>';
-          aiMonitorRenderKey = emptyKey;
-        }
-        return;
-      }
-      const renderKey = JSON.stringify(items.map((request) => [
-        request.id,
-        request.state,
-        request.finishedAt,
-        request.responsePreview,
-        request.error,
-      ]));
-      if (aiMonitorRenderKey === renderKey) {
-        for (const request of items) {
-          const item = aiIds.requestList.querySelector('[data-request-id="' + CSS.escape(String(request.id)) + '"]');
-          const time = item?.querySelector(".ai-request-time");
-          if (time) time.textContent = formatDuration(request.elapsedMs);
-        }
-        return;
-      }
-      aiIds.requestList.innerHTML = [
-        renderSharedSystemMessage(sharedSystemMessage),
-        ...items.map((request, index) => renderAiRequest(request, index === 0)),
-      ].filter(Boolean).join("");
-      aiMonitorRenderKey = renderKey;
-      bindDetailsToggle(aiIds.requestList);
-    }
-
-    function findSharedSystemMessage(requests) {
-      for (const request of requests) {
-        const message = (request.messages || []).find((item) => item.role === "system");
-        if (message?.content) return message.content;
-      }
-      return "";
-    }
-
-    function renderSharedSystemMessage(content) {
-      if (!content) return "";
-      return '<details class="ai-message ai-shared-message">' +
-        '<summary class="ai-request-summary">' +
-          '<div class="ai-request-main"><span class="ai-request-pill">system</span><span>共享系统提示词</span></div>' +
-          '<button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开共享系统提示词"></button>' +
-        '</summary>' +
-        '<pre>' + escapeHtml(content) + '</pre>' +
-      '</details>';
-    }
-
-    function renderAiRequest(request, open) {
-      const state = requestStateLabel(request);
-      const elapsed = formatDuration(request.elapsedMs);
-      const classes = [
-        "ai-request",
-        request.state === "waiting" ? "is-waiting" : "",
-        request.state === "waiting" && (request.elapsedMs || 0) > 30000 ? "is-slow" : "",
-        request.state === "error" ? "is-error" : "",
-      ].filter(Boolean).join(" ");
-      const messages = (request.messages || []).filter((message) => message.role !== "system").map((message) =>
-        '<div class="ai-message">' +
-          '<div class="ai-message-role">' + escapeHtml(message.role || "message") + '</div>' +
-          '<pre>' + escapeHtml(message.content || "") + '</pre>' +
-        '</div>'
-      ).join("");
-      const response = request.responsePreview
-        ? '<div class="ai-response-preview">' + escapeHtml(request.responsePreview) + '</div>'
-        : "";
-      const error = request.error
-        ? '<div class="ai-response-preview">' + escapeHtml(request.error) + '</div>'
-        : "";
-      return '<details class="' + classes + '" data-request-id="' + escapeHtml(request.id || "") + '"' + (open ? " open" : "") + '>' +
-        '<summary class="ai-request-summary">' +
-          '<div class="ai-request-main">' +
-            '<span class="ai-request-pill">' + escapeHtml(state) + '</span>' +
-            '<span>第 ' + escapeHtml(request.rowIndex) + ' 行</span>' +
-            '<span>' + escapeHtml(request.stageLabel || request.stage || "") + '</span>' +
-            '<span>' + escapeHtml(request.model || "") + '</span>' +
-            (request.reasoningEffort !== "" && request.reasoningEffort != null
-              ? '<span>' + (isGptModelName(request.model) ? '推理 ' : '强度 ') + escapeHtml(thinkingLevelLabels[request.reasoningEffort] || request.reasoningEffort) + '</span>'
-              : '') +
-          '</div>' +
-          '<div class="ai-request-time">' + elapsed + '</div>' +
-          '<button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开第 ' + escapeHtml(request.rowIndex) + ' 行请求详情"></button>' +
-        '</summary>' +
-        '<div class="ai-request-body">' + messages + response + error + '</div>' +
-      '</details>';
     }
 
     // 说话习惯层：按章/按卷命中人名后启用该角色的说话特色规则，防止刻意口癖被判成翻译错误。
@@ -2618,8 +2450,6 @@
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
         lastAiResultRevision = 0;
-        aiMonitorRenderKey = "";
-        aiRequestCache.clear();
       }
       if (aiRunId) lastAiRunId = aiRunId;
       const sameAiScope = Boolean(
@@ -2635,7 +2465,6 @@
       if (ai.running) {
         aiIds.status.dataset.cacheCleared = "";
       }
-      renderAiMonitor(ai);
       if (ai.providerDefaults) {
         providerDefaults = ai.providerDefaults;
         applyProviderDefaults(providerDefaults[aiIds.provider.value]);
@@ -2651,10 +2480,8 @@
       if (ai.speechHabitStatus) setSpeechHabitHint(ai.speechHabitStatus);
       aiIds.start.disabled = Boolean(ai.running);
       aiIds.stop.disabled = !ai.running;
-      aiIds.monitorEnabled.disabled = Boolean(ai.running);
       prefilterIds.start.disabled = Boolean(ai.running);
       prefilterIds.stop.disabled = !ai.running;
-      aiIds.monitorSection.hidden = !Boolean(ai.monitorEnabled);
       const aiTotal = Math.max(0, ai.queued || 0);
       const done = ai.modelProcessed || 0;
       const total = Math.max(1, aiTotal);
@@ -2760,7 +2587,6 @@
         if (lastAiRunId) {
           params.set("runId", lastAiRunId);
           params.set("afterRevision", String(lastAiResultRevision));
-          for (const id of aiRequestCache.keys()) params.append("knownRequestId", id);
         }
         const response = await apiFetch("/api/ai-proofread/status?" + params);
         const data = await response.json();
@@ -3016,17 +2842,8 @@
     });
     aiIds.start.addEventListener("click", async () => {
       aiIds.start.disabled = true;
-      const monitorEnabled = aiIds.monitorEnabled.checked;
-      aiIds.monitorEnabled.disabled = true;
       aiIds.status.dataset.cacheCleared = "";
       aiIds.panel.open = true;
-      aiIds.monitorSection.hidden = !monitorEnabled;
-      aiIds.monitorSection.open = monitorEnabled;
-      if (!monitorEnabled) {
-        aiIds.monitorState.textContent = "未启用";
-        aiIds.requestList.innerHTML = "";
-        aiMonitorRenderKey = "";
-      }
       setRuntimeStatus("正在启动 AI 校对...");
       try {
         const response = await apiFetch("/api/ai-proofread/start", {
@@ -3041,7 +2858,6 @@
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
         aiIds.start.disabled = false;
-        aiIds.monitorEnabled.disabled = false;
       }
     });
     aiIds.stop.addEventListener("click", async () => {
@@ -3056,8 +2872,6 @@
         }
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
-      } finally {
-        aiIds.monitorEnabled.disabled = false;
       }
     });
     aiIds.clearCache.addEventListener("click", async () => {
@@ -3065,7 +2879,7 @@
         showToast("AI 校对仍在运行，请先停止任务再清除 AI 记录。", { tone: "watch", durationMs: 8000 });
         return;
       }
-      if (!confirm("清除 AI 运行记录和对话监控？备注与人工确认不会被清除。")) return;
+      if (!confirm("清除 AI 运行记录？备注与人工确认不会被清除。")) return;
       aiIds.clearCache.disabled = true;
       setRuntimeStatus("正在清除 AI 记录...");
       if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
@@ -3077,10 +2891,10 @@
         if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
         if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);
         renderClearedAiStatus();
-        showToast("已清除 AI 运行记录和对话监控；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
+        showToast("已清除 AI 运行记录；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
       } catch (error) {
         if (error instanceof TypeError || /Unknown local API endpoint|清除失败/.test(error.message || "")) {
-          const fallback = "已清除本页 AI 对话监控；备注与人工确认已保留。本地服务重启后可同步清除后台记录。";
+          const fallback = "已清除本页 AI 运行记录；备注与人工确认已保留。本地服务重启后可同步清除后台记录。";
           renderClearedAiStatus(fallback);
           showToast(fallback, { tone: "watch", durationMs: 12000 });
         } else {

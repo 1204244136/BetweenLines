@@ -156,7 +156,6 @@ const status = {
   reasoningEffort: "",
   projectKey: "",
   rowsSignature: "",
-  monitorEnabled: false,
   total: 0,
   queued: 0,
   processed: 0,
@@ -209,8 +208,6 @@ const status = {
   suggested: 0,
   errors: 0,
   active: [],
-  activeRequests: [],
-  recentRequests: [],
   error: "",
   logs: [],
   results: new Map(),
@@ -236,7 +233,6 @@ function clientStatus(options = {}) {
   const sameRun = Boolean(options.runId) && options.runId === status.runId;
   const afterRevision = sameRun ? clampInteger(options.afterRevision, 0, Number.MAX_SAFE_INTEGER, 0) : 0;
   const resultLimit = clampInteger(options.resultLimit, 0, 500, 0);
-  const knownRequestIds = new Set(Array.isArray(options.knownRequestIds) ? options.knownRequestIds : []);
   const incrementalResults = status.resultChanges.slice(afterRevision, resultLimit ? afterRevision + resultLimit : undefined);
   const results = options.includeResults === false
     ? []
@@ -264,7 +260,6 @@ function clientStatus(options = {}) {
     reasoningEffort: status.reasoningEffort,
     projectKey: status.projectKey,
     rowsSignature: status.rowsSignature,
-    monitorEnabled: status.monitorEnabled,
     total: status.total,
     queued: status.queued,
     processed: status.processed,
@@ -318,8 +313,6 @@ function clientStatus(options = {}) {
     suggested: status.suggested,
     errors: status.errors,
     active: status.active,
-    activeRequests: withElapsed(status.activeRequests).map((request) => requestForClient(request, knownRequestIds)),
-    recentRequests: status.recentRequests.map((request) => requestForClient(request, knownRequestIds)),
     error: status.error,
     logs: options.includeLogs === false ? [] : status.logs,
     results,
@@ -329,14 +322,6 @@ function clientStatus(options = {}) {
     providerDefaults,
     proofreadPrompt: proofreadPromptFor(status.proofreadMode, status.profileId),
   };
-}
-
-function withElapsed(requests) {
-  const now = Date.now();
-  return requests.map((request) => ({
-    ...request,
-    elapsedMs: Math.max(0, now - Date.parse(request.startedAt || new Date())),
-  }));
 }
 
 function readRows(inputProject = {}) {
@@ -447,7 +432,6 @@ function cleanConfig(input = {}) {
     systemPrompt: String(input.systemPrompt || "").trim() || proofreadPromptFor(proofreadMode, profileId).system,
     glossaryFile: String(input.glossaryFile || "").trim(),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
-    monitorEnabled: Boolean(input.monitorEnabled),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
     // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
@@ -490,7 +474,6 @@ function resetStatus(config, rowsLength) {
   status.reasoningEffort = config.reasoningEffort;
   status.projectKey = config.projectKey;
   status.rowsSignature = config.rowsSignature;
-  status.monitorEnabled = config.monitorEnabled;
   status.total = rowsLength;
   status.queued = 0;
   status.processed = 0;
@@ -536,8 +519,6 @@ function resetStatus(config, rowsLength) {
   status.suggested = 0;
   status.errors = 0;
   status.active = [];
-  status.activeRequests = [];
-  status.recentRequests = [];
   status.error = "";
   status.logs = [];
   status.results = new Map();
@@ -570,12 +551,6 @@ function makePrefilterResult(row, labels, classification, comparisonMode = "tril
       `分析：${analysis}${row.jp ? ` 参照列：${sourceLabel}。` : ""}`,
     ].filter(Boolean).join("\n"),
   };
-}
-
-function requestForClient(request, knownRequestIds) {
-  if (!knownRequestIds.has(request.id)) return request;
-  const { messages, ...summary } = request;
-  return summary;
 }
 
 function addResult(result, { prefilterKind = "" } = {}) {
@@ -840,7 +815,6 @@ function clearProofreadCache() {
   status.finishedAt = null;
   status.projectKey = "";
   status.rowsSignature = "";
-  status.monitorEnabled = false;
   status.total = 0;
   status.queued = 0;
   status.processed = 0;
@@ -868,8 +842,6 @@ function clearProofreadCache() {
   status.suggested = 0;
   status.errors = 0;
   status.active = [];
-  status.activeRequests = [];
-  status.recentRequests = [];
   status.error = "";
   status.logs = [];
   status.results = new Map();
@@ -1054,11 +1026,11 @@ async function proofreadRow(row, allRows, config, labels) {
       contextMode: hasContext ? "requested" : "none",
       lowScore: lowScore.active ? { rows: config.lowScoreRows } : null,
     }, config);
-    const stage = round === 0 ? "base" : (lowScore.active ? `low-score-${round}` : `context-${round}`);
     const stageLabel = round === 0
       ? "当前行判断"
       : (lowScore.active ? `低分归因与修复 ${round}` : `扩展上下文 ${round}`);
-    const content = await trackedCallModel(row, stage, stageLabel, messages, config);
+    pushLog(`第 ${row.index} 行：${stageLabel}，等待模型返回。`);
+    const content = await callModel(messages, config);
     decision = parseDecision(content, { proofreadMode: config.proofreadMode });
     const entersLowScore = !lowScore.active && config.lowScoreCheck && hasNeighborRow(contextState)
       && shouldCheckLowScore({ decision, minPenalty: config.lowScorePenalty });
@@ -1121,7 +1093,8 @@ async function proofreadRow(row, allRows, config, labels) {
           contextMode: contextState.items.length ? "requested" : "none",
           webLookup: { entries, sites: config.wikiSites, round },
         }, config);
-        const content = await trackedCallModel(row, `web-lookup-${round + 1}`, stageLabel, messages, config);
+        pushLog(`第 ${row.index} 行：${stageLabel}，等待模型返回。`);
+        const content = await callModel(messages, config);
         const next = parseDecision(content, { proofreadMode: config.proofreadMode });
         status.webLookupAttempts += 1;
         if (!shouldRetryWithContext(next)) {
@@ -1154,73 +1127,6 @@ async function proofreadRow(row, allRows, config, labels) {
     pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废并转人工确认。`);
   }
   return decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
-}
-
-async function trackedCallModel(row, stage, stageLabel, messages, config) {
-  if (!config.monitorEnabled) {
-    pushLog(`第 ${row.index} 行：${stageLabel}，等待模型返回。`);
-    return callModel(messages, config);
-  }
-  const requestId = `${status.runId}:${row.index}:${stage}:${Date.now()}`;
-  const startedAt = new Date().toISOString();
-  const request = {
-    id: requestId,
-    rowIndex: row.index,
-    stage,
-    stageLabel,
-    provider: config.provider,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
-    startedAt,
-    state: "waiting",
-    messages: summarizeMessages(messages),
-  };
-  status.activeRequests.push(request);
-  pushLog(`第 ${row.index} 行：${stageLabel}，等待模型返回。`);
-  try {
-    const content = await callModel(messages, config);
-    finishRequest(requestId, {
-      state: "done",
-      finishedAt: new Date().toISOString(),
-      responsePreview: previewText(content),
-    });
-    return content;
-  } catch (error) {
-    finishRequest(requestId, {
-      state: status.stopRequested ? "stopped" : "error",
-      finishedAt: new Date().toISOString(),
-      error: error.message || String(error),
-    });
-    throw error;
-  }
-}
-
-function finishRequest(requestId, patch) {
-  const index = status.activeRequests.findIndex((request) => request.id === requestId);
-  if (index < 0) return;
-  const [request] = status.activeRequests.splice(index, 1);
-  const finished = {
-    ...request,
-    ...patch,
-  };
-  finished.elapsedMs = Math.max(0, Date.parse(finished.finishedAt || new Date()) - Date.parse(finished.startedAt || new Date()));
-  status.recentRequests.unshift(finished);
-  if (status.recentRequests.length > 8) {
-    status.recentRequests.splice(8);
-  }
-}
-
-function summarizeMessages(messages) {
-  return messages.map((message) => ({
-    role: message.role,
-    content: previewText(message.content, 10000),
-  }));
-}
-
-function previewText(value, maxLength = 1200) {
-  const text = String(value || "");
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}\n...（已截断，完整内容已发送给模型）`;
 }
 
 function shouldRetryWithContext(decision) {

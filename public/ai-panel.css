@@ -367,7 +367,7 @@ details[open] > summary .details-toggle::before {
   transition: width 160ms ease;
 }
 
-/* ---- 对话监控 / 内置提示词 --------------------------------------------- */
+/* ---- 内置提示词 --------------------------------------------------------- */
 
 .ai-section {
   border-top: 1px solid var(--ai-line);
@@ -398,6 +398,13 @@ details[open] > summary .details-toggle::before {
 .ai-prompt-box {
   margin-top: 0;
 }
+.ai-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 6px;
+}
 .ai-prompt-actions {
   display: flex;
   gap: 8px;
@@ -408,128 +415,6 @@ details[open] > summary .details-toggle::before {
   max-height: 320px;
   font-size: 12px;
   background: var(--ai-surface-subtle);
-}
-.ai-monitor {
-  margin-top: 0;
-}
-.ai-monitor-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-.ai-monitor-state {
-  color: var(--ai-muted-2);
-  font-size: 12px;
-}
-.ai-request-list {
-  display: grid;
-  gap: 6px;
-}
-.ai-request-empty {
-  padding: 8px 10px;
-  border: 1px dashed var(--ai-line);
-  border-radius: var(--ai-radius);
-  color: var(--ai-muted-2);
-  background: var(--ai-surface-subtle);
-  font-size: 12px;
-}
-.ai-request {
-  border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius);
-  background: var(--ai-surface-subtle);
-  overflow: hidden;
-}
-.ai-request.is-waiting {
-  border-color: color-mix(in srgb, var(--ai-focus) 34%, var(--ai-line));
-  background: color-mix(in srgb, var(--ai-info) 54%, var(--ai-surface));
-}
-.ai-request.is-slow {
-  border-color: #ead08d;
-  background: var(--watch, #fdf3d8);
-}
-.ai-request.is-error {
-  border-color: #f1b6b0;
-  background: var(--review, #fdeceb);
-}
-.ai-request-summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  cursor: default;
-  list-style: none;
-}
-.ai-request-summary::-webkit-details-marker {
-  display: none;
-}
-.ai-request-main {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  color: var(--ai-text);
-  font-size: 12px;
-  line-height: 1.35;
-}
-.ai-request-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 1px 7px;
-  border: 1px solid var(--ai-line);
-  border-radius: 999px;
-  background: var(--ai-surface);
-  color: var(--ai-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-.ai-request-time {
-  color: var(--ai-muted-2);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.ai-request-body {
-  display: grid;
-  gap: 6px;
-  padding: 0 10px 10px;
-}
-.ai-message {
-  border: 1px solid var(--ai-line);
-  border-radius: 6px;
-  background: var(--ai-surface);
-  overflow: hidden;
-}
-.ai-shared-message {
-  border-color: color-mix(in srgb, var(--ai-focus) 22%, var(--ai-line));
-  background: color-mix(in srgb, var(--ai-info) 42%, var(--ai-surface));
-}
-.ai-message-role {
-  padding: 5px 7px;
-  border-bottom: 1px solid var(--ai-line);
-  color: var(--ai-muted);
-  font-size: 11px;
-  font-weight: 700;
-  background: var(--ai-surface-subtle);
-}
-.ai-message pre,
-.ai-response-preview {
-  margin: 0;
-  padding: 7px;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #344054;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-}
-.ai-response-preview {
-  border: 1px solid var(--ai-line);
-  border-radius: 6px;
-  background: var(--ai-surface);
 }
 
 /* ---- 响应式 ------------------------------------------------------------- */

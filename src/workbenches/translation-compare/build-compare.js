@@ -941,7 +941,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           </div></details>
           <div class="ai-runbar">
             <div class="toggle-row ai-options">
-              <label><input id="aiMonitorEnabled" type="checkbox">对话监控</label>
               <label><input id="aiPromptVisible" type="checkbox">内置提示词</label>
             </div>
             <div class="ai-status">
@@ -954,18 +953,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               <button id="clearAiLog" class="btn btn--subtle" type="button">清AI记录</button>
             </div>
           </div>
-          <details id="aiMonitorSection" class="ai-section" open>
-            <summary><span>AI 对话监控 <span id="aiMonitorState" class="ai-monitor-state">尚未启动</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 对话监控"></button></summary>
-            <div class="ai-monitor">
-              <div id="aiRequestList" class="ai-request-list">
-                <div class="ai-request-empty">启动 AI 校对后，这里会显示程序发给模型的问题和接口等待状态。</div>
-              </div>
-            </div>
-          </details>
           <details id="aiPromptSection" class="ai-section">
             <summary><span>内置提示词</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开内置提示词"></button></summary>
             <div class="ai-prompt-box">
-            <div class="ai-monitor-head">
+            <div class="ai-prompt-head">
               <div class="ai-prompt-actions">
                 <button id="aiPromptReset" type="button">恢复默认</button>
               </div>

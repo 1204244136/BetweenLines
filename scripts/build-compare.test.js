@@ -230,9 +230,12 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(script, /prefilterIds\.confirm\.addEventListener\("click"[\s\S]*?current\.manualDone = true;[\s\S]*?applyFilters\(\{ reset: false \}\)/);
   assert.doesNotMatch(script, /aiIds\.similarity/);
   assert.match(script, /afterRevision/);
-  assert.match(script, /knownRequestId/);
-  assert.match(script, /aiRequestCache/);
   assert.match(script, /aiStatusRefreshInFlight/);
+  assert.doesNotMatch(script, /aiRequestCache/);
+  assert.doesNotMatch(script, /knownRequestId/);
+  assert.doesNotMatch(html, /id="aiMonitorSection"/);
+  assert.doesNotMatch(html, /id="aiMonitorEnabled"/);
+  assert.doesNotMatch(html, /AI 对话监控/);
   assert.match(script, /pendingResults\.length[\s\S]*?saveNotes\(\)[\s\S]*?updateDoneCount\(\)/);
   assert.match(script, /function writeNote\([^)]*\{ deferCommit = false \}/);
   assert.match(script, /function revisionTextFor\(item\)/);
