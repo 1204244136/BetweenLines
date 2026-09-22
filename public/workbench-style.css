@@ -1157,6 +1157,9 @@
     }
     .hide-translation-diff [data-diff-kind="translation"],
     .hide-revision-diff [data-diff-kind="revision"],
+    .hide-revision-diff [data-diff-kind="stage1-step"],
+    .hide-revision-diff [data-diff-kind="stage2-step"],
+    .hide-revision-diff [data-diff-kind="revision-summary"],
     .hide-translation-diff [data-diff][data-has-revision="0"],
     .hide-revision-diff [data-diff][data-has-translation="0"],
     .hide-translation-diff.hide-revision-diff [data-diff] {

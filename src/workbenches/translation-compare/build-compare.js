@@ -826,7 +826,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="transcomparator-session-token" content="">
   <title>${bilingual ? "双语" : "三语"}翻译对比校对工作台</title>
-  <style>${workbenchStyle}${aiPanelStyle}</style>
+  <style>${assets.workbenchStyle}${assets.aiPanelStyle}</style>
 </head>
 <body>
   <div class="app-shell mode-${comparisonMode}">
@@ -1015,7 +1015,9 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
                   <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
-                  <div class="ai-stage-card-sub">快速直通: <span id="metricFastPassHits">0</span></div>
+                  <div class="ai-stage-card-sub">
+                    <span class="ai-stage-sub-item">快速直通: <span id="metricFastPassHits">0</span></span>
+                  </div>
                   <div id="stage1ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage1ActiveRowsText"></span></div>
                 </div>
               </div>
@@ -1032,7 +1034,11 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段二复审行">
                   <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
                   <div class="ai-stage-card-sub">
-                    采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
+                    <span class="ai-stage-sub-item">采纳: <span id="metricCritiqueAccept">0</span></span>
+                    <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                    <span class="ai-stage-sub-item">调整: <span id="metricCritiqueModify">0</span></span>
+                    <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                    <span class="ai-stage-sub-item">驳回: <span id="metricCritiqueReject">0</span></span>
                   </div>
                   <div id="stage2ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage2ActiveRowsText"></span></div>
                 </div>
@@ -1049,7 +1055,9 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段三仲裁行">
                   <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
-                  <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
+                  <div class="ai-stage-card-sub">
+                    <span class="ai-stage-sub-item">升级仲裁: <span id="metricCritiqueEscalate">0</span></span>
+                  </div>
                   <div id="stage3ActiveInfo" class="ai-stage-active-info" hidden>处理中: <span id="stage3ActiveRowsText"></span></div>
                 </div>
               </div>

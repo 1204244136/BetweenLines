@@ -68,3 +68,26 @@ test("formatArbitrationNoteLines generates structured analysis traces", () => {
   assert.ok(lines[1].includes("Stylist复审[调整]"));
   assert.ok(lines[2].includes("Arbiter仲裁[Stylist方案]"));
 });
+
+test("formatArbitrationNoteLines records stage-specific revised texts for progression tracking", () => {
+  const lines = formatArbitrationNoteLines({
+    gatekeeperDecision: {
+      summary: "指出语病重复与事实增补",
+      needsEdit: true,
+      stage1RevisedText: "亚雷斯塔尚未登门",
+    },
+    stylistReview: {
+      critique: { attitude: "modify", rationale: "增强隐喻，提升文采" },
+      revisedText: "亚雷斯塔尚未叩响门扉",
+    },
+    arbitration: {
+      winner: "stylist",
+      reason: "复审方案更具文学意蕴",
+    },
+  });
+  assert.ok(lines.some((l) => l === "Gatekeeper初审：指出语病重复与事实增补"));
+  assert.ok(lines.some((l) => l === "初审改案：亚雷斯塔尚未登门"));
+  assert.ok(lines.some((l) => l.startsWith("Stylist复审[调整]：")));
+  assert.ok(lines.some((l) => l === "复审改案：亚雷斯塔尚未叩响门扉"));
+  assert.ok(lines.some((l) => l.startsWith("Arbiter仲裁[Stylist方案]：")));
+});

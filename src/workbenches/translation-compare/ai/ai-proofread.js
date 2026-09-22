@@ -1731,6 +1731,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
 async function runStage2Stylist(stage1Result, config, labels) {
   const { row, targetLabel, lowScore } = stage1Result;
   let decision = { ...stage1Result.decision };
+  decision.stage1RevisedText = String(stage1Result.decision?.revisedText || "");
 
   pushLog(`第 ${row.index} 行：初审建议修改，转入 Stage 2 (Stylist 文学复审)。`);
 
@@ -1755,6 +1756,7 @@ async function runStage2Stylist(stage1Result, config, labels) {
     const stylistReview = parseStylistResponse(stylistRaw);
     decision.stylistReview = stylistReview;
     decision.stylistModelId = sConf.model;
+    decision.stage2RevisedText = String(stylistReview.revisedText || "");
 
     pushLog(`第 ${row.index} 行：Stylist 复审完成（attitude: ${stylistReview.critique.attitude}）。`);
 
@@ -1825,6 +1827,7 @@ async function runStage3Arbiter(stage2Result, config, labels) {
     decision.arbitrationModelId = aConf.model;
     if (applied.revisedText) {
       decision.revisedText = applied.revisedText;
+      decision.stage3RevisedText = applied.revisedText;
     }
     decision.needsEdit = applied.needsEdit;
     decision.stage = "arbiter";

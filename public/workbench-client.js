@@ -649,8 +649,14 @@
         || text.startsWith("线上查证：")
         || text.startsWith("标点自动规范化：")
         || text.startsWith("Gatekeeper初审：")
+        || text.startsWith("初审改案：")
+        || text.startsWith("初审建议：")
         || text.startsWith("Stylist复审")
-        || text.startsWith("Arbiter仲裁");
+        || text.startsWith("复审改案：")
+        || text.startsWith("复审建议：")
+        || text.startsWith("Arbiter仲裁")
+        || text.startsWith("仲裁改案：")
+        || text.startsWith("仲裁建议：");
     }
 
     function normalizeStoredNote(value) {
@@ -1465,16 +1471,64 @@
         const matchBadge = revisionMatchesTw
           ? '<span class="diff-match-badge" title="与' + escapeHtml(pageLabels.tw) + '简体化的差异完全相同">同' + escapeHtml(pageLabels.tw) + '简体化</span>'
           : "";
+
+        const noteData = parseAutomatedNote(item?.note);
+        const s1Rev = noteData?.stage1Revision;
+        const hasStepProgression = Boolean(
+          noteData &&
+          (noteData.stage2 || noteData.stage3) &&
+          (s1Rev || noteData.stage1)
+        );
+
+        let stepProgressionHtml = "";
+        if (hasStepProgression) {
+          let s1StepLabel = "步骤 1：事实初审";
+          let s1StepSubLabel = "初审改案";
+          let s1DiffHtml = "";
+          let s2DiffHtml = "";
+
+          if (s1Rev) {
+            const isPartialPhrase = s1Rev.length < targetText.length * 0.45;
+            s1StepSubLabel = isPartialPhrase ? "局部修正提议" : (escapeHtml(pageLabels[targetKey] || targetKey) + " → 初审改案");
+            s1DiffHtml = isPartialPhrase
+              ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(s1Rev) + '</ins></div>'
+              : inlineDiffHtml(targetText, s1Rev);
+
+            s2DiffHtml = isPartialPhrase
+              ? inlineDiffHtml(targetText, revision)
+              : inlineDiffHtml(s1Rev, revision);
+          } else {
+            s1StepSubLabel = "事实审查重点";
+            s1DiffHtml = '<div class="diff-partial-phrase"><span>审查要点：</span><span class="diff-step-audit-point">' + escapeHtml(noteData.stage1 || "指出事实性硬伤") + '</span></div>';
+            s2DiffHtml = inlineDiffHtml(targetText, revision);
+          }
+
+          stepProgressionHtml = '<details open class="diff-step-details">' +
+            '<summary class="diff-step-summary">分步演进明细（初审 ➔ 复审）▾</summary>' +
+            '<div class="diff-step-content">' +
+              '<div class="diff-comparison is-stage-step is-gk" data-diff-kind="stage1-step">' +
+                '<div class="version-label"><span class="diff-step-pill is-gk">' + s1StepLabel + '</span><span>' + s1StepSubLabel + '</span></div>' +
+                '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s1DiffHtml + '</div>' +
+              '</div>' +
+              '<div class="diff-comparison is-stage-step is-stylist" data-diff-kind="stage2-step">' +
+                '<div class="version-label"><span class="diff-step-pill is-stylist">步骤 2：文学复审</span><span>' + (s1Rev && s1Rev.length >= targetText.length * 0.45 ? '初审改案 → 最终修改' : '全句文学润色') + '</span></div>' +
+                '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s2DiffHtml + '</div>' +
+              '</div>' +
+            '</div>' +
+          '</details>';
+        }
+
         comparisons.push({
           kind: "revision",
           html: '<div class="diff-comparison" data-diff-kind="revision">' +
           '<div class="version-label"><span>' + escapeHtml(pageLabels[targetKey] || targetKey) + ' → 修改结果</span>' + matchBadge + '</div>' +
           '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + revisionDiffHtml + '</div>' +
+          stepProgressionHtml +
           '</div>',
         });
       }
       const hasTranslation = comparisons.some((item) => item.kind === "translation");
-      const hasRevision = comparisons.some((item) => item.kind === "revision");
+      const hasRevision = comparisons.some((item) => item.kind.startsWith("revision") || item.kind.includes("step"));
       return comparisons.length
         ? '<section class="diff-block" data-diff data-has-translation="' + (hasTranslation ? "1" : "0") + '" data-has-revision="' + (hasRevision ? "1" : "0") + '">' +
           '<div class="diff-title">差异辅助</div>' +
@@ -1573,8 +1627,11 @@
         revision: "",
         analysis: "",
         stage1: "",
+        stage1Revision: "",
         stage2: null,
+        stage2Revision: "",
         stage3: null,
+        stage3Revision: "",
       };
       let currentField = "";
       for (const line of lines.slice(1)) {
@@ -1587,6 +1644,9 @@
         } else if (line.startsWith("Gatekeeper初审：")) {
           data.stage1 = line.slice("Gatekeeper初审：".length).trim();
           currentField = "";
+        } else if (line.startsWith("初审改案：") || line.startsWith("初审建议：")) {
+          data.stage1Revision = line.replace(/^(初审改案|初审建议)：/, "").trim();
+          currentField = "";
         } else if (line.startsWith("Stylist复审")) {
           const match = line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/);
           if (match) {
@@ -1596,6 +1656,9 @@
             };
           }
           currentField = "";
+        } else if (line.startsWith("复审改案：") || line.startsWith("复审建议：")) {
+          data.stage2Revision = line.replace(/^(复审改案|复审建议)：/, "").trim();
+          currentField = "";
         } else if (line.startsWith("Arbiter仲裁")) {
           const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/);
           if (match) {
@@ -1604,6 +1667,9 @@
               text: match[2]?.trim() || "",
             };
           }
+          currentField = "";
+        } else if (line.startsWith("仲裁改案：") || line.startsWith("仲裁建议：")) {
+          data.stage3Revision = line.replace(/^(仲裁改案|仲裁建议)：/, "").trim();
           currentField = "";
         } else if (line.startsWith("质量评分：") || line.startsWith("评分：") || line.startsWith("翻译得分：")) {
           const match = line.match(/(\d+)\s*分?(?:（扣\s*(\d+)\s*分?）|\(扣\s*(\d+)\s*分?\))?/);
@@ -1662,6 +1728,31 @@
         else if (data.grade === "excellent") data.severity = "none";
       }
 
+      // 兼容历史数据：若无独立改案行，从 Stylist 分析与 Gatekeeper 评语中推断阶段改案
+      if (data.stage2 && !data.stage1Revision) {
+        if (data.stage2.text) {
+          const legacyGkMatch = data.stage2.text.match(/(?:Gatekeeper|初审(?:员)?|初审修改稿?)\s*(?:处理为|建议为|改为|提出|译为|修正为|写作|方案为|采用)[‘“](.*?)[’”]/)
+            || data.stage2.text.match(/(?:建议(?:为)?|应为|修正为)[‘“](.*?)[’”]/);
+          if (legacyGkMatch && legacyGkMatch[1]?.trim()) {
+            data.stage1Revision = legacyGkMatch[1].trim();
+          }
+        }
+        if (!data.stage1Revision && data.stage1) {
+          const gkMatch = data.stage1.match(/(?:建议(?:为|改为|改写为)?|处理为|改为|修正为|漏译(?:原文)?(?:限定语)?)[：:‘“「](.*?)[’”」]/)
+            || data.stage1.match(/「(.*?)」/);
+          if (gkMatch && gkMatch[1]?.trim()) {
+            data.stage1Revision = gkMatch[1].trim();
+          }
+        }
+      }
+      if (data.stage2 && !data.stage2Revision) {
+        if (data.stage2.attitude.includes("采纳") && data.stage1Revision) {
+          data.stage2Revision = data.stage1Revision;
+        } else if (!data.stage3 && data.revision) {
+          data.stage2Revision = data.revision;
+        }
+      }
+
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
     }
 
@@ -1696,6 +1787,10 @@
       const note = parseAutomatedNote(noteText);
       if (!note) return '<div class="note-summary" hidden></div>';
 
+      const revisionText = revisionTextFor(item);
+      const revisionTarget = revisionTargetFor(item);
+      const revisionLabel = pageLabels[revisionTarget] || (revisionTarget === "tw" ? "非原文 C" : "非原文 B");
+
       let pipelineHtml = "";
       if (note.stage2 || note.stage3) {
         const s2Attitude = note.stage2?.attitude || "复审";
@@ -1706,6 +1801,28 @@
 
         const s3Winner = note.stage3?.winner || "仲裁";
 
+        const s1RevHtml = note.stage1Revision
+          ? '<div class="stage-proposal-mini is-gk">' +
+              '<span class="stage-proposal-mini-tag">初审改案:</span>' +
+              '<span class="stage-proposal-text">' + escapeHtml(note.stage1Revision) + '</span>' +
+            '</div>'
+          : '';
+
+        const s2RevHtml = (note.stage2Revision && note.stage2Revision.trim() !== String(revisionText || "").trim())
+          ? '<div class="stage-proposal-mini is-stylist">' +
+              '<span class="stage-proposal-mini-tag">复审改案:</span>' +
+              '<span class="stage-proposal-text">' + escapeHtml(note.stage2Revision) + '</span>' +
+            '</div>'
+          : '';
+
+        const s3RevText = note.stage3Revision;
+        const s3RevHtml = (s3RevText && s3RevText.trim() !== String(revisionText || "").trim())
+          ? '<div class="stage-proposal-mini is-arbiter">' +
+              '<span class="stage-proposal-mini-tag">仲裁改案:</span>' +
+              '<span class="stage-proposal-text">' + escapeHtml(s3RevText) + '</span>' +
+            '</div>'
+          : '';
+
         pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" title="点击展开/收起多阶段审核轨迹">' +
           '<span class="pipeline-step is-gk">初审</span>' +
           '<span class="pipeline-arrow">➔</span>' +
@@ -1714,20 +1831,53 @@
           '<span class="pipeline-expand-hint">审核轨迹 ▾</span>' +
         '</div>' +
         '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '" hidden>' +
-          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
-          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
-          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
+          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div>' + s1RevHtml + '</div>' : '') +
+          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div>' + s2RevHtml + '</div>' : '') +
+          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div>' + s3RevHtml + '</div>' : '') +
         '</div>';
       }
 
-      const analysis = note.analysis
-        ? '<div class="note-detail note-reason"><div class="note-detail-head"><span class="note-summary-key">分析</span></div><div class="note-summary-value">' + escapeHtml(note.analysis) + '</div></div>'
+      let displayAnalysis = String(note.analysis || "").trim();
+      if (note.stage1 || note.stage2) {
+        const s1 = String(note.stage1 || "").trim();
+        const s2 = String(note.stage2?.text || "").trim();
+        if (s1 && displayAnalysis === s1) {
+          displayAnalysis = "";
+        } else if (s1 && displayAnalysis.startsWith(s1)) {
+          displayAnalysis = displayAnalysis.slice(s1.length).trim();
+        } else if (s2 && displayAnalysis === s2) {
+          displayAnalysis = "";
+        }
+      }
+      const analysis = displayAnalysis
+        ? '<div class="note-detail note-reason"><div class="note-detail-head"><span class="note-summary-key">分析</span></div><div class="note-summary-value">' + escapeHtml(displayAnalysis) + '</div></div>'
         : "";
-      const revisionText = revisionTextFor(item);
-      const revisionTarget = revisionTargetFor(item);
-      const revisionLabel = pageLabels[revisionTarget] || (revisionTarget === "tw" ? "非原文 C" : "非原文 B");
+
+      let stagePillsHtml = "";
+      const hasMultipleStages = Boolean(
+        note.stage2 || note.stage3 ||
+        (note.stage1Revision && (note.stage2Revision || note.revision))
+      );
+      if (hasMultipleStages) {
+        const currentRev = String(revisionText || "").trim();
+        const s1Rev = String(note.stage1Revision || "").trim();
+        const s2Rev = String(note.stage2Revision || note.revision || "").trim();
+        const s3Rev = String(note.stage3Revision || (note.stage3 ? note.revision : "")).trim();
+
+        const isS1Active = Boolean(s1Rev && currentRev === s1Rev);
+        const isS3Active = Boolean(note.stage3 && s3Rev && currentRev === s3Rev);
+        const isS2Active = !isS1Active && !isS3Active;
+
+        stagePillsHtml = '<div class="revision-stage-pills" data-row-id="' + escapeHtml(id || "") + '" title="在不同阶段的修改版本间快速切换">' +
+          '<span class="stage-pills-label">版本:</span>' +
+          '<button type="button" class="stage-pill-btn is-gk ' + (isS1Active ? 'is-active' : '') + '" data-apply-stage="1" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段一事实初审文本">初审</button>' +
+          '<button type="button" class="stage-pill-btn is-stylist ' + (isS2Active ? 'is-active' : '') + '" data-apply-stage="2" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段二文学复审文本">复审</button>' +
+          (note.stage3 ? '<button type="button" class="stage-pill-btn is-arbiter ' + (isS3Active ? 'is-active' : '') + '" data-apply-stage="3" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段三终审仲裁文本">仲裁</button>' : '') +
+        '</div>';
+      }
+
       const revision = revisionText
-        ? '<div class="note-detail note-revision"><div class="note-detail-head"><span class="note-summary-key">' + escapeHtml(revisionLabel) + '修改结果</span><div class="revision-head-actions"><button type="button" class="writeback-revision" data-writeback-revision="' + escapeHtml(id || "") + '" title="将修改结果直接写回原文件">写回</button><button type="button" class="copy-revision" data-copy-text="' + escapeHtml(revisionText) + '" title="复制修改结果">复制</button></div></div><textarea class="revision-editor" data-revision="' + escapeHtml(id || "") + '" aria-label="第 ' + escapeHtml(id || "") + ' 行 AI 修改结果">' + escapeHtml(revisionText) + '</textarea></div>'
+        ? '<div class="note-detail note-revision"><div class="note-detail-head"><span class="note-summary-key">' + escapeHtml(revisionLabel) + '修改结果</span>' + stagePillsHtml + '<div class="revision-head-actions"><button type="button" class="writeback-revision" data-writeback-revision="' + escapeHtml(id || "") + '" title="将修改结果直接写回原文件">写回</button><button type="button" class="copy-revision" data-copy-text="' + escapeHtml(revisionText) + '" title="复制修改结果">复制</button></div></div><textarea class="revision-editor" data-revision="' + escapeHtml(id || "") + '" aria-label="第 ' + escapeHtml(id || "") + ' 行 AI 修改结果">' + escapeHtml(revisionText) + '</textarea></div>'
         : "";
       
       let ratingBadges = "";
@@ -2218,6 +2368,15 @@
     });
 
     tbody.addEventListener("click", (event) => {
+      const applyStageBtn = event.target.closest("[data-apply-stage]");
+      if (applyStageBtn) {
+        event.preventDefault();
+        event.stopPropagation();
+        const rowId = applyStageBtn.dataset.rowId;
+        const stage = applyStageBtn.dataset.applyStage;
+        applyStageRevision(rowId, stage);
+        return;
+      }
       const pipelineBtn = event.target.closest("[data-pipeline-toggle]");
       if (pipelineBtn) {
         const rowId = pipelineBtn.dataset.pipelineToggle;
@@ -2571,6 +2730,64 @@
         rowTexts[key] = list;
       }
       return rowTexts;
+    }
+
+    function applyStageRevision(id, stage) {
+      const rowId = String(id || "");
+      if (!rowId || !notes[rowId]) return;
+      const noteData = parseAutomatedNote(notes[rowId].note);
+      if (!noteData) return;
+
+      let targetText = "";
+      let stageName = "";
+      if (String(stage) === "1") {
+        targetText = noteData.stage1Revision || "";
+        stageName = "阶段一初审方案";
+      } else if (String(stage) === "2") {
+        targetText = noteData.stage2Revision || noteData.revision || "";
+        stageName = "阶段二复审方案";
+      } else if (String(stage) === "3") {
+        targetText = noteData.stage3Revision || noteData.revision || "";
+        stageName = "阶段三仲裁方案";
+      }
+
+      if (!targetText) {
+        const fallbackMsg = noteData.stage1
+          ? ("第 " + rowId + " 行初审要点：" + noteData.stage1.slice(0, 80) + "…")
+          : "该阶段未提供独立修改文本";
+        showToast(fallbackMsg, { tone: "watch", durationMs: 7000 });
+        return;
+      }
+
+      const current = notes[rowId] || { note: "", done: false };
+      current.revisionText = targetText;
+      current.revisionTarget = revisionTargetFor(current);
+      notes[rowId] = current;
+      saveNotes();
+
+      const rowElem = renderedRow(rowId);
+      if (rowElem) {
+        const editor = rowElem.querySelector('.revision-editor[data-revision="' + CSS.escape(rowId) + '"]');
+        if (editor) {
+          editor.value = targetText;
+          syncRevisionEditorHeight(editor);
+        }
+        const copyButton = rowElem.querySelector(".copy-revision");
+        if (copyButton) copyButton.dataset.copyText = targetText;
+
+        const pills = rowElem.querySelectorAll(".stage-pill-btn[data-row-id='" + CSS.escape(rowId) + "']");
+        for (const pill of pills) {
+          pill.classList.toggle("is-active", pill.dataset.applyStage === String(stage));
+        }
+
+        const diffSlot = rowElem.querySelector("[data-diff-slot]");
+        const rowObj = rowsById.get(rowId);
+        if (diffSlot && rowObj) {
+          diffSlot.innerHTML = renderDiffBlock(rowObj, current);
+        }
+      }
+
+      showToast("已切换为" + stageName, { tone: "success" });
     }
 
     async function writebackSingleRevision(id, button) {

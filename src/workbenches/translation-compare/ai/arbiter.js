@@ -175,16 +175,30 @@ function formatArbitrationNoteLines({
   if (gatekeeperDecision.summary) {
     lines.push(`Gatekeeper初审：${gatekeeperDecision.summary}`);
   }
+  const gkText = String(gatekeeperDecision.stage1RevisedText || gatekeeperDecision.revisedText || "").trim();
+  if (gatekeeperDecision.needsEdit !== false && gkText) {
+    lines.push(`初审改案：${gkText}`);
+  }
+
   const critique = stylistReview.critique || {};
   if (critique.rationale || stylistReview.summary) {
     const attMap = { accept: "采纳", modify: "调整", reject: "驳回", escalate: "提交仲裁" };
     const attLabel = attMap[critique.attitude] || critique.attitude || "复审";
     lines.push(`Stylist复审[${attLabel}]：${critique.rationale || stylistReview.summary}`);
   }
+  const s2Text = String(gatekeeperDecision.stage2RevisedText || stylistReview.revisedText || "").trim();
+  if (s2Text && s2Text !== gkText) {
+    lines.push(`复审改案：${s2Text}`);
+  }
+
   if (arbitration.reason) {
     const winnerMap = { gatekeeper: "Gatekeeper方案", stylist: "Stylist方案", original: "维持原译", neither: "折中方案" };
     const winLabel = winnerMap[arbitration.winner] || arbitration.winner || "裁决";
     lines.push(`Arbiter仲裁[${winLabel}]：${arbitration.reason}`);
+    const s3Text = String(arbitration.revisedText || gatekeeperDecision.stage3RevisedText || "").trim();
+    if (s3Text && s3Text !== s2Text && s3Text !== gkText) {
+      lines.push(`仲裁改案：${s3Text}`);
+    }
   }
 
   return lines;

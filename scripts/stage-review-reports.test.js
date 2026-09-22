@@ -163,3 +163,145 @@ test("selecting stage preset or clicking header does not trigger stage filter", 
   assert.equal(ui.run("activeStageFilter"), null);
   assert.equal(card2.classList.contains("is-active-filter"), false);
 });
+
+test("parseAutomatedNote extracts stage-specific revisions and supports legacy inference", () => {
+  const ui = createWorkbench();
+
+  // 1. 新格式：显式包含 初审改案 与 复审改案
+  const noteNew = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：指出语病重复与事实增补",
+    "初审改案：彼时，亚雷斯塔尚未登门。",
+    "Stylist复审[调整]：深化隐喻，修饰节奏",
+    "复审改案：彼时，亚雷斯塔尚未叩响门扉。",
+    "修改结果：彼时，亚雷斯塔尚未叩响门扉。",
+  ].join("\n");
+
+  const parsedNew = ui.run(`parseAutomatedNote(${JSON.stringify(noteNew)})`);
+  assert.equal(parsedNew.stage1Revision, "彼时，亚雷斯塔尚未登门。");
+  assert.equal(parsedNew.stage2Revision, "彼时，亚雷斯塔尚未叩响门扉。");
+  assert.equal(parsedNew.revision, "彼时，亚雷斯塔尚未叩响门扉。");
+
+  // 2. 历史/旧格式：仅在 Stylist 评语中提及初审处理
+  const noteLegacy = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：指出原译‘还尚未’语义重复。",
+    "Stylist复审[调整]：Gatekeeper 处理为‘亚雷斯塔尚未登门’过于平淡直白，宜深化隐喻色彩。",
+    "修改结果：彼时，亚雷斯塔尚未叩响门扉。",
+  ].join("\n");
+
+  const parsedLegacy = ui.run(`parseAutomatedNote(${JSON.stringify(noteLegacy)})`);
+  assert.equal(parsedLegacy.stage1Revision, "亚雷斯塔尚未登门");
+  assert.equal(parsedLegacy.stage2Revision, "彼时，亚雷斯塔尚未叩响门扉。");
+});
+
+test("renderNoteSummary and renderDiffBlock visualize step progression and version switcher", async () => {
+  const ui = createWorkbench(undefined, {
+    rows: [
+      {
+        index: 2,
+        relation: "1:1",
+        jp: "未だアレイスターが門を叩く前の、ある意味においては平和な时代のお话。",
+        cn: "这个故事发生在某种意义上尚算平和的时代——彼时，亚雷斯塔还尚未登门拜师。",
+        signature: "sig2",
+      },
+    ],
+  });
+
+  const noteWithProgression = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "质量评分：97分 (-3)",
+    "Gatekeeper初审：指出语病重复与增补",
+    "初审改案：这个故事发生在某种意义上尚算平和的时代——彼时，亚雷斯塔尚未登门。",
+    "Stylist复审[调整]：增强隐喻色彩并调谐用字",
+    "复审改案：这个故事发生在某种意义上还算平和的时代——彼时，亚雷斯塔尚未叩响门扉。",
+    "修改结果：这个故事发生在某种意义上还算平和的时代——彼时，亚雷斯塔尚未叩响门扉。",
+  ].join("\n");
+
+  ui.run(`
+    notes["2"] = {
+      note: ${JSON.stringify(noteWithProgression)},
+      revisionText: "这个故事发生在某种意义上还算平和的时代——彼时，亚雷斯塔尚未叩响门扉。",
+      manualDone: false,
+    };
+  `);
+
+  // 1. 检查差异辅助（renderDiffBlock）：默认展示全貌对比，分步演进明细默认展开（<details open>）
+  const rowObj = ui.run('allRows.find(r => r.index === 2)');
+  const diffHtml = ui.run(`renderDiffBlock(${JSON.stringify(rowObj)}, notes["2"])`);
+  assert.match(diffHtml, /译文 → 修改结果/);
+  assert.match(diffHtml, /<details open class="diff-step-details">/);
+  assert.match(diffHtml, /分步演进明细/);
+  assert.match(diffHtml, /步骤 1：事实初审/);
+  assert.match(diffHtml, /步骤 2：文学复审/);
+
+  // 2. 检查审核轨迹卡片与版本切换器（renderNoteSummary）：精简轻量，消除重复分析栏
+  const summaryHtml = ui.run(`renderNoteSummary(notes["2"], "2")`);
+  assert.match(summaryHtml, /初审改案:/);
+  assert.match(summaryHtml, /revision-stage-pills/);
+  assert.match(summaryHtml, /data-apply-stage="1"/);
+  assert.match(summaryHtml, /data-apply-stage="2"/);
+  assert.equal(summaryHtml.includes('note-reason'), false, "初审与分析100%重复时已消除冗余分析栏");
+
+  // 3. 测试点击「采纳初审方案」切换版本
+  ui.run('applyStageRevision("2", "1")');
+  const activeRev = ui.run('notes["2"].revisionText');
+  assert.equal(activeRev, "这个故事发生在某种意义上尚算平和的时代——彼时，亚雷斯塔尚未登门。");
+
+  // 切换后再次生成 diffHtml，此时当前选中的已是初审改案
+  const diffAfterS1 = ui.run(`renderDiffBlock(${JSON.stringify(rowObj)}, notes["2"])`);
+  assert.ok(diffAfterS1);
+});
+
+test("multi-stage rows without explicit stage1Revision still render version buttons and open step progression", () => {
+  const ui = createWorkbench(undefined, {
+    rows: [
+      {
+        index: 8,
+        relation: "1:1",
+        jp: "「新婦ミナよ。あなたは結婚を申し込んだ人生の伴侶メイザースを認め、ミナ=メイザースというご自身の新たな名前を受け入れますか?」",
+        cn: "「新娘米娜，请问你愿意接受马瑟斯先生成为你的人生伴侣，并从此改名为米娜·马瑟斯吗？」",
+        signature: "sig8",
+      },
+    ],
+  });
+
+  // 模拟历史数据：只有初审说明和复审调整，没有独立的「初审改案：」
+  const noteRow8 = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "质量评分：95分 (-5)",
+    "Gatekeeper初审：需要修改：译文漏译原文限定语「結婚を申し込んだ」（主动求婚的），属性忌遗漏，其余语义一致。",
+    "Stylist复审[调整]：初审员敏锐地指出了限定语的漏译。然而初审修改稿仍残留明显的翻译腔与口吻偏差……因此需在补全信息的基础上，重塑誓词的典雅庄重文风。",
+    "修改结果：「新娘米娜。你是否愿意承认向你求婚的人生伴侣马瑟斯，并接纳‘米娜·马瑟斯’这一属于你自己的新名字？」",
+  ].join("\n");
+
+  ui.run(`
+    notes["8"] = {
+      note: ${JSON.stringify(noteRow8)},
+      revisionText: "「新娘米娜。你是否愿意承认向你求婚的人生伴侣马瑟斯，并接纳‘米娜·马瑟斯’这一属于你自己的新名字？」",
+      manualDone: false,
+    };
+  `);
+
+  const rowObj = ui.run('allRows.find(r => r.index === 8)');
+
+  // 1. 差异辅助应包含默认展开的分步演进
+  const diffHtml = ui.run(`renderDiffBlock(${JSON.stringify(rowObj)}, notes["8"])`);
+  assert.match(diffHtml, /<details open class="diff-step-details">/);
+  assert.match(diffHtml, /步骤 1：事实初审/);
+  assert.match(diffHtml, /步骤 2：文学复审/);
+
+  // 2. 修改结果区必须渲染「版本: [初审] [复审]」切换按钮，绝不缺失！
+  const summaryHtml = ui.run(`renderNoteSummary(notes["8"], "8")`);
+  assert.match(summaryHtml, /revision-stage-pills/);
+  assert.match(summaryHtml, /data-apply-stage="1"/);
+  assert.match(summaryHtml, /data-apply-stage="2"/);
+});
