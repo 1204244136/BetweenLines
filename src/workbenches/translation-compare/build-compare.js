@@ -977,46 +977,52 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div class="ai-actions">
               <button id="aiStart" class="btn btn--primary" type="button">开始</button>
               <button id="aiStop" class="btn btn--danger" type="button" disabled>停止</button>
-              <button id="clearAiLog" class="btn btn--subtle" type="button">清AI记录</button>
+              <button id="clearAiLog" class="btn btn--subtle" type="button">清除 AI 记录</button>
             </div>
           </div>
           <div id="aiStageDashboard" class="ai-stage-dashboard" aria-label="审核流水线阶段统计">
             <div class="ai-stage-dashboard-header">
               <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
-              <span id="aiStageFastPassRate" class="ai-stage-badge" title="Fast Pass 高置信度直接通过率">Fast Pass: 0%</span>
+              <span id="aiStageFastPassRate" class="ai-stage-badge" title="高置信度快速直通率 (Fast Pass)">快速直通: 0%</span>
             </div>
             <div class="ai-stage-cards">
-              <div class="ai-stage-card" id="stage1Card" data-filter-stage="1" title="Stage 1 Gatekeeper：事实性硬伤审查与直接通过（点击筛选通过行）">
-                <div class="ai-stage-card-head">
-                  <span class="ai-stage-card-label">Stage 1 事实初审</span>
-                  <select id="stage1PresetSelect" class="ai-stage-preset-select" title="Stage 1 模型预设（默认使用主配置）">
+              <div class="ai-stage-card" id="stage1Card" data-filter-stage="1" title="阶段一 事实初审：事实性硬伤审查与直接通过">
+                <div class="ai-stage-card-head" title="配置阶段一模型预设（默认使用主配置）">
+                  <span class="ai-stage-card-label">阶段一 事实初审</span>
+                  <select id="stage1PresetSelect" class="ai-stage-preset-select" title="阶段一模型预设（默认使用主配置）">
                     <option value="">使用主配置</option>
                   </select>
                 </div>
-                <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
-                <div class="ai-stage-card-sub">Fast Pass: <span id="metricFastPassHits">0</span></div>
+                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
+                  <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
+                  <div class="ai-stage-card-sub">快速直通: <span id="metricFastPassHits">0</span></div>
+                </div>
               </div>
-              <div class="ai-stage-card" id="stage2Card" data-filter-stage="2" title="Stage 2 Stylist：文学责编复审与同行评议（点击筛选复审行）">
-                <div class="ai-stage-card-head">
-                  <span class="ai-stage-card-label">Stage 2 文学复审</span>
-                  <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择 Stage 2 模型预设（不填代表不启用）">
+              <div class="ai-stage-card" id="stage2Card" data-filter-stage="2" title="阶段二 文学复审：文学责编复审与同行评议">
+                <div class="ai-stage-card-head" title="配置阶段二模型预设（未启用时不执行复审）">
+                  <span class="ai-stage-card-label">阶段二 文学复审</span>
+                  <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二模型预设（不填代表不启用）">
                     <option value="">未启用</option>
                   </select>
                 </div>
-                <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
-                <div class="ai-stage-card-sub">
-                  采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
+                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段二复审行">
+                  <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
+                  <div class="ai-stage-card-sub">
+                    采纳:<span id="metricCritiqueAccept">0</span> 调:<span id="metricCritiqueModify">0</span> 驳:<span id="metricCritiqueReject">0</span>
+                  </div>
                 </div>
               </div>
-              <div class="ai-stage-card" id="stage3Card" data-filter-stage="3" title="Stage 3 Arbiter：初审与复审分歧仲裁（点击筛选仲裁行）">
-                <div class="ai-stage-card-head">
-                  <span class="ai-stage-card-label">Stage 3 终审仲裁</span>
-                  <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在 Stage 2 选择预设启用后，方可配置 Stage 3">
+              <div class="ai-stage-card" id="stage3Card" data-filter-stage="3" title="阶段三 终审仲裁：初审与复审分歧仲裁">
+                <div class="ai-stage-card-head" title="配置阶段三模型预设（需先在阶段二选择预设启用）">
+                  <span class="ai-stage-card-label">阶段三 终审仲裁</span>
+                  <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二选择预设启用后，方可配置阶段三">
                     <option value="">未启用</option>
                   </select>
                 </div>
-                <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
-                <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
+                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段三仲裁行">
+                  <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
+                  <div class="ai-stage-card-sub">升级:<span id="metricCritiqueEscalate">0</span></div>
+                </div>
               </div>
             </div>
           </div>

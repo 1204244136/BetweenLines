@@ -45,7 +45,19 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       elements.set(id, {
         hidden: false, disabled: false, value: "", textContent: "", innerHTML: "", checked: false,
         dataset: {}, style: { setProperty() {} }, options: [], children: [], files: [], open: false,
-        classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+        classList: (() => {
+          const classes = new Set();
+          return {
+            add(...names) { names.forEach((n) => classes.add(n)); },
+            remove(...names) { names.forEach((n) => classes.delete(n)); },
+            toggle(name, force) {
+              const shouldHave = force !== undefined ? Boolean(force) : !classes.has(name);
+              if (shouldHave) classes.add(name); else classes.delete(name);
+              return shouldHave;
+            },
+            contains(name) { return classes.has(name); },
+          };
+        })(),
         addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(fn); },
         async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
         setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },

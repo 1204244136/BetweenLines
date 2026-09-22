@@ -74,5 +74,5 @@ test("client renderAiStatus updates in-page stage dashboard metrics", () => {
   assert.equal(elS3.textContent, 1);
 
   const elRate = ui.element("aiStageFastPassRate");
-  assert.equal(elRate.textContent, "Fast Pass: 70%");
+  assert.equal(elRate.textContent, "快速直通: 70%");
 });

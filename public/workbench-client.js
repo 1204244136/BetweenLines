@@ -20,22 +20,22 @@
     }
     const gptReasoningOptions = [
       ["", "模型默认"],
-      ["none", "无 (none)"],
-      ["minimal", "最小 (minimal)"],
-      ["low", "低 (low)"],
-      ["medium", "中 (medium)"],
-      ["high", "高 (high)"],
-      ["xhigh", "极高 (xhigh)"],
-      ["max", "最大 (max)"],
+      ["none", "无"],
+      ["minimal", "最小"],
+      ["low", "低"],
+      ["medium", "中"],
+      ["high", "高"],
+      ["xhigh", "极高"],
+      ["max", "最大"],
     ];
     const nonGptIntensityOptions = [
       ["", "模型默认"],
-      ["low", "低 (low)"],
-      ["medium", "中 (medium)"],
-      ["high", "高 (high)"],
-      ["xhigh", "极高 (xhigh)"],
-      ["ultra", "超高 (ultra)"],
-      ["max", "最大 (max)"],
+      ["low", "低"],
+      ["medium", "中"],
+      ["high", "高"],
+      ["xhigh", "极高"],
+      ["ultra", "超高"],
+      ["max", "最大"],
     ];
     // 旧版（inferenceSettingVersion 2）保存的是数值 temperature；迁移到语义档位时按共享映射取整
     const legacyTemperatureToIntensity = {
@@ -715,14 +715,14 @@
 
     const thinkingLevelLabels = {
       "": "模型默认",
-      off: "关闭思考 (off)",
-      none: "无 (none)",
-      minimal: "最小 (minimal)",
-      low: "低 (low)",
-      medium: "中 (medium)",
-      high: "高 (high)",
-      xhigh: "极高 (xhigh)",
-      max: "最大 (max)",
+      off: "关闭思考",
+      none: "无",
+      minimal: "最小",
+      low: "低",
+      medium: "中",
+      high: "高",
+      xhigh: "极高",
+      max: "最大",
     };
     const aiModelMetadataMap = new Map();
 
@@ -809,7 +809,7 @@
       aiIds.reasoningEffort.value = targetValue;
       aiIds.reasoningEffort.title = isReasoning
         ? ("该推理模型专属的推理强度档位（数据源：" + (caps.source || "检测") + "，绝不套用统一档位）")
-        : "常规非推理模型文本化强度档位（low~max，模型默认时不发送采样参数）";
+        : "常规非推理模型文本化强度档位（低~最大，模型默认时不发送采样参数）";
       const labelElem = aiIds.reasoningField ? aiIds.reasoningField.querySelector("label") : null;
       if (labelElem) {
         labelElem.textContent = isReasoning ? "推理强度" : "推理强度";
@@ -910,11 +910,11 @@
         if (!hasStage2) {
           aiIds.stage3Preset.value = "";
           aiIds.stage3Preset.disabled = true;
-          aiIds.stage3Preset.title = "需先在 Stage 2 选择预设启用后，方可配置 Stage 3";
+          aiIds.stage3Preset.title = "需先在阶段二选择预设启用后，方可配置阶段三";
           aiIds.stage3Card?.classList.add("is-disabled");
         } else {
           aiIds.stage3Preset.disabled = false;
-          aiIds.stage3Preset.title = "选择 Stage 3 模型预设（不填代表不启用）";
+          aiIds.stage3Preset.title = "选择阶段三模型预设（不填代表不启用）";
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
       }
@@ -1444,7 +1444,7 @@
         comparisons.push({
           kind: "translation",
           html: '<div class="diff-comparison" data-diff-kind="translation">' +
-          '<div class="version-label"><span>' + escapeHtml(pageLabels.cn) + ' -> ' + escapeHtml(pageLabels.tw) + '简体化</span></div>' +
+          '<div class="version-label"><span>' + escapeHtml(pageLabels.cn) + ' → ' + escapeHtml(pageLabels.tw) + '简体化</span></div>' +
           '<div lang="zh-Hans">' + twDiffHtml + '</div>' +
           '</div>',
         });
@@ -1456,7 +1456,7 @@
         comparisons.push({
           kind: "revision",
           html: '<div class="diff-comparison" data-diff-kind="revision">' +
-          '<div class="version-label"><span>' + escapeHtml(pageLabels[targetKey] || targetKey) + ' -> 修改结果</span>' + matchBadge + '</div>' +
+          '<div class="version-label"><span>' + escapeHtml(pageLabels[targetKey] || targetKey) + ' → 修改结果</span>' + matchBadge + '</div>' +
           '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + revisionDiffHtml + '</div>' +
           '</div>',
         });
@@ -1702,9 +1702,9 @@
           '<span class="pipeline-expand-hint">审核轨迹 ▾</span>' +
         '</div>' +
         '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '" hidden>' +
-          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ Stage 1: 事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
-          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ Stage 2: 文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
-          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ Stage 3: 终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
+          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
+          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
+          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
         '</div>';
       }
 
@@ -2270,14 +2270,42 @@
     });
 
     let activeStageFilter = null;
+    let suppressStageCardFilterUntil = 0;
+
+    function suppressStageCardFilter(durationMs = 600) {
+      suppressStageCardFilterUntil = Math.max(suppressStageCardFilterUntil, Date.now() + durationMs);
+    }
 
     function bindStageCardFilters() {
       const cards = ["stage1Card", "stage2Card", "stage3Card"]
         .map((id) => document.getElementById(id))
         .filter(Boolean);
+
+      // 为阶段预设下拉选择框绑定完整的事件隔离与抑制锁，杜绝任何冒泡或 Chromium 原生下拉穿透点击
+      const presetSelects = [aiIds.stage1Preset, aiIds.stage2Preset, aiIds.stage3Preset].filter(Boolean);
+      presetSelects.forEach((selectEl) => {
+        const suppressHandler = (e) => {
+          suppressStageCardFilter(600);
+          if (e && (e.type === "click" || e.type === "mousedown" || e.type === "pointerdown")) {
+            e.stopPropagation();
+          }
+        };
+        ["mousedown", "mouseup", "click", "pointerdown", "pointerup", "focus", "blur", "input", "change"].forEach((ev) => {
+          selectEl.addEventListener(ev, suppressHandler);
+        });
+      });
+
       cards.forEach((card) => {
         card.addEventListener("click", (event) => {
-          if (event?.target?.closest && event.target.closest("select")) return;
+          // 1. 若处于预设选择器的交互抑制窗口内（防原生 select 关闭时的合成穿透点击），忽略
+          if (Date.now() < suppressStageCardFilterUntil) {
+            return;
+          }
+          // 2. 若点击目标位于卡片头部（标题区、下拉框、或任何表单控件），忽略
+          if (event?.target?.closest && event.target.closest(".ai-stage-card-head, .ai-stage-preset-select, select, option, label, button, input")) {
+            return;
+          }
+
           const stage = card.dataset.filterStage;
           if (activeStageFilter === stage) {
             activeStageFilter = null;
@@ -2287,8 +2315,8 @@
             cards.forEach((c) => c.classList.remove("is-active-filter"));
             activeStageFilter = stage;
             card.classList.add("is-active-filter");
-            const names = { "1": "Stage 1 事实初审", "2": "Stage 2 文学复审", "3": "Stage 3 终审仲裁" };
-            showToast("已筛选 " + names[stage] + " 相关行", { tone: "info", durationMs: 3000 });
+            const names = { "1": "阶段一 事实初审", "2": "阶段二 文学复审", "3": "阶段三 终审仲裁" };
+            showToast("已筛选 " + names[stage] + " 相关行（再次点击指标可取消）", { tone: "info", durationMs: 3000 });
           }
           applyFilters({ reset: true });
         });
@@ -2451,6 +2479,12 @@
       doneFilter.classList.remove("is-active");
       doneFilter.setAttribute("aria-pressed", "false");
       doneFilter.textContent = "未人工确认";
+      if (activeStageFilter) {
+        activeStageFilter = null;
+        ["stage1Card", "stage2Card", "stage3Card"].forEach((id) => {
+          document.getElementById(id)?.classList.remove("is-active-filter");
+        });
+      }
       showSource.checked = true;
       if (showTranslationDiff) showTranslationDiff.checked = true;
       showRevisionDiff.checked = true;
@@ -2847,7 +2881,7 @@
       const elRate = document.getElementById("aiStageFastPassRate");
       if (elRate) {
         const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) : 0;
-        elRate.textContent = "Fast Pass: " + rate + "%";
+        elRate.textContent = "快速直通: " + rate + "%";
       }
     }
 
@@ -2855,10 +2889,10 @@
       if (!ai) return;
       const stageMetrics = ai.stageMetrics || {};
       const stageMetricsSummary = [
-        ["stage1Passed", "Gatekeeper通过"],
-        ["stage2Reviewed", "Stylist审阅"],
-        ["stage3Arbitrated", "仲裁"],
-        ["fastPassHits", "Fast Pass"],
+        ["stage1Passed", "初审通过"],
+        ["stage2Reviewed", "文学复审"],
+        ["stage3Arbitrated", "终审仲裁"],
+        ["fastPassHits", "快速直通"],
         ["lowScoreHits", "低分归因"],
         ["webLookupHits", "线上查证"],
       ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
@@ -3319,16 +3353,23 @@
       });
     });
     if (aiIds.stage1Preset) {
-      aiIds.stage1Preset.addEventListener("change", saveAiConfig);
+      aiIds.stage1Preset.addEventListener("change", () => {
+        suppressStageCardFilter(600);
+        saveAiConfig();
+      });
     }
     if (aiIds.stage2Preset) {
       aiIds.stage2Preset.addEventListener("change", () => {
+        suppressStageCardFilter(600);
         updateStagePresetDependencies();
         saveAiConfig();
       });
     }
     if (aiIds.stage3Preset) {
-      aiIds.stage3Preset.addEventListener("change", saveAiConfig);
+      aiIds.stage3Preset.addEventListener("change", () => {
+        suppressStageCardFilter(600);
+        saveAiConfig();
+      });
     }
     if (aiIds.smartConcurrency) {
       aiIds.smartConcurrency.addEventListener("change", () => {

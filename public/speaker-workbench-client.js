@@ -761,23 +761,23 @@
 
   const thinkingLevelLabels = {
     "": "模型默认",
-    off: "关闭思考 (off)",
-    none: "无 (none)",
-    minimal: "最小 (minimal)",
-    low: "低 (low)",
-    medium: "中 (medium)",
-    high: "高 (high)",
-    xhigh: "极高 (xhigh)",
-    max: "最大 (max)",
+    off: "关闭思考",
+    none: "无",
+    minimal: "最小",
+    low: "低",
+    medium: "中",
+    high: "高",
+    xhigh: "极高",
+    max: "最大",
   };
   const nonReasoningIntensityOptions = [
     ["", "模型默认"],
-    ["low", "低 (low)"],
-    ["medium", "中 (medium)"],
-    ["high", "高 (high)"],
-    ["xhigh", "极高 (xhigh)"],
-    ["ultra", "超高 (ultra)"],
-    ["max", "最大 (max)"],
+    ["low", "低"],
+    ["medium", "中"],
+    ["high", "高"],
+    ["xhigh", "极高"],
+    ["ultra", "超高"],
+    ["max", "最大"],
   ];
   const aiModelMetadataMap = new Map();
 
@@ -840,7 +840,7 @@
     }
     aiReasoningEffort.title = isReasoning
       ? ("该推理模型专属的推理强度档位（数据源：" + (caps.source || "检测") + "，绝不套用统一档位）")
-      : "常规非推理模型文本化强度档位（low~max，模型默认时不发送采样参数）";
+      : "常规非推理模型文本化强度档位（低~最大，模型默认时不发送采样参数）";
   }
 
   function loadAiConfig() {

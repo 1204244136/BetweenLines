@@ -596,6 +596,8 @@ details[open] > summary .details-toggle::before {
   justify-content: space-between;
   gap: 8px;
   min-height: 22px;
+  cursor: default;
+  user-select: none;
 }
 
 .ai-stage-card-label {
@@ -621,6 +623,21 @@ details[open] > summary .details-toggle::before {
   opacity: 0.5;
   cursor: not-allowed;
   background: var(--ai-surface);
+}
+
+.ai-stage-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: var(--ai-radius-sm);
+  padding: 3px 5px;
+  margin: 0 -5px -2px -5px;
+  transition: background 120ms ease;
+}
+
+.ai-stage-card-body:hover {
+  background: color-mix(in srgb, var(--ai-focus) 8%, transparent);
 }
 
 .ai-stage-card-value {
@@ -650,18 +667,17 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-card[data-filter-stage] {
-  cursor: pointer;
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-}
-
-.ai-stage-card[data-filter-stage]:hover {
-  border-color: var(--ai-focus);
 }
 
 .ai-stage-card.is-active-filter {
   border-color: var(--ai-focus) !important;
   background: var(--ai-surface-selected) !important;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ai-focus) 20%, transparent);
+}
+
+.ai-stage-card.is-active-filter .ai-stage-card-body {
+  background: color-mix(in srgb, var(--ai-focus) 12%, transparent);
 }
 
 /* ---- 行内多阶段审核流转胶囊与展开卡片 ----------------------------------- */
