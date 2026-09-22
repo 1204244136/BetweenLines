@@ -66,6 +66,37 @@ const {
   normalizeCause,
   shouldCheckLowScore,
 } = require("./low-score");
+const {
+  createStageMetrics,
+  normalizeCritiqueResult,
+  normalizeReviewStageResult,
+  normalizeArbitrationResult,
+  reviewStageResultFromLegacy,
+  isFastPassDecision,
+} = require("./stage-results");
+const {
+  PERSONAS,
+  PERSONA_DEFINITIONS,
+  buildPersonaSystemPrompt,
+  buildStylistMessages,
+  buildArbiterMessages,
+  parseStylistResponse,
+  parseArbiterResponse,
+  createPersonaContext,
+} = require("./persona-runtime");
+const {
+  shouldTriggerArbitration,
+  resolveDeterministicAgreement,
+  applyArbitrationDecision,
+  formatArbitrationNoteLines,
+} = require("./arbiter");
+const {
+  getModelProfile,
+  scheduleModels,
+} = require("./scheduler-profile");
+const {
+  globalFeedbackCollector,
+} = require("./feedback-collector");
 
 const providerDefaults = {
   claude: {
@@ -210,11 +241,34 @@ const status = {
   errors: 0,
   active: [],
   error: "",
+  stageMetrics: createStageMetrics(),
+  metrics: {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    totalLatencyMs: 0,
+    modelCalls: 0,
+    averageLatencyMs: 0,
+  },
   logs: [],
   results: new Map(),
   resultChanges: [],
   resultRevision: 0,
 };
+
+function recordModelCallMetrics(latencyMs, usage = {}) {
+  const promptTokens = Math.max(0, Number(usage.promptTokens) || 0);
+  const completionTokens = Math.max(0, Number(usage.completionTokens) || 0);
+  const totalTokens = Math.max(0, Number(usage.totalTokens) || (promptTokens + completionTokens) || 0);
+  status.metrics.modelCalls += 1;
+  status.metrics.totalLatencyMs += Math.max(0, Number(latencyMs) || 0);
+  status.metrics.promptTokens += promptTokens;
+  status.metrics.completionTokens += completionTokens;
+  status.metrics.totalTokens += totalTokens;
+  if (status.metrics.modelCalls > 0) {
+    status.metrics.averageLatencyMs = Math.round(status.metrics.totalLatencyMs / status.metrics.modelCalls);
+  }
+}
 
 let controllers = new Set();
 let recentModelOutcomes = [];
@@ -324,6 +378,9 @@ function clientStatus(options = {}) {
     errors: status.errors,
     active: status.active,
     error: status.error,
+    stageMetrics: { ...status.stageMetrics },
+    metrics: { ...status.metrics },
+    feedbackStats: globalFeedbackCollector.getStatistics(),
     logs: options.includeLogs === false ? [] : status.logs,
     results,
     resultRevision: deliveredRevision,
@@ -449,10 +506,36 @@ function cleanConfig(input = {}) {
     systemPrompt: String(input.systemPrompt || "").trim() || proofreadPromptFor(proofreadMode, profileId).system,
     glossaryFile: String(input.glossaryFile || "").trim(),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
+    multiStageEnabled: Boolean(input.multiStageEnabled || input.challengerEnabled || input.singleModelPersona || input.stylistConfig || input.stage2Preset),
+    challengerEnabled: Boolean(input.challengerEnabled),
+    singleModelPersona: Boolean(input.singleModelPersona),
+    arbiterEnabled: input.arbiterEnabled !== false,
+    stylistConfig: input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults) : (input.stage2Preset ? cleanSubStageConfig(input.stage2Preset, defaults) : null),
+    arbiterConfig: input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults) : (input.stage3Preset ? cleanSubStageConfig(input.stage3Preset, defaults) : null),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
     // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
     termConflictIndexes: new Set(),
+  };
+}
+
+function cleanSubStageConfig(input = {}, fallbackDefaults = {}) {
+  if (!input || typeof input !== "object") return null;
+  const provider = providerDefaults[input.provider] ? input.provider : "local";
+  const defaults = providerDefaults[provider] || fallbackDefaults;
+  const model = String(input.model || defaults.model || "").trim();
+  if (!model) return null;
+  const baseUrl = String(input.baseUrl || defaults.baseUrl || "").trim().replace(/\/+$/, "");
+  const apiKey = String(input.apiKey || "").trim();
+  const reasoningEffort = (isGptModel(model) || isReasoningModel(model))
+    ? normalizeReasoningEffort(input.reasoningEffort, model)
+    : normalizeNonGptIntensity(input.reasoningEffort);
+  return {
+    provider,
+    baseUrl,
+    model,
+    apiKey,
+    reasoningEffort,
   };
 }
 
@@ -546,6 +629,15 @@ function resetStatus(config, rowsLength) {
   status.errors = 0;
   status.active = [];
   status.error = "";
+  status.stageMetrics = createStageMetrics();
+  status.metrics = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    totalLatencyMs: 0,
+    modelCalls: 0,
+    averageLatencyMs: 0,
+  };
   status.logs = [];
   status.results = new Map();
   status.resultChanges = [];
@@ -581,7 +673,14 @@ function makePrefilterResult(row, labels, classification, comparisonMode = "tril
 
 function addResult(result, { prefilterKind = "" } = {}) {
   status.resultRevision += 1;
-  const storedResult = { ...result, resultRevision: status.resultRevision };
+  // Every result, including deterministic prefilter rows and transport errors,
+  // exposes the same stage contract for consumers that do not understand the
+  // legacy note/status fields yet.
+  const storedResult = {
+    ...result,
+    stageResult: result.stageResult || reviewStageResultFromLegacy(result, status.model),
+    resultRevision: status.resultRevision,
+  };
   status.results.set(result.index, storedResult);
   status.resultChanges.push(storedResult);
   status.processed += 1;
@@ -592,9 +691,31 @@ function addResult(result, { prefilterKind = "" } = {}) {
     if (prefilterKind === "similarity") status.similarityPrefiltered += 1;
     if (prefilterKind === "structured-conflict") status.structuredConflicts += 1;
     if (prefilterKind === "term") status.termPrefiltered += 1;
+    // Deterministic prefilter results are the first Fast Pass implementation:
+    // they complete without spending a model request.
+    if (result.done) {
+      status.stageMetrics.fastPassHits += 1;
+      status.stageMetrics.stage1Passed += 1;
+    }
   } else {
     status.modelProcessed += 1;
     if (result.done) status.modelHandled += 1;
+    // A model result that closes without a suggestion is the Gatekeeper's
+    // positive path. Suggestions are the first observable Stylist review
+    // boundary; keeping these counters here preserves one execution loop.
+    if (result.done) status.stageMetrics.stage1Passed += 1;
+    if (result.fastPass === true) status.stageMetrics.fastPassHits += 1;
+    if (result.status === "suggestion") status.stageMetrics.stage2Reviewed += 1;
+    if (result.stageSignals?.lowScore) status.stageMetrics.lowScoreHits += 1;
+    if (result.stageSignals?.webLookup) status.stageMetrics.webLookupHits += 1;
+    const attitude = result.critique?.attitude;
+    if (attitude === "accept") status.stageMetrics.critiqueAccept += 1;
+    if (attitude === "reject") status.stageMetrics.critiqueReject += 1;
+    if (attitude === "modify") status.stageMetrics.critiqueModify += 1;
+    if (attitude === "escalate") status.stageMetrics.critiqueEscalate += 1;
+    if (result.arbitration || result.stageResult?.stage === "arbiter") {
+      status.stageMetrics.stage3Arbitrated += 1;
+    }
   }
   if (result.status === "suggestion") status.suggested += 1;
   if (result.status === "error") status.errors += 1;
@@ -883,6 +1004,7 @@ function clearProofreadCache() {
   status.errors = 0;
   status.active = [];
   status.error = "";
+  status.stageMetrics = createStageMetrics();
   status.logs = [];
   status.results = new Map();
   status.resultChanges = [];
@@ -1455,6 +1577,95 @@ async function proofreadRow(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
+
+  // 多阶段认知审核：Stage 2 Stylist 与 Stage 3 Arbiter
+  const isFastPass = !decision.needsEdit && isFastPassDecision(decision);
+  if (!isFastPass && (config.multiStageEnabled || config.challengerEnabled || config.singleModelPersona)) {
+    pushLog(`第 ${row.index} 行：初审进入多阶段审查，转入 Stage 2 (Stylist 文学复审)。`);
+
+    let sConf = config.stylistConfig;
+    if (!sConf) {
+      if (config.singleModelPersona) {
+        const pCtx = createPersonaContext("stylist", config);
+        sConf = pCtx.config;
+      } else {
+        sConf = config;
+      }
+    }
+
+    const stylistMessages = buildStylistMessages(row, decision, {
+      targetLabel,
+      basePrompt: config.systemPrompt,
+    });
+
+    try {
+      const stylistRaw = await callModel(stylistMessages, sConf);
+      const stylistReview = parseStylistResponse(stylistRaw);
+      decision.stylistReview = stylistReview;
+      decision.stylistModelId = sConf.model;
+
+      pushLog(`第 ${row.index} 行：Stylist 复审完成（attitude: ${stylistReview.critique.attitude}）。`);
+
+      const arbCheck = shouldTriggerArbitration({
+        gatekeeperDecision: decision,
+        stylistReview,
+        signals: {
+          termConflict: isTermConflictRow(config, row.index),
+          lowScoreUncertain: lowScore.active,
+        },
+      });
+
+      if (arbCheck.triggered && config.arbiterEnabled !== false) {
+        pushLog(`第 ${row.index} 行：触发 Stage 3 (Arbiter 终审仲裁)：${arbCheck.reason}`);
+
+        let aConf = config.arbiterConfig;
+        if (!aConf) {
+          if (config.singleModelPersona) {
+            const pCtx = createPersonaContext("arbiter", config);
+            aConf = pCtx.config;
+          } else {
+            aConf = config;
+          }
+        }
+
+        const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
+          targetLabel,
+          basePrompt: config.systemPrompt,
+        });
+
+        const arbiterRaw = await callModel(arbiterMessages, aConf);
+        const arbiterParsed = parseArbiterResponse(arbiterRaw);
+
+        const applied = applyArbitrationDecision({
+          arbitration: arbiterParsed.arbitration,
+          gatekeeperDecision: decision,
+          stylistReview,
+          targetText,
+          adjudicatedRevisedText: arbiterParsed.revisedText,
+        });
+
+        decision.arbitration = applied.arbitration;
+        decision.arbitrationModelId = aConf.model;
+        if (applied.revisedText) {
+          decision.revisedText = applied.revisedText;
+        }
+        decision.needsEdit = applied.needsEdit;
+        decision.stage = "arbiter";
+        pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
+      } else {
+        if (stylistReview.critique.attitude === "modify" && stylistReview.revisedText) {
+          decision.revisedText = stylistReview.revisedText;
+        } else if (stylistReview.critique.attitude === "reject") {
+          decision.needsEdit = false;
+          decision.revisedText = "";
+        }
+        decision.stage = "stylist";
+      }
+    } catch (stylistErr) {
+      pushLog(`第 ${row.index} 行：多阶段审阅过程中异常（${stylistErr.message}），回退至 Gatekeeper 初审方案。`);
+    }
+  }
+
   // 成品格式门禁（确定性工序，输出侧的第一关）：revisedText 必须与目标列同段数、不带模型自己插入的
   // 换行/`<br>`，段结构或 noteref 标记对不上就作废转人工。放在标点规范化之前，因为它会改变文本结构
   // （标点工序的内联标记“先摘后还原”也要求标记结构已经稳定）。
@@ -1469,7 +1680,12 @@ async function proofreadRow(row, allRows, config, labels) {
     status.scriptLeaks += 1;
     pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废并转人工确认。`);
   }
-  return decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
+  const result = decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
+  result.stageSignals = {
+    lowScore: lowScore.active,
+    webLookup: Boolean(guarded.webLookup?.concluded),
+  };
+  return result;
 }
 
 function shouldRetryWithContext(decision) {
@@ -2520,6 +2736,7 @@ async function callModel(messages, config) {
 }
 
 async function callOpenAiCompatible(messages, config) {
+  const startTime = Date.now();
   const headers = buildProviderHeaders(config);
   const body = buildChatCompletionBody(messages, config);
   const data = await fetchJson(buildApiUrl(config.baseUrl, "/v1/chat/completions"), {
@@ -2527,6 +2744,13 @@ async function callOpenAiCompatible(messages, config) {
     headers,
     body: JSON.stringify(body),
   });
+  const latencyMs = Date.now() - startTime;
+  const usage = {
+    promptTokens: Number(data.usage?.prompt_tokens) || 0,
+    completionTokens: Number(data.usage?.completion_tokens) || 0,
+    totalTokens: Number(data.usage?.total_tokens) || 0,
+  };
+  recordModelCallMetrics(latencyMs, usage);
   const firstChoice = data.choices?.[0];
   if (firstChoice?.message?.refusal) {
     const error = new Error(`The model declined to answer: ${firstChoice.message.refusal}`);
@@ -2542,11 +2766,19 @@ async function callOpenAiCompatible(messages, config) {
 }
 
 async function callClaude(messages, config) {
+  const startTime = Date.now();
   const data = await fetchJson(buildApiUrl(config.baseUrl, "/v1/messages"), {
     method: "POST",
     headers: buildProviderHeaders(config),
     body: JSON.stringify(buildClaudeMessageBody(messages, config)),
   });
+  const latencyMs = Date.now() - startTime;
+  const usage = {
+    promptTokens: Number(data.usage?.input_tokens) || 0,
+    completionTokens: Number(data.usage?.output_tokens) || 0,
+    totalTokens: (Number(data.usage?.input_tokens) || 0) + (Number(data.usage?.output_tokens) || 0),
+  };
+  recordModelCallMetrics(latencyMs, usage);
   if (data.stop_reason === "refusal") {
     const error = new Error("The model declined to answer (Claude refusal).");
     error.code = "MODEL_REFUSAL";
@@ -2911,6 +3143,17 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
   const bilingual = proofreadMode === "bilingual";
   // 双语没有“另一份译文”可比较：counterpart 一律按“仍需修改”处理。
   const better = bilingual && decision.better === "counterpart" ? "neither" : decision.better;
+  const multiStageLines = (decision.stylistReview || decision.arbitration)
+    ? formatArbitrationNoteLines({
+        gatekeeperDecision: decision,
+        stylistReview: decision.stylistReview,
+        arbitration: decision.arbitration,
+      })
+    : [];
+
+  const effectiveStage = decision.stage || (decision.arbitration ? "arbiter" : (decision.stylistReview ? "stylist" : "gatekeeper"));
+  const effectiveModelId = (effectiveStage === "arbiter" ? decision.arbitrationModelId : (effectiveStage === "stylist" ? decision.stylistModelId : status.model)) || status.model;
+
   if (decision.needsContext || better === "unclear") {
     return {
       runId: status.runId,
@@ -2919,11 +3162,25 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
       targetKey,
       status: "suggestion",
       done: false,
+      critique: decision.stylistReview?.critique || normalizeCritiqueResult({ attitude: "escalate", rationale: decision.summary }),
+      arbitration: decision.arbitration || null,
+      stageResult: normalizeReviewStageResult({
+        stage: effectiveStage,
+        modelId: effectiveModelId,
+        persona: effectiveStage,
+        needsEdit: decision.needsEdit,
+        needsContext: decision.needsContext,
+        decision: better,
+        summary: decision.summary,
+        revisedText: decision.revisedText,
+        confidence: decision.score != null ? Number(decision.score) / 100 : null,
+      }),
       note: [
         "[AI校对]",
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：待人工确认",
         speakerLine(decision),
+        ...multiStageLines,
         ...analysisLines(decision),
       ].filter(Boolean).join("\n"),
     };
@@ -2939,11 +3196,26 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
       // 语义不同却无需修改，表示 B 作为译文是成立的（keep），不是“比谁更好”。
       status: decision.semanticSame ? "same" : (bilingual ? "target-ok" : "target-better"),
       done: true,
+      fastPass: isFastPassDecision(decision),
+      critique: decision.stylistReview?.critique || normalizeCritiqueResult({ attitude: "reject", rationale: decision.summary }),
+      arbitration: decision.arbitration || null,
+      stageResult: normalizeReviewStageResult({
+        stage: effectiveStage,
+        modelId: effectiveModelId,
+        persona: effectiveStage,
+        needsEdit: decision.needsEdit,
+        needsContext: decision.needsContext,
+        decision: better,
+        summary: decision.summary,
+        revisedText: decision.revisedText,
+        confidence: decision.score != null ? Number(decision.score) / 100 : null,
+      }),
       note: [
         "[AI校对]",
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：否",
         speakerLine(decision),
+        ...multiStageLines,
         ...analysisLines(decision),
       ].filter(Boolean).join("\n"),
     };
@@ -2957,15 +3229,18 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
   if (better === "counterpart") {
     lines.push("是否需要修改：是");
     lines.push(...scoreAndGradeLines(decision));
+    lines.push(...multiStageLines);
     lines.push(...analysisLines(decision, decision.revisedText ? "" : decision.suggestion || `参考${counterpartLabel}修订${targetLabel}。`));
     if (decision.revisedText) lines.push(`修改结果：${decision.revisedText}`);
   } else if (better === "neither") {
     lines.push("是否需要修改：是");
     lines.push(...scoreAndGradeLines(decision));
+    lines.push(...multiStageLines);
     lines.push(...analysisLines(decision, decision.revisedText ? "" : decision.suggestion || "按原文重新整理译文。"));
     if (decision.revisedText) lines.push(`修改结果：${decision.revisedText}`);
   } else {
     lines.push("是否需要修改：待人工确认");
+    lines.push(...multiStageLines);
     lines.push(...analysisLines(decision));
   }
 
@@ -2976,6 +3251,26 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
     targetKey,
     status: "suggestion",
     done: false,
+    critique: decision.stylistReview?.critique || normalizeCritiqueResult({
+      // A concrete revision is a modification proposal. Without a concrete
+      // revisedText the row cannot be accepted automatically and remains an
+      // escalation candidate.
+      attitude: better === "unclear" || !decision.revisedText ? "escalate" : "modify",
+      rationale: decision.summary,
+      acceptedChanges: decision.revisedText ? [decision.revisedText] : [],
+    }),
+    arbitration: decision.arbitration || null,
+    stageResult: normalizeReviewStageResult({
+      stage: effectiveStage,
+      modelId: effectiveModelId,
+      persona: effectiveStage,
+      needsEdit: decision.needsEdit,
+      needsContext: decision.needsContext,
+      decision: better,
+      summary: decision.summary,
+      revisedText: decision.revisedText,
+      confidence: decision.score != null ? Number(decision.score) / 100 : null,
+    }),
     note: lines.join("\n"),
   };
 }
@@ -3114,4 +3409,10 @@ module.exports = {
   startPrefilter,
   startProofread,
   stopProofread,
+  recordHumanFeedback: (event) => globalFeedbackCollector.record(event),
+  getFeedbackStatistics: () => globalFeedbackCollector.getStatistics(),
+  globalFeedbackCollector,
+  scheduleModels,
+  getModelProfile,
+  createPersonaContext,
 };
