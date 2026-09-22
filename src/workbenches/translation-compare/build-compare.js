@@ -1007,7 +1007,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             </div>
             <div class="action-group" aria-label="修改结果操作">
               <span class="action-group__label">修改结果</span>
-              <button id="acceptAiSame" class="btn btn--success" type="button">确认自动不改</button>
+              <button id="acceptAiSame" class="btn btn--success" type="button" title="将全部 AI 判断不改的行标记为人工确认（无视当前筛选）">确认自动不改</button>
               <button id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回</button>
               <button id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认</button>
             </div>

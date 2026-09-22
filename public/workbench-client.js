@@ -1777,12 +1777,13 @@
       return note.grade || note.severity || "unrated";
     }
 
-    function currentAiSameRows() {
-      return filteredRows.filter((row) => {
+    function allAiSameRows() {
+      return allRows.filter((row) => {
         const item = notes[String(row.index)];
         return aiResultState(row) === "same" && !item?.manualDone && !item?.recoveredUnverified;
       });
     }
+    const currentAiSameRows = allAiSameRows;
 
     function prefilterResultKind(row) {
       const marker = automatedNoteMarker(notes[String(row.index)]?.note || "");
@@ -2256,12 +2257,12 @@
     }
 
     document.getElementById("acceptAiSame").addEventListener("click", () => {
-      const rows = currentAiSameRows();
+      const rows = allAiSameRows();
       if (!rows.length) {
-        showToast("当前筛选结果中没有待确认的自动不改行。", { tone: "watch", durationMs: 6000 });
+        showToast("没有待确认的自动不改行。", { tone: "watch", durationMs: 6000 });
         return;
       }
-      if (!confirm("将当前筛选结果中的 " + rows.length + " 条自动不改行标记为人工确认？")) return;
+      if (!confirm("将全部 " + rows.length + " 条自动不改行标记为人工确认（无视当前筛选）？")) return;
       for (const row of rows) {
         const id = String(row.index);
         const current = notes[id] || { note: "", done: false, manualDone: false, aiDone: false };

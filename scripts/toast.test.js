@@ -96,3 +96,31 @@ test("失败轮次的提示报错因而不是统计数字", async () => {
   assert.deepEqual(toastMessages(ui), ["AI 接口配置或响应异常，任务已自动终止。"]);
   assert.equal(ui.run("toasts[0].tone"), "error");
 });
+
+test("「确认自动不改」无视当前筛选，直接确认全部 AI 判断不改的行", async () => {
+  const ui = createWorkbench();
+  ui.run(`
+    let lastConfirm = "";
+    confirm = (msg) => { lastConfirm = msg; return true; };
+    notes["1"] = { note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：否\\n分析：无需修改。", manualDone: false, done: false };
+    notes["2"] = { note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：否\\n分析：无需修改。", manualDone: false, done: false };
+    notes["3"] = { note: "[AI校对]\\n语义是否相同：不同\\n是否需要修改：是\\n修改结果：改写后的译文。\\n分析：需改写。", manualDone: false, done: false };
+    query.value = "译文三";
+    applyFilters({ reset: false });
+  `);
+  assert.equal(ui.run("filteredRows.length"), 1, "当前筛选只命中第 3 行");
+  assert.equal(ui.run("filteredRows[0].index"), 3);
+
+  await ui.element("acceptAiSame").dispatch("click");
+
+  assert.match(ui.run("lastConfirm"), /将全部 2 条自动不改行标记为人工确认（无视当前筛选）？/);
+  assert.equal(ui.run('notes["1"].manualDone'), true, "第 1 行被标记为人工确认");
+  assert.equal(ui.run('notes["1"].done'), true);
+  assert.equal(ui.run('notes["2"].manualDone'), true, "第 2 行被标记为人工确认");
+  assert.equal(ui.run('notes["2"].done'), true);
+  assert.equal(ui.run('notes["3"].manualDone'), false, "第 3 行（需修改）不受影响");
+  assert.deepEqual(toastMessages(ui), ["已将 2 条自动不改行标记为人工确认。"]);
+
+  await ui.element("acceptAiSame").dispatch("click");
+  assert.equal(toastMessages(ui).at(-1), "没有待确认的自动不改行。");
+});

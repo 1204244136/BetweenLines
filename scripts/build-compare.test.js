@@ -184,7 +184,7 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.match(filterPanel, /id="showSource" type="checkbox" checked>原文/);
   assert.match(filterPanel, /id="showRevisionDiff" type="checkbox" checked>修改差异/);
   assert.match(filterPanel, /<div class="action-bar">/);
-  assert.match(filterPanel, /id="acceptAiSame" class="btn btn--success" type="button">确认自动不改/);
+  assert.match(filterPanel, /id="acceptAiSame" class="btn btn--success" type="button" title="将全部 AI 判断不改的行标记为人工确认（无视当前筛选）">确认自动不改/);
   assert.match(filterPanel, /id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回/);
   assert.match(filterPanel, /id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认/);
   const displayIdx = filterPanel.indexOf('aria-label="显示设置"');
