@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { makeHtml } = require("./build-compare");
-const { createWorkbench } = require("./workbench-fixture");
+const { createWorkbench, storageFixture } = require("./workbench-fixture");
 const { createStageMetrics } = require("../src/workbenches/translation-compare/ai/stage-results");
 
 test("build-compare renders visible ai stage metrics dashboard", () => {
@@ -142,4 +142,183 @@ test("client renderAiStatus displays multi-stage pipeline flow status and active
   assert.equal(active1Text.textContent, "70, 71");
   const active2Text = ui.element("stage2ActiveRowsText");
   assert.equal(active2Text.textContent, "68");
+});
+
+test("client restores stage metrics from notes on reload without waiting for AI status", () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        note: "[规则预筛]\n语义是否相同：相同\n是否需要修改：否\n分析：预筛通过。",
+        aiDone: true,
+      },
+      2: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无需修改\n分析：原译准确。",
+        aiDone: true,
+      },
+      3: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：改案A\nStylist复审[调整]：深化隐喻\n复审改案：改案B\n修改结果：改案B",
+        aiDone: true,
+      },
+      4: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：初审建议\n初审改案：初审案\nStylist复审[提交仲裁]：存在分歧\n复审改案：复审案\nArbiter仲裁[Gatekeeper方案]：采纳初审方案\n仲裁改案：初审案\n修改结果：初审案",
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+      { index: 3, jp: "A3", cn: "B3", relation: "1:1", score: 0.9, signature: "sig-3" },
+      { index: 4, jp: "A4", cn: "B4", relation: "1:1", score: 0.9, signature: "sig-4" },
+    ],
+  });
+
+  // 页面刚加载完，在未调用任何 renderAiStatus 之前，各指标就已从 notes 恢复
+  assert.equal(ui.element("metricStage1Passed").textContent, 2); // 行1预筛通过 + 行2初审通过
+  assert.equal(ui.element("metricFastPassHits").textContent, 2);
+  assert.equal(ui.element("aiStageFastPassRate").textContent, "快速直通: 100%");
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 2); // 行3调整 + 行4提交仲裁
+  assert.equal(ui.element("metricCritiqueModify").textContent, 1);
+  assert.equal(ui.element("metricCritiqueEscalate").textContent, 1);
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 1); // 行4仲裁
+
+  // Status pills reflect ready state
+  assert.equal(ui.element("stage1StatusPill").dataset.state, "done");
+  assert.equal(ui.element("stage1StatusPill").textContent, "就绪");
+  assert.equal(ui.element("stage2StatusPill").dataset.state, "done");
+  assert.equal(ui.element("stage2StatusPill").textContent, "就绪");
+  assert.equal(ui.element("stage3StatusPill").dataset.state, "done");
+  assert.equal(ui.element("stage3StatusPill").textContent, "就绪");
+});
+
+test("idle AI status with zero stageMetrics does not overwrite restored metrics from notes", () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无需修改",
+        aiDone: true,
+      },
+      2: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：建议修改\nStylist复审[采纳]：同意初审\n修改结果：改案",
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+    ],
+  });
+
+  assert.equal(ui.element("metricStage1Passed").textContent, 1);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 1);
+  assert.equal(ui.element("metricCritiqueAccept").textContent, 1);
+
+  // 服务端返回非运行状态且各指标全为 0（如常驻服务刚重启或空闲未跑 AI）
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: false,
+      stageMetrics: {
+        stage1Passed: 0,
+        fastPassHits: 0,
+        stage2Reviewed: 0,
+        critiqueAccept: 0,
+        critiqueModify: 0,
+        critiqueReject: 0,
+        critiqueEscalate: 0,
+        stage3Arbitrated: 0,
+      },
+      results: [],
+    });
+  `);
+
+  // 本地已还原的指标不得被服务端的全 0 冲刷掉
+  assert.equal(ui.element("metricStage1Passed").textContent, 1);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 1);
+  assert.equal(ui.element("metricCritiqueAccept").textContent, 1);
+});
+
+test("recovering notes from historical space restores and updates stage metrics dashboard", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const historicalKey = "translation-compare-notes-v7:project:rowsPrevious";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({}),
+    [historicalKey]: JSON.stringify({
+      1: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无误",
+        rowSig: "sig-1",
+        manualDone: false,
+        aiDone: true,
+      },
+      2: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：需修饰\n初审改案：初审案\nStylist复审[驳回]：无需修改\nArbiter仲裁[维持原译]：维持原译",
+        rowSig: "sig-2",
+        manualDone: false,
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+    ],
+  });
+
+  // 初始本页空间为空，指标为 0
+  assert.equal(ui.element("metricStage1Passed").textContent, 0);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 0);
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 0);
+
+  // 在“备注空间与找回”面板中，从历史空间找回记录
+  ui.run(`
+    const space = notesSpaceInventory.find((s) => s.key === ${JSON.stringify(historicalKey)});
+    previewNotesRecovery(space);
+  `);
+  // 点击“应用找回”
+  await ui.element("applyNotesRecovery").dispatch("click");
+
+  // 找回后，阶段指标立刻更新为找回记录的统计
+  assert.equal(ui.element("metricStage1Passed").textContent, 1);
+  assert.equal(ui.element("metricFastPassHits").textContent, 1);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 1);
+  assert.equal(ui.element("metricCritiqueReject").textContent, 1);
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
+});
+
+test("clearing current notes space resets stage metrics dashboard to zero", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无误",
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+    ],
+    confirm: () => true, // 确认清空
+  });
+
+  assert.equal(ui.element("metricStage1Passed").textContent, 1);
+
+  // 点击清空本页空间
+  await ui.element("clearCurrentNotes").dispatch("click");
+
+  // 阶段指标应正确归零
+  assert.equal(ui.element("metricStage1Passed").textContent, 0);
+  assert.equal(ui.element("metricFastPassHits").textContent, 0);
+  assert.equal(ui.element("stage1StatusPill").textContent, "待命");
 });

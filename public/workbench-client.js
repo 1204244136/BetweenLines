@@ -380,6 +380,7 @@
     let currentPage = 1;
     let activeRowId = "";
     let lastAiRunId = "";
+    let currentAiRunning = false;
     // 本页「预筛结果集」对应的运行号：不只由本页启动的那一轮设置，页面重开后由状态轮询
     // 从服务端上一轮预筛结果里认领（服务端会整轮返回结果），否则 resultIds 为空、
     // 「确认预筛」永久锁死，用户点「开始预筛」就会把同一批行重新筛一遍。
@@ -2073,6 +2074,9 @@
       }
       doneCount.textContent = String(done);
       aiDoneCount.textContent = String(aiDone);
+      if (!currentAiRunning) {
+        updateStageMetricsDashboard();
+      }
     }
 
     function totalPages() {
@@ -2270,7 +2274,7 @@
         (doneMode === "done" && isDone);
       const rawNote = notes[id]?.note || "";
       const matchesStage = !activeStageFilter ||
-        (activeStageFilter === "1" && (hasNote || isDone)) ||
+        (activeStageFilter === "1" && rawNote.includes("是否需要修改：否")) ||
         (activeStageFilter === "2" && rawNote.includes("Stylist复审")) ||
         (activeStageFilter === "3" && rawNote.includes("Arbiter仲裁"));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
@@ -3217,9 +3221,91 @@
       }
     }
 
-    function renderAiStatus(ai) {
-      if (!ai) return;
-      const stageMetrics = ai.stageMetrics || {};
+    function computeStageMetricsFromNotes(sourceNotes = notes) {
+      let stage1Passed = 0;
+      let fastPassHits = 0;
+      let stage2Reviewed = 0;
+      let critiqueAccept = 0;
+      let critiqueModify = 0;
+      let critiqueReject = 0;
+      let critiqueEscalate = 0;
+      let stage3Arbitrated = 0;
+      let lowScoreHits = 0;
+      let webLookupHits = 0;
+
+      for (const item of Object.values(sourceNotes || {})) {
+        if (!item) continue;
+        const noteText = String(item.note || "").trim();
+        if (!noteText || !hasAutomatedDecisionNote(noteText)) continue;
+        const parsed = parseAutomatedNote(noteText);
+        if (!parsed) continue;
+
+        if (parsed.modify === "否") {
+          stage1Passed += 1;
+          if (!parsed.stage2 && !noteText.includes("Stylist复审")) {
+            fastPassHits += 1;
+          }
+        }
+
+        if (parsed.stage2 || noteText.includes("Stylist复审")) {
+          stage2Reviewed += 1;
+          const attitude = String(parsed.stage2?.attitude || "");
+          if (attitude.includes("采纳") || attitude === "accept") {
+            critiqueAccept += 1;
+          } else if (attitude.includes("调整") || attitude === "modify") {
+            critiqueModify += 1;
+          } else if (attitude.includes("驳回") || attitude === "reject") {
+            critiqueReject += 1;
+          } else if (attitude.includes("仲裁") || attitude === "escalate") {
+            critiqueEscalate += 1;
+          }
+        }
+
+        if (parsed.stage3 || noteText.includes("Arbiter仲裁")) {
+          stage3Arbitrated += 1;
+        }
+
+        if (noteText.includes("低分归因：")) {
+          lowScoreHits += 1;
+        }
+        if (noteText.includes("线上查证：")) {
+          webLookupHits += 1;
+        }
+      }
+
+      return {
+        stage1Passed,
+        fastPassHits,
+        stage2Reviewed,
+        critiqueAccept,
+        critiqueModify,
+        critiqueReject,
+        critiqueEscalate,
+        stage3Arbitrated,
+        lowScoreHits,
+        webLookupHits,
+      };
+    }
+
+    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false) {
+      const localMetrics = computeStageMetricsFromNotes(notes);
+      let stageMetrics = localMetrics;
+      const hasOverride = overrideMetrics && Object.values(overrideMetrics).some((v) => Number(v) > 0);
+      const hasLocal = Object.values(localMetrics).some((v) => Number(v) > 0);
+
+      if (aiRunning) {
+        stageMetrics = overrideMetrics || localMetrics;
+      } else if (hasLocal) {
+        // 当前工作台 notes 中存在审核指标：以当前工作台已加载/找回的 notes 为真理源，
+        // 绝不让服务端空闲时的全 0 指标冲掉本地已还原的统计。
+        stageMetrics = localMetrics;
+      } else if (hasOverride) {
+        // 本地没有自动化备注（例如在无 notes 的测试夹具中直接模拟状态响应），使用显式提供的指标
+        stageMetrics = overrideMetrics;
+      } else {
+        stageMetrics = localMetrics;
+      }
+
       const stageMetricsSummary = [
         ["stage1Passed", "初审通过"],
         ["stage2Reviewed", "文学复审"],
@@ -3228,8 +3314,20 @@
         ["lowScoreHits", "低分归因"],
         ["webLookupHits", "线上查证"],
       ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
-      aiIds.status.dataset.stageMetrics = stageMetricsSummary;
-      renderStageMetricsDashboard(stageMetrics, ai.stagePipelines, Boolean(ai.running));
+
+      if (aiIds.status) aiIds.status.dataset.stageMetrics = stageMetricsSummary;
+      if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
+
+      renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning);
+      return stageMetrics;
+    }
+
+    function renderAiStatus(ai) {
+      if (!ai) return;
+      currentAiRunning = Boolean(ai.running);
+      const isRunning = Boolean(ai.running);
+      const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning);
+      const stageMetricsSummary = aiIds.status?.dataset.stageMetrics || "";
       const aiRunId = ai.runId || "";
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
@@ -4357,6 +4455,7 @@
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
     // 特化规范 / 目标列都恢复后才有确定的对照表变体：这时再取构建期判定。
     refreshTermVerdicts();
+    updateStageMetricsDashboard();
     refreshAiStatus();
     setInterval(refreshAiStatus, 1500);
     applyFilters();
