@@ -16,6 +16,7 @@ const {
   findSpeechMergeContext,
   guardTargetScript,
   hasTargetScriptLeak,
+  isModelRefusalError,
   isPureSymmetricFragmentRow,
   startProofread,
 } = require("./ai-proofread");
@@ -967,4 +968,73 @@ test("目标列本来就有刻意的假名写法时不拦；纯目标列语言�
   assert.equal(guarded.needsContext, true);
   assert.equal(guarded.better, "unclear");
   assert.match(guarded.summary, /混入了原文（日文）文字/);
+});
+
+test("isModelRefusalError 准确识别各类内容安全拒答并排除普通请求错误", () => {
+  assert.equal(isModelRefusalError(new Error("http://... 返回 HTTP 400: The model declined to answer.")), true);
+  assert.equal(isModelRefusalError({ message: "The model declined to answer", httpStatus: 400 }), true);
+  assert.equal(isModelRefusalError({ responseBody: '{"error":{"message":"The model declined to answer."}}' }), true);
+  assert.equal(isModelRefusalError({ message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy." }), true);
+  assert.equal(isModelRefusalError({ code: "MODEL_REFUSAL" }), true);
+  assert.equal(isModelRefusalError({ code: "CONTENT_FILTER" }), true);
+  assert.equal(isModelRefusalError({ message: "Content moderation safety policy violation" }), true);
+
+  // 普通请求配置错误不属于拒答
+  assert.equal(isModelRefusalError(new Error("HTTP 400: Invalid parameter 'foo'")), false);
+  assert.equal(isModelRefusalError(new Error("HTTP 401: Unauthorized")), false);
+  assert.equal(isModelRefusalError(new Error("HTTP 404: Not Found")), false);
+  assert.equal(isModelRefusalError(null), false);
+});
+
+test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不中断任务，平滑转人工确认且不计入熔断失败", async () => {
+  const { finished, rows } = await runProofreadAgainst({
+    label: "model-refusal",
+    rowCount: 6,
+    breaker: { circuitBreakerErrorRate: 0.5, circuitBreakerEnabled: true },
+    respond: (_count, response) => {
+      let raw = "";
+      const request = response.req;
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => { raw += chunk; });
+      request.on("end", () => {
+        const user = JSON.parse(JSON.parse(raw).messages[1].content);
+        const index = Number(user.row.index);
+        // 模拟第 2、4 行触发敏感词被拒答
+        if (index === 2 || index === 4) {
+          response.statusCode = 400;
+          response.end(JSON.stringify({
+            error: {
+              message: "The model declined to answer.",
+              type: "invalid_request_error",
+              code: null,
+            },
+          }));
+          return;
+        }
+        response.end(passingDecisionBody);
+      });
+    },
+  });
+
+  assert.equal(finished.running, false);
+  assert.equal(finished.stopRequested, false, "任务不应被终止");
+  assert.equal(finished.error, "", "全局错误应为空");
+  assert.equal(finished.errors, 0, "拒答行不应被计入系统调用错误");
+  assert.equal(finished.modelRefusals, 2, "成功统计 2 行模型拒答");
+  assert.equal(finished.processed, rows.length, "所有行均被处理完毕");
+  assert.match(finished.logs.join("\n"), /模型拒答防护：2 行因触发内容安全审查被拒答，已自动跳过并转人工确认。/);
+
+  const statusWithResults = clientStatus();
+  const refusedRow2 = statusWithResults.results.find((item) => item.index === 2);
+  assert.ok(refusedRow2);
+  assert.equal(refusedRow2.status, "suggestion");
+  assert.equal(refusedRow2.done, false);
+  assert.match(refusedRow2.note, /\[AI校对\]/);
+  assert.match(refusedRow2.note, /是否需要修改：待人工确认/);
+  assert.match(refusedRow2.note, /模型拒答（触发内容安全审查策略）/);
+  assert.match(refusedRow2.note, /The model declined to answer/);
+
+  const normalRow1 = statusWithResults.results.find((item) => item.index === 1);
+  assert.ok(normalRow1);
+  assert.equal(normalRow1.done, true);
 });

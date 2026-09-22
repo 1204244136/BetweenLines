@@ -205,6 +205,7 @@ const status = {
   skippedDone: 0,
   modelProcessed: 0,
   modelHandled: 0,
+  modelRefusals: 0,
   suggested: 0,
   errors: 0,
   active: [],
@@ -310,6 +311,7 @@ function clientStatus(options = {}) {
     skippedDone: status.skippedDone,
     modelProcessed: status.modelProcessed,
     modelHandled: status.modelHandled,
+    modelRefusals: status.modelRefusals,
     suggested: status.suggested,
     errors: status.errors,
     active: status.active,
@@ -516,6 +518,7 @@ function resetStatus(config, rowsLength) {
   status.skippedDone = 0;
   status.modelProcessed = 0;
   status.modelHandled = 0;
+  status.modelRefusals = 0;
   status.suggested = 0;
   status.errors = 0;
   status.active = [];
@@ -866,17 +869,25 @@ async function runQueue(queue, allRows, config, labels) {
         addResult(result);
         if (!status.stopRequested) recordModelOutcome(false, config);
       } catch (error) {
-        const fatalRequestError = isFatalRequestError(error) && !status.stopRequested;
-        addResult({
-          runId: status.runId,
-          index: row.index,
-          signature: rowSignature(row),
-          status: status.stopRequested && !fatalRequestError ? "stopped" : "error",
-          done: false,
-          note: `[AI校对]\n${status.stopRequested && !fatalRequestError ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
-        });
-        if (fatalRequestError) stopForFatalRequestError(error);
-        else if (!status.stopRequested) recordModelOutcome(true, config);
+        const isRefusal = isModelRefusalError(error);
+        const fatalRequestError = !isRefusal && isFatalRequestError(error) && !status.stopRequested;
+        if (isRefusal) {
+          status.modelRefusals += 1;
+          const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
+          addResult(makeRefusalResult(row, error, targetKey));
+          pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
+        } else {
+          addResult({
+            runId: status.runId,
+            index: row.index,
+            signature: rowSignature(row),
+            status: status.stopRequested && !fatalRequestError ? "stopped" : "error",
+            done: false,
+            note: `[AI校对]\n${status.stopRequested && !fatalRequestError ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
+          });
+          if (fatalRequestError) stopForFatalRequestError(error);
+          else if (!status.stopRequested) recordModelOutcome(true, config);
+        }
       } finally {
         status.active = status.active.filter((index) => index !== row.index);
       }
@@ -899,6 +910,9 @@ function finish() {
     if (lowScore) pushLog(lowScore);
     const lookup = webLookupSummary();
     if (lookup) pushLog(lookup);
+    if (status.modelRefusals) {
+      pushLog(`模型拒答防护：${status.modelRefusals} 行因触发内容安全审查被拒答，已自动跳过并转人工确认。`);
+    }
     if (status.scriptLeaks) {
       pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废并转人工确认。`);
     }
@@ -934,7 +948,70 @@ function finish() {
   }
 }
 
+function isModelRefusalError(error) {
+  if (!error) return false;
+  if (error.code === "MODEL_REFUSAL" || error.code === "CONTENT_FILTER") return true;
+
+  const textToCheck = [
+    error.message,
+    error.responseBody,
+    error.code,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const refusalPatterns = [
+    "declined to answer",
+    "content_filter",
+    "content filter",
+    "content management policy",
+    "responsible ai",
+    "safety policy",
+    "safety violation",
+    "safety check",
+    "policy violation",
+    "violates policy",
+    "violated our content policy",
+    "sensitive content",
+    "prohibited content",
+    "moderation",
+    "refused to respond",
+  ];
+
+  return refusalPatterns.some((pattern) => textToCheck.includes(pattern));
+}
+
+function formatRefusalReason(error) {
+  if (!error) return "触发内容安全审查策略";
+  const raw = String(error.responseBody || error.message || "").trim();
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.error?.message) return parsed.error.message;
+    if (parsed.message) return parsed.message;
+  } catch {}
+  const match = raw.match(/(?:the model declined to answer|content_filter|content management policy|responsible ai|safety policy|safety violation|policy violation|violates policy|sensitive content|prohibited content)[^"'\r\n]*/i);
+  if (match) return match[0].trim();
+  return String(error.message || raw).slice(0, 200).trim() || "模型拒绝回答本行内容";
+}
+
+function makeRefusalResult(row, error, targetKey = "") {
+  const reason = formatRefusalReason(error);
+  return {
+    runId: status.runId,
+    index: row.index,
+    signature: rowSignature(row),
+    targetKey,
+    status: "suggestion",
+    done: false,
+    note: [
+      "[AI校对]",
+      "语义是否相同：待人工确认",
+      "是否需要修改：待人工确认",
+      `分析：模型拒答（触发内容安全审查策略）。本行原文或译文可能包含敏感词，模型拒绝回答，已自动转由人工核验。 拒答详情：${reason}`,
+    ].join("\n"),
+  };
+}
+
 function isFatalRequestError(error) {
+  if (isModelRefusalError(error)) return false;
   return error?.code === "INVALID_JSON_RESPONSE"
     || [400, 401, 403, 404, 405, 415, 422].includes(error?.httpStatus);
 }
@@ -2195,7 +2272,18 @@ async function callOpenAiCompatible(messages, config) {
     headers,
     body: JSON.stringify(body),
   });
-  return data.choices?.[0]?.message?.content || "";
+  const firstChoice = data.choices?.[0];
+  if (firstChoice?.message?.refusal) {
+    const error = new Error(`The model declined to answer: ${firstChoice.message.refusal}`);
+    error.code = "MODEL_REFUSAL";
+    throw error;
+  }
+  if (firstChoice?.finish_reason === "content_filter") {
+    const error = new Error("The response was filtered due to the content management policy.");
+    error.code = "CONTENT_FILTER";
+    throw error;
+  }
+  return firstChoice?.message?.content || "";
 }
 
 async function callClaude(messages, config) {
@@ -2204,6 +2292,11 @@ async function callClaude(messages, config) {
     headers: buildProviderHeaders(config),
     body: JSON.stringify(buildClaudeMessageBody(messages, config)),
   });
+  if (data.stop_reason === "refusal") {
+    const error = new Error("The model declined to answer (Claude refusal).");
+    error.code = "MODEL_REFUSAL";
+    throw error;
+  }
   return extractClaudeText(data);
 }
 
@@ -2281,6 +2374,7 @@ async function fetchJson(url, options, fetchOptions = {}) {
       const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
       error.code = "HTTP_ERROR";
       error.httpStatus = response.status;
+      error.responseBody = text;
       throw error;
     }
     if (!text) return {};
@@ -2736,6 +2830,7 @@ module.exports = {
   guardTargetScript,
   hasTargetScriptLeak,
   isGptModel,
+  isModelRefusalError,
   isAlignFragmentRow,
   isAlignFragmentText,
   isPureSymmetricFragmentRow,
