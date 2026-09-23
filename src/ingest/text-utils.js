@@ -36,16 +36,13 @@ function readText(file) {
   return fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }
 
-async function readInputText(file) {
-  if (isEpubInput(file)) return readEpubText(file);
+async function readSelectedInputText(file, selection = {}) {
+  if (isEpubInput(file)) return readEpubText(file, { inlineMarkup: selection.inlineMarkup });
   if (formatForFile(file)) return readWithPandoc(file);
   return readText(file);
 }
 
-async function readSelectedInputText(file, selection = {}) {
-  if (isEpubInput(file)) return readEpubText(file, { inlineMarkup: selection.inlineMarkup });
-  return readInputText(file);
-}
+const readInputText = (file) => readSelectedInputText(file);
 
 function blockStartPattern(markers) {
   return new RegExp(

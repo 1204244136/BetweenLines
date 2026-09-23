@@ -79,7 +79,7 @@ index-X 结构与命名规范契约：
    - `src/ingest/text-utils.js` 的 `loadParagraphs` 双语模式只返回 `cn`/`jp`，不写空 `tw` 数组；控制台也只按 `activeLangs()` 打印段落计数。
    - 被 `npm run align:jp` 自动调用。
 
-5. `src/workbenches/translation-compare/align_jp.py`（`scripts/align_jp.py` 为兼容 CLI 入口）
+5. `src/workbenches/translation-compare/align_jp.py`
    - 使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` 做跨语言语义对齐。
    - 对齐移动只允许 `1:1`、`1:2`、`1:0`、`0:1`：每张表格行最多包含一个原文段落；译文侧仍可一段拆成多段。
    - 当 `torch.cuda.is_available()` 为 true 时使用 CUDA/ROCm 暴露的加速后端，否则使用 CPU，除非 accelerator guard 阻止。

@@ -3,22 +3,11 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { makeHtml, alignLegacyNotes } = require("./build-compare");
 const { createNotesTools } = require("../src/workbenches/translation-compare/notes-spaces");
+const { storageFixture } = require("./workbench-fixture");
 
 const helpers = createNotesTools(alignLegacyNotes);
 const key = "translation-compare-notes-v7:project:rows";
 const sourceKey = "translation-compare-notes-v7:project:rowsPrevious";
-
-function storageFixture(initial = {}) {
-  const data = new Map(Object.entries(initial));
-  return {
-    data, failWrites: false,
-    get length() { return data.size; },
-    key(index) { return [...data.keys()][index] ?? null; },
-    getItem(name) { return data.get(name) ?? null; },
-    setItem(name, value) { if (this.failWrites) throw Error("QuotaExceededError"); data.set(name, value); },
-    removeItem(name) { data.delete(name); },
-  };
-}
 
 function createWorkbench(storage = storageFixture()) {
   const elements = new Map();

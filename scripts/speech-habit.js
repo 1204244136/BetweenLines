@@ -18,6 +18,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { getActiveProject, resolveProjectArtifact } = require("./project-store");
+const { loadActiveCompareData } = require("./lib/offline-cli");
 const {
   loadSpeechTables,
   normalizeSpeechTablePaths,
@@ -67,14 +68,11 @@ function usage() {
 }
 
 function loadRows() {
-  const active = getActiveProject();
-  if (!active) throw new Error("没有活动项目：请先在控制台生成一次，或运行 npm run align:jp && npm run build。");
-  const file = resolveProjectArtifact(active.id, "translation-compare.json", { snapshotId: active.snapshotId });
-  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const { project, file, rows, data } = loadActiveCompareData();
   return {
-    project: data.project || {},
+    project,
     file,
-    rows: Array.isArray(data.rows) ? data.rows : [],
+    rows,
     speechHabits: data.speechHabits || null,
   };
 }

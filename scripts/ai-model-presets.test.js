@@ -1,23 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
-const { createWorkbench, toastMessages } = require("./workbench-fixture");
-
-function storageFixture(initial = {}) {
-  const data = new Map(Object.entries(initial));
-  return {
-    data,
-    failWrites: false,
-    get length() { return data.size; },
-    key(index) { return [...data.keys()][index] ?? null; },
-    getItem(name) { return data.get(name) ?? null; },
-    setItem(name, value) {
-      if (this.failWrites) throw Error("QuotaExceededError");
-      data.set(name, String(value));
-    },
-    removeItem(name) { data.delete(name); },
-  };
-}
+const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
 
 test("ai-presets: listPresets handles empty, malformed, and non-array storage", () => {
   const tools = createPresetTools();
