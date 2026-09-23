@@ -22,9 +22,18 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   }, "");
 
   assert.match(html, /<div id="aiStageDashboard" class="ai-stage-dashboard"/);
+  assert.match(html, /id="aiStageSummaryNeedsEdit"/);
+  assert.match(html, /id="metricFinalNeedsEdit"/);
+  assert.match(html, /id="aiStageSummaryUnchanged"/);
+  assert.match(html, /id="metricFinalUnchanged"/);
+  assert.match(html, /id="aiStageSummaryNeedsCheck"/);
+  assert.match(html, /id="metricFinalNeedsCheck"/);
   assert.match(html, /id="metricStage1Passed"/);
+  assert.match(html, /id="metricStage1NeedsEdit"/);
+  assert.match(html, /id="metricStage1Total"/);
   assert.match(html, /id="metricFastPassHits"/);
   assert.match(html, /id="metricStage2Reviewed"/);
+  assert.match(html, /id="metricStage2Diverged"/);
   assert.match(html, /id="metricCritiqueAccept"/);
   assert.match(html, /id="metricCritiqueModify"/);
   assert.match(html, /id="metricCritiqueReject"/);
@@ -32,6 +41,12 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /调整:\s*<span id="metricCritiqueModify">/);
   assert.match(html, /驳回:\s*<span id="metricCritiqueReject">/);
   assert.match(html, /升级仲裁:\s*<span id="metricCritiqueEscalate">/);
+  assert.match(html, /id="metricStage3Arbitrated"/);
+  assert.match(html, /id="metricStage3Settled"/);
+  assert.match(html, /id="metricArbGatekeeper"/);
+  assert.match(html, /id="metricArbStylist"/);
+  assert.match(html, /id="metricArbSynthesis"/);
+  assert.match(html, /id="metricArbOriginal"/);
   assert.match(html, /id="metricStage1Errors"/);
   assert.match(html, /id="metricStage2Errors"/);
   assert.match(html, /id="metricStage3Errors"/);
@@ -190,13 +205,20 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   });
 
   // 页面刚加载完，在未调用任何 renderAiStatus 之前，各指标就已从 notes 恢复
+  assert.equal(ui.element("metricFinalNeedsEdit").textContent, 2); // 行3与行4最终需修改
+  assert.equal(ui.element("metricFinalUnchanged").textContent, 2); // 行1与行2无需修改
   assert.equal(ui.element("metricStage1Passed").textContent, 2); // 行1预筛通过 + 行2初审通过
+  assert.equal(ui.element("metricStage1NeedsEdit").textContent, 2); // 行3与行4初审建议修改
+  assert.equal(ui.element("metricStage1Total").textContent, 4); // 2 + 2 = 4
   assert.equal(ui.element("metricFastPassHits").textContent, 2);
   assert.equal(ui.element("aiStageFastPassRate").textContent, "快速直通: 100%");
   assert.equal(ui.element("metricStage2Reviewed").textContent, 2); // 行3调整 + 行4提交仲裁
+  assert.equal(ui.element("metricStage2Diverged").textContent, 1); // 行4分歧进入仲裁
   assert.equal(ui.element("metricCritiqueModify").textContent, 1);
   assert.equal(ui.element("metricCritiqueEscalate").textContent, 1);
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1); // 行4仲裁
+  assert.equal(ui.element("metricArbGatekeeper").textContent, 1); // 行4仲裁采纳初审方案
+  assert.equal(ui.element("metricStage3Settled").textContent, 1);
 
   // Status pills reflect ready state
   assert.equal(ui.element("stage1StatusPill").dataset.state, "done");
@@ -662,4 +684,163 @@ test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确�
   `);
   assert.equal(active1.hidden, true);
   assert.equal(activeText1.textContent, "", "隐藏时清空活跃行文本");
+});
+
+test("认知审核流水线指标：数学意义严格闭环与明确流转脉络", () => {
+  const ui = createWorkbench();
+
+  // 模拟用户真实场景中的 271 行流转数据
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: false,
+      finishedAt: "2026-01-01T00:00:00.000Z",
+      queued: 271,
+      total: 271,
+      modelProcessed: 64,
+      suggested: 62,
+      errors: 0,
+      stageMetrics: {
+        stage1Passed: 208,
+        stage1NeedsEdit: 63,
+        stage1Total: 271,
+        stage1Errors: 0,
+        fastPassHits: 207,
+        stage2Reviewed: 63,
+        stage2Diverged: 42,
+        stage2Errors: 0,
+        critiqueAccept: 5,
+        critiqueModify: 57,
+        critiqueReject: 1,
+        critiqueEscalate: 0,
+        stage3Arbitrated: 42,
+        stage3Settled: 42,
+        stage3Errors: 0,
+        arbitrationGatekeeper: 10,
+        arbitrationStylist: 25,
+        arbitrationSynthesis: 6,
+        arbitrationOriginal: 1,
+        finalNeedsEdit: 62,
+        finalUnchanged: 209,
+        finalNeedsCheck: 0,
+        totalAudited: 271,
+      },
+      results: [],
+    });
+  `);
+
+  // 1. 全局最终修改结论：明确回答「应该有几条需要改」
+  const finalEdit = ui.element("metricFinalNeedsEdit");
+  const finalUnchanged = ui.element("metricFinalUnchanged");
+  assert.equal(Number(finalEdit.textContent), 62, "明确指出最终建议修改为 62 行");
+  assert.equal(Number(finalUnchanged.textContent), 209, "明确指出无需修改为 209 行");
+  assert.equal(Number(finalEdit.textContent) + Number(finalUnchanged.textContent), 271, "62 + 209 = 271，总量数学严格闭环");
+
+  // 2. 阶段一事实初审：208 通过 + 63 提改 = 271 总检，63 流入阶段二
+  const s1Passed = Number(ui.element("metricStage1Passed").textContent);
+  const s1NeedsEdit = Number(ui.element("metricStage1NeedsEdit").textContent);
+  const s1Total = Number(ui.element("metricStage1Total").textContent);
+  const fpHits = Number(ui.element("metricFastPassHits").textContent);
+  assert.equal(s1Passed, 208);
+  assert.equal(s1NeedsEdit, 63);
+  assert.equal(s1Total, 271);
+  assert.equal(fpHits, 207);
+  assert.equal(s1Passed + s1NeedsEdit, s1Total, "阶段一：208 通过 + 63 提改 = 271 总检");
+
+  // 3. 阶段二文学复审：承接阶段一的 63 行提改
+  const s2Reviewed = Number(ui.element("metricStage2Reviewed").textContent);
+  const s2Diverged = Number(ui.element("metricStage2Diverged").textContent);
+  const cAccept = Number(ui.element("metricCritiqueAccept").textContent);
+  const cModify = Number(ui.element("metricCritiqueModify").textContent);
+  const cReject = Number(ui.element("metricCritiqueReject").textContent);
+  const cEscalate = Number(ui.element("metricCritiqueEscalate").textContent);
+  assert.equal(s2Reviewed, 63, "阶段二复审量精确等于阶段一提改量 (63)");
+  assert.equal(cAccept, 5);
+  assert.equal(cModify, 57);
+  assert.equal(cReject, 1);
+  assert.equal(cEscalate, 0);
+  assert.equal(cAccept + cModify + cReject + cEscalate, s2Reviewed, "阶段二：5 采纳 + 57 调整 + 1 驳回 + 0 升级 = 63 复审");
+  assert.equal(s2Diverged, 42, "阶段二产生 42 行分歧，流入阶段三");
+
+  // 4. 阶段三终审仲裁：承接阶段二的 42 行分歧
+  const s3Arbitrated = Number(ui.element("metricStage3Arbitrated").textContent);
+  const s3Settled = Number(ui.element("metricStage3Settled").textContent);
+  const arbGK = Number(ui.element("metricArbGatekeeper").textContent);
+  const arbStylist = Number(ui.element("metricArbStylist").textContent);
+  const arbSynth = Number(ui.element("metricArbSynthesis").textContent);
+  const arbOrig = Number(ui.element("metricArbOriginal").textContent);
+  assert.equal(s3Arbitrated, 42, "阶段三仲裁量精确等于阶段二分歧量 (42)");
+  assert.equal(s3Settled, 42);
+  assert.equal(arbGK, 10);
+  assert.equal(arbStylist, 25);
+  assert.equal(arbSynth, 6);
+  assert.equal(arbOrig, 1);
+  assert.equal(arbGK + arbStylist + arbSynth + arbOrig, s3Arbitrated, "阶段三：10 初审胜 + 25 复审胜 + 6 结合 + 1 维持原译 = 42 仲裁");
+
+  // 5. 快速直通率与状态提示文字
+  const rateText = ui.element("aiStageFastPassRate").textContent;
+  assert.match(rateText, /快速直通:\s*100%/);
+  const rateTitle = ui.element("aiStageFastPassRate").title;
+  assert.match(rateTitle, /207\s*行快速直通/);
+  assert.match(rateTitle, /271/);
+});
+
+test("顶部审核结论指标筛选：点击建议修改/无需修改筛选对应行", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        note: "[规则预筛]\n是否需要修改：否\n分析：预筛通过。",
+        aiDone: true,
+      },
+      2: {
+        note: "[AI校对]\n是否需要修改：否\nGatekeeper初审：无需修改",
+        aiDone: true,
+      },
+      3: {
+        note: "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n修改结果：改案3",
+        aiDone: true,
+      },
+      4: {
+        note: "[AI校对]\n是否需要修改：是\nGatekeeper初审：初审建议\nStylist复审[调整]：深化\n修改结果：改案4",
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+      { index: 3, jp: "A3", cn: "B3", relation: "1:1", score: 0.9, signature: "sig-3" },
+      { index: 4, jp: "A4", cn: "B4", relation: "1:1", score: 0.9, signature: "sig-4" },
+    ],
+  });
+
+  // 初始加载：全部 4 行
+  assert.equal(ui.run("filteredRows.length"), 4);
+
+  // 点击「最终建议修改」徽标：筛选出 2 行（行3、行4）
+  await ui.element("aiStageSummaryNeedsEdit").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "needsEdit");
+  assert.equal(ui.run("filteredRows.length"), 2);
+  const editIndices = Array.from(ui.run("filteredRows.map(r => r.index)"));
+  assert.deepEqual(editIndices, [3, 4]);
+
+  // 再次点击「最终建议修改」徽标：取消筛选，恢复 4 行
+  await ui.element("aiStageSummaryNeedsEdit").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), null);
+  assert.equal(ui.run("filteredRows.length"), 4);
+
+  // 点击「无需修改」徽标：筛选出 2 行（行1、行2）
+  await ui.element("aiStageSummaryUnchanged").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "unchanged");
+  assert.equal(ui.run("filteredRows.length"), 2);
+  const unchangedIndices = Array.from(ui.run("filteredRows.map(r => r.index)"));
+  assert.deepEqual(unchangedIndices, [1, 2]);
+
+  // 再次点击取消筛选
+  await ui.element("aiStageSummaryUnchanged").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), null);
+  assert.equal(ui.run("filteredRows.length"), 4);
 });

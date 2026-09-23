@@ -507,6 +507,7 @@ function cleanConfig(input = {}) {
     apiKey: String(input.apiKey || "").trim(),
     systemPrompt: String(input.systemPrompt || "").trim() || proofreadPromptFor(proofreadMode, profileId).system,
     glossaryFile: String(input.glossaryFile || "").trim(),
+    continueOnly: Boolean(input.continueOnly),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
     targetStage: (input.stage === "stage2" || input.targetStage === "stage2") ? "stage2"
       : ((input.stage === "stage3" || input.targetStage === "stage3") ? "stage3"
@@ -736,6 +737,18 @@ function addResult(result, { prefilterKind = "" } = {}) {
 
     if (result.arbitration || result.stageResult?.stage === "arbiter") {
       status.stageMetrics.stage3Arbitrated += 1;
+      status.stageMetrics.stage2Diverged = Math.max(status.stageMetrics.stage3Arbitrated, status.stageMetrics.stage2Diverged || 0);
+      const winner = String(result.arbitration?.winner || result.stageResult?.winner || "");
+      if (winner === "gatekeeper" || winner.includes("初审")) {
+        status.stageMetrics.arbitrationGatekeeper = (status.stageMetrics.arbitrationGatekeeper || 0) + 1;
+      } else if (winner === "stylist" || winner.includes("复审")) {
+        status.stageMetrics.arbitrationStylist = (status.stageMetrics.arbitrationStylist || 0) + 1;
+      } else if (winner === "synthesis" || winner === "combined" || winner === "compromise" || winner.includes("结合") || winner.includes("综合") || winner.includes("折中")) {
+        status.stageMetrics.arbitrationSynthesis = (status.stageMetrics.arbitrationSynthesis || 0) + 1;
+      } else if (winner === "original" || winner === "target" || winner.includes("维持") || winner.includes("原译")) {
+        status.stageMetrics.arbitrationOriginal = (status.stageMetrics.arbitrationOriginal || 0) + 1;
+      }
+      status.stageMetrics.stage3Settled = (status.stageMetrics.stage3Settled || 0) + 1;
     }
   }
   if (result.status === "suggestion") status.suggested += 1;
@@ -750,6 +763,20 @@ function addResult(result, { prefilterKind = "" } = {}) {
       status.stageMetrics.stage1Errors += 1;
     }
   }
+
+  // 最终审核结论与阶段流转指标
+  if (result.status === "suggestion" && result.done === false) {
+    status.stageMetrics.finalNeedsEdit = (status.stageMetrics.finalNeedsEdit || 0) + 1;
+  } else if (result.done === true) {
+    status.stageMetrics.finalUnchanged = (status.stageMetrics.finalUnchanged || 0) + 1;
+  } else if (result.status !== "error") {
+    status.stageMetrics.finalNeedsCheck = (status.stageMetrics.finalNeedsCheck || 0) + 1;
+  }
+  if (result.status === "suggestion" || result.stageResult?.needsEdit || result.stylistReview || result.arbitration) {
+    status.stageMetrics.stage1NeedsEdit = (status.stageMetrics.stage1NeedsEdit || 0) + 1;
+  }
+  status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0);
+  status.stageMetrics.totalAudited = status.processed;
 }
 
 async function startPrefilter(input) {
@@ -870,6 +897,10 @@ async function startProofread(input) {
         (noteText && (noteText.includes("是否需要修改：是") || noteText.includes("初审改案") || noteText.includes("Gatekeeper初审：建议修改")))
       );
       if (hasSuggestion) {
+        if (config.continueOnly && (noteText.includes("Stylist复审") || memoryResult?.stylistReview)) {
+          status.skippedDone += 1;
+          continue;
+        }
         const s1Item = (memoryResult && memoryResult.stageResult && memoryResult.stageResult.needsEdit)
           ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null }
           : reconstructStage1Result(row, noteText, config, labels);
@@ -911,6 +942,10 @@ async function startProofread(input) {
         (noteText && (noteText.includes("提交仲裁") || noteText.includes("分歧") || noteText.includes("escalate")))
       );
       if (hasDispute) {
+        if (config.continueOnly && (noteText.includes("Arbiter仲裁") || memoryResult?.arbitration)) {
+          status.skippedDone += 1;
+          continue;
+        }
         const s2Item = (memoryResult && memoryResult.stageResult)
           ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null, arbCheck: { triggered: true } }
           : reconstructStage2Result(row, noteText, config, labels);

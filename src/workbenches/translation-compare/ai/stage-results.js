@@ -56,12 +56,36 @@ function normalizeCritiqueResult(value = {}) {
 }
 
 function createStageMetrics(value = {}) {
+  const stage1Passed = Math.max(0, Number(value.stage1Passed) || 0);
+  const stage1NeedsEdit = Math.max(0, Number(value.stage1NeedsEdit) || 0);
+  const stage1Total = Math.max(stage1Passed + stage1NeedsEdit, Number(value.stage1Total) || 0);
+  const stage2Reviewed = Math.max(0, Number(value.stage2Reviewed) || 0);
+  const stage3Arbitrated = Math.max(0, Number(value.stage3Arbitrated) || 0);
+  const stage2Diverged = Math.max(0, Number(value.stage2Diverged) || stage3Arbitrated);
+  const stage2Pending = Math.max(0, Number(value.stage2Pending) || (stage1NeedsEdit - stage2Reviewed));
+  const stage3Pending = Math.max(0, Number(value.stage3Pending) || (stage2Diverged - stage3Arbitrated));
+  const arbitrationGatekeeper = Math.max(0, Number(value.arbitrationGatekeeper) || 0);
+  const arbitrationStylist = Math.max(0, Number(value.arbitrationStylist) || 0);
+  const arbitrationSynthesis = Math.max(0, Number(value.arbitrationSynthesis) || 0);
+  const arbitrationOriginal = Math.max(0, Number(value.arbitrationOriginal) || 0);
+  const stage3Settled = Math.max(stage3Arbitrated, Number(value.stage3Settled) || (arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal));
+  const finalNeedsEdit = Math.max(0, Number(value.finalNeedsEdit) || 0);
+  const finalUnchanged = Math.max(0, Number(value.finalUnchanged) || 0);
+  const finalNeedsCheck = Math.max(0, Number(value.finalNeedsCheck) || 0);
+  const totalAudited = Math.max(stage1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck, Number(value.totalAudited) || 0);
+
   return {
-    stage1Passed: Math.max(0, Number(value.stage1Passed) || 0),
+    stage1Passed,
+    stage1NeedsEdit,
+    stage1Total,
     stage1Errors: Math.max(0, Number(value.stage1Errors) || 0),
-    stage2Reviewed: Math.max(0, Number(value.stage2Reviewed) || 0),
+    stage2Reviewed,
+    stage2Diverged,
+    stage2Pending,
     stage2Errors: Math.max(0, Number(value.stage2Errors) || 0),
-    stage3Arbitrated: Math.max(0, Number(value.stage3Arbitrated) || 0),
+    stage3Arbitrated,
+    stage3Settled,
+    stage3Pending,
     stage3Errors: Math.max(0, Number(value.stage3Errors) || 0),
     fastPassHits: Math.max(0, Number(value.fastPassHits) || 0),
     webLookupHits: Math.max(0, Number(value.webLookupHits) || 0),
@@ -70,6 +94,14 @@ function createStageMetrics(value = {}) {
     critiqueReject: Math.max(0, Number(value.critiqueReject) || 0),
     critiqueModify: Math.max(0, Number(value.critiqueModify) || 0),
     critiqueEscalate: Math.max(0, Number(value.critiqueEscalate) || 0),
+    arbitrationGatekeeper,
+    arbitrationStylist,
+    arbitrationSynthesis,
+    arbitrationOriginal,
+    finalNeedsEdit,
+    finalUnchanged,
+    finalNeedsCheck,
+    totalAudited,
   };
 }
 

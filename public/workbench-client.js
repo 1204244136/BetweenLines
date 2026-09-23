@@ -2508,8 +2508,36 @@
         (activeStageFilter === "1" && (rawNote.includes("是否需要修改：否") || (rawNote.includes("调用失败") && !rawNote.includes("Stylist") && !rawNote.includes("Arbiter")))) ||
         (activeStageFilter === "2" && (rawNote.includes("Stylist复审") || (rawNote.includes("调用失败") && rawNote.includes("Stylist")))) ||
         (activeStageFilter === "3" && (rawNote.includes("Arbiter仲裁") || (rawNote.includes("调用失败") && rawNote.includes("Arbiter"))));
+      const isStage2PendingRow = (r) => {
+        const rowId = String(r.index);
+        const text = String(notes[rowId]?.note || "");
+        if (!text) return false;
+        const p = parseAutomatedNote(text);
+        if (!p) return false;
+        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
+        const isS1Edit = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
+        return isS1Edit && !hasS2;
+      };
+      const isStage3PendingRow = (r) => {
+        const rowId = String(r.index);
+        const text = String(notes[rowId]?.note || "");
+        if (!text) return false;
+        const p = parseAutomatedNote(text);
+        if (!p) return false;
+        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
+        const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
+        const att = String(p.stage2?.attitude || "");
+        const isDiverged = att.includes("调整") || att.includes("驳回") || att.includes("仲裁") || att === "modify" || att === "reject" || att === "escalate";
+        return hasS2 && isDiverged && !hasS3;
+      };
+      const matchesSummary = !activeSummaryFilter ||
+        (activeSummaryFilter === "needsEdit" && aiResultState(row) === "modify") ||
+        (activeSummaryFilter === "unchanged" && aiResultState(row) === "same") ||
+        (activeSummaryFilter === "needsCheck" && aiResultState(row) === "unclear") ||
+        (activeSummaryFilter === "stage2Pending" && isStage2PendingRow(row)) ||
+        (activeSummaryFilter === "stage3Pending" && isStage3PendingRow(row));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
-      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesStage;
+      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesStage && matchesSummary;
     }
 
     function applyFilters({ reset = true } = {}) {
@@ -2614,13 +2642,14 @@
       }
       const pipelineBtn = event.target.closest("[data-pipeline-toggle]");
       if (pipelineBtn) {
+        event.preventDefault();
+        event.stopPropagation();
         const rowId = pipelineBtn.dataset.pipelineToggle;
         const details = document.getElementById("pipelineDetails_" + rowId);
         if (details) {
           details.hidden = !details.hidden;
           const hint = pipelineBtn.querySelector(".pipeline-expand-hint");
           if (hint) hint.textContent = details.hidden ? "审核轨迹 ▾" : "收起 ▴";
-          syncVisibleRowLayout();
         }
         return;
       }
@@ -2676,6 +2705,7 @@
     });
 
     let activeStageFilter = null;
+    let activeSummaryFilter = null;
     let suppressStageCardFilterUntil = 0;
 
     function suppressStageCardFilter(durationMs = 600) {
@@ -2725,6 +2755,39 @@
             showToast("已筛选 " + names[stage] + " 相关行（再次点击指标可取消）", { tone: "info", durationMs: 3000 });
           }
           applyFilters({ reset: true });
+        });
+      });
+
+      // 顶部全局审核结论指标筛选与待复审/待仲裁筛选
+      const summaryItems = [
+        { id: "aiStageSummaryNeedsEdit", filter: "needsEdit", name: "最终建议修改" },
+        { id: "aiStageSummaryUnchanged", filter: "unchanged", name: "无需修改" },
+        { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "待人工确认" },
+        { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审" },
+        { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁" },
+      ];
+      summaryItems.forEach(({ id, filter, name }) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const trigger = () => {
+          if (activeSummaryFilter === filter) {
+            activeSummaryFilter = null;
+            el.classList.remove("is-active");
+            showToast("已取消" + name + "筛选，展示全部行", { tone: "info", durationMs: 2500 });
+          } else {
+            summaryItems.forEach((item) => document.getElementById(item.id)?.classList.remove("is-active"));
+            activeSummaryFilter = filter;
+            el.classList.add("is-active");
+            showToast("已筛选" + name + "行（再次点击可取消）", { tone: "info", durationMs: 3000 });
+          }
+          applyFilters({ reset: true });
+        };
+        el.addEventListener("click", trigger);
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            trigger();
+          }
         });
       });
     }
@@ -2891,6 +2954,12 @@
         activeStageFilter = null;
         ["stage1Card", "stage2Card", "stage3Card"].forEach((id) => {
           document.getElementById(id)?.classList.remove("is-active-filter");
+        });
+      }
+      if (activeSummaryFilter) {
+        activeSummaryFilter = null;
+        ["aiStageSummaryNeedsEdit", "aiStageSummaryUnchanged", "aiStageSummaryNeedsCheck", "stage2PendingItem", "stage3PendingItem"].forEach((id) => {
+          document.getElementById(id)?.classList.remove("is-active");
         });
       }
       showSource.checked = true;
@@ -3314,19 +3383,46 @@
 
     function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
+      const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
+      const s1Total = Math.max(s1Passed + s1NeedsEdit, Number(stageMetrics.stage1Total) || 0);
       const s1Errors = Math.max(0, Number(stageMetrics.stage1Errors) || 0);
       const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
       const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
+      const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0);
       const s2Errors = Math.max(0, Number(stageMetrics.stage2Errors) || 0);
       const cAccept = Math.max(0, Number(stageMetrics.critiqueAccept) || 0);
       const cModify = Math.max(0, Number(stageMetrics.critiqueModify) || 0);
       const cReject = Math.max(0, Number(stageMetrics.critiqueReject) || 0);
       const cEscalate = Math.max(0, Number(stageMetrics.critiqueEscalate) || 0);
       const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
+      const arbGK = Math.max(0, Number(stageMetrics.arbitrationGatekeeper) || 0);
+      const arbStylist = Math.max(0, Number(stageMetrics.arbitrationStylist) || 0);
+      const arbSynth = Math.max(0, Number(stageMetrics.arbitrationSynthesis) || 0);
+      const arbOrig = Math.max(0, Number(stageMetrics.arbitrationOriginal) || 0);
+      const s3Settled = Math.max(s3Arbitrated, Number(stageMetrics.stage3Settled) || (arbGK + arbStylist + arbSynth + arbOrig));
       const s3Errors = Math.max(0, Number(stageMetrics.stage3Errors) || 0);
+      const finalNeedsEdit = Math.max(0, Number(stageMetrics.finalNeedsEdit) || 0);
+      const finalUnchanged = Math.max(0, Number(stageMetrics.finalUnchanged) || 0);
+      const finalNeedsCheck = Math.max(0, Number(stageMetrics.finalNeedsCheck) || 0);
+      const totalAudited = Math.max(s1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck, Number(stageMetrics.totalAudited) || 0);
 
+      // 全局最终修改结论摘要
+      const elFinalNeedsEdit = document.getElementById("metricFinalNeedsEdit");
+      if (elFinalNeedsEdit) elFinalNeedsEdit.textContent = finalNeedsEdit;
+      const elFinalUnchanged = document.getElementById("metricFinalUnchanged");
+      if (elFinalUnchanged) elFinalUnchanged.textContent = finalUnchanged;
+      const elFinalNeedsCheck = document.getElementById("metricFinalNeedsCheck");
+      if (elFinalNeedsCheck) elFinalNeedsCheck.textContent = finalNeedsCheck;
+      const badgeNeedsCheck = document.getElementById("aiStageSummaryNeedsCheck");
+      if (badgeNeedsCheck) badgeNeedsCheck.hidden = finalNeedsCheck === 0;
+
+      // 阶段一
       const elS1 = document.getElementById("metricStage1Passed");
       if (elS1) elS1.textContent = s1Passed;
+      const elS1NeedsEdit = document.getElementById("metricStage1NeedsEdit");
+      if (elS1NeedsEdit) elS1NeedsEdit.textContent = s1NeedsEdit;
+      const elS1Total = document.getElementById("metricStage1Total");
+      if (elS1Total) elS1Total.textContent = s1Total;
       const elS1Err = document.getElementById("metricStage1Errors");
       if (elS1Err) {
         elS1Err.textContent = s1Errors;
@@ -3336,14 +3432,28 @@
       const elFp = document.getElementById("metricFastPassHits");
       if (elFp) elFp.textContent = fpHits;
 
+      // 阶段二
       const elS2 = document.getElementById("metricStage2Reviewed");
       if (elS2) elS2.textContent = s2Reviewed;
+      const elS2Diverged = document.getElementById("metricStage2Diverged");
+      if (elS2Diverged) elS2Diverged.textContent = s2Diverged;
       const elS2Err = document.getElementById("metricStage2Errors");
       if (elS2Err) {
         elS2Err.textContent = s2Errors;
         const item = document.getElementById("stage2ErrorItem");
         if (item) item.classList.toggle("has-errors", s2Errors > 0);
       }
+      const s2Pending = Math.max(0, s1NeedsEdit - s2Reviewed);
+      const elS2Pending = document.getElementById("metricStage2Pending");
+      const itemS2Pending = document.getElementById("stage2PendingItem");
+      const sepS2Pending = document.getElementById("stage2PendingSep");
+      if (elS2Pending) elS2Pending.textContent = s2Pending;
+      if (itemS2Pending) {
+        itemS2Pending.hidden = s2Pending === 0;
+        itemS2Pending.title = "初审已提改 " + s1NeedsEdit + " 行，已复审 " + s2Reviewed + " 行，" + s2Pending + " 行尚未执行文学复审（点击可筛选）";
+      }
+      if (sepS2Pending) sepS2Pending.hidden = s2Pending === 0;
+
       const elCAccept = document.getElementById("metricCritiqueAccept");
       if (elCAccept) elCAccept.textContent = cAccept;
       const elCModify = document.getElementById("metricCritiqueModify");
@@ -3353,8 +3463,29 @@
       const elCEscalate = document.getElementById("metricCritiqueEscalate");
       if (elCEscalate) elCEscalate.textContent = cEscalate;
 
+      // 阶段三
       const elS3 = document.getElementById("metricStage3Arbitrated");
       if (elS3) elS3.textContent = s3Arbitrated;
+      const elS3Settled = document.getElementById("metricStage3Settled");
+      if (elS3Settled) elS3Settled.textContent = s3Settled;
+      const s3Pending = Math.max(0, s2Diverged - s3Arbitrated);
+      const elS3Pending = document.getElementById("metricStage3Pending");
+      const itemS3Pending = document.getElementById("stage3PendingItem");
+      const sepS3Pending = document.getElementById("stage3PendingSep");
+      if (elS3Pending) elS3Pending.textContent = s3Pending;
+      if (itemS3Pending) {
+        itemS3Pending.hidden = s3Pending === 0;
+        itemS3Pending.title = "复审产生分歧 " + s2Diverged + " 行，已仲裁 " + s3Arbitrated + " 行，" + s3Pending + " 行尚未执行终审仲裁（点击可筛选）";
+      }
+      if (sepS3Pending) sepS3Pending.hidden = s3Pending === 0;
+      const elArbGK = document.getElementById("metricArbGatekeeper");
+      if (elArbGK) elArbGK.textContent = arbGK;
+      const elArbStylist = document.getElementById("metricArbStylist");
+      if (elArbStylist) elArbStylist.textContent = arbStylist;
+      const elArbSynth = document.getElementById("metricArbSynthesis");
+      if (elArbSynth) elArbSynth.textContent = arbSynth;
+      const elArbOrig = document.getElementById("metricArbOriginal");
+      if (elArbOrig) elArbOrig.textContent = arbOrig;
       const elS3Err = document.getElementById("metricStage3Errors");
       if (elS3Err) {
         elS3Err.textContent = s3Errors;
@@ -3366,6 +3497,10 @@
       if (elRate) {
         const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) : 0;
         elRate.textContent = "快速直通: " + rate + "%";
+        if (totalAudited > 0) {
+          const overallRate = Math.round((fpHits / totalAudited) * 100);
+          elRate.title = "初审放行 " + s1Passed + " 行中 " + fpHits + " 行快速直通 (" + rate + "%)\n审核总量 " + totalAudited + " 行（总直通占比 " + overallRate + "%）";
+        }
       }
 
       // 实时阶段状态指示（动态胶囊与活跃行提示）
@@ -3483,16 +3618,27 @@
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
       let stage1Passed = 0;
+      let stage1NeedsEdit = 0;
       let stage1Errors = 0;
       let fastPassHits = 0;
       let stage2Reviewed = 0;
+      let stage2Diverged = 0;
       let stage2Errors = 0;
       let critiqueAccept = 0;
       let critiqueModify = 0;
       let critiqueReject = 0;
       let critiqueEscalate = 0;
       let stage3Arbitrated = 0;
+      let stage3Settled = 0;
       let stage3Errors = 0;
+      let arbitrationGatekeeper = 0;
+      let arbitrationStylist = 0;
+      let arbitrationSynthesis = 0;
+      let arbitrationOriginal = 0;
+      let finalNeedsEdit = 0;
+      let finalUnchanged = 0;
+      let finalNeedsCheck = 0;
+      let totalAudited = 0;
       let lowScoreHits = 0;
       let webLookupHits = 0;
 
@@ -3502,6 +3648,7 @@
         if (!noteText) continue;
 
         if (isAiFailureNote(noteText)) {
+          totalAudited += 1;
           if (noteText.includes("Arbiter") || noteText.includes("终审仲裁")) {
             stage3Errors += 1;
           } else if (noteText.includes("Stylist") || noteText.includes("文学复审")) {
@@ -3516,14 +3663,34 @@
         const parsed = parseAutomatedNote(noteText);
         if (!parsed) continue;
 
-        if (parsed.modify === "否") {
-          stage1Passed += 1;
-          if (!parsed.stage2 && !noteText.includes("Stylist复审")) {
-            fastPassHits += 1;
-          }
+        totalAudited += 1;
+
+        // 全局最终修改结论
+        if (parsed.modify === "是") {
+          finalNeedsEdit += 1;
+        } else if (parsed.modify === "否") {
+          finalUnchanged += 1;
+        } else {
+          finalNeedsCheck += 1;
         }
 
-        if (parsed.stage2 || noteText.includes("Stylist复审")) {
+        const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
+        const hasStage3 = Boolean(parsed.stage3 || noteText.includes("Arbiter仲裁"));
+        const hasStage1Revision = Boolean(parsed.stage1Revision || (parsed.stage1 && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
+
+        // 阶段一事实初审指标：
+        // 无需修改通过（未进入阶段二，或阶段一确认无需修改且未提出修改方案）
+        if (!hasStage2 && parsed.modify === "否") {
+          stage1Passed += 1;
+          fastPassHits += 1;
+        } else if (parsed.modify === "否" && !hasStage1Revision) {
+          stage1Passed += 1;
+        } else {
+          stage1NeedsEdit += 1;
+        }
+
+        // 阶段二文学复审指标
+        if (hasStage2) {
           stage2Reviewed += 1;
           const attitude = String(parsed.stage2?.attitude || "");
           if (attitude.includes("采纳") || attitude === "accept") {
@@ -3537,8 +3704,20 @@
           }
         }
 
-        if (parsed.stage3 || noteText.includes("Arbiter仲裁")) {
+        // 阶段三终审仲裁指标
+        if (hasStage3) {
           stage3Arbitrated += 1;
+          stage2Diverged += 1;
+          const winner = String(parsed.stage3?.winner || "").toLowerCase();
+          if (winner.includes("初审") || winner.includes("gatekeeper") || winner.includes("gk")) {
+            arbitrationGatekeeper += 1;
+          } else if (winner.includes("复审") || winner.includes("stylist")) {
+            arbitrationStylist += 1;
+          } else if (winner.includes("结合") || winner.includes("综合") || winner.includes("折中") || winner.includes("synthesis") || winner.includes("combined") || winner.includes("compromise")) {
+            arbitrationSynthesis += 1;
+          } else if (winner.includes("维持") || winner.includes("原译") || winner.includes("original") || winner.includes("target")) {
+            arbitrationOriginal += 1;
+          }
         }
 
         if (noteText.includes("低分归因：")) {
@@ -3549,18 +3728,37 @@
         }
       }
 
+      stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
+      const stage1Total = stage1Passed + stage1NeedsEdit;
+      const stage2Pending = Math.max(0, stage1NeedsEdit - stage2Reviewed);
+      const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
+
       return {
         stage1Passed,
+        stage1NeedsEdit,
+        stage1Total,
         stage1Errors,
         fastPassHits,
         stage2Reviewed,
+        stage2Diverged,
+        stage2Pending,
         stage2Errors,
         critiqueAccept,
         critiqueModify,
         critiqueReject,
         critiqueEscalate,
         stage3Arbitrated,
+        stage3Settled,
+        stage3Pending,
         stage3Errors,
+        arbitrationGatekeeper,
+        arbitrationStylist,
+        arbitrationSynthesis,
+        arbitrationOriginal,
+        finalNeedsEdit,
+        finalUnchanged,
+        finalNeedsCheck,
+        totalAudited,
         lowScoreHits,
         webLookupHits,
       };
@@ -3572,12 +3770,15 @@
       const hasOverride = overrideMetrics && Object.values(overrideMetrics).some((v) => Number(v) > 0);
       const hasLocal = Object.values(localMetrics).some((v) => Number(v) > 0);
 
-      if (aiRunning) {
-        stageMetrics = overrideMetrics || localMetrics;
-      } else if (hasLocal) {
+      if (hasLocal) {
         // 当前工作台 notes 中存在审核指标：以当前工作台已加载/找回的 notes 为真理源，
-        // 绝不让服务端空闲时的全 0 指标冲掉本地已还原的统计。
+        // 增量运行期间（例如只复审待处理行），绝不让单次任务从 0 开始的指标冲掉本地累积数据！
         stageMetrics = localMetrics;
+        if (overrideMetrics) {
+          if (overrideMetrics.stage1Errors > stageMetrics.stage1Errors) stageMetrics.stage1Errors = overrideMetrics.stage1Errors;
+          if (overrideMetrics.stage2Errors > stageMetrics.stage2Errors) stageMetrics.stage2Errors = overrideMetrics.stage2Errors;
+          if (overrideMetrics.stage3Errors > stageMetrics.stage3Errors) stageMetrics.stage3Errors = overrideMetrics.stage3Errors;
+        }
       } else if (hasOverride) {
         // 本地没有自动化备注（例如在无 notes 的测试夹具中直接模拟状态响应），使用显式提供的指标
         stageMetrics = overrideMetrics;
@@ -3586,11 +3787,17 @@
       }
 
       const stageMetricsSummary = [
+        ["finalNeedsEdit", "最终建议修改"],
+        ["finalUnchanged", "无需修改"],
         ["stage1Passed", "初审通过"],
+        ["stage1NeedsEdit", "初审提改"],
+        ["stage1Total", "初审总检"],
         ["stage1Errors", "初审异常"],
         ["stage2Reviewed", "文学复审"],
+        ["stage2Diverged", "复审分歧"],
         ["stage2Errors", "复审异常"],
         ["stage3Arbitrated", "终审仲裁"],
+        ["stage3Settled", "仲裁定案"],
         ["stage3Errors", "仲裁异常"],
         ["fastPassHits", "快速直通"],
         ["lowScoreHits", "低分归因"],
@@ -3730,10 +3937,15 @@
       let pipelineDoneText = "";
       if (isMultiStage && stageMetrics) {
         const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
+        const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
         const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
         const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
+        const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0);
         const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
-        pipelineDoneText = " ｜ 初审 " + s1Passed + (fpHits ? " (直通 " + fpHits + ")" : "") + " ➔ 复审 " + s2Reviewed + " ➔ 仲裁 " + s3Arbitrated;
+        const s1Part = "初审 " + s1Passed + (fpHits ? "(直通 " + fpHits + ")" : "") + (s1NeedsEdit ? "➔提改 " + s1NeedsEdit : "");
+        const s2Part = "复审 " + s2Reviewed + (s2Diverged ? "(分歧 " + s2Diverged + ")" : "");
+        const s3Part = "仲裁 " + s3Arbitrated;
+        pipelineDoneText = " ｜ " + s1Part + " ➔ " + s2Part + " ➔ " + s3Part;
       }
 
       const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") +
@@ -4369,6 +4581,70 @@
       return count;
     }
 
+    function clearUnconfirmedStageNotes(targetStage = "stage1") {
+      if (targetStage === "stage1") {
+        return clearUnconfirmedAiProofreadNotes();
+      }
+      let clearedCount = 0;
+      for (const [id, item] of Object.entries(notes)) {
+        if (!item || item.manualDone) continue;
+        const note = String(item.note || "").trim();
+        if (!note || !hasAutomatedDecisionNote(note)) continue;
+        const p = parseAutomatedNote(note);
+        if (!p) continue;
+
+        if (targetStage === "stage2") {
+          if (!p.stage2 && !note.includes("Stylist复审")) continue;
+          // 清理 Stylist 复审及后续仲裁，保留初审改案
+          const lines = note.split("\n").filter((line) => {
+            return !line.startsWith("Stylist复审") &&
+              !line.startsWith("复审改案：") &&
+              !line.startsWith("复审建议：") &&
+              !line.startsWith("Arbiter仲裁") &&
+              !line.startsWith("仲裁改案：") &&
+              !line.startsWith("仲裁建议：");
+          });
+          const revIdx = lines.findIndex((l) => l.startsWith("修改结果："));
+          if (p.stage1Revision) {
+            if (revIdx >= 0) {
+              lines[revIdx] = `修改结果：${p.stage1Revision}`;
+            } else {
+              lines.push(`修改结果：${p.stage1Revision}`);
+            }
+            item.revisionText = p.stage1Revision;
+          }
+          item.note = lines.join("\n");
+          clearedCount += 1;
+        } else if (targetStage === "stage3") {
+          if (!p.stage3 && !note.includes("Arbiter仲裁")) continue;
+          // 清理 Arbiter 仲裁，保留复审方案
+          const lines = note.split("\n").filter((line) => {
+            return !line.startsWith("Arbiter仲裁") &&
+              !line.startsWith("仲裁改案：") &&
+              !line.startsWith("仲裁建议：");
+          });
+          const revIdx = lines.findIndex((l) => l.startsWith("修改结果："));
+          const fallbackRev = p.stage2Revision || p.stage1Revision;
+          if (fallbackRev) {
+            if (revIdx >= 0) {
+              lines[revIdx] = `修改结果：${fallbackRev}`;
+            } else {
+              lines.push(`修改结果：${fallbackRev}`);
+            }
+            item.revisionText = fallbackRev;
+          }
+          item.note = lines.join("\n");
+          clearedCount += 1;
+        }
+      }
+      if (clearedCount > 0) {
+        saveNotes();
+        applyFilters({ reset: false });
+        updateStageMetricsDashboard();
+      }
+      return clearedCount;
+    }
+
     function clearUnconfirmedAiProofreadNotes() {
       let clearedCount = 0;
       for (const [id, item] of Object.entries(notes)) {
@@ -4467,6 +4743,41 @@
           showToast("当前没有未人工确认的初审修改建议行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
           return;
         }
+
+        let reviewedCount = 0;
+        let pendingCount = 0;
+        for (const [id, item] of Object.entries(notes)) {
+          if (!item || item.manualDone) continue;
+          const text = String(item.note || "");
+          const p = parseAutomatedNote(text);
+          if (!p) continue;
+          const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
+          const hasS1 = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
+          if (hasS2) reviewedCount += 1;
+          else if (hasS1) pendingCount += 1;
+        }
+
+        if (reviewedCount > 0) {
+          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
+            if (aiConfirmIds.message) {
+              aiConfirmIds.message.innerHTML = `检测到当前已有 <strong>${reviewedCount}</strong> 条文学复审方案${pendingCount > 0 ? `，<strong>${pendingCount}</strong> 条初审建议待复审` : ""}。<br>请选择本次启动方式：`;
+            }
+            aiConfirmIds.dialog.showModal();
+            return;
+          }
+          if (confirm(`检测到已有 ${reviewedCount} 条文学复审方案${pendingCount > 0 ? `，${pendingCount} 条待复审` : ""}。\n\n点击「确定」：继续复审剩余待处理行（保留已有 ${reviewedCount} 条方案，推荐）\n点击「取消」：全部重新复审（清空已有复审方案重新执行）`)) {
+            await startAiProofread({ continueOnly: true, stage: "stage2" });
+          } else {
+            const cleared = clearUnconfirmedStageNotes("stage2");
+            if (cleared > 0) {
+              showToast(`已清空 ${cleared} 条未人工确认的文学复审方案。`, { tone: "info", durationMs: 6000 });
+            }
+            await startAiProofread({ continueOnly: false, stage: "stage2" });
+          }
+          return;
+        }
+        await startAiProofread({ continueOnly: true, stage: "stage2" });
+        return;
       } else if (stage === "stage3") {
         if (!aiIds.stage3Preset?.value) {
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
@@ -4493,6 +4804,41 @@
           showToast("当前没有需要终审仲裁的分歧行。", { tone: "info", durationMs: 5000 });
           return;
         }
+
+        let arbitratedCount = 0;
+        let pendingArbCount = 0;
+        for (const [id, item] of Object.entries(notes)) {
+          if (!item || item.manualDone) continue;
+          const text = String(item.note || "");
+          const p = parseAutomatedNote(text);
+          if (!p) continue;
+          const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
+          const hasDispute = Boolean(text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
+          if (hasS3) arbitratedCount += 1;
+          else if (hasDispute) pendingArbCount += 1;
+        }
+
+        if (arbitratedCount > 0) {
+          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
+            if (aiConfirmIds.message) {
+              aiConfirmIds.message.innerHTML = `检测到当前已有 <strong>${arbitratedCount}</strong> 条终审仲裁方案${pendingArbCount > 0 ? `，<strong>${pendingArbCount}</strong> 条分歧行待仲裁` : ""}。<br>请选择本次启动方式：`;
+            }
+            aiConfirmIds.dialog.showModal();
+            return;
+          }
+          if (confirm(`检测到已有 ${arbitratedCount} 条终审仲裁方案${pendingArbCount > 0 ? `，${pendingArbCount} 条待仲裁` : ""}。\n\n点击「确定」：继续仲裁剩余待处理分歧行（保留已有 ${arbitratedCount} 条方案，推荐）\n点击「取消」：全部重新仲裁（清空已有仲裁重新执行）`)) {
+            await startAiProofread({ continueOnly: true, stage: "stage3" });
+          } else {
+            const cleared = clearUnconfirmedStageNotes("stage3");
+            if (cleared > 0) {
+              showToast(`已清空 ${cleared} 条未人工确认的终审仲裁方案。`, { tone: "info", durationMs: 6000 });
+            }
+            await startAiProofread({ continueOnly: false, stage: "stage3" });
+          }
+          return;
+        }
+        await startAiProofread({ continueOnly: true, stage: "stage3" });
+        return;
       }
 
       if (stage === "stage1") {
@@ -4532,6 +4878,7 @@
 
       const baseConfig = aiConfig();
       baseConfig.stage = stage;
+      baseConfig.continueOnly = Boolean(continueOnly);
 
       const rowNotes = {};
       for (const [id, item] of Object.entries(notes)) {
@@ -4543,10 +4890,27 @@
         const completedSet = new Set(baseConfig.completedIndexes || []);
         for (const [id, item] of Object.entries(notes)) {
           if (!item) continue;
+          const num = Number(id);
+          if (!Number.isInteger(num) || num <= 0) continue;
+          if (item.manualDone) {
+            completedSet.add(num);
+            continue;
+          }
           const noteText = String(item.note || "").trim();
-          if (item.manualDone || item.aiDone || hasAutomatedDecisionNote(noteText)) {
-            const num = Number(id);
-            if (Number.isInteger(num) && num > 0) completedSet.add(num);
+          const p = parseAutomatedNote(noteText);
+          if (stage === "stage1") {
+            if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
+          } else if (stage === "stage2") {
+            const hasS2 = Boolean(p?.stage2 || noteText.includes("Stylist复审"));
+            const hasS1 = Boolean(p?.modify === "是" || p?.stage1Revision || (p?.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
+            if (hasS2 || !hasS1) {
+              completedSet.add(num);
+            }
+          } else if (stage === "stage3") {
+            const hasS3 = Boolean(p?.stage3 || noteText.includes("Arbiter仲裁"));
+            if (hasS3) {
+              completedSet.add(num);
+            }
           }
         }
         baseConfig.completedIndexes = [...completedSet];
@@ -4611,9 +4975,12 @@
       if (aiConfirmIds.clear) {
         aiConfirmIds.clear.addEventListener("click", async () => {
           aiConfirmIds.dialog.close();
-          const cleared = clearUnconfirmedAiProofreadNotes();
+          const cleared = clearUnconfirmedStageNotes(pendingStartStage);
           if (cleared > 0) {
-            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
+            const msg = pendingStartStage === "stage1"
+              ? `已清空 ${cleared} 条未人工确认的 AI 校对信息。`
+              : `已清空 ${cleared} 条未人工确认的方案。`;
+            showToast(msg, { tone: "info", durationMs: 6000 });
           }
           await startAiProofread({ continueOnly: false, stage: pendingStartStage });
         });

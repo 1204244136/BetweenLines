@@ -969,6 +969,9 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div class="ai-stage-dashboard-header">
               <div class="ai-stage-dashboard-title-group">
                 <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
+                <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
+                <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
+                <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="需要人工确认的存疑行数" role="button" tabindex="0" hidden>待确认: <strong id="metricFinalNeedsCheck">0</strong></span>
                 <span id="aiStageFastPassRate" class="ai-stage-badge" title="高置信度快速直通率 (Fast Pass)">快速直通: 0%</span>
               </div>
               <div class="ai-stage-dashboard-status-bar">
@@ -995,9 +998,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
                   <div class="ai-stage-card-main">
-                    <div class="ai-stage-card-value"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
+                    <div class="ai-stage-card-value" title="初审直接合格放行行数"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
+                    <div class="ai-stage-card-flow" title="初审发现硬伤并提议修改，流入阶段二文学复审">
+                      <span class="ai-stage-flow-arrow" aria-hidden="true">➔</span>
+                      <span class="ai-stage-flow-pill"><strong id="metricStage1NeedsEdit">0</strong><span class="ai-stage-unit">提改</span></span>
+                    </div>
                     <div class="ai-stage-card-sub">
-                      <span class="ai-stage-sub-item">快速直通: <span id="metricFastPassHits">0</span></span>
+                      <span class="ai-stage-sub-item" title="规则/术语/高置信无需调用模型直接放行">快速直通: <span id="metricFastPassHits">0</span></span>
+                      <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                      <span class="ai-stage-sub-item" title="初审总检验行数（通过 + 提改）">总检: <span id="metricStage1Total">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage1ErrorItem" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></span>
                     </div>
@@ -1023,13 +1032,21 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段二复审行">
                   <div class="ai-stage-card-main">
-                    <div class="ai-stage-card-value"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
+                    <div class="ai-stage-card-value" title="承接阶段一初审提改行进行文学复审"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
+                    <div class="ai-stage-card-flow" title="复审与初审产生立场或方案分歧，流入阶段三终审仲裁">
+                      <span class="ai-stage-flow-arrow" aria-hidden="true">➔</span>
+                      <span class="ai-stage-flow-pill is-arb"><strong id="metricStage2Diverged">0</strong><span class="ai-stage-unit">分歧</span></span>
+                    </div>
                     <div class="ai-stage-card-sub">
                       <span class="ai-stage-sub-item">采纳: <span id="metricCritiqueAccept">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item">调整: <span id="metricCritiqueModify">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item">驳回: <span id="metricCritiqueReject">0</span></span>
+                      <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                      <span class="ai-stage-sub-item" id="stage2EscalateItem" title="复审显式请求升级仲裁">升级仲裁: <span id="metricCritiqueEscalate">0</span></span>
+                      <span class="ai-stage-sub-sep" id="stage2PendingSep" aria-hidden="true" hidden>·</span>
+                      <span class="ai-stage-sub-item ai-stage-sub-item--warn" id="stage2PendingItem" title="初审已提改但尚未执行文学复审的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage2ErrorItem" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></span>
                     </div>
@@ -1055,9 +1072,21 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段三仲裁行">
                   <div class="ai-stage-card-main">
-                    <div class="ai-stage-card-value"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
+                    <div class="ai-stage-card-value" title="承接阶段二分歧行进行终审仲裁裁决"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
+                    <div class="ai-stage-card-flow" title="终审裁决完毕，形成最终定案修改建议">
+                      <span class="ai-stage-flow-arrow" aria-hidden="true">➔</span>
+                      <span class="ai-stage-flow-pill is-settled"><strong id="metricStage3Settled">0</strong><span class="ai-stage-unit">定案</span></span>
+                    </div>
                     <div class="ai-stage-card-sub">
-                      <span class="ai-stage-sub-item">升级仲裁: <span id="metricCritiqueEscalate">0</span></span>
+                      <span class="ai-stage-sub-item" title="仲裁裁定支持初审方案">初审胜: <span id="metricArbGatekeeper">0</span></span>
+                      <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                      <span class="ai-stage-sub-item" title="仲裁裁定支持复审润色方案">复审胜: <span id="metricArbStylist">0</span></span>
+                      <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                      <span class="ai-stage-sub-item" title="仲裁综合双方优点给出结合方案">结合: <span id="metricArbSynthesis">0</span></span>
+                      <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
+                      <span class="ai-stage-sub-item" title="仲裁判定双方方案均不妥，维持原译">维持原译: <span id="metricArbOriginal">0</span></span>
+                      <span class="ai-stage-sub-sep" id="stage3PendingSep" aria-hidden="true" hidden>·</span>
+                      <span class="ai-stage-sub-item ai-stage-sub-item--warn" id="stage3PendingItem" title="复审已产生分歧但尚未执行终审仲裁的行数（点击可筛选）" hidden>待仲裁: <span id="metricStage3Pending">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage3ErrorItem" title="阶段三仲裁异常行数">异常: <span id="metricStage3Errors">0</span></span>
                     </div>
