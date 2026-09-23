@@ -300,3 +300,111 @@ test("阶段三队列判定：isStage3DisputeRow 全面覆盖已仲裁行与各�
   assert.equal(isStage3DisputeRow(row, "", { critique: { attitude: "reject" } }), true, "内存 critique attitude 为 reject 时必须被识别为分歧");
   assert.equal(isStage3DisputeRow(row, "", { arbitration: { winner: "gatekeeper" } }), true, "内存存在 arbitration 必须被识别为已仲裁行");
 });
+
+test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规范注入", () => {
+  const row = {
+    index: 107,
+    jp: "純粋とか徹底とか言えば聞こえは良いが、魔術の天才の表の肩書きはほぼ無職。",
+    cn: "当然，说他纯粹也好，彻底也罢，但这魔法天才的公开身份却是近乎无业游民。",
+  };
+
+  const gatekeeperDecision = {
+    needsEdit: true,
+    better: "neither",
+    semanticSame: true,
+    summary: "原译增译了'当然'并漏掉'聞こえは良い'，且'魔術'应统一为专用术语'魔术'。",
+    revisedText: "说他纯粹也好，彻底也罢，听起来固然不错，但这魔术天才表面上的头衔基本就是个无业游民。",
+    stage1RevisedText: "说他纯粹也好，彻底也罢，听起来固然不错，但这魔术天才表面上的头衔基本就是个无业游民。",
+  };
+
+  const stylistReview = {
+    attitude: "modify",
+    rationale: "初审纠正术语'魔术'准确，但'头衔'用词偏生硬，进行了文学润色。",
+    revisedText: "说他纯粹也好，彻底也罢，听起来固然不错，但这位魔术天才明面上的公开身份却近乎无业游民。",
+  };
+
+  const termGuidance = {
+    targetLabel: "当前译文",
+    count: 1,
+    terms: [
+      {
+        source: "魔術",
+        alias: "魔術",
+        target: "魔术",
+        type: "术语",
+        note: "魔術 → 魔术（术语）",
+      },
+    ],
+    block: "【译名对照表（本行命中）】\n- 魔術 → 魔术（术语）\n用法：译文里出现这些概念时，必须使用对照表给出的标准译名。",
+  };
+
+  const basePrompt = "【通用校对规则】\n核心校对规范A\n【成品校对规范：测试规范】\n— 小说文体要求\n注意人物语气与对话节奏。";
+  const glossary = "术语表（全卷）：\n- アニー → 安妮";
+
+  // 1. 验证 Stylist 消息构造
+  const stylistMessages = buildStylistMessages(row, gatekeeperDecision, {
+    targetLabel: "当前译文",
+    basePrompt,
+    termGuidance,
+    glossary,
+  });
+
+  assert.equal(stylistMessages.length, 2);
+  const stylistSystem = stylistMessages[0].content;
+  assert.ok(stylistSystem.includes("【当前身份与任务契约：文学责编 (Stylist)】"));
+  assert.ok(stylistSystem.includes("术语与规范红线"));
+  assert.ok(stylistSystem.includes("【译名对照表（本行命中）】"));
+  assert.ok(stylistSystem.includes("魔術 → 魔术（术语）"));
+  assert.ok(stylistSystem.includes("术语表（全卷）"));
+  assert.ok(stylistSystem.includes("注意人物语气与对话节奏"));
+
+  const extractUserPayload = (content) => {
+    const start = content.indexOf("{");
+    const end = content.indexOf("\n\n请按如下");
+    return JSON.parse(content.slice(start, end >= 0 ? end : undefined));
+  };
+
+  const stylistUserJson = extractUserPayload(stylistMessages[1].content);
+  assert.ok(stylistUserJson.terms, "Stylist user payload 必须包含 terms 字段");
+  assert.equal(stylistUserJson.terms.items[0].translation, "魔术");
+  assert.equal(stylistUserJson.glossary, glossary);
+
+  // 2. 验证 Arbiter 消息构造
+  const arbiterMessages = buildArbiterMessages(row, gatekeeperDecision, stylistReview, {
+    targetLabel: "当前译文",
+    basePrompt,
+    termGuidance,
+    glossary,
+  });
+
+  assert.equal(arbiterMessages.length, 2);
+  const arbiterSystem = arbiterMessages[0].content;
+  assert.ok(arbiterSystem.includes("【当前身份与任务契约：终审法官 (Chief Arbiter)】"));
+  assert.ok(arbiterSystem.includes("术语裁决权威"));
+  assert.ok(arbiterSystem.includes("【译名对照表（本行命中）】"));
+  assert.ok(arbiterSystem.includes("魔術 → 魔术（术语）"));
+  assert.ok(arbiterSystem.includes("术语表（全卷）"));
+  assert.ok(arbiterSystem.includes("注意人物语气与对话节奏"));
+
+  const arbiterUserJson = extractUserPayload(arbiterMessages[1].content);
+  assert.ok(arbiterUserJson.terms, "Arbiter user payload 必须包含 terms 字段，绝不能让仲裁法官在缺乏术语表的情况下盲猜");
+  assert.equal(arbiterUserJson.terms.items[0].source, "魔術");
+  assert.equal(arbiterUserJson.terms.items[0].translation, "魔术");
+  assert.equal(arbiterUserJson.glossary, glossary);
+  assert.ok(arbiterUserJson.task.includes("若提供了术语表/译名对照表，裁决必须严格遵循标准译名"));
+});
+
+test("多阶段流水线：无术语命中行优雅降级，不引入多余 terms 结构", () => {
+  const row = { index: 1, jp: "普通の文章です。", cn: "这是普通的句子。" };
+  const gatekeeperDecision = { needsEdit: false, revisedText: "" };
+  const stylistReview = { attitude: "accept", rationale: "原译自然", revisedText: "" };
+
+  const arbiterMessages = buildArbiterMessages(row, gatekeeperDecision, stylistReview, {
+    targetLabel: "当前译文",
+  });
+  const start = arbiterMessages[1].content.indexOf("{");
+  const end = arbiterMessages[1].content.indexOf("\n\n请按如下");
+  const arbiterUserJson = JSON.parse(arbiterMessages[1].content.slice(start, end));
+  assert.equal(arbiterUserJson.terms, undefined, "无术语命中行不注入 terms 字段");
+  assert.equal(arbiterUserJson.glossary, undefined);
+});

@@ -2040,9 +2040,14 @@ async function runStage2Stylist(stage1Result, config, labels) {
     }
   }
 
+  const termGuidance = config.termContext?.get(Number(row.index)) || null;
+  const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : (config.glossary || "");
+
   const stylistMessages = buildStylistMessages(row, decision, {
     targetLabel,
     basePrompt: config.systemPrompt,
+    termGuidance,
+    glossary,
   });
 
   let arbCheck = { triggered: false };
@@ -2101,9 +2106,14 @@ async function runStage3Arbiter(stage2Result, config, labels) {
     }
   }
 
+  const termGuidance = config.termContext?.get(Number(row.index)) || null;
+  const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : (config.glossary || "");
+
   const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
     targetLabel,
     basePrompt: config.systemPrompt,
+    termGuidance,
+    glossary,
   });
 
   try {
