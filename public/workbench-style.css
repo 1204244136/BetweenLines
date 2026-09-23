@@ -193,6 +193,15 @@
     .has-workbench-tabs > details.panel-details > summary {
       display: none !important;
     }
+    .panel-desc {
+      margin: 2px 0 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .notes-toolbar .panel-desc {
+      margin: 0;
+    }
     .has-workbench-tabs .prefilter-body {
       border-top: 0 !important;
       margin-top: 0 !important;

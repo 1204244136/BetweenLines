@@ -1156,10 +1156,10 @@
           e.preventDefault();
           const wasOpen = el.open;
           if (wasOpen) {
-            // 点击已展开的活跃标签：收起面板！
+            // 点击已展开的活跃标签：直接收起当前面板
             el.open = false;
           } else {
-            // 点击其他标签：展开目标面板，并互斥收起所有其他面板！
+            // 点击其他标签：展开目标面板，并互斥收起所有其他面板
             panels.forEach((p) => {
               p.el.open = p.id === id;
             });
@@ -1174,27 +1174,7 @@
         tabMap.set(id, { btn: tabBtn, badge: badgeSpan, stateId, el });
       });
 
-      const actionsDiv = document.createElement("div");
-      actionsDiv.className = "workbench-tabs-actions";
-
-      const collapseBtn = document.createElement("button");
-      collapseBtn.type = "button";
-      collapseBtn.className = "workbench-tab-action btn-collapse-panel";
-      collapseBtn.title = "收起当前标签页，留出最大表格对比空间";
-      collapseBtn.setAttribute("aria-label", "收起面板");
-      collapseBtn.innerHTML = '<span class="collapse-icon">▲</span><span class="collapse-text">收起面板</span>';
-      collapseBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        panels.forEach((p) => { p.el.open = false; });
-        updateTabsActiveState();
-        if (typeof syncVisibleRowLayout === "function") {
-          window.requestAnimationFrame(syncVisibleRowLayout);
-        }
-      });
-      appendChildSafe(actionsDiv, collapseBtn);
-
       appendChildSafe(tabsBar, tabsList);
-      appendChildSafe(tabsBar, actionsDiv);
 
       if (typeof groupBody.insertBefore === "function") {
         groupBody.insertBefore(tabsBar, groupBody.firstChild);
@@ -1205,12 +1185,10 @@
       if (panelGroup) panelGroup.classList.add("tabs-mode");
 
       function updateTabsActiveState() {
-        let anyOpen = false;
         panels.forEach(({ id, el }) => {
           const entry = tabMap.get(id);
           if (!entry) return;
           if (el.open) {
-            anyOpen = true;
             entry.btn.classList.add("is-active");
             entry.btn.setAttribute("aria-selected", "true");
           } else {
@@ -1218,7 +1196,6 @@
             entry.btn.setAttribute("aria-selected", "false");
           }
         });
-        collapseBtn.style.visibility = anyOpen ? "visible" : "hidden";
       }
 
       // 监听原生 details 的 toggle 事件，保持与外部脚本控制双向同步

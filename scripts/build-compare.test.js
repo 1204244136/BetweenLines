@@ -171,6 +171,15 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   });
   assert.match(groupPanelSlice, /<\/details>\s*<\/div>\s*<\/details>\s*$/, "面板容器与父抽屉应在最后一个面板抽屉之后闭合，且容器内不含非面板节点");
   assert.match(html, /<span[^>]*data-panel-group-state[^>]*>/, "父摘要应带状态字段供客户端同步");
+
+  // 四个内置标签页统一提供简明描述信息（panel-desc），且不提供收起面板冗余按钮
+  assert.match(html, /<details id="prefilterPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">执行规则与相似度预筛，快速过滤无需校对的高一致性文本。<\/p>/s);
+  assert.match(html, /<details id="aiPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">配置模型服务与校对规范，深度审查翻译缺陷并提供修改建议。<\/p>/s);
+  assert.match(html, /<details id="filterPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">按条件检索过滤表格行，控制列显示，并批量确认或写回修改。<\/p>/s);
+  assert.match(html, /<div class="notes-toolbar">\s*<p class="panel-desc">找回历史备注，或用 JSON 在浏览器之间备份与迁移。<\/p>/s);
+  assert.doesNotMatch(html, /btn-collapse-panel/, "移除收起面板按钮，点击当前展开标签页即可收起");
+  assert.doesNotMatch(html, />收起面板</, "页面模板中不应包含收起面板按钮文本");
+
   // 摘要行带实时状态字段（属性顺序不固定）
   assert.match(html, /<span[^>]*(?:id="prefilterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="prefilterPanelState")[^>]*>/);
   assert.match(html, /<span[^>]*(?:id="aiPanelState"[^>]*class="ai-status-badge"|class="ai-status-badge"[^>]*id="aiPanelState")[^>]*>/);

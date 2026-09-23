@@ -828,6 +828,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
         <div class="panel-group-body">
         <details id="prefilterPanel" class="panel-details" aria-label="预筛选">
           <summary class="panel-summary"><span>预筛选 <span class="panel-summary-state" id="prefilterPanelState">尚未运行</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开预筛选"></button></summary>
+          <p class="panel-desc">执行规则与相似度预筛，快速过滤无需校对的高一致性文本。</p>
           <div class="prefilter-body">
             <div class="prefilter-config">
               <div class="ai-field">
@@ -848,6 +849,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
         </details>
         <details id="aiPanel" class="panel-details ai-panel" aria-label="AI 校对">
           <summary class="ai-panel-title"><span>AI 辅助校对</span><span id="aiPanelState" class="ai-status-badge">就绪</span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开 AI 辅助校对"></button></summary>
+          <p class="panel-desc">配置模型服务与校对规范，深度审查翻译缺陷并提供修改建议。</p>
           <details id="aiConfigSection" class="ai-config-details" open><summary class="ai-section-summary">服务与任务设置</summary><div class="ai-config-stack">
             <section class="ai-config-band ai-service-band" aria-labelledby="aiServiceLabel">
               <div id="aiServiceLabel" class="ai-config-label">AI 服务</div>
@@ -1077,6 +1079,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
         </details>
         <details id="filterPanel" class="panel-details" aria-label="筛选与批处理">
           <summary class="panel-summary"><span>筛选与批处理 <span class="panel-summary-state" id="filterPanelState">未筛选</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开筛选与批处理"></button></summary>
+          <p class="panel-desc">按条件检索过滤表格行，控制列显示，并批量确认或写回修改。</p>
           <div class="filter-bar" aria-label="筛选">
             <input id="query" class="filter-search" type="search" placeholder="搜索原文、译文、备注">
             <div class="filter-groups">
@@ -1127,7 +1130,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
           <div class="notes-body">
             <div class="notes-toolbar">
-              <p>找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
+              <p class="panel-desc">找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
               <div class="notes-actions">
                 <button id="exportAllNotes" class="btn" type="button">备份全部</button>
                 <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
