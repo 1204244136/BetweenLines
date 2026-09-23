@@ -6,13 +6,10 @@ const {
   normalizePath,
 } = require("../../ingest/input-selection");
 const { HEADER_ANCHORED_ALIGNMENT_VERSION } = require("./epub-header-alignment");
+const { countMatches } = require("../../core/text-helpers");
 
 function validLanguageCode(value) {
   return /^[a-z]{2,8}$/i.test(String(value || ""));
-}
-
-function countMatches(text, pattern) {
-  return (String(text || "").match(pattern) || []).length;
 }
 
 function detectLanguage(text) {

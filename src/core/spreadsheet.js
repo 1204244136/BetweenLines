@@ -32,7 +32,7 @@ const parser = new XMLParser({
   htmlEntities: true,
 });
 
-const asArray = (value) => (value == null ? [] : (Array.isArray(value) ? value : [value]));
+const { asArray } = require("./text-helpers");
 const textOf = (value) => {
   if (value == null) return "";
   if (typeof value === "object") {

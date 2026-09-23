@@ -1,3 +1,5 @@
+const { bigramSet, jaccard } = require("../../../core/text-helpers");
+
 function canonicalText(text) {
   return String(text || "")
     .normalize("NFKC")
@@ -6,31 +8,13 @@ function canonicalText(text) {
     .toLowerCase();
 }
 
+// 预筛相似度的归一化口径：决定哪些行会被判「几乎相同」而跳过模型，改它等于改预筛阈值。
 function similarityText(text) {
   return canonicalText(text).replace(/[\p{P}\p{S}]/gu, "");
 }
 
-function bigrams(text) {
-  const chars = Array.from(similarityText(text));
-  if (chars.length < 2) return new Set(chars);
-  const grams = new Set();
-  for (let index = 0; index < chars.length - 1; index += 1) {
-    grams.add(chars[index] + chars[index + 1]);
-  }
-  return grams;
-}
-
 function textSimilarity(a, b) {
-  const aSet = bigrams(a);
-  const bSet = bigrams(b);
-  if (!aSet.size && !bSet.size) return 1;
-  if (!aSet.size || !bSet.size) return 0;
-
-  let intersection = 0;
-  for (const gram of aSet) {
-    if (bSet.has(gram)) intersection += 1;
-  }
-  return intersection / (aSet.size + bSet.size - intersection);
+  return jaccard(bigramSet(similarityText(a)), bigramSet(similarityText(b)));
 }
 
 function isStructuredText(text) {

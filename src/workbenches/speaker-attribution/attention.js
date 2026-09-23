@@ -5,6 +5,7 @@ const {
   speakerPromptFor,
   buildSpeakerSystemPrompt,
 } = require("./ai/speaker-contract");
+const { stripInvisible, unique } = require("../../core/text-helpers");
 
 // 说话归属动词。最长/最具特异性的表层形式排在前面，以便
 // 择一匹配能够优先锚定它们（例如「と言った」先于「言った」，「叫び返した」
@@ -89,18 +90,11 @@ const candidateStopWords = new Set([
 
 
 function normalize(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .replace(/[\u200b-\u200f\u202a-\u202e\ufeff]/g, "")
-    .trim();
+  return stripInvisible(value).trim();
 }
 
 function clamp(value, min = 0, max = 1) {
   return Math.max(min, Math.min(max, Number(value) || 0));
-}
-
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
 }
 
 function isLikelyCandidate(raw, cleaned) {

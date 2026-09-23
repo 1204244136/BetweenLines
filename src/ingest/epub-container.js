@@ -3,9 +3,9 @@ const path = require("path");
 const JSZip = require("jszip");
 const { XMLParser, XMLValidator } = require("fast-xml-parser");
 const { storageLayout } = require("../core/storage-layout");
+const { asArray } = require("../core/text-helpers");
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "", removeNSPrefix: true });
-const asArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
 
 function isEpubDirectory(file) {
   try {

@@ -17,6 +17,7 @@
  */
 const path = require("path");
 const { readRecords } = require("../../../core/spreadsheet");
+const { firstColumn } = require("../../../core/text-helpers");
 
 const COLUMN_CANDIDATES = {
   character: ["角色", "人物", "character", "name"],
@@ -46,14 +47,6 @@ const WORD_BOUNDARY = /[\s\u3000、。，．！？：；「」『』（）〈〉
 // 否则「知っているわらわからすれば」会被前面的「る」挡住。
 const FIRST_PERSON_AFTER_PARTICLE = /^[はがをにへとでやのかもばねよぞさえこそまで]/;
 const SENTENCE_END_CHARS = "」』）)。．.!！？?…—～~、,，:：;； \t☆★♪♡♥";
-
-function firstColumn(record, keys) {
-  for (const key of keys) {
-    const value = record[key];
-    if (value != null && String(value).trim()) return String(value).trim();
-  }
-  return "";
-}
 
 /**
  * 角色条目的两种包装形态统一取值：现算路径给 `{ entry, activated }`，落盘块还原路径给

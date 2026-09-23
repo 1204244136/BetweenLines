@@ -1,36 +1,17 @@
+const { bigramSet, jaccard: setSimilarity, stripInvisible, unique } = require("../../core/text-helpers");
+
 const HAN_PATTERN = /\p{Script=Han}/u;
 
 function normalizeText(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .replace(/[\u200b-\u200f\u202a-\u202e\ufeff]/g, "")
-    .toLowerCase();
+  return stripInvisible(value).toLowerCase();
 }
 
 function compactText(value) {
   return normalizeText(value).replace(/[\s\p{P}\p{S}]/gu, "");
 }
 
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
-}
-
 function bigrams(value) {
-  const chars = Array.from(compactText(value));
-  if (chars.length < 2) return new Set(chars);
-  const result = new Set();
-  for (let index = 0; index < chars.length - 1; index += 1) {
-    result.add(chars[index] + chars[index + 1]);
-  }
-  return result;
-}
-
-function setSimilarity(left = new Set(), right = new Set()) {
-  if (!left.size && !right.size) return 1;
-  if (!left.size || !right.size) return 0;
-  let intersection = 0;
-  for (const value of left) if (right.has(value)) intersection += 1;
-  return intersection / (left.size + right.size - intersection);
+  return bigramSet(compactText(value));
 }
 
 function extractNumbers(value) {

@@ -10,6 +10,7 @@ const { createProjectContext, rowSignature } = require("../../core/project-conte
 const { publishProject } = require("../../storage/project-store");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
+const { bigramSet, escapeHtml, jaccard, safeJson } = require("../../core/text-helpers");
 
 function readWorkbenchAssets() {
   const publicDir = path.join(__dirname, "..", "..", "..", "public");
@@ -207,25 +208,9 @@ function normalizeZh(text) {
     .replace(/[「」『』“”‘’（）()【】《》〈〉—\-─…、，。！？：；,.!?;:\s0-9a-z]/g, "");
 }
 
-function bigrams(text) {
-  const chars = Array.from(normalizeZh(text));
-  if (chars.length < 2) return new Set(chars);
-  const grams = new Set();
-  for (let i = 0; i < chars.length - 1; i += 1) grams.add(chars[i] + chars[i + 1]);
-  return grams;
-}
-
+// 归一化口径（normalizeZh）是本模块的业务约定，决定两份非原文文本的对齐分数；二元组与 Jaccard 用共享实现。
 function similarity(a, b) {
-  const aSet = bigrams(a);
-  const bSet = bigrams(b);
-  if (!aSet.size && !bSet.size) return 1;
-  if (!aSet.size || !bSet.size) return 0;
-
-  let intersection = 0;
-  for (const gram of aSet) {
-    if (bSet.has(gram)) intersection += 1;
-  }
-  return intersection / (aSet.size + bSet.size - intersection);
+  return jaccard(bigramSet(normalizeZh(a)), bigramSet(normalizeZh(b)));
 }
 
 function lengthScore(a, b) {
@@ -709,14 +694,6 @@ function loadJpPivotLang(comparisonMode = "trilingual") {
   return data.pivotLang || "tw";
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function rowClass(score) {
   if (score >= 0.35) return "ok";
   if (score >= 0.18) return "watch";
@@ -816,7 +793,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   };
   const defaultProofreadMode = comparisonMode;
   const clientRows = workbenchClientRows(rows, comparisonMode);
-  const rowsJson = JSON.stringify(clientRows).replace(/</g, "\\u003c");
+  const rowsJson = safeJson(clientRows);
   const assets = readWorkbenchAssets();
 
   return `<!doctype html>
@@ -1234,7 +1211,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${createPresetTools.toString()}
 
     const storageKey = ${JSON.stringify(storageKey)};
-    const pageMeta = ${JSON.stringify(clientMeta).replace(/</g, "\\u003c")};
+    const pageMeta = ${safeJson(clientMeta)};
 ${assets.workbenchClient}</script>
 </body>
 </html>`;

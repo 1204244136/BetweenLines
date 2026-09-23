@@ -9,6 +9,7 @@ const { readEpubSpineDocuments } = require("../../ingest/epub-utils");
 const { isEpubInput } = require("../../ingest/epub-container");
 const { deriveContextUnits, deriveLineUnits } = require("../../ingest/line-units");
 const { shortHash } = require("../../core/project-context");
+const { escapeHtml, safeJson } = require("../../core/text-helpers");
 const { storageLayout } = require("../../core/storage-layout");
 const { detectLanguage, selectionFromArgs } = require("./speaker-selection");
 const { compareTexts, joinTextItems } = require("./text-comparison");
@@ -41,19 +42,6 @@ const initialSpeakerAssets = readSpeakerWorkbenchAssets();
 const workbenchStyle = initialSpeakerAssets.workbenchStyle;
 const aiPanelStyle = initialSpeakerAssets.aiPanelStyle;
 const workbenchClient = initialSpeakerAssets.workbenchClient;
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function safeJson(value) {
-  return JSON.stringify(value).replace(/</g, "\\u003c");
-}
 
 async function loadUnits(file, lang, inputMode) {
   if (isEpubInput(file)) {

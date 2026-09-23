@@ -5,6 +5,7 @@ const { loadEpubArchive, withEpubFile } = require("./epub-container");
 const { XMLParser } = require("fast-xml-parser");
 const { compile } = require("html-to-text");
 const { normalizeDocumentText: normalizeEpubText, readWithPandoc, textLength } = require("./pandoc-utils");
+const { asArray, countMatches } = require("../core/text-helpers");
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -39,11 +40,6 @@ const htmlToTextWithInlineMarkup = compile({
     maxInputLength: undefined,
   },
 });
-
-function asArray(value) {
-  if (value == null) return [];
-  return Array.isArray(value) ? value : [value];
-}
 
 function normalizeInlineMarkupOptions(options = {}) {
   const inlineMarkup = options.inlineMarkup || options;
@@ -247,10 +243,6 @@ async function spineTextPreview(zip, itemPath, options = {}) {
   const htmlFile = zip.file(itemPath);
   if (!htmlFile) return "";
   return normalizeEpubText(epubHtmlToText(await htmlFile.async("string"), options));
-}
-
-function countMatches(text, regex) {
-  return (text.match(regex) || []).length;
 }
 
 function isTextDense(block) {

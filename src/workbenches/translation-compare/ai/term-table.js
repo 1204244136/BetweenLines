@@ -44,6 +44,7 @@
 const path = require("path");
 const { toCn } = require("../../../ingest/text-utils");
 const { readRecords } = require("../../../core/spreadsheet");
+const { firstColumn, stripInlineMarkup } = require("../../../core/text-helpers");
 
 const COLUMN_CANDIDATES = {
   source: ["base_ori", "original", "source", "jp", "原文", "日文", "原词"],
@@ -100,12 +101,7 @@ const TERM_STRONG_MIN_LENGTH = 3;
 
 // 行文本里带内联标记（ruby/rt/b/sup）：注音 rt 是读音，不算正文，先剥掉再匹配，
 // 否则「ときわだい」这类读音会命中「ときわだいちゆうがく」之类的长读音串。
-function stripInlineMarkup(text) {
-  return String(text || "")
-    .replace(/<rp[^>]*>[\s\S]*?<\/rp>/gi, "")
-    .replace(/<rt[^>]*>[\s\S]*?<\/rt>/gi, "")
-    .replace(/<[^>]*>/g, "");
-}
+// 实现在 src/core/text-helpers.js（stripInlineMarkup）。
 
 // 纯假名别名只在足够长时才可用：短读法（イヴ、タク）会和普通词、长词片段撞车。
 function isAliasUsable(alias) {
@@ -242,13 +238,6 @@ function hasUsableMatch(text, alias) {
     from = at + 1;
   }
   return false;
-}
-
-function firstColumn(record, keys) {
-  for (const key of keys) {
-    if (record[key]) return record[key];
-  }
-  return "";
 }
 
 function splitBracketed(value) {

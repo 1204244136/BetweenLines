@@ -14,13 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { toCn } = require("../../ingest/text-utils");
-
-function stripInlineMarkup(text) {
-  return String(text || "")
-    .replace(/<rp[^>]*>[\s\S]*?<\/rp>/gi, "")
-    .replace(/<rt[^>]*>[\s\S]*?<\/rt>/gi, "")
-    .replace(/<[^>]*>/g, "");
-}
+const { stripInlineMarkup } = require("../../core/text-helpers");
 
 function defaultIndexXDir() {
   if (process.env.INDEX_X_DIR) return process.env.INDEX_X_DIR;
