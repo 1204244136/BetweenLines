@@ -1,54 +1,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const vm = require("node:vm");
-const { makeHtml, alignLegacyNotes } = require("./build-compare");
+const { alignLegacyNotes } = require("./build-compare");
 const { createNotesTools } = require("../src/workbenches/translation-compare/notes-spaces");
-const { storageFixture } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, currentKey: key, siblingKey: sourceKey } = require("./workbench-fixture");
 
 const helpers = createNotesTools(alignLegacyNotes);
-const key = "translation-compare-notes-v7:project:rows";
-const sourceKey = "translation-compare-notes-v7:project:rowsPrevious";
-
-function createWorkbench(storage = storageFixture()) {
-  const elements = new Map();
-  const element = (id) => {
-    if (!elements.has(id)) {
-      const listeners = new Map();
-      elements.set(id, {
-        hidden: false, disabled: false, value: "", textContent: "", innerHTML: "", checked: false,
-        dataset: {}, style: { setProperty() {} }, options: [], children: [], files: [], open: false,
-        classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
-        addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(fn); },
-        async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
-        setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
-        querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; },
-        replaceChildren() {}, append() {}, focus() {}, click() {},
-        showModal() { this.open = true; }, close() { this.open = false; },
-        getBoundingClientRect() { return { height: 0, top: 0, bottom: 0 }; },
-      });
-    }
-    return elements.get(id);
-  };
-  const html = makeHtml([{ index: 1, jp: "原文", cn: "译文", relation: "1:1", score: 0.5, signature: "sig-1" }], {
-    comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" },
-  }, { projectKey: "project", rowsSignature: "rows", notesStorage: { key } });
-  element("rowData").textContent = html.match(/<script id="rowData" type="application\/json">([\s\S]*?)<\/script>/)[1];
-  const script = html.match(/<script>\s*([\s\S]*?)<\/script>\s*<\/body>/)[1];
-  const context = vm.createContext({
-    document: {
-      getElementById: element, querySelector: element, querySelectorAll() { return []; },
-      createElement: () => element(Symbol()), createElementNS: () => element(Symbol()),
-      documentElement: element("html"), addEventListener() {},
-    },
-    localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
-    window: { addEventListener() {}, requestAnimationFrame() {}, setTimeout() {}, clearTimeout() {} },
-    navigator: {}, location: { protocol: "file:" },
-    fetch: () => new Promise(() => {}), setTimeout() {}, clearTimeout() {}, setInterval() {},
-    confirm() { return true; }, requestAnimationFrame() {},
-  });
-  vm.runInContext(script, context);
-  return { element, context, storage, run: (code) => vm.runInContext(code, context) };
-}
 
 test("工作台在存储超额失败时内存恢复并保护来源数据", () => {
   const raw = JSON.stringify({ 1: { note: "历史备注", manualDone: true, rowSig: "sig-1" } });

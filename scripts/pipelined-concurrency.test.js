@@ -2,20 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  runStage1Gatekeeper,
-  runStage2Stylist,
-  runStage3Arbiter,
   finalizeRowResult,
   proofreadRow,
 } = require("../src/workbenches/translation-compare/ai/ai-proofread");
-
-test("分阶段评审函数正确模块化与导出", () => {
-  assert.equal(typeof runStage1Gatekeeper, "function");
-  assert.equal(typeof runStage2Stylist, "function");
-  assert.equal(typeof runStage3Arbiter, "function");
-  assert.equal(typeof finalizeRowResult, "function");
-  assert.equal(typeof proofreadRow, "function");
-});
 
 test("proofreadRow 在单行调用中按顺序执行模块化阶段", async () => {
   const row = { index: 1, jp: "吾輩は猫である。", cn: "我是猫。" };

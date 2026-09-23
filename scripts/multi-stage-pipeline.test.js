@@ -4,8 +4,6 @@ const assert = require("node:assert/strict");
 const {
   decisionToResult,
   clientStatus,
-  recordHumanFeedback,
-  getFeedbackStatistics,
 } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 
 const {
@@ -151,34 +149,4 @@ test("多阶段流水线端到端：双角色立场分歧触发 Arbiter 仲裁�
   assert.equal(result.stageResult.stage, "arbiter");
   assert.equal(result.arbitration.winner, "stylist");
   assert.ok(result.note.includes("Arbiter仲裁[Stylist方案]"));
-});
-
-test("人工反馈收集器：记录反馈行为并计算采纳校准率", () => {
-  recordHumanFeedback({
-    action: "accepted_ai",
-    index: 50,
-    rowSignature: "sig-50",
-    originalText: "旧译文",
-    aiRevisedText: "AI建议新译文",
-    userFinalText: "AI建议新译文",
-    stage: "stylist",
-    modelId: "claude-3-5-sonnet",
-  });
-
-  recordHumanFeedback({
-    action: "rejected_ai",
-    index: 51,
-    rowSignature: "sig-51",
-    originalText: "旧译文",
-    aiRevisedText: "AI建议新译文",
-    userFinalText: "旧译文",
-    stage: "gatekeeper",
-    modelId: "gpt-4o",
-  });
-
-  const stats = getFeedbackStatistics();
-  assert.ok(stats.total >= 2);
-  assert.ok(stats.accepted >= 1);
-  assert.ok(stats.rejected >= 1);
-  assert.ok(stats.byStage.stylist);
 });
