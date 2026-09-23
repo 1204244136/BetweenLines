@@ -177,11 +177,11 @@
       border-radius: var(--radius);
       background: var(--surface);
       box-shadow: var(--shadow-panel);
-      overflow: hidden;
+      overflow: visible;
     }
     .has-workbench-tabs > details.panel-details {
       border: 0 !important;
-      border-radius: 0 !important;
+      border-radius: 0 0 var(--radius) var(--radius) !important;
       background: transparent !important;
       margin: 0 !important;
       padding: 6px 12px 10px !important;
@@ -236,6 +236,7 @@
       padding: 4px 6px 0;
       border-bottom: 1px solid var(--line);
       background: var(--surface-subtle);
+      border-radius: var(--radius) var(--radius) 0 0;
       user-select: none;
       min-height: 38px;
     }
@@ -745,6 +746,9 @@
       position: relative;
       min-width: 0;
     }
+    .select-combobox.is-open {
+      z-index: 50;
+    }
     .select-trigger {
       width: 100%;
       height: var(--control-height, 30px);
@@ -763,7 +767,14 @@
       cursor: pointer;
       transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
     }
-    .select-trigger:hover {
+    .select-trigger:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      border-color: var(--line);
+      background: var(--surface-subtle);
+      color: var(--muted-2);
+    }
+    .select-trigger:hover:not(:disabled) {
       border-color: var(--line-strong);
     }
     .select-trigger:focus {
@@ -804,6 +815,10 @@
       border-radius: var(--radius);
       background: var(--surface);
       box-shadow: 0 12px 24px rgba(16, 24, 40, 0.14);
+    }
+    .select-combobox.drop-up .select-menu {
+      top: auto;
+      bottom: calc(100% + 4px);
     }
     .select-menu[hidden] {
       display: none;

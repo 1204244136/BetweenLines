@@ -1402,6 +1402,7 @@
         const selected = selectedOption();
         value.textContent = selected?.textContent || "";
         trigger.title = selected?.textContent || "";
+        trigger.disabled = Boolean(select.disabled);
         menu.replaceChildren(...Array.from(select.options).map((option) => {
           const item = document.createElement("button");
           item.type = "button";
@@ -1421,13 +1422,24 @@
       }
 
       function close() {
+        wrapper.classList.remove("is-open", "drop-up");
         menu.hidden = true;
         trigger.setAttribute("aria-expanded", "false");
       }
 
       function open() {
+        if (select.disabled || trigger.disabled) return;
         closeAllSelects(wrapper);
         sync();
+        wrapper.classList.add("is-open");
+        const rect = trigger.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        if (spaceBelow < 160 && spaceAbove > spaceBelow) {
+          wrapper.classList.add("drop-up");
+        } else {
+          wrapper.classList.remove("drop-up");
+        }
         menu.hidden = false;
         trigger.setAttribute("aria-expanded", "true");
       }
@@ -1487,6 +1499,7 @@
     function closeAllSelects(except) {
       for (const wrapper of document.querySelectorAll(".select-combobox")) {
         if (wrapper === except) continue;
+        wrapper.classList.remove("is-open", "drop-up");
         const menu = wrapper.querySelector(".select-menu");
         const trigger = wrapper.querySelector(".select-trigger");
         if (menu) menu.hidden = true;
