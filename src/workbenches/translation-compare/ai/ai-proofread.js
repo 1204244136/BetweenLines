@@ -28,18 +28,21 @@ const {
   detectModelCapabilities,
   isReasoningModel,
   normalizeModelReasoningEffort,
-  CLAUDE_THINKING_BUDGETS,
   loadModelsDev,
 } = require("./model-capabilities");
 const {
   TEXT_INTENSITY_TEMPERATURE_MAP,
   buildApiUrl,
   buildProviderHeaders,
+  buildChatCompletionBody: buildSharedChatCompletionBody,
+  buildClaudeMessageBody,
   extractClaudeText,
+  fetchJson: sharedFetchJson,
   isGptModel,
   normalizeNonGptTemperature,
   testModelConnectivity,
 } = require("../../../ai/llm-client");
+const { firstString, parseBoolean } = require("../../../ai/prompt-contract");
 const toTw = OpenCC.Converter({ from: "cn", to: "tw" });
 const { loadGlossary, glossaryPrompt } = require("./glossary");
 const {
@@ -72,14 +75,10 @@ const {
   createStagePipelines,
   normalizeCritiqueResult,
   normalizeReviewStageResult,
-  normalizeArbitrationResult,
   reviewStageResultFromLegacy,
   isFastPassDecision,
 } = require("./stage-results");
 const {
-  PERSONAS,
-  PERSONA_DEFINITIONS,
-  buildPersonaSystemPrompt,
   buildStylistMessages,
   buildArbiterMessages,
   parseStylistResponse,
@@ -88,7 +87,6 @@ const {
 } = require("./persona-runtime");
 const {
   shouldTriggerArbitration,
-  resolveDeterministicAgreement,
   applyArbitrationDecision,
   formatArbitrationNoteLines,
 } = require("./arbiter");
@@ -2992,107 +2990,25 @@ async function callClaude(messages, config) {
   return extractClaudeText(data);
 }
 
-function buildClaudeMessageBody(messages, config = {}, modelMeta = null) {
-  const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
-  const system = messages
-    .filter((message) => message.role === "system")
-    .map((message) => String(message.content || ""))
-    .filter(Boolean)
-    .join("\n\n");
-  const effort = caps.reasoning ? normalizeModelReasoningEffort(config.reasoningEffort, config.model, caps) : "";
-  const isThinkingEnabled = caps.reasoning && effort && effort !== "off" && effort !== "none";
-  const budgetTokens = isThinkingEnabled ? (CLAUDE_THINKING_BUDGETS[effort] || 4096) : 0;
-  const maxTokens = isThinkingEnabled ? Math.max(8192, budgetTokens + 4096) : 4096;
-
-  const body = {
-    model: config.model,
-    max_tokens: maxTokens,
-    messages: messages
-      .filter((message) => message.role !== "system")
-      .map((message) => ({ role: message.role, content: message.content })),
-  };
-  if (system) body.system = system;
-  if (isThinkingEnabled) {
-    body.thinking = {
-      type: "enabled",
-      budget_tokens: budgetTokens,
-    };
-  } else {
-    const temperature = normalizeNonGptTemperature(config.reasoningEffort);
-    if (temperature != null && caps.supportsTemperature !== false) body.temperature = temperature;
-  }
-  return body;
-}
-
-// extractClaudeText 与共享传输层 (src/ai/llm-client.js) 同源。
-// 注意：下面两个 body 构造函数不是共享层的副本——共享层读 config.temperature ?? config.reasoningEffort，
-// 而 AI 校对只接受语义强度档位（reasoningEffort），两者不要合并。
+// 请求体构造与 JSON 传输以共享传输层 (src/ai/llm-client.js) 为唯一事实来源：
+// 那里负责出站地址校验（拒绝云元数据 / link-local）、禁止自动跟随重定向与超时。
+// AI 校对只在两点上做领域包装：GPT 系列放行任意合法推理档位（normalizeReasoningEffort），
+// 以及把本轮请求登记到 `controllers` 以便「停止」时整体中止。
 
 function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
-  const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
-  const body = {
-    model: config.model,
-    messages,
-    stream: false,
-  };
-  if (caps.reasoning || isGptModel(config.model)) {
-    const reasoningEffort = normalizeReasoningEffort(config.reasoningEffort, config.model, caps);
-    if (reasoningEffort && reasoningEffort !== "off" && reasoningEffort !== "none") {
-      body.reasoning_effort = reasoningEffort;
-    }
-  } else {
-    const temperature = normalizeNonGptTemperature(config.reasoningEffort);
-    if (temperature != null && caps.supportsTemperature !== false) {
-      body.temperature = temperature;
-    }
-  }
-  return body;
+  return buildSharedChatCompletionBody(messages, config, modelMeta, { effortNormalizer: normalizeReasoningEffort });
 }
 
 async function fetchJson(url, options, fetchOptions = {}) {
-  const controller = new AbortController();
   const track = fetchOptions.track !== false;
-  const timeoutMs = fetchOptions.timeoutMs || 90000;
-  let timedOut = false;
+  const controller = new AbortController();
   if (track) controllers.add(controller);
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    const text = await response.text();
-    if (!response.ok) {
-      const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
-      error.code = "HTTP_ERROR";
-      error.httpStatus = response.status;
-      error.responseBody = text;
-      const retryAfter = response.headers?.get?.("retry-after");
-      if (retryAfter) {
-        error.retryAfter = retryAfter;
-      }
-      throw error;
-    }
-    if (!text) return {};
-    try {
-      return JSON.parse(text);
-    } catch (cause) {
-      const contentType = response.headers.get("content-type") || "未知类型";
-      const preview = text.replace(/\s+/g, " ").trim().slice(0, 160);
-      const error = new Error(`${displayRequestUrl(url)} 返回了非 JSON 响应（${contentType}）：${preview || "空响应"}`);
-      error.code = "INVALID_JSON_RESPONSE";
-      error.cause = cause;
-      throw error;
-    }
-  } catch (error) {
-    if (timedOut && error?.name === "AbortError") {
-      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
-      timeoutError.code = "REQUEST_TIMEOUT";
-      throw timeoutError;
-    }
-    throw error;
+    return await sharedFetchJson(url, options, {
+      timeoutMs: fetchOptions.timeoutMs || 90000,
+      signal: controller.signal,
+    });
   } finally {
-    clearTimeout(timeout);
     if (track) controllers.delete(controller);
   }
 }
@@ -3229,24 +3145,6 @@ function normalizeGrade(value) {
   return "";
 }
 
-function firstString(...values) {
-  for (const value of values) {
-    const text = String(value || "").trim();
-    if (text) return text;
-  }
-  return "";
-}
-
-function parseBoolean(value, fallback = false) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  const text = String(value ?? "").trim().toLowerCase();
-  if (!text) return fallback;
-  if (["true", "1", "yes", "y", "是", "需要", "相同"].includes(text)) return true;
-  if (["false", "0", "no", "n", "否", "不需要", "不同"].includes(text)) return false;
-  return fallback;
-}
-
 function normalizeBetter(value) {
   const text = String(value || "").trim().toLowerCase();
   if (["target", "目标", "目标列", "当前列", "本列", "原目标", "keep", "保持", "保留", "维持", "不改", "无需修改"].includes(text)) return "target";
@@ -3263,19 +3161,6 @@ function parseNeedsEdit(value, semanticSame, better) {
   if (better === "counterpart" || better === "neither") return true;
   if (semanticSame || better === "target") return false;
   return false;
-}
-
-function displayRequestUrl(value) {
-  try {
-    const url = new URL(String(value));
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return String(value || "").split(/[?#]/, 1)[0];
-  }
 }
 
 function normalizeSeverity(value, needsEdit = true) {

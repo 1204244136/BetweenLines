@@ -141,15 +141,20 @@ function normalizeNonGptTemperature(value) {
   return Math.round(temperature * 10) / 10;
 }
 
-function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
+/**
+ * 构造请求体。`options.effortNormalizer(value, model, caps)` 允许领域层替换推理档位归一化
+ * （AI 校对对 GPT 系列放行任意合法档位）；不传时用模型元数据表的口径。
+ */
+function buildChatCompletionBody(messages, config = {}, modelMeta = null, options = {}) {
   const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
+  const normalizeEffort = options.effortNormalizer || normalizeModelReasoningEffort;
   const body = {
     model: config.model,
     messages,
     stream: false,
   };
   if (caps.reasoning || isGptModel(config.model)) {
-    const effort = normalizeModelReasoningEffort(config.reasoningEffort, config.model, caps);
+    const effort = normalizeEffort(config.reasoningEffort, config.model, caps);
     if (effort && effort !== "off" && effort !== "none") {
       body.reasoning_effort = effort;
     }
@@ -203,6 +208,20 @@ function extractClaudeText(data = {}) {
     .join("");
 }
 
+/** 错误信息里的地址去掉凭据与查询串，避免把 key 写进日志。 */
+function displayRequestUrl(value) {
+  try {
+    const url = new URL(String(value));
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return String(value || "").split(/[?#]/, 1)[0];
+  }
+}
+
 async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}) {
   const controller = new AbortController();
   let timedOut = false;
@@ -235,9 +254,12 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
     });
     const text = await response.text();
     if (!response.ok) {
-      const error = new Error(`${url} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
+      const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
       error.code = "HTTP_ERROR";
       error.httpStatus = response.status;
+      error.responseBody = text;
+      const retryAfter = response.headers?.get?.("retry-after");
+      if (retryAfter) error.retryAfter = retryAfter;
       throw error;
     }
     if (!text) return {};
@@ -246,7 +268,7 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
     } catch (cause) {
       const contentType = response.headers.get("content-type") || "未知类型";
       const preview = text.replace(/\s+/g, " ").trim().slice(0, 160);
-      const error = new Error(`${url} 返回了非 JSON 响应（${contentType}）：${preview || "空响应"}`);
+      const error = new Error(`${displayRequestUrl(url)} 返回了非 JSON 响应（${contentType}）：${preview || "空响应"}`);
       error.code = "INVALID_JSON_RESPONSE";
       error.cause = cause;
       throw error;
