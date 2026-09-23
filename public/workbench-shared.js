@@ -45,9 +45,9 @@ async function copyText(value) {
   helper.style.left = "-9999px";
   helper.style.top = "0";
   document.body.appendChild(helper);
-  helper.select();
   try {
-    document.execCommand("copy");
+    helper.select();
+    if (!document.execCommand("copy")) throw new Error("复制失败，请手动选择文本复制。");
   } finally {
     helper.remove();
   }

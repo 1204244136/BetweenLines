@@ -190,6 +190,8 @@ index-X 结构与命名规范契约：
 - `src/runtime/`：本地服务和生成编排，只负责连接输入、共享能力和工作台，不在这里堆积领域判断。
 - `scripts/`：命令行、Python/PowerShell 工具和旧路径兼容入口。兼容入口只转发，不复制业务实现。
 - `public/`：浏览器资源。不要把服务端存储、对齐或 AI 领域逻辑移入前端文件。
+- `public/workbench-shared.js` 由两个工作台构建器在客户端脚本之前注入，共享 API 鉴权、模型能力检测与复制等浏览器基础能力。复制失败必须拒绝 Promise，各调用方负责显示失败反馈；剪贴板 API 拒绝后可尝试旧式复制，旧式接口返回 false 仍是失败，临时文本框必须清理。回归：`node --test scripts/workbench-shared.test.js`。
+- `src/core/text-helpers.js`、`atomic-fs.js`、`progress.js` 分别集中无领域语义的文本工具、原子文件读写和机器进度协议；正文归一化与相似度阈值仍归各领域模块。离线 CLI 的活动快照读取统一经 `scripts/lib/offline-cli.js`。
 
 README 中的目录树用于帮助外部读者建立概念；本节才是新增或移动实现时的路径依据。
 

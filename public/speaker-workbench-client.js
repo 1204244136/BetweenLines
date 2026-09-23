@@ -665,11 +665,11 @@
       return;
     }
     const copyButton = event.target.closest("[data-copy-text]");
-    if (copyButton) copyText(copyButton.dataset.copyText || "");
+    if (copyButton) copyText(copyButton.dataset.copyText || "").catch(() => window.alert("复制失败，请手动选择文本复制。"));
     const promptButton = event.target.closest("[data-copy-prompt]");
     if (promptButton) {
       const row = allRows.find((item) => item.id === promptButton.dataset.copyPrompt);
-      if (row) copyText(promptTextFor(row));
+      if (row) copyText(promptTextFor(row)).catch(() => window.alert("复制失败，请手动选择文本复制。"));
     }
   });
   tbody.addEventListener("focusin", (event) => {
