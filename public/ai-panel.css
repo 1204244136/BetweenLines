@@ -602,7 +602,16 @@ details[open] > summary .details-toggle::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-stage-dashboard-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .ai-stage-dashboard-title {
@@ -619,6 +628,41 @@ details[open] > summary .details-toggle::before {
   border-radius: var(--ai-radius-badge, 4px);
   background: var(--ai-surface-selected);
   color: var(--ai-focus);
+}
+
+.ai-stage-dashboard-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.ai-stage-dashboard-status-bar .ai-status-text {
+  font-size: 11px;
+  color: var(--ai-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 580px;
+}
+
+.ai-stage-dashboard-status-bar .ai-progress {
+  width: 90px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--ai-line);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+}
+
+.ai-stage-dashboard-status-bar .ai-progress span {
+  display: block;
+  height: 100%;
+  background: var(--ai-focus);
+  transition: width 200ms ease;
 }
 
 .ai-stage-cards {
@@ -720,11 +764,60 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-active-info {
   font-size: 10px;
+  line-height: 1.3;
   color: var(--ai-focus);
-  margin-top: 2px;
+  background: color-mix(in srgb, var(--ai-focus) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ai-focus) 18%, transparent);
+  border-radius: var(--ai-radius-badge, 4px);
+  padding: 1px 6px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.ai-stage-active-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ai-focus);
+  box-shadow: 0 0 4px var(--ai-focus);
+  animation: ai-stage-pulse 1.4s infinite ease-in-out;
+  flex-shrink: 0;
+}
+
+.ai-stage-card-ctrls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.ai-stage-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ai-stage-btn {
+  height: 22px;
+  line-height: 20px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: var(--ai-radius-btn, 4px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ai-stage-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .ai-stage-preset-select {
@@ -777,14 +870,13 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-card-body {
   display: flex;
-  flex-direction: row;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: stretch;
   justify-content: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 3px;
   cursor: pointer;
   border-radius: var(--ai-radius-btn, 5px);
-  padding: 2px 4px;
+  padding: 3px 4px;
   margin: 0;
   transition: background 120ms ease;
 }
@@ -793,12 +885,22 @@ details[open] > summary .details-toggle::before {
   background: color-mix(in srgb, var(--ai-focus) 8%, transparent);
 }
 
+.ai-stage-card-main {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
 .ai-stage-card-value {
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
   font-size: 14px;
   color: var(--ai-text);
+  flex-shrink: 0;
 }
 
 .ai-stage-card-value strong {
@@ -834,6 +936,24 @@ details[open] > summary .details-toggle::before {
   color: var(--ai-text);
 }
 
+.ai-stage-sub-item--error {
+  color: var(--ai-muted-2);
+  transition: all 140ms ease;
+}
+
+.ai-stage-sub-item--error.has-errors {
+  color: #ef4444;
+  font-weight: 600;
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  padding: 0 4px;
+  border-radius: var(--ai-radius-badge, 3px);
+}
+
+.ai-stage-sub-item--error.has-errors [id^="metric"] {
+  color: #ef4444;
+  font-weight: 700;
+}
+
 .ai-stage-sub-sep {
   color: var(--ai-line-strong, #cbd5e1);
   font-size: 9px;
@@ -860,17 +980,27 @@ details[open] > summary .details-toggle::before {
 .stage-pipeline-badge {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   padding: 2px 7px;
   margin-bottom: 6px;
   border-radius: var(--ai-radius-badge, 4px);
   background: var(--ai-surface-subtle);
   border: 1px solid var(--ai-line);
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.3;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  scrollbar-width: none;
   transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.stage-pipeline-badge::-webkit-scrollbar {
+  display: none;
 }
 
 .stage-pipeline-badge:hover {
@@ -880,8 +1010,14 @@ details[open] > summary .details-toggle::before {
 
 .pipeline-step {
   font-weight: 700;
-  padding: 1px 4px;
+  padding: 1px 5px;
   border-radius: 3px;
+  white-space: nowrap;
+  word-break: keep-all;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.25;
 }
 
 .pipeline-step.is-gk {
@@ -911,12 +1047,18 @@ details[open] > summary .details-toggle::before {
 .pipeline-arrow {
   font-size: 10px;
   color: var(--ai-muted-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 .pipeline-expand-hint {
   font-size: 10px;
   color: var(--ai-muted);
   margin-left: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 .stage-pipeline-details {
@@ -1022,6 +1164,12 @@ details[open] > summary .details-toggle::before {
   border: 1px solid #e9d7fe;
 }
 
+.diff-step-pill.is-arbiter {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
 .diff-step-pill.is-summary {
   background: #eff8ff;
   color: #175cd3;
@@ -1039,6 +1187,11 @@ details[open] > summary .details-toggle::before {
 
 .diff-comparison.is-stage-step.is-stylist {
   border-left: 3px solid #9e77ed;
+  padding-left: 8px;
+}
+
+.diff-comparison.is-stage-step.is-arbiter {
+  border-left: 3px solid #f59e0b;
   padding-left: 8px;
 }
 

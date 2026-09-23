@@ -39,7 +39,8 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     const timer = timeouts.find((item) => item.id === id);
     if (timer) timer.cleared = true;
   };
-  const element = (id) => {
+  const element = (rawId) => {
+    const id = rawId === "aiStart" ? "stage1Start" : (rawId === "aiStop" ? "stage1Stop" : rawId);
     if (!elements.has(id)) {
       const listeners = new Map();
       elements.set(id, {

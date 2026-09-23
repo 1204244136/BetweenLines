@@ -34,7 +34,7 @@ const PERSONA_DEFINITIONS = Object.freeze({
     id: "arbiter",
     name: "终审法官 (Chief Arbiter)",
     role: "Chief Arbiter",
-    description: "站在客观中立的终审角度，对比原文、原译、Gatekeeper 初审与 Stylist 复审，裁定争端与最终版本。原则：不重新翻译，只裁决已有方案最优解。",
+    description: "站在客观中立的终审角度，对比原文、原译、Gatekeeper 初审与 Stylist 复审，裁定争端与最终版本。原则：不重新翻译；仲裁不局限于二选一，若初审与复审各有可取之处，应主动给出汲取双方优点的结合修改方案。",
     reasoningPreference: "high",
   },
 });
@@ -137,10 +137,13 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       `【当前身份与任务契约：${def.name}】`,
       "你是翻译评议委员会的终审法官（Chief Arbiter）。当事实质检员（Gatekeeper）与文学责编（Stylist）产生分歧，或遇到高风险疑难语句时，由你做出权威终审裁决。",
       "1. 审判原则：",
-      "   - 忠实度第一：如果某方案虽然文采斐然但扭曲了原文真实含义，予以驳回；",
-      "   - 避免无谓重述：不重新翻译，只裁决已有方案最优解，优先在【原译】、【Gatekeeper方案】、【Stylist方案】之间裁定胜出者（winner: 'gatekeeper' | 'stylist' | 'original' | 'neither'）；",
-      "   - 只有当既有方案全部存在致命硬伤时，才给出极简修复方案。",
-      "2. 必须输出合法 JSON，包含：winner, reason, finalDecision ('keep'|'replace'|'unclear'), riskFlags, revisedText。",
+      "   - 忠实度第一：若某方案文采斐然但扭曲了原文真实含义，予以驳回；忠实准确是翻译的底线。",
+      "   - 裁决与结合机制（打破二选一）：原则上不重新翻译，只裁决已有方案最优解或融合长处，仲裁绝不仅限于二选一：",
+      "     * 若某一方方案完全胜出，可直接裁定胜出（winner: 'gatekeeper' 或 'stylist'）；",
+      "     * 若原译准确恰当且无需修改，可裁定维持原译（winner: 'original'）；",
+      "     * 【核心结合方案】若初审（Gatekeeper）与复审（Stylist）的内容各有可取之处（例如：初审准确纠正了漏译错译或术语硬伤，复审语言更为自然生动但遗漏了初审的订正，或两者分别修正了不同缺陷），你应当主动融会贯通，给出汲取双方优点的结合修改方案（winner 设为 'synthesis'，并在 revisedText 给出具体的结合修改文本）；",
+      "     * 若两方修改方案均存在严重缺陷且确实都需要修改，也可给出独立裁决修复方案（winner: 'neither'）。",
+      "2. 必须输出合法 JSON，包含：winner ('gatekeeper'|'stylist'|'synthesis'|'original'|'neither'), reason, finalDecision ('keep'|'replace'|'unclear'), riskFlags, revisedText。",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
     ].filter(Boolean).join("\n");
@@ -202,14 +205,14 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
       rationale: stylistCritique.rationale || stylistCritique.summary || "",
       revisedText: stylistCritique.revisedText || "",
     },
-    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。判定哪一方胜出（winner），并给出最终定案文本（revisedText）。",
+    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。",
   };
 
   return [
     { role: "system", content: baseSystem },
     {
       role: "user",
-      content: `请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | original | neither",\n  "reason": "仲裁裁决理由",\n  "finalDecision": "replace | keep | unclear",\n  "riskFlags": [],\n  "revisedText": "最终定案文本"\n}`,
+      content: `请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | synthesis | original | neither",\n  "reason": "仲裁裁决理由（若采用结合方案，请说明分别吸取了初审与复审的哪些长处）",\n  "finalDecision": "replace | keep | unclear",\n  "riskFlags": [],\n  "revisedText": "最终定案文本（若采用结合方案或修改方案，给出完整成品文本；若维持原译可为空）"\n}`,
     },
   ];
 }
@@ -251,6 +254,37 @@ function parseStylistResponse(content) {
 }
 
 /**
+ * Normalize raw winner from Arbiter model response into canonical winner keys:
+ * "gatekeeper" | "stylist" | "synthesis" | "original" | "neither"
+ */
+function normalizeArbiterWinner(rawWinner, fallbackDecision) {
+  const text = String(rawWinner || "").trim().toLowerCase();
+  if (["synthesis", "combined", "combination", "hybrid", "both", "blend", "merge", "结合", "结合方案", "综合", "综合方案", "兼顾", "融合"].includes(text)) {
+    return "synthesis";
+  }
+  if (["gatekeeper", "gk", "初审", "初审方案", "事实初审", "事实方案"].includes(text)) {
+    return "gatekeeper";
+  }
+  if (["stylist", "复审", "复审方案", "文学复审", "文学方案"].includes(text)) {
+    return "stylist";
+  }
+  if (["original", "target", "原译", "维持原译", "不改", "无需修改", "keep"].includes(text)) {
+    return "original";
+  }
+  if (["neither", "compromise", "折中", "折中方案", "独立", "独立方案"].includes(text)) {
+    return "neither";
+  }
+  if (text) {
+    if (text.includes("结合") || text.includes("综合") || text.includes("融合")) return "synthesis";
+    if (text.includes("复审") || text.includes("stylist")) return "stylist";
+    if (text.includes("初审") || text.includes("gatekeeper")) return "gatekeeper";
+    if (text.includes("原译") || text.includes("维持")) return "original";
+    return text;
+  }
+  return fallbackDecision === "keep" ? "original" : "stylist";
+}
+
+/**
  * Parse Arbiter model output into normalized ArbitrationResult.
  */
 function parseArbiterResponse(content) {
@@ -263,11 +297,14 @@ function parseArbiterResponse(content) {
     parsed = {};
   }
 
+  const rawWinner = parsed.winner || (parsed.decision === "keep" ? "original" : "stylist");
+  const normalizedWinner = normalizeArbiterWinner(rawWinner, parsed.finalDecision || parsed.decision);
+
   const result = normalizeArbitrationResult({
-    winner: parsed.winner || (parsed.decision === "keep" ? "original" : "stylist"),
+    winner: normalizedWinner,
     reason: parsed.reason || parsed.summary || parsed.rationale,
     riskFlags: parsed.riskFlags,
-    finalDecision: parsed.finalDecision || parsed.decision,
+    finalDecision: parsed.finalDecision || parsed.decision || (normalizedWinner === "original" ? "keep" : "replace"),
   });
 
   const revisedText = String(

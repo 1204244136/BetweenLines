@@ -321,8 +321,14 @@
       stage3Preset: document.getElementById("stage3PresetSelect"),
       stage2Card: document.getElementById("stage2Card"),
       stage3Card: document.getElementById("stage3Card"),
-      start: document.getElementById("aiStart"),
-      stop: document.getElementById("aiStop"),
+      start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
+      stop: document.getElementById("stage1Stop") || document.getElementById("aiStop"),
+      stage1Start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
+      stage1Stop: document.getElementById("stage1Stop") || document.getElementById("aiStop"),
+      stage2Start: document.getElementById("stage2Start"),
+      stage2Stop: document.getElementById("stage2Stop"),
+      stage3Start: document.getElementById("stage3Start"),
+      stage3Stop: document.getElementById("stage3Stop"),
       clearCache: document.getElementById("clearAiLog"),
       status: document.getElementById("aiStatus"),
       panelState: document.getElementById("aiPanelState"),
@@ -438,7 +444,7 @@
       return (entry && entry.prompt) || "";
     }
     let aiModelOptions = [];
-    aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
+    if (aiIds.promptVisible) aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
 
     function serializeNotes() {
       for (const [id, item] of Object.entries(notes)) {
@@ -599,7 +605,10 @@
       const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
       if (!lines[0]?.startsWith("[AI校对]")) return false;
       return lines.slice(1).some((line) =>
-        line.startsWith("调用失败：") ||
+        line.startsWith("调用失败") ||
+        line.startsWith("调用异常") ||
+        line.includes("调用失败") ||
+        line.includes("调用异常") ||
         line === "校对已终止。" ||
         line.startsWith("校对已终止：")
       );
@@ -668,8 +677,26 @@
 
     function revisionTextFor(item) {
       if (!item) return "";
+      // 1. 若用户曾通过版本切换按钮手动切换了版本，尊重用户的显式选择
+      if (item.revisionStageActive && Object.prototype.hasOwnProperty.call(item, "revisionText")) {
+        return String(item.revisionText || "");
+      }
+      // 2. 对于多阶段校对行：无关当前筛选，默认显示最后的版本（仲裁 ＞ 复审 ＞ 初审）
+      const noteData = parseAutomatedNote(item.note || "");
+      if (noteData && (noteData.stage2 || noteData.stage3)) {
+        if (noteData.stage3) {
+          const s3 = noteData.stage3Revision || noteData.revision || noteData.stage2Revision || noteData.stage1Revision;
+          if (s3) return s3;
+        }
+        if (noteData.stage2) {
+          const s2 = noteData.stage2Revision || (!noteData.stage3 ? noteData.revision : "") || noteData.stage1Revision;
+          if (s2) return s2;
+        }
+        if (noteData.stage1Revision) return noteData.stage1Revision;
+      }
+      // 3. 普通单阶段行或已明确指定 revisionText 的行：优先遵循 item.revisionText
       if (Object.prototype.hasOwnProperty.call(item, "revisionText")) return String(item.revisionText || "");
-      return parseAutomatedNote(item.note || "")?.revision || "";
+      return noteData?.revision || "";
     }
 
     function revisionTargetFor(item) {
@@ -944,7 +971,7 @@
         breakerThreshold: formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         breakerDisabled: aiIds.breakerDisabled.checked,
         similarity: formatPercentRatio(prefilterIds.similarity.value),
-        promptVisible: aiIds.promptVisible.checked,
+        promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
         stage1PresetId: aiIds.stage1Preset?.value || "",
         stage2PresetId: aiIds.stage2Preset?.value || "",
@@ -954,6 +981,7 @@
     }
 
     function saveAiPrompt() {
+      if (!aiIds.prompt) return;
       localStorage.setItem(aiPromptStorageKey, JSON.stringify({
         systemPrompt: aiIds.prompt.value,
         promptTouched: Boolean(aiIds.prompt.dataset.touched),
@@ -1016,18 +1044,20 @@
       aiIds.breakerDisabled.checked = Boolean(saved.breakerDisabled);
       updateBreakerControls();
       if (saved.similarity != null) prefilterIds.similarity.value = formatPercentRatio(saved.similarity);
-      aiIds.promptVisible.checked = Boolean(saved.promptVisible);
+      if (aiIds.promptVisible) aiIds.promptVisible.checked = Boolean(saved.promptVisible);
       if (typeof savedPrompt.systemPrompt === "string" && savedPrompt.systemPrompt) {
-        if (savedPrompt.promptTouched) {
+        if (savedPrompt.promptTouched && aiIds.prompt) {
           aiIds.prompt.value = savedPrompt.systemPrompt;
           aiIds.prompt.dataset.touched = "1";
         } else {
           defaultProofreadPrompt = defaultPromptForProfile(aiIds.profile.value) || defaultProofreadPrompt;
-          aiIds.prompt.value = defaultProofreadPrompt;
-          aiIds.prompt.dataset.touched = "";
+          if (aiIds.prompt) {
+            aiIds.prompt.value = defaultProofreadPrompt;
+            aiIds.prompt.dataset.touched = "";
+          }
         }
       }
-      aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
+      if (aiIds.promptVisible && aiIds.promptSection) aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
       normalizeSimilarityInput();
       updateProofreadModeHint();
       updateInferenceSettingOptions();
@@ -1556,19 +1586,14 @@
 
         const noteData = parseAutomatedNote(item?.note);
         const s1Rev = noteData?.stage1Revision;
-        const hasStepProgression = Boolean(
-          noteData &&
-          (noteData.stage2 || noteData.stage3) &&
-          (s1Rev || noteData.stage1)
-        );
+        const hasStage2 = Boolean(noteData && (noteData.stage2 || String(item?.note || "").includes("Stylist复审")));
+        const hasStage3 = Boolean(noteData && (noteData.stage3 || String(item?.note || "").includes("Arbiter仲裁")));
+        const hasStepProgression = Boolean(hasStage2 || hasStage3);
 
+        const lang = targetKey === "tw" ? "zh-Hant" : "zh-Hans";
         let stepProgressionHtml = "";
-        if (hasStepProgression) {
-          let s1StepLabel = "步骤 1：事实初审";
-          let s1StepSubLabel = "初审改案";
-          let s1DiffHtml = "";
-          let s2DiffHtml = "";
 
+        if (hasStepProgression) {
           // 防呆校验：若 s1Rev 包含日文假名，或初审意图为删除/增译且 s1Rev 恰为被指出待删除的缺陷短语，不能作为初审改案展示
           const isDeleteWord = Boolean(
             s1Rev &&
@@ -1581,35 +1606,84 @@
              targetText.includes(s1Rev))
           );
           const hasKana = Boolean(s1Rev && /[\u3040-\u309F\u30A0-\u30FF]/.test(s1Rev));
-          const validS1Rev = (isDeleteWord || hasKana) ? "" : s1Rev;
+          const p1 = (isDeleteWord || hasKana) ? "" : s1Rev;
 
-          if (validS1Rev) {
-            const isPartialPhrase = validS1Rev.length < targetText.length * 0.45;
+          // p2: 复审改案
+          let p2 = String(noteData?.stage2Revision || "").trim();
+          if (!p2 && hasStage2) {
+            if (noteData.stage2?.attitude?.includes("采纳")) {
+              p2 = p1 || targetText;
+            } else if (!hasStage3 && noteData.revision) {
+              p2 = String(noteData.revision || "").trim();
+            }
+          }
+
+          // p3: 仲裁定案
+          let p3 = String(noteData?.stage3Revision || "").trim();
+          if (!p3 && hasStage3) {
+            if (noteData.stage3) p3 = String(noteData.revision || "").trim();
+          }
+
+          // 步骤 1：事实初审 (p0 -> p1)
+          let s1StepLabel = "步骤 1：事实初审";
+          let s1StepSubLabel = "初审改案";
+          let s1DiffHtml = "";
+          if (p1) {
+            const isPartialPhrase = p1.length < targetText.length * 0.45;
             s1StepSubLabel = isPartialPhrase ? "局部修正提议" : (escapeHtml(pageLabels[targetKey] || targetKey) + " → 初审改案");
             s1DiffHtml = isPartialPhrase
-              ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(validS1Rev) + '</ins></div>'
-              : inlineDiffHtml(targetText, validS1Rev);
-
-            s2DiffHtml = isPartialPhrase
-              ? inlineDiffHtml(targetText, revision)
-              : inlineDiffHtml(validS1Rev, revision);
+              ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(p1) + '</ins></div>'
+              : inlineDiffHtml(targetText, p1);
           } else {
             s1StepSubLabel = "事实审查重点";
             s1DiffHtml = '<div class="diff-partial-phrase"><span>审查要点：</span><span class="diff-step-audit-point">' + escapeHtml(noteData.stage1 || "指出事实性硬伤") + '</span></div>';
-            s2DiffHtml = inlineDiffHtml(targetText, revision);
+          }
+
+          // p2 diff: p1 -> p2
+          const baseForP2 = p1 || targetText;
+          let s2StepSubLabel = p1 ? "初审改案 → 复审改案" : "全句文学润色";
+          if (p2 && p2 === p1) {
+            s2DiffHtml = '<div class="diff-partial-phrase"><span>复审采纳初审方案，无进一步文字调整</span></div>';
+          } else if (p2) {
+            s2DiffHtml = inlineDiffHtml(baseForP2, p2);
+          } else {
+            s2DiffHtml = inlineDiffHtml(baseForP2, revision);
+          }
+
+          // 步骤 3：终审仲裁 (p2 -> p3，若有仲裁)
+          let stage3StepBlock = "";
+          if (hasStage3) {
+            const baseForP3 = p2 || baseForP2;
+            let s3DiffHtml = "";
+            if (p3 && p3 === p2 && p2) {
+              s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定采纳复审方案</span></div>';
+            } else if (p3 && p3 === p1 && p1) {
+              s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定采纳初审方案</span></div>';
+            } else if (p3 && p3 === targetText) {
+              s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定维持原译</span></div>';
+            } else if (p3) {
+              s3DiffHtml = inlineDiffHtml(baseForP3, p3);
+            } else {
+              s3DiffHtml = inlineDiffHtml(baseForP3, revision);
+            }
+            stage3StepBlock = '<div class="diff-comparison is-stage-step is-arbiter" data-diff-kind="stage3-step">' +
+              '<div class="version-label"><span class="diff-step-pill is-arbiter">步骤 3：终审仲裁</span><span>' + (p2 ? '复审改案 → 仲裁定案' : '初审改案 → 仲裁定案') + '</span></div>' +
+              '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s3DiffHtml + '</div>' +
+            '</div>';
           }
 
           stepProgressionHtml = '<details open class="diff-step-details">' +
-            '<summary class="diff-step-summary">分步演进明细（初审 ➔ 复审）▾</summary>' +
+            '<summary class="diff-step-summary">分步演进明细（' + (hasStage3 ? '初审 ➔ 复审 ➔ 仲裁' : '初审 ➔ 复审') + '）▾</summary>' +
             '<div class="diff-step-content">' +
               '<div class="diff-comparison is-stage-step is-gk" data-diff-kind="stage1-step">' +
                 '<div class="version-label"><span class="diff-step-pill is-gk">' + s1StepLabel + '</span><span>' + s1StepSubLabel + '</span></div>' +
                 '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s1DiffHtml + '</div>' +
               '</div>' +
               '<div class="diff-comparison is-stage-step is-stylist" data-diff-kind="stage2-step">' +
-                '<div class="version-label"><span class="diff-step-pill is-stylist">步骤 2：文学复审</span><span>' + (validS1Rev && validS1Rev.length >= targetText.length * 0.45 ? '初审改案 → 最终修改' : '全句文学润色') + '</span></div>' +
+                '<div class="version-label"><span class="diff-step-pill is-stylist">步骤 2：文学复审</span><span>' + s2StepSubLabel + '</span></div>' +
                 '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s2DiffHtml + '</div>' +
               '</div>' +
+              stage3StepBlock +
             '</div>' +
           '</details>';
         }
@@ -1850,11 +1924,22 @@
           }
         }
       }
+      if (data.stage3 && !data.stage3Revision) {
+        if (data.revision) {
+          data.stage3Revision = data.revision;
+        } else if (data.stage2Revision) {
+          data.stage3Revision = data.stage2Revision;
+        } else if (data.stage1Revision) {
+          data.stage3Revision = data.stage1Revision;
+        }
+      }
       if (data.stage2 && !data.stage2Revision) {
         if (data.stage2.attitude.includes("采纳") && data.stage1Revision) {
           data.stage2Revision = data.stage1Revision;
         } else if (!data.stage3 && data.revision) {
           data.stage2Revision = data.revision;
+        } else if (data.stage1Revision) {
+          data.stage2Revision = data.stage1Revision;
         }
       }
 
@@ -1873,6 +1958,15 @@
         if (isDeleteWord || hasKana) {
           data.stage1Revision = "";
         }
+      }
+
+      // 默认版本显示逻辑：最后阶段的版本优先（仲裁 ＞ 复审 ＞ 初审）
+      if (data.stage3 && (data.stage3Revision || data.revision)) {
+        data.revision = data.stage3Revision || data.revision;
+      } else if (data.stage2 && (data.stage2Revision || data.revision)) {
+        data.revision = data.stage2Revision || data.revision;
+      } else if (data.stage1Revision) {
+        data.revision = data.stage1Revision || data.revision;
       }
 
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
@@ -1895,6 +1989,39 @@
       return { critical: "致命", major: "严重", minor: "轻微", none: "无" }[severity] || "";
     }
 
+    function formatWinnerLabel(rawWinner = "") {
+      const text = String(rawWinner || "").trim();
+      if (!text) return "裁决";
+      const map = {
+        stylist: "复审方案",
+        "stylist方案": "复审方案",
+        "Stylist方案": "复审方案",
+        gatekeeper: "初审方案",
+        "gatekeeper方案": "初审方案",
+        "Gatekeeper方案": "初审方案",
+        synthesis: "结合方案",
+        "synthesis方案": "结合方案",
+        "Synthesis方案": "结合方案",
+        combined: "结合方案",
+        "combined方案": "结合方案",
+        "Combined方案": "结合方案",
+        combination: "结合方案",
+        hybrid: "结合方案",
+        both: "结合方案",
+        "结合方案": "结合方案",
+        "综合方案": "结合方案",
+        "结合": "结合方案",
+        "综合": "结合方案",
+        original: "维持原译",
+        target: "维持原译",
+        neither: "折中方案",
+        compromise: "结合方案",
+        "折中方案": "结合方案",
+      };
+      if (map[text]) return map[text];
+      return text.replace(/Stylist/gi, "复审").replace(/Gatekeeper/gi, "初审");
+    }
+
     function renderNoteSummary(item, id) {
       const noteText = item?.note || "";
       const note = parseAutomatedNote(noteText);
@@ -1912,29 +2039,8 @@
         else if (s2Attitude.includes("调整")) attCls = "is-modify";
         else if (s2Attitude.includes("驳回")) attCls = "is-reject";
 
-        const s3Winner = note.stage3?.winner || "仲裁";
-
-        const s1RevHtml = note.stage1Revision
-          ? '<div class="stage-proposal-mini is-gk">' +
-              '<span class="stage-proposal-mini-tag">初审改案:</span>' +
-              '<span class="stage-proposal-text">' + escapeHtml(note.stage1Revision) + '</span>' +
-            '</div>'
-          : '';
-
-        const s2RevHtml = (note.stage2Revision && note.stage2Revision.trim() !== String(revisionText || "").trim())
-          ? '<div class="stage-proposal-mini is-stylist">' +
-              '<span class="stage-proposal-mini-tag">复审改案:</span>' +
-              '<span class="stage-proposal-text">' + escapeHtml(note.stage2Revision) + '</span>' +
-            '</div>'
-          : '';
-
-        const s3RevText = note.stage3Revision;
-        const s3RevHtml = (s3RevText && s3RevText.trim() !== String(revisionText || "").trim())
-          ? '<div class="stage-proposal-mini is-arbiter">' +
-              '<span class="stage-proposal-mini-tag">仲裁改案:</span>' +
-              '<span class="stage-proposal-text">' + escapeHtml(s3RevText) + '</span>' +
-            '</div>'
-          : '';
+        const rawWinner = note.stage3?.winner || "仲裁";
+        const s3Winner = formatWinnerLabel(rawWinner);
 
         pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" title="点击展开/收起多阶段审核轨迹">' +
           '<span class="pipeline-step is-gk">初审</span>' +
@@ -1944,9 +2050,9 @@
           '<span class="pipeline-expand-hint">审核轨迹 ▾</span>' +
         '</div>' +
         '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '" hidden>' +
-          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div>' + s1RevHtml + '</div>' : '') +
-          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div>' + s2RevHtml + '</div>' : '') +
-          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div>' + s3RevHtml + '</div>' : '') +
+          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
+          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
+          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
         '</div>';
       }
 
@@ -1974,12 +2080,24 @@
       if (hasMultipleStages) {
         const currentRev = String(revisionText || "").trim();
         const s1Rev = String(note.stage1Revision || "").trim();
-        const s2Rev = String(note.stage2Revision || note.revision || "").trim();
-        const s3Rev = String(note.stage3Revision || (note.stage3 ? note.revision : "")).trim();
+        const s2Rev = String(note.stage2Revision || (!note.stage3 ? note.revision : "") || "").trim();
+        const s3Rev = String(note.stage3Revision || (note.stage3 ? note.revision : "") || "").trim();
 
-        const isS1Active = Boolean(s1Rev && currentRev === s1Rev);
-        const isS3Active = Boolean(note.stage3 && s3Rev && currentRev === s3Rev);
-        const isS2Active = !isS1Active && !isS3Active;
+        // 默认显示最后的版本：仲裁 ＞ 复审 ＞ 初审
+        let activeStage = note.stage3 ? "3" : (note.stage2 ? "2" : "1");
+        if (item?.revisionStageActive) {
+          activeStage = String(item.revisionStageActive);
+        } else if (note.stage3 && s3Rev && currentRev === s3Rev) {
+          activeStage = "3";
+        } else if (note.stage2 && s2Rev && currentRev === s2Rev) {
+          activeStage = "2";
+        } else if (s1Rev && currentRev === s1Rev) {
+          activeStage = "1";
+        }
+
+        const isS1Active = activeStage === "1";
+        const isS2Active = activeStage === "2";
+        const isS3Active = activeStage === "3";
 
         stagePillsHtml = '<div class="revision-stage-pills" data-row-id="' + escapeHtml(id || "") + '" title="在不同阶段的修改版本间快速切换">' +
           '<span class="stage-pills-label">版本:</span>' +
@@ -2387,9 +2505,9 @@
         (doneMode === "done" && isDone);
       const rawNote = notes[id]?.note || "";
       const matchesStage = !activeStageFilter ||
-        (activeStageFilter === "1" && rawNote.includes("是否需要修改：否")) ||
-        (activeStageFilter === "2" && rawNote.includes("Stylist复审")) ||
-        (activeStageFilter === "3" && rawNote.includes("Arbiter仲裁"));
+        (activeStageFilter === "1" && (rawNote.includes("是否需要修改：否") || (rawNote.includes("调用失败") && !rawNote.includes("Stylist") && !rawNote.includes("Arbiter")))) ||
+        (activeStageFilter === "2" && (rawNote.includes("Stylist复审") || (rawNote.includes("调用失败") && rawNote.includes("Stylist")))) ||
+        (activeStageFilter === "3" && (rawNote.includes("Arbiter仲裁") || (rawNote.includes("调用失败") && rawNote.includes("Arbiter"))));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
       return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesStage;
     }
@@ -2625,12 +2743,14 @@
       document.documentElement.classList.toggle("hide-revision-diff", !showRevisionDiff.checked);
       syncVisibleRowLayout();
     });
-    aiIds.promptVisible.addEventListener("change", () => {
-      aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
-      if (aiIds.promptVisible.checked) aiIds.promptSection.open = true;
-      saveAiConfig();
-      syncVisibleRowLayout();
-    });
+    if (aiIds.promptVisible) {
+      aiIds.promptVisible.addEventListener("change", () => {
+        aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
+        if (aiIds.promptVisible.checked) aiIds.promptSection.open = true;
+        saveAiConfig();
+        syncVisibleRowLayout();
+      });
+    }
 
     function setPage(page) {
       currentPage = Math.max(1, Math.min(Number(page) || 1, totalPages()));
@@ -2878,6 +2998,7 @@
 
       const current = notes[rowId] || { note: "", done: false };
       current.revisionText = targetText;
+      current.revisionStageActive = String(stage);
       current.revisionTarget = revisionTargetFor(current);
       notes[rowId] = current;
       saveNotes();
@@ -2895,12 +3016,6 @@
         const pills = rowElem.querySelectorAll(".stage-pill-btn[data-row-id='" + CSS.escape(rowId) + "']");
         for (const pill of pills) {
           pill.classList.toggle("is-active", pill.dataset.applyStage === String(stage));
-        }
-
-        const diffSlot = rowElem.querySelector("[data-diff-slot]");
-        const rowObj = rowsById.get(rowId);
-        if (diffSlot && rowObj) {
-          diffSlot.innerHTML = renderDiffBlock(rowObj, current);
         }
       }
 
@@ -3100,7 +3215,7 @@
         circuitBreakerErrorRate: parsePercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         circuitBreakerEnabled: !aiIds.breakerDisabled.checked,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
-        systemPrompt: aiIds.prompt.value,
+        systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
         labels: pageLabels,
         projectKey: pageMeta.projectKey || "",
         rowsSignature: pageMeta.rowsSignature || "",
@@ -3199,20 +3314,36 @@
 
     function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
+      const s1Errors = Math.max(0, Number(stageMetrics.stage1Errors) || 0);
       const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
       const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
+      const s2Errors = Math.max(0, Number(stageMetrics.stage2Errors) || 0);
       const cAccept = Math.max(0, Number(stageMetrics.critiqueAccept) || 0);
       const cModify = Math.max(0, Number(stageMetrics.critiqueModify) || 0);
       const cReject = Math.max(0, Number(stageMetrics.critiqueReject) || 0);
       const cEscalate = Math.max(0, Number(stageMetrics.critiqueEscalate) || 0);
       const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
+      const s3Errors = Math.max(0, Number(stageMetrics.stage3Errors) || 0);
 
       const elS1 = document.getElementById("metricStage1Passed");
       if (elS1) elS1.textContent = s1Passed;
+      const elS1Err = document.getElementById("metricStage1Errors");
+      if (elS1Err) {
+        elS1Err.textContent = s1Errors;
+        const item = document.getElementById("stage1ErrorItem");
+        if (item) item.classList.toggle("has-errors", s1Errors > 0);
+      }
       const elFp = document.getElementById("metricFastPassHits");
       if (elFp) elFp.textContent = fpHits;
+
       const elS2 = document.getElementById("metricStage2Reviewed");
       if (elS2) elS2.textContent = s2Reviewed;
+      const elS2Err = document.getElementById("metricStage2Errors");
+      if (elS2Err) {
+        elS2Err.textContent = s2Errors;
+        const item = document.getElementById("stage2ErrorItem");
+        if (item) item.classList.toggle("has-errors", s2Errors > 0);
+      }
       const elCAccept = document.getElementById("metricCritiqueAccept");
       if (elCAccept) elCAccept.textContent = cAccept;
       const elCModify = document.getElementById("metricCritiqueModify");
@@ -3221,8 +3352,15 @@
       if (elCReject) elCReject.textContent = cReject;
       const elCEscalate = document.getElementById("metricCritiqueEscalate");
       if (elCEscalate) elCEscalate.textContent = cEscalate;
+
       const elS3 = document.getElementById("metricStage3Arbitrated");
       if (elS3) elS3.textContent = s3Arbitrated;
+      const elS3Err = document.getElementById("metricStage3Errors");
+      if (elS3Err) {
+        elS3Err.textContent = s3Errors;
+        const item = document.getElementById("stage3ErrorItem");
+        if (item) item.classList.toggle("has-errors", s3Errors > 0);
+      }
 
       const elRate = document.getElementById("aiStageFastPassRate");
       if (elRate) {
@@ -3243,7 +3381,7 @@
         if (aiRunning) {
           if (p1.inFlight > 0) {
             pill1.dataset.state = "running";
-            pill1.textContent = p1.inFlight + "在飞" + (p1.pending > 0 ? " · " + p1.pending + "待审" : "");
+            pill1.textContent = p1.inFlight + "处理中" + (p1.pending > 0 ? " · " + p1.pending + "待审" : "");
           } else if (p1.pending > 0) {
             pill1.dataset.state = "queued";
             pill1.textContent = p1.pending + "排队";
@@ -3252,8 +3390,8 @@
             pill1.textContent = "初审完毕";
           }
         } else {
-          pill1.dataset.state = s1Passed > 0 ? "done" : "idle";
-          pill1.textContent = s1Passed > 0 ? "就绪" : "待命";
+          pill1.dataset.state = (s1Passed > 0 || s1Errors > 0) ? "done" : "idle";
+          pill1.textContent = (s1Passed > 0 || s1Errors > 0) ? "就绪" : "待命";
         }
       }
       if (active1 && activeText1) {
@@ -3266,7 +3404,7 @@
       }
 
       // Stage 2
-      const s2Enabled = Boolean(aiIds.stage2Preset?.value || s2Reviewed > 0 || p2.inFlight > 0 || p2.pending > 0);
+      const s2Enabled = Boolean(aiIds.stage2Preset?.value || s2Reviewed > 0 || s2Errors > 0 || p2.inFlight > 0 || p2.pending > 0 || stage2WaitingForStage1);
       const pill2 = document.getElementById("stage2StatusPill");
       const active2 = document.getElementById("stage2ActiveInfo");
       const activeText2 = document.getElementById("stage2ActiveRowsText");
@@ -3274,10 +3412,13 @@
         if (!s2Enabled) {
           pill2.dataset.state = "disabled";
           pill2.textContent = "未启用";
+        } else if (stage2WaitingForStage1) {
+          pill2.dataset.state = "queued";
+          pill2.textContent = "等待阶段一";
         } else if (aiRunning) {
           if (p2.inFlight > 0) {
             pill2.dataset.state = "running";
-            pill2.textContent = p2.inFlight + "在飞" + (p2.pending > 0 ? " · " + p2.pending + "排队" : "");
+            pill2.textContent = p2.inFlight + "处理中" + (p2.pending > 0 ? " · " + p2.pending + "排队" : "");
           } else if (p2.pending > 0) {
             pill2.dataset.state = "queued";
             pill2.textContent = p2.pending + "排队";
@@ -3286,8 +3427,8 @@
             pill2.textContent = "待命";
           }
         } else {
-          pill2.dataset.state = s2Reviewed > 0 ? "done" : "idle";
-          pill2.textContent = s2Reviewed > 0 ? "就绪" : "待命";
+          pill2.dataset.state = (s2Reviewed > 0 || s2Errors > 0) ? "done" : "idle";
+          pill2.textContent = (s2Reviewed > 0 || s2Errors > 0) ? "就绪" : "待命";
         }
       }
       if (active2 && activeText2) {
@@ -3300,7 +3441,7 @@
       }
 
       // Stage 3
-      const s3Enabled = Boolean((aiIds.stage3Preset?.value && s2Enabled) || s3Arbitrated > 0 || p3.inFlight > 0 || p3.pending > 0);
+      const s3Enabled = Boolean((aiIds.stage3Preset?.value && s2Enabled) || s3Arbitrated > 0 || s3Errors > 0 || p3.inFlight > 0 || p3.pending > 0 || stage3WaitingForStage2);
       const pill3 = document.getElementById("stage3StatusPill");
       const active3 = document.getElementById("stage3ActiveInfo");
       const activeText3 = document.getElementById("stage3ActiveRowsText");
@@ -3308,10 +3449,13 @@
         if (!s3Enabled) {
           pill3.dataset.state = "disabled";
           pill3.textContent = "未启用";
+        } else if (stage3WaitingForStage2) {
+          pill3.dataset.state = "queued";
+          pill3.textContent = "等待阶段二";
         } else if (aiRunning) {
           if (p3.inFlight > 0) {
             pill3.dataset.state = "running";
-            pill3.textContent = p3.inFlight + "在飞" + (p3.pending > 0 ? " · " + p3.pending + "排队" : "");
+            pill3.textContent = p3.inFlight + "处理中" + (p3.pending > 0 ? " · " + p3.pending + "排队" : "");
           } else if (p3.pending > 0) {
             pill3.dataset.state = "queued";
             pill3.textContent = p3.pending + "排队";
@@ -3320,8 +3464,8 @@
             pill3.textContent = "待命";
           }
         } else {
-          pill3.dataset.state = s3Arbitrated > 0 ? "done" : "idle";
-          pill3.textContent = s3Arbitrated > 0 ? "就绪" : "待命";
+          pill3.dataset.state = (s3Arbitrated > 0 || s3Errors > 0) ? "done" : "idle";
+          pill3.textContent = (s3Arbitrated > 0 || s3Errors > 0) ? "就绪" : "待命";
         }
       }
       if (active3 && activeText3) {
@@ -3336,20 +3480,36 @@
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
       let stage1Passed = 0;
+      let stage1Errors = 0;
       let fastPassHits = 0;
       let stage2Reviewed = 0;
+      let stage2Errors = 0;
       let critiqueAccept = 0;
       let critiqueModify = 0;
       let critiqueReject = 0;
       let critiqueEscalate = 0;
       let stage3Arbitrated = 0;
+      let stage3Errors = 0;
       let lowScoreHits = 0;
       let webLookupHits = 0;
 
       for (const item of Object.values(sourceNotes || {})) {
         if (!item) continue;
         const noteText = String(item.note || "").trim();
-        if (!noteText || !hasAutomatedDecisionNote(noteText)) continue;
+        if (!noteText) continue;
+
+        if (isAiFailureNote(noteText)) {
+          if (noteText.includes("Arbiter") || noteText.includes("终审仲裁")) {
+            stage3Errors += 1;
+          } else if (noteText.includes("Stylist") || noteText.includes("文学复审")) {
+            stage2Errors += 1;
+          } else {
+            stage1Errors += 1;
+          }
+          continue;
+        }
+
+        if (!hasAutomatedDecisionNote(noteText)) continue;
         const parsed = parseAutomatedNote(noteText);
         if (!parsed) continue;
 
@@ -3388,13 +3548,16 @@
 
       return {
         stage1Passed,
+        stage1Errors,
         fastPassHits,
         stage2Reviewed,
+        stage2Errors,
         critiqueAccept,
         critiqueModify,
         critiqueReject,
         critiqueEscalate,
         stage3Arbitrated,
+        stage3Errors,
         lowScoreHits,
         webLookupHits,
       };
@@ -3421,8 +3584,11 @@
 
       const stageMetricsSummary = [
         ["stage1Passed", "初审通过"],
+        ["stage1Errors", "初审异常"],
         ["stage2Reviewed", "文学复审"],
+        ["stage2Errors", "复审异常"],
         ["stage3Arbitrated", "终审仲裁"],
+        ["stage3Errors", "仲裁异常"],
         ["fastPassHits", "快速直通"],
         ["lowScoreHits", "低分归因"],
         ["webLookupHits", "线上查证"],
@@ -3437,8 +3603,44 @@
 
     function renderAiStatus(ai) {
       if (!ai) return;
+      const previousRunning = currentAiRunning;
       currentAiRunning = Boolean(ai.running);
       const isRunning = Boolean(ai.running);
+
+      if (previousRunning && !isRunning) {
+        const finishedStage = runningAiStage;
+        runningAiStage = null;
+        if (finishedStage === "stage1" && stage2WaitingForStage1) {
+          stage2WaitingForStage1 = false;
+          const hasStage1Suggestions = Object.values(notes).some((item) => {
+            const text = String(item?.note || "");
+            return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
+          });
+          if (hasStage1Suggestions) {
+            showToast("阶段一初审已完成，自动接力启动阶段二文学复审...", { tone: "info", durationMs: 4000 });
+            setTimeout(() => { promptAndStartAi("stage2"); }, 300);
+          } else {
+            showToast("阶段一事实初审全部通过，无需要文学复审的行。", { tone: "success", durationMs: 6000 });
+            if (stage3WaitingForStage2) {
+              stage3WaitingForStage2 = false;
+              showToast("无需要终审仲裁的行。", { tone: "info", durationMs: 5000 });
+            }
+          }
+        } else if (finishedStage === "stage2" && stage3WaitingForStage2) {
+          stage3WaitingForStage2 = false;
+          const hasDisputes = Object.values(notes).some((item) => {
+            const text = String(item?.note || "");
+            return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
+          });
+          if (hasDisputes) {
+            showToast("阶段二复审已完成，自动接力启动阶段三终审仲裁...", { tone: "info", durationMs: 4000 });
+            setTimeout(() => { promptAndStartAi("stage3"); }, 300);
+          } else {
+            showToast("阶段二文学复审已定案，无需要终审仲裁的分歧行。", { tone: "success", durationMs: 6000 });
+          }
+        }
+      }
+
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning);
       const stageMetricsSummary = aiIds.status?.dataset.stageMetrics || "";
       const aiRunId = ai.runId || "";
@@ -3467,14 +3669,15 @@
       if (sameAiScope && ai.proofreadPrompt?.system && (!ai.profileId || ai.profileId === aiIds.profile.value)) {
         const previousDefault = defaultProofreadPrompt;
         defaultProofreadPrompt = ai.proofreadPrompt.system;
-        if (!aiIds.prompt.dataset.touched || aiIds.prompt.value === previousDefault) {
+        if (aiIds.prompt && (!aiIds.prompt.dataset.touched || aiIds.prompt.value === previousDefault)) {
           aiIds.prompt.value = defaultProofreadPrompt;
         }
       }
       if (ai.termTableStatus) setTermTableHint(ai.termTableStatus);
       if (ai.speechHabitStatus) setSpeechHabitHint(ai.speechHabitStatus);
-      aiIds.start.disabled = Boolean(ai.running);
-      aiIds.stop.disabled = !ai.running;
+      setAllStageButtonsRunning(Boolean(ai.running));
+      if (aiIds.start) aiIds.start.disabled = Boolean(ai.running);
+      if (aiIds.stop) aiIds.stop.disabled = !ai.running;
       prefilterIds.start.disabled = Boolean(ai.running);
       prefilterIds.stop.disabled = !ai.running;
       const aiTotal = Math.max(0, ai.queued || 0);
@@ -3515,9 +3718,9 @@
         const p1 = ai.stagePipelines.stage1 || {};
         const p2 = ai.stagePipelines.stage2 || {};
         const p3 = ai.stagePipelines.stage3 || {};
-        const s1Part = "S1初审 " + (p1.inFlight > 0 ? p1.inFlight + "在飞" : (p1.pending > 0 ? p1.pending + "排队" : "完毕"));
-        const s2Part = "S2复审 " + (p2.inFlight > 0 ? p2.inFlight + "在飞" + (p2.pending > 0 ? "(" + p2.pending + "排队)" : "") : (p2.pending > 0 ? p2.pending + "排队" : "空闲"));
-        const s3Part = "S3仲裁 " + (p3.inFlight > 0 ? p3.inFlight + "在飞" : (p3.pending > 0 ? p3.pending + "排队" : "空闲"));
+        const s1Part = "S1初审 " + (p1.inFlight > 0 ? p1.inFlight + "处理中" : (p1.pending > 0 ? p1.pending + "排队" : "完毕"));
+        const s2Part = "S2复审 " + (p2.inFlight > 0 ? p2.inFlight + "处理中" + (p2.pending > 0 ? "(" + p2.pending + "排队)" : "") : (p2.pending > 0 ? p2.pending + "排队" : "空闲"));
+        const s3Part = "S3仲裁 " + (p3.inFlight > 0 ? p3.inFlight + "处理中" : (p3.pending > 0 ? p3.pending + "排队" : "空闲"));
         pipelineText = " ｜ " + s1Part + " ➔ " + s2Part + " ➔ " + s3Part;
       }
 
@@ -4026,18 +4229,24 @@
       updateBreakerControls();
       saveAiConfig();
     });
-    aiIds.prompt.addEventListener("input", () => {
-      aiIds.prompt.dataset.touched = "1";
-      saveAiPrompt();
-    });
-    aiIds.promptReset.addEventListener("click", () => {
-      defaultProofreadPrompt = defaultPromptForProfile(aiIds.profile.value) || defaultProofreadPrompt;
-      aiIds.prompt.value = defaultProofreadPrompt;
-      aiIds.prompt.dataset.touched = "";
-      aiIds.prompt.focus();
-      saveAiPrompt();
-      showToast("已恢复当前特化规范的默认提示词。", { tone: "success", durationMs: 6000 });
-    });
+    if (aiIds.prompt) {
+      aiIds.prompt.addEventListener("input", () => {
+        aiIds.prompt.dataset.touched = "1";
+        saveAiPrompt();
+      });
+    }
+    if (aiIds.promptReset) {
+      aiIds.promptReset.addEventListener("click", () => {
+        defaultProofreadPrompt = defaultPromptForProfile(aiIds.profile.value) || defaultProofreadPrompt;
+        if (aiIds.prompt) {
+          aiIds.prompt.value = defaultProofreadPrompt;
+          aiIds.prompt.dataset.touched = "";
+          aiIds.prompt.focus();
+        }
+        saveAiPrompt();
+        showToast("已恢复当前特化规范的默认提示词。", { tone: "success", durationMs: 6000 });
+      });
+    }
 
     function bindPromptTabs() {
       const tabs = document.querySelectorAll(".ai-prompt-tab");
@@ -4063,11 +4272,15 @@
     aiIds.profile.addEventListener("change", () => {
       // 换特化规范：只替换没有手改过的提示词，手改过的提示词由服务端按“是否已带该档案”决定补不补。
       const nextDefault = defaultPromptForProfile(aiIds.profile.value);
-      if (nextDefault && (!aiIds.prompt.dataset.touched || aiIds.prompt.value === defaultProofreadPrompt)) {
+      if (nextDefault) {
         defaultProofreadPrompt = nextDefault;
-        aiIds.prompt.value = nextDefault;
+        if (aiIds.prompt && (!aiIds.prompt.dataset.touched || aiIds.prompt.value === defaultProofreadPrompt)) {
+          aiIds.prompt.value = nextDefault;
+        }
       }
-      aiIds.prompt.dataset.touched = aiIds.prompt.dataset.touched ? "1" : "";
+      if (aiIds.prompt) {
+        aiIds.prompt.dataset.touched = aiIds.prompt.dataset.touched ? "1" : "";
+      }
       refreshTermVerdicts();
       setTermTableHint(null);
       setSpeechHabitHint(null);
@@ -4196,16 +4409,141 @@
       return clearedCount;
     }
 
-    async function startAiProofread() {
-      aiIds.start.disabled = true;
-      aiIds.status.dataset.cacheCleared = "";
-      aiIds.panel.open = true;
-      setRuntimeStatus("正在启动 AI 校对...");
+    let runningAiStage = null;
+    let stage2WaitingForStage1 = false;
+    let stage3WaitingForStage2 = false;
+
+    function setAllStageButtonsRunning(running) {
+      const isRunning = Boolean(running);
+      const s1Start = document.getElementById("stage1Start") || aiIds.start;
+      const s1Stop = document.getElementById("stage1Stop") || aiIds.stop;
+      const s2Start = document.getElementById("stage2Start");
+      const s2Stop = document.getElementById("stage2Stop");
+      const s3Start = document.getElementById("stage3Start");
+      const s3Stop = document.getElementById("stage3Stop");
+
+      if (s1Start) s1Start.disabled = isRunning;
+      if (s1Stop) s1Stop.disabled = !isRunning;
+
+      if (s2Start) s2Start.disabled = isRunning || stage2WaitingForStage1;
+      if (s2Stop) s2Stop.disabled = !isRunning && !stage2WaitingForStage1;
+
+      if (s3Start) s3Start.disabled = isRunning || stage3WaitingForStage2;
+      if (s3Stop) s3Stop.disabled = !isRunning && !stage3WaitingForStage2;
+    }
+    setAllStageButtonsRunning(false);
+
+    let pendingStartStage = "stage1";
+
+    async function promptAndStartAi(stage = "stage1") {
+      pendingStartStage = stage;
+
+      if (stage === "stage2") {
+        if (!aiIds.stage2Preset?.value) {
+          showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
+          return;
+        }
+        const hasStage1Suggestions = Object.values(notes).some((item) => {
+          const text = String(item?.note || "");
+          return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
+        });
+        if (!hasStage1Suggestions) {
+          // 若没有可以校对的行，但阶段一仍在继续，则「等待」阶段一！
+          if (currentAiRunning || runningAiStage === "stage1") {
+            stage2WaitingForStage1 = true;
+            setAllStageButtonsRunning(currentAiRunning);
+            updateStageMetricsDashboard();
+            showToast("已排队：当前暂无初审修改建议，等待阶段一产出建议后自动启动文学复审。", { tone: "info", durationMs: 5000 });
+            return;
+          }
+          showToast("当前没有未人工确认的初审修改建议行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
+          return;
+        }
+      } else if (stage === "stage3") {
+        if (!aiIds.stage3Preset?.value) {
+          showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
+          return;
+        }
+        const hasDisputes = Object.values(notes).some((item) => {
+          const text = String(item?.note || "");
+          return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
+        });
+        if (!hasDisputes) {
+          // 若没有可以仲裁的行，但阶段一或阶段二仍在继续，则「等待」阶段二！
+          if (currentAiRunning || stage2WaitingForStage1) {
+            stage3WaitingForStage2 = true;
+            setAllStageButtonsRunning(currentAiRunning);
+            updateStageMetricsDashboard();
+            showToast("已排队：当前暂无分歧行，等待阶段二复审产生分歧后自动启动终审仲裁。", { tone: "info", durationMs: 5000 });
+            return;
+          }
+          showToast("当前没有需要终审仲裁的分歧行。", { tone: "info", durationMs: 5000 });
+          return;
+        }
+      }
+
+      if (stage === "stage1") {
+        const unconfirmedCount = countUnconfirmedAiProofreadNotes();
+        if (unconfirmedCount > 0) {
+          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
+            if (aiConfirmIds.message) {
+              aiConfirmIds.message.innerHTML = `检测到当前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。<br>请选择本次启动方式：`;
+            }
+            aiConfirmIds.dialog.showModal();
+            return;
+          }
+          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）`)) {
+            const cleared = clearUnconfirmedAiProofreadNotes();
+            if (cleared > 0) {
+              showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
+            }
+            await startAiProofread({ continueOnly: false, stage: "stage1" });
+          } else {
+            await startAiProofread({ continueOnly: true, stage: "stage1" });
+          }
+          return;
+        }
+        await startAiProofread({ continueOnly: false, stage: "stage1" });
+      } else {
+        await startAiProofread({ continueOnly: false, stage });
+      }
+    }
+
+    async function startAiProofread({ continueOnly = false, stage = "stage1" } = {}) {
+      runningAiStage = stage;
+      setAllStageButtonsRunning(true);
+      if (aiIds.status) aiIds.status.dataset.cacheCleared = "";
+      if (aiIds.panel) aiIds.panel.open = true;
+      const stageNames = { stage1: "阶段一 事实初审", stage2: "阶段二 文学复审", stage3: "阶段三 终审仲裁" };
+      setRuntimeStatus("正在启动 " + (stageNames[stage] || "AI 校对") + "...");
+
+      const baseConfig = aiConfig();
+      baseConfig.stage = stage;
+
+      const rowNotes = {};
+      for (const [id, item] of Object.entries(notes)) {
+        if (item && item.note) rowNotes[id] = item.note;
+      }
+      baseConfig.rowNotes = rowNotes;
+
+      if (continueOnly) {
+        const completedSet = new Set(baseConfig.completedIndexes || []);
+        for (const [id, item] of Object.entries(notes)) {
+          if (!item) continue;
+          const noteText = String(item.note || "").trim();
+          if (item.manualDone || item.aiDone || hasAutomatedDecisionNote(noteText)) {
+            const num = Number(id);
+            if (Number.isInteger(num) && num > 0) completedSet.add(num);
+          }
+        }
+        baseConfig.completedIndexes = [...completedSet];
+      }
+
       try {
         const response = await apiFetch("/api/ai-proofread/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(aiConfig()),
+          body: JSON.stringify(baseConfig),
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
@@ -4213,55 +4551,36 @@
         refreshAiStatus();
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
-        aiIds.start.disabled = false;
+        runningAiStage = null;
+        setAllStageButtonsRunning(false);
       }
     }
 
-    if (aiConfirmIds.dialog) {
-      if (aiConfirmIds.clear) {
-        aiConfirmIds.clear.addEventListener("click", async () => {
-          aiConfirmIds.dialog.close();
-          const cleared = clearUnconfirmedAiProofreadNotes();
-          if (cleared > 0) {
-            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
-          }
-          await startAiProofread();
-        });
+    async function stopAiProofread(targetBtnStage = "") {
+      if (targetBtnStage === "stage2" && stage2WaitingForStage1) {
+        stage2WaitingForStage1 = false;
+        setAllStageButtonsRunning(currentAiRunning);
+        updateStageMetricsDashboard();
+        showToast("已取消阶段二文学复审的排队等待。", { tone: "info", durationMs: 4000 });
+        return;
       }
-      if (aiConfirmIds.keep) {
-        aiConfirmIds.keep.addEventListener("click", async () => {
-          aiConfirmIds.dialog.close();
-          await startAiProofread();
-        });
+      if (targetBtnStage === "stage3" && stage3WaitingForStage2) {
+        stage3WaitingForStage2 = false;
+        setAllStageButtonsRunning(currentAiRunning);
+        updateStageMetricsDashboard();
+        showToast("已取消阶段三终审仲裁的排队等待。", { tone: "info", durationMs: 4000 });
+        return;
       }
-      if (aiConfirmIds.cancel) {
-        aiConfirmIds.cancel.addEventListener("click", () => {
-          aiConfirmIds.dialog.close();
-        });
-      }
-    }
 
-    aiIds.start.addEventListener("click", async () => {
-      const unconfirmedCount = countUnconfirmedAiProofreadNotes();
-      if (unconfirmedCount > 0) {
-        if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
-          if (aiConfirmIds.message) {
-            aiConfirmIds.message.innerHTML = `检测到之前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。<br>是否在开始本次校对前清空这些信息？`;
-          }
-          aiConfirmIds.dialog.showModal();
-          return;
-        }
-        if (confirm(`是否清空之前未人工确认的 ${unconfirmedCount} 条 AI 校对信息？\n\n点击「确定」：清空未确认信息后开始校对\n点击「取消」：保留现有信息直接开始校对`)) {
-          const cleared = clearUnconfirmedAiProofreadNotes();
-          if (cleared > 0) {
-            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
-          }
-        }
-      }
-      await startAiProofread();
-    });
-    aiIds.stop.addEventListener("click", async () => {
-      aiIds.stop.disabled = true;
+      stage2WaitingForStage1 = false;
+      stage3WaitingForStage2 = false;
+      const stopButtons = [
+        document.getElementById("stage1Stop"),
+        document.getElementById("stage2Stop"),
+        document.getElementById("stage3Stop"),
+        aiIds.stop,
+      ].filter(Boolean);
+      stopButtons.forEach((btn) => { btn.disabled = true; });
       setRuntimeStatus("正在终止 AI 校对...");
       try {
         const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
@@ -4273,37 +4592,95 @@
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
       }
-    });
-    aiIds.clearCache.addEventListener("click", async () => {
-      if (aiIds.stop.disabled === false) {
-        showToast("AI 校对仍在运行，请先停止任务再清除 AI 记录。", { tone: "watch", durationMs: 8000 });
-        return;
+    }
+
+    if (aiConfirmIds.dialog) {
+      if (aiConfirmIds.clear) {
+        aiConfirmIds.clear.addEventListener("click", async () => {
+          aiConfirmIds.dialog.close();
+          const cleared = clearUnconfirmedAiProofreadNotes();
+          if (cleared > 0) {
+            showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
+          }
+          await startAiProofread({ continueOnly: false, stage: pendingStartStage });
+        });
       }
-      if (!confirm("清除 AI 运行记录？备注与人工确认不会被清除。")) return;
-      aiIds.clearCache.disabled = true;
-      setRuntimeStatus("正在清除 AI 记录...");
-      if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
-      clearLocalAiCache();
-      renderClearedAiStatus();
-      try {
-        const response = await apiFetch("/api/ai-proofread/cache/clear", { method: "POST" });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
-        if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);
-        renderClearedAiStatus();
-        showToast("已清除 AI 运行记录；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
-      } catch (error) {
-        if (error instanceof TypeError || /Unknown local API endpoint|清除失败/.test(error.message || "")) {
-          const fallback = "已清除本页 AI 运行记录；备注与人工确认已保留。本地服务重启后可同步清除后台记录。";
-          renderClearedAiStatus(fallback);
-          showToast(fallback, { tone: "watch", durationMs: 12000 });
-        } else {
-          showToast(error.message, { tone: "error", durationMs: 12000 });
+      if (aiConfirmIds.keep) {
+        aiConfirmIds.keep.addEventListener("click", async () => {
+          aiConfirmIds.dialog.close();
+          showToast("保留已有方案，仅校对剩余未处理行。", { tone: "info", durationMs: 4000 });
+          await startAiProofread({ continueOnly: true, stage: pendingStartStage });
+        });
+      }
+      if (aiConfirmIds.cancel) {
+        aiConfirmIds.cancel.addEventListener("click", () => {
+          aiConfirmIds.dialog.close();
+        });
+      }
+    }
+
+    const boundStartButtons = new Set();
+    const stage1StartEl = document.getElementById("stage1Start") || aiIds.start;
+    if (stage1StartEl) {
+      stage1StartEl.addEventListener("click", async () => { await promptAndStartAi("stage1"); });
+      boundStartButtons.add(stage1StartEl);
+    }
+    const stage2StartEl = document.getElementById("stage2Start");
+    if (stage2StartEl && !boundStartButtons.has(stage2StartEl)) {
+      stage2StartEl.addEventListener("click", async () => { await promptAndStartAi("stage2"); });
+      boundStartButtons.add(stage2StartEl);
+    }
+    const stage3StartEl = document.getElementById("stage3Start");
+    if (stage3StartEl && !boundStartButtons.has(stage3StartEl)) {
+      stage3StartEl.addEventListener("click", async () => { await promptAndStartAi("stage3"); });
+      boundStartButtons.add(stage3StartEl);
+    }
+    if (aiIds.start && !boundStartButtons.has(aiIds.start)) {
+      aiIds.start.addEventListener("click", async () => { await promptAndStartAi("stage1"); });
+    }
+
+    const stage1StopEl = document.getElementById("stage1Stop");
+    if (stage1StopEl) stage1StopEl.addEventListener("click", () => stopAiProofread("stage1"));
+    const stage2StopEl = document.getElementById("stage2Stop");
+    if (stage2StopEl) stage2StopEl.addEventListener("click", () => stopAiProofread("stage2"));
+    const stage3StopEl = document.getElementById("stage3Stop");
+    if (stage3StopEl) stage3StopEl.addEventListener("click", () => stopAiProofread("stage3"));
+    if (aiIds.stop && aiIds.stop !== stage1StopEl) {
+      aiIds.stop.addEventListener("click", () => stopAiProofread(""));
+    }
+
+    if (aiIds.clearCache) {
+      aiIds.clearCache.addEventListener("click", async () => {
+        if (aiIds.stop && aiIds.stop.disabled === false) {
+          showToast("AI 校对仍在运行，请先停止任务再清除 AI 记录。", { tone: "watch", durationMs: 8000 });
+          return;
         }
-      } finally {
-        aiIds.clearCache.disabled = false;
-      }
-    });
+        if (!confirm("清除 AI 运行记录？备注与人工确认不会被清除。")) return;
+        aiIds.clearCache.disabled = true;
+        setRuntimeStatus("正在清除 AI 记录...");
+        if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
+        clearLocalAiCache();
+        renderClearedAiStatus();
+        try {
+          const response = await apiFetch("/api/ai-proofread/cache/clear", { method: "POST" });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
+          if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);
+          renderClearedAiStatus();
+          showToast("已清除 AI 运行记录；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
+        } catch (error) {
+          if (error instanceof TypeError || /Unknown local API endpoint|清除失败/.test(error.message || "")) {
+            const fallback = "已清除本页 AI 运行记录；备注与人工确认已保留。本地服务重启后可同步清除后台记录。";
+            renderClearedAiStatus(fallback);
+            showToast(fallback, { tone: "watch", durationMs: 12000 });
+          } else {
+            showToast(error.message, { tone: "error", durationMs: 12000 });
+          }
+        } finally {
+          aiIds.clearCache.disabled = false;
+        }
+      });
+    }
     tbody.addEventListener("click", (event) => {
       const button = event.target.closest("[data-verify]");
       if (!button) return;

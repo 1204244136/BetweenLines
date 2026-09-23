@@ -58,8 +58,11 @@ function normalizeCritiqueResult(value = {}) {
 function createStageMetrics(value = {}) {
   return {
     stage1Passed: Math.max(0, Number(value.stage1Passed) || 0),
+    stage1Errors: Math.max(0, Number(value.stage1Errors) || 0),
     stage2Reviewed: Math.max(0, Number(value.stage2Reviewed) || 0),
+    stage2Errors: Math.max(0, Number(value.stage2Errors) || 0),
     stage3Arbitrated: Math.max(0, Number(value.stage3Arbitrated) || 0),
+    stage3Errors: Math.max(0, Number(value.stage3Errors) || 0),
     fastPassHits: Math.max(0, Number(value.fastPassHits) || 0),
     webLookupHits: Math.max(0, Number(value.webLookupHits) || 0),
     lowScoreHits: Math.max(0, Number(value.lowScoreHits) || 0),

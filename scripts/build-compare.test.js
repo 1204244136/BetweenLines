@@ -117,7 +117,8 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   // 熔断阈值可在「校对设置」里手动调整，并支持整体停用
   assert.match(html, /id="aiBreakerThreshold" type="text" inputmode="decimal" value="50%"/);
   assert.match(html, /<input id="aiBreakerDisabled" type="checkbox">关闭/);
-  assert.match(html, /class="ai-runbar"/);
+  assert.match(html, /id="aiStageDashboard"/);
+  assert.match(html, /class="ai-stage-dashboard-header"/);
   assert.doesNotMatch(html, /id="aiProofreadModeHint"/);
   assert.match(html, /translation-compare-ai-prompt-v1:/);
   assert.match(html, /pageMeta\.projectKey \|\| "unscoped"/);

@@ -40,7 +40,7 @@ test("多阶段流水线端到端：快速直通 Fast Pass 路径", () => {
   assert.equal(result.done, true);
   assert.equal(result.fastPass, true);
   assert.equal(result.stageResult.stage, "gatekeeper");
-  assert.equal(result.critique.attitude, "reject"); // no modification proposed
+  assert.equal(result.critique, null, "阶段一直接通过且未经历复审的行，critique 为 null，绝不误标记为复审驳回");
   assert.equal(result.arbitration, null);
 });
 
@@ -148,5 +148,83 @@ test("多阶段流水线端到端：双角色立场分歧触发 Arbiter 仲裁�
   assert.equal(result.done, true);
   assert.equal(result.stageResult.stage, "arbiter");
   assert.equal(result.arbitration.winner, "stylist");
-  assert.ok(result.note.includes("Arbiter仲裁[Stylist方案]"));
+  assert.ok(result.note.includes("Arbiter仲裁[复审方案]"));
+});
+
+test("多阶段流水线端到端：初审与复审各有长处，Arbiter 给出打破二选一的结合修改方案（synthesis）", () => {
+  const row = {
+    index: 43,
+    jp: "彼の右腕には、二つの異なる術式が組み込まれていた。",
+    cn: "他的右手被植入了两种不同的法术。",
+  };
+
+  // 1. 初审 Gatekeeper：纠正专有名词术语（术式而非普通法术），但改得略显僵硬
+  const gatekeeperDecision = {
+    needsEdit: true,
+    better: "neither",
+    semanticSame: false,
+    score: 80,
+    summary: "术语硬伤：'術式' 应统一规范为专用术语'术式'，而非普通'法术'。",
+    revisedText: "他的右腕之中，装配着两套相异的术式。",
+    stage1RevisedText: "他的右腕之中，装配着两套相异的术式。",
+  };
+
+  // 2. 复审 Stylist：润色行文流畅度，消除'被植入'的僵硬语感，但沿用了'法术'
+  const stylistReview = {
+    critique: {
+      attitude: "modify",
+      rationale: "原句带有生硬的被动与翻译腔；改为主谓流畅表达更具文学表现力，但初审的'装配'过于机械化。",
+      acceptedChanges: ["消除生硬被动语态"],
+      rejectedChanges: ["装配过于机械"],
+    },
+    revisedText: "在他右臂之中，交错潜藏着两种迥异的法术。",
+    summary: "润色为更自然的中文动作描写",
+  };
+
+  // 3. 触发仲裁
+  const check = shouldTriggerArbitration({
+    gatekeeperDecision,
+    stylistReview,
+  });
+  assert.equal(check.triggered, true);
+
+  // 4. Arbiter 终审仲裁：认可初审的术语'术式'，同时采纳复审的文学意蕴与流畅动作描写，给出融合两者的结合方案
+  const arbiterResult = {
+    winner: "synthesis",
+    reason: "初审纠正术语'术式'准确无误，必须保留；复审对动词与句式韵律的重构极佳。结合双方优点，融汇为最终定案。",
+    finalDecision: "replace",
+    riskFlags: [],
+  };
+
+  const combinedText = "在他右臂之中，交错潜藏着两种迥异的术式。";
+  const applied = applyArbitrationDecision({
+    arbitration: arbiterResult,
+    gatekeeperDecision,
+    stylistReview,
+    targetText: row.cn,
+    adjudicatedRevisedText: combinedText,
+  });
+
+  assert.equal(applied.winner, "synthesis");
+  assert.equal(applied.needsEdit, true);
+  assert.equal(applied.revisedText, combinedText);
+
+  const decisionWithArbitration = {
+    ...gatekeeperDecision,
+    stylistReview,
+    arbitration: applied.arbitration,
+    needsEdit: applied.needsEdit,
+    revisedText: applied.revisedText,
+    stage3RevisedText: applied.revisedText,
+    stage: "arbiter",
+    arbitrationModelId: "deepseek-reasoner",
+  };
+
+  const result = decisionToResult(row, decisionWithArbitration, "译文 B", "原文 A", "cn", "bilingual");
+  assert.equal(result.done, false); // needsEdit=true -> suggestion / 待确认修改
+  assert.equal(result.stageResult.stage, "arbiter");
+  assert.equal(result.arbitration.winner, "synthesis");
+  assert.ok(result.note.includes("Arbiter仲裁[结合方案]：初审纠正术语'术式'准确无误"));
+  assert.ok(result.note.includes(`仲裁改案：${combinedText}`));
+  assert.ok(result.note.includes(`修改结果：${combinedText}`));
 });

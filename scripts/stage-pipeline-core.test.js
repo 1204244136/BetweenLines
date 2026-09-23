@@ -213,6 +213,31 @@ test("角色运行时：parseArbiterResponse 正确解析结构化的终审仲�
   assert.equal(parsed.revisedText, "终审裁定的译文");
 });
 
+test("角色运行时：parseArbiterResponse 正确解析打破二选一的结合修改方案（synthesis）", () => {
+  const rawEng = JSON.stringify({
+    winner: "synthesis",
+    reason: "初审纠正了否定时态硬伤，复审消除了翻译腔，两者结合为最优解",
+    finalDecision: "replace",
+    riskFlags: [],
+    revisedText: "结合初审准确性与复审文学性的定案文本",
+  });
+  const parsedEng = parseArbiterResponse(rawEng);
+  assert.equal(parsedEng.arbitration.winner, "synthesis");
+  assert.equal(parsedEng.arbitration.finalDecision, "replace");
+  assert.equal(parsedEng.revisedText, "结合初审准确性与复审文学性的定案文本");
+
+  // 支持中文 winner 声明，自动归一化为 synthesis
+  const rawZh = JSON.stringify({
+    winner: "结合方案",
+    reason: "综合初审与复审的长处",
+    revisedText: "中文归一定案文本",
+  });
+  const parsedZh = parseArbiterResponse(rawZh);
+  assert.equal(parsedZh.arbitration.winner, "synthesis");
+  assert.equal(parsedZh.arbitration.finalDecision, "replace");
+  assert.equal(parsedZh.revisedText, "中文归一定案文本");
+});
+
 test("角色运行时：createPersonaContext 构建相互隔离的运行时上下文", () => {
   const baseConfig = { model: "o3-mini", provider: "local" };
   const ctxA = createPersonaContext("gatekeeper", baseConfig);
@@ -273,6 +298,19 @@ test("仲裁决议应用：applyArbitrationDecision 准确选择胜出修订案"
   assert.equal(applied.revisedText, "文学润色文本");
 });
 
+test("仲裁决议应用：applyArbitrationDecision 支持结合修改方案并采用 Arbiter 融合文本", () => {
+  const applied = applyArbitrationDecision({
+    arbitration: { winner: "synthesis", reason: "融合初审纠错与复审句式" },
+    gatekeeperDecision: { revisedText: "初审纠错文本" },
+    stylistReview: { revisedText: "复审润色文本" },
+    adjudicatedRevisedText: "仲裁结合两者的全新定案文本",
+  });
+  assert.equal(applied.winner, "synthesis");
+  assert.equal(applied.finalDecision, "replace");
+  assert.equal(applied.needsEdit, true);
+  assert.equal(applied.revisedText, "仲裁结合两者的全新定案文本");
+});
+
 test("仲裁备注格式化：formatArbitrationNoteLines 生成结构化分析轨迹", () => {
   const lines = formatArbitrationNoteLines({
     gatekeeperDecision: { summary: "发现漏译形容词" },
@@ -282,7 +320,7 @@ test("仲裁备注格式化：formatArbitrationNoteLines 生成结构化分析�
   assert.equal(lines.length, 3);
   assert.ok(lines[0].includes("Gatekeeper初审"));
   assert.ok(lines[1].includes("Stylist复审[调整]"));
-  assert.ok(lines[2].includes("Arbiter仲裁[Stylist方案]"));
+  assert.ok(lines[2].includes("Arbiter仲裁[复审方案]"));
 });
 
 test("仲裁备注格式化：记录各阶段特有修订文本以追踪演进链条", () => {
@@ -305,7 +343,28 @@ test("仲裁备注格式化：记录各阶段特有修订文本以追踪演进�
   assert.ok(lines.some((l) => l === "初审改案：亚雷斯塔尚未登门"));
   assert.ok(lines.some((l) => l.startsWith("Stylist复审[调整]：")));
   assert.ok(lines.some((l) => l === "复审改案：亚雷斯塔尚未叩响门扉"));
-  assert.ok(lines.some((l) => l.startsWith("Arbiter仲裁[Stylist方案]：")));
+  assert.ok(lines.some((l) => l.startsWith("Arbiter仲裁[复审方案]：")));
+});
+
+test("仲裁备注格式化：支持结合修改方案并在备注中生成「仲裁[结合方案]」与「仲裁改案」", () => {
+  const lines = formatArbitrationNoteLines({
+    gatekeeperDecision: {
+      summary: "指出关键术语漏译",
+      needsEdit: true,
+      stage1RevisedText: "初审纠错文本",
+    },
+    stylistReview: {
+      critique: { attitude: "modify", rationale: "改善行文语序" },
+      revisedText: "复审润色文本",
+    },
+    arbitration: {
+      winner: "synthesis",
+      reason: "初审术语准确，复审句式优美，汲取双方优点进行结合",
+      revisedText: "仲裁结合定案文本",
+    },
+  });
+  assert.ok(lines.some((l) => l.startsWith("Arbiter仲裁[结合方案]：初审术语准确，复审句式优美")));
+  assert.ok(lines.some((l) => l === "仲裁改案：仲裁结合定案文本"));
 });
 
 // ==========================================

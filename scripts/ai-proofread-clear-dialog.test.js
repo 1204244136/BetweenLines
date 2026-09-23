@@ -50,7 +50,7 @@ test("存在未人工确认的 AI 校对信息时，点击开始校对弹出确�
   assert.equal(ui.run('Boolean(notes["1"] && notes["2"])'), true, "取消后未确认记录完好保留");
 });
 
-test("弹窗中选择「保留并开始」，保留原有 AI 记录并启动校对", async () => {
+test("弹窗中选择「继续剩下的（未AI校对过的）」，保留原有 AI 记录并跳过已有结果启动校对", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
@@ -71,14 +71,16 @@ test("弹窗中选择「保留并开始」，保留原有 AI 记录并启动校�
   await ui.element("aiStart").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, true);
 
-  // 点击「保留并开始」
+  // 点击「继续剩下的（未AI校对过的）」
   await ui.element("aiConfirmKeep").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, false, "弹窗关闭");
   assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 1, "发起启动请求");
+  const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
+  assert.equal(post.body.completedIndexes.includes(1), true, "已有 AI 记录的第 1 行被加入 completedIndexes 跳过");
   assert.equal(ui.run('notes["1"]?.revisionText'), "修订一", "原有修改建议保持不变");
 });
 
-test("弹窗中选择「清空并开始」，清空未确认的 AI 记录，保留已确认记录并启动校对", async () => {
+test("弹窗中选择「从未人工确认处开始」，清空未确认的 AI 记录，保留已确认记录并启动校对", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },

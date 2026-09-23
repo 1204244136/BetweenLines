@@ -508,6 +508,10 @@ function cleanConfig(input = {}) {
     systemPrompt: String(input.systemPrompt || "").trim() || proofreadPromptFor(proofreadMode, profileId).system,
     glossaryFile: String(input.glossaryFile || "").trim(),
     completedIndexes: normalizeIndexSet(input.completedIndexes),
+    targetStage: (input.stage === "stage2" || input.targetStage === "stage2") ? "stage2"
+      : ((input.stage === "stage3" || input.targetStage === "stage3") ? "stage3"
+      : ((input.stage === "all" || input.targetStage === "all") ? "all" : "stage1")),
+    rowNotes: (input.rowNotes && typeof input.rowNotes === "object") ? input.rowNotes : {},
     multiStageEnabled: Boolean(input.multiStageEnabled || input.challengerEnabled || input.singleModelPersona || input.stylistConfig || input.stage2Preset),
     challengerEnabled: Boolean(input.challengerEnabled),
     singleModelPersona: Boolean(input.singleModelPersona),
@@ -708,20 +712,44 @@ function addResult(result, { prefilterKind = "" } = {}) {
     // boundary; keeping these counters here preserves one execution loop.
     if (result.done) status.stageMetrics.stage1Passed += 1;
     if (result.fastPass === true) status.stageMetrics.fastPassHits += 1;
-    if (result.status === "suggestion") status.stageMetrics.stage2Reviewed += 1;
     if (result.stageSignals?.lowScore) status.stageMetrics.lowScoreHits += 1;
     if (result.stageSignals?.webLookup) status.stageMetrics.webLookupHits += 1;
-    const attitude = result.critique?.attitude;
-    if (attitude === "accept") status.stageMetrics.critiqueAccept += 1;
-    if (attitude === "reject") status.stageMetrics.critiqueReject += 1;
-    if (attitude === "modify") status.stageMetrics.critiqueModify += 1;
-    if (attitude === "escalate") status.stageMetrics.critiqueEscalate += 1;
+
+    // 只有真正经历了 Stage 2 复审（有 stylistReview 或 stage 为 stylist/arbiter）时，
+    // 才计入 Stage 2 相关指标；阶段一直接通过（无需修改）的内容绝不能被统计为复审驳回！
+    const hasStage2Review = Boolean(
+      result.stylistReview ||
+      result.stageResult?.stage === "stylist" ||
+      result.stageResult?.stage === "arbiter" ||
+      (result.critique && result.critique.attitude && !result.fastPass && result.stageResult?.stage !== "gatekeeper")
+    );
+    if (hasStage2Review && result.critique?.attitude) {
+      status.stageMetrics.stage2Reviewed += 1;
+      const attitude = result.critique.attitude;
+      if (attitude === "accept") status.stageMetrics.critiqueAccept += 1;
+      if (attitude === "reject") status.stageMetrics.critiqueReject += 1;
+      if (attitude === "modify") status.stageMetrics.critiqueModify += 1;
+      if (attitude === "escalate") status.stageMetrics.critiqueEscalate += 1;
+    } else if (result.status === "suggestion" && result.stageResult?.stage === "stylist") {
+      status.stageMetrics.stage2Reviewed += 1;
+    }
+
     if (result.arbitration || result.stageResult?.stage === "arbiter") {
       status.stageMetrics.stage3Arbitrated += 1;
     }
   }
   if (result.status === "suggestion") status.suggested += 1;
-  if (result.status === "error") status.errors += 1;
+  if (result.status === "error") {
+    status.errors += 1;
+    const stage = result.stage || result.stageResult?.stage;
+    if (stage === "arbiter" || stage === "stage3") {
+      status.stageMetrics.stage3Errors += 1;
+    } else if (stage === "stylist" || stage === "stage2") {
+      status.stageMetrics.stage2Errors += 1;
+    } else {
+      status.stageMetrics.stage1Errors += 1;
+    }
+  }
 }
 
 async function startPrefilter(input) {
@@ -823,6 +851,90 @@ async function startProofread(input) {
     status.speechHabitCharacters = activatedCharacters;
     pushLog(`${speechTableSummary(tables)}：按${scope === "volume" ? "卷" : "章"}命中 ${activatedChapters} ${scope === "volume" ? "卷" : "章"} / ${activatedCharacters.length} 个角色${volume?.code ? `（${volume.code}）` : ""}，这些角色的说话特色不会被判为翻译错误。`);
   }
+  let stageItems = { stage2: [], stage3: [] };
+
+  if (config.targetStage === "stage2") {
+    if (!config.stylistConfig && !config.singleModelPersona) {
+      const error = new Error("请先在阶段二选择模型预设以启用文学复审。");
+      error.code = "STAGE2_CONFIG_MISSING";
+      throw error;
+    }
+    const items = [];
+    for (const row of rows) {
+      const idx = Number(row.index);
+      if (config.completedIndexes.has(idx)) continue;
+      const noteText = config.rowNotes[idx] || "";
+      const memoryResult = status.results.get(idx);
+      const hasSuggestion = Boolean(
+        (memoryResult && memoryResult.stageResult?.needsEdit) ||
+        (noteText && (noteText.includes("是否需要修改：是") || noteText.includes("初审改案") || noteText.includes("Gatekeeper初审：建议修改")))
+      );
+      if (hasSuggestion) {
+        const s1Item = (memoryResult && memoryResult.stageResult && memoryResult.stageResult.needsEdit)
+          ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null }
+          : reconstructStage1Result(row, noteText, config, labels);
+        items.push(s1Item);
+      } else {
+        status.skippedDone += 1;
+      }
+    }
+    stageItems.stage2 = items;
+    status.queued = items.length;
+    pushLog(`阶段二 文学复审：共 ${items.length} 行初审修改建议进入复审队列。`);
+    if (items.length === 0) {
+      pushLog("阶段二 文学复审：当前没有需要复审的初审修改建议行。");
+      finish();
+      return clientStatus({ includeResults: false });
+    }
+    runQueue([], rows, config, labels, stageItems).catch((error) => {
+      status.error = error.message || String(error);
+      pushLog(status.error);
+      finish();
+    });
+    return clientStatus({ includeResults: false });
+  }
+
+  if (config.targetStage === "stage3") {
+    if (!config.arbiterConfig && !config.singleModelPersona) {
+      const error = new Error("请先在阶段三选择模型预设以启用终审仲裁。");
+      error.code = "STAGE3_CONFIG_MISSING";
+      throw error;
+    }
+    const items = [];
+    for (const row of rows) {
+      const idx = Number(row.index);
+      if (config.completedIndexes.has(idx)) continue;
+      const noteText = config.rowNotes[idx] || "";
+      const memoryResult = status.results.get(idx);
+      const hasDispute = Boolean(
+        (memoryResult && (memoryResult.critique?.attitude === "escalate" || memoryResult.stageResult?.decision === "escalate")) ||
+        (noteText && (noteText.includes("提交仲裁") || noteText.includes("分歧") || noteText.includes("escalate")))
+      );
+      if (hasDispute) {
+        const s2Item = (memoryResult && memoryResult.stageResult)
+          ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null, arbCheck: { triggered: true } }
+          : reconstructStage2Result(row, noteText, config, labels);
+        items.push(s2Item);
+      } else {
+        status.skippedDone += 1;
+      }
+    }
+    stageItems.stage3 = items;
+    status.queued = items.length;
+    pushLog(`阶段三 终审仲裁：共 ${items.length} 行复审分歧进入仲裁队列。`);
+    if (items.length === 0) {
+      pushLog("阶段三 终审仲裁：当前没有需要终审仲裁的分歧行。");
+      finish();
+      return clientStatus({ includeResults: false });
+    }
+    runQueue([], rows, config, labels, stageItems).catch((error) => {
+      status.error = error.message || String(error);
+      pushLog(status.error);
+      finish();
+    });
+    return clientStatus({ includeResults: false });
+  }
+
   // 对照表预处理：先于规则/相似度预筛运行——命中的行直接用表里的内容判定，不再交给模型。
   const resolvedByTermTable = applyTermTable(config, rows, labels);
 
@@ -861,7 +973,7 @@ async function startProofread(input) {
   pushLog(config.circuitBreakerEnabled
     ? `错误率熔断：最近 ${errorCircuitBreaker.windowSize} 次调用中失败占比达到 ${Math.round(config.circuitBreakerErrorRate * 100)}% 时自动终止。`
     : "错误率熔断：已关闭，调用失败不会自动终止任务。");
-  runQueue(queue, rows, config, labels).catch((error) => {
+  runQueue(queue, rows, config, labels, stageItems).catch((error) => {
     status.error = error.message || String(error);
     pushLog(status.error);
     finish();
@@ -1113,7 +1225,7 @@ function parseRateLimitReason(error) {
   return "接口频控限制";
 }
 
-async function runQueue(queue, allRows, config, labels) {
+async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const isSmart = Boolean(config.smartConcurrency);
   let currentConcurrency = config.concurrency;
   const maxConcurrency = isSmart ? config.concurrencyMax : config.concurrency;
@@ -1129,10 +1241,11 @@ async function runQueue(queue, allRows, config, labels) {
   status.concurrencyLimits = 0;
 
   // 流水线阶段解耦队列（Staged Pipelining Queues）
-  // Stage 1 事实初审一产出建议，立刻推入 Stage 2 队列，Stylist 无需等待后续行的初审！
-  const stage1Pending = [...queue];
-  const stage2Pending = [];
-  const stage3Pending = [];
+  // 正常流程下各阶段独立控制，仅在显式 all 模式下连贯自动推进
+  const shouldCascade = config.targetStage === "all";
+  const stage1Pending = (config.targetStage === "stage1" || shouldCascade) ? [...queue] : [];
+  const stage2Pending = config.targetStage === "stage2" ? [...(stageItems.stage2 || [])] : [];
+  const stage3Pending = config.targetStage === "stage3" ? [...(stageItems.stage3 || [])] : [];
 
   let stage1InFlight = 0;
   let stage2InFlight = 0;
@@ -1262,15 +1375,14 @@ async function runQueue(queue, allRows, config, labels) {
         }
 
         const isFastPass = !s1.decision.needsEdit && isFastPassDecision(s1.decision);
-        const isMultiStage = Boolean(config.multiStageEnabled || config.challengerEnabled || config.singleModelPersona);
 
-        if (isFastPass || !isMultiStage) {
-          // 命中 Fast Pass 或单阶段：无需 Stage 2，直接完成输出
+        if (isFastPass || !shouldCascade) {
+          // 命中 Fast Pass 或独立执行模式（stage1 模式）：无需 Stage 2，直接完成输出
           const result = finalizeRowResult(s1, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
-          // 提出修改：立即推入 Stage 2 队列，Stylist 可以立刻并发启动，不阻塞 Stage 1 审后续行！
+          // 仅在 all 级联流水线模式下推入 Stage 2 队列！
           stage2Pending.push(s1);
           syncStagePipelineQueues();
           pushLog(`第 ${row.index} 行：事实初审完成，移交 Stage 2 (Stylist 文学复审队列)。`);
@@ -1328,6 +1440,7 @@ async function runQueue(queue, allRows, config, labels) {
               runId: status.runId,
               index: row.index,
               signature: rowSignature(row),
+              stage: "stage1",
               status: "error",
               done: false,
               note: `[AI校对]\n调用失败（频控限制已达重试上限）：${error.message || String(error)}`,
@@ -1340,6 +1453,7 @@ async function runQueue(queue, allRows, config, labels) {
             runId: status.runId,
             index: row.index,
             signature: rowSignature(row),
+            stage: "stage1",
             status: status.stopRequested && !fatalRequestError ? "stopped" : "error",
             done: false,
             note: `[AI校对]\n${status.stopRequested && !fatalRequestError ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
@@ -1364,19 +1478,20 @@ async function runQueue(queue, allRows, config, labels) {
       syncStagePipelineQueues();
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels);
-        if (s2.arbCheck?.triggered && config.arbiterEnabled !== false) {
-          // 产生分歧，触发终审仲裁，推入 Stage 3 队列！
+        if (s2.arbCheck?.triggered && shouldCascade && config.arbiterEnabled !== false) {
+          // 产生分歧，仅在 all 级联流水线模式下推入 Stage 3 队列！
           stage3Pending.push(s2);
           syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
-          // 未产生分歧：采纳复审结论，直接完成
+          // 独立 Stage 2 模式或未产生分歧：采纳复审结论，直接完成
           const result = finalizeRowResult(s2, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2.row.index);
         }
       } catch (error) {
         pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
+        status.stageMetrics.stage2Errors += 1;
         const result = finalizeRowResult(s1Item, config);
         addResult(result);
         status.active = status.active.filter((idx) => idx !== s1Item.row.index);
@@ -1397,6 +1512,7 @@ async function runQueue(queue, allRows, config, labels) {
         addResult(result);
       } catch (error) {
         pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
+        status.stageMetrics.stage3Errors += 1;
         const result = finalizeRowResult(s2Item, config);
         addResult(result);
       } finally {
@@ -1739,6 +1855,104 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
     counterpartText,
     lowScore,
   };
+}
+
+function parseStoredNote(note = "") {
+  const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const data = {
+    semantic: "",
+    modify: "",
+    stage1: "",
+    stage1Revision: "",
+    stage2: null,
+    stage2Revision: "",
+    stage3: null,
+    stage3Revision: "",
+    revision: "",
+    analysis: "",
+    score: 80,
+  };
+  for (const line of lines) {
+    if (line.startsWith("语义是否相同：")) data.semantic = line.slice("语义是否相同：".length).trim();
+    else if (line.startsWith("是否需要修改：")) data.modify = line.slice("是否需要修改：".length).trim();
+    else if (line.startsWith("Gatekeeper初审：")) data.stage1 = line.slice("Gatekeeper初审：".length).trim();
+    else if (line.startsWith("初审改案：") || line.startsWith("初审建议：")) data.stage1Revision = line.replace(/^(初审改案|初审建议)：/, "").trim();
+    else if (line.startsWith("Stylist复审")) {
+      const match = line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/);
+      if (match) {
+        data.stage2 = { attitude: match[1] || "modify", text: match[2]?.trim() || "" };
+      }
+    } else if (line.startsWith("复审改案：") || line.startsWith("复审建议：")) data.stage2Revision = line.replace(/^(复审改案|复审建议)：/, "").trim();
+    else if (line.startsWith("Arbiter仲裁")) {
+      const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/);
+      if (match) {
+        data.stage3 = { winner: match[1] || "裁决", text: match[2]?.trim() || "" };
+      }
+    } else if (line.startsWith("仲裁改案：") || line.startsWith("仲裁建议：")) data.stage3Revision = line.replace(/^(仲裁改案|仲裁建议)：/, "").trim();
+    else if (line.startsWith("修改结果：")) data.revision = line.slice("修改结果：".length).trim();
+    else if (line.startsWith("分析：")) data.analysis = line.slice("分析：".length).trim();
+  }
+  return data;
+}
+
+function reconstructStage1Result(row, noteText, config, labels) {
+  const parsed = parseStoredNote(noteText);
+  const bilingual = config.proofreadMode === "bilingual";
+  const targetKey = bilingual ? "cn" : config.target;
+  const counterpartKey = bilingual ? "jp" : (targetKey === "cn" ? "tw" : "cn");
+  const targetLabel = targetKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C");
+  const counterpartLabel = counterpartKey === "jp"
+    ? (labels.jp || "原文 A")
+    : (counterpartKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C"));
+  const targetText = textForKey(row, targetKey);
+  const counterpartText = textForKey(row, counterpartKey);
+
+  const revisedText = parsed.stage1Revision || parsed.revision || "";
+  const decision = {
+    needsEdit: parsed.modify === "是" || Boolean(revisedText),
+    semanticSame: parsed.semantic !== "不同",
+    better: bilingual ? (parsed.modify === "是" ? "neither" : "keep") : "target",
+    summary: parsed.analysis || parsed.stage1 || (parsed.modify === "是" ? "初审建议修改" : "无需修改"),
+    revisedText,
+    score: parsed.score || 80,
+    stage1RevisedText: revisedText,
+  };
+
+  return {
+    row,
+    decision,
+    targetKey,
+    counterpartKey,
+    targetLabel,
+    counterpartLabel,
+    targetText,
+    counterpartText,
+    lowScore: null,
+  };
+}
+
+function reconstructStage2Result(row, noteText, config, labels) {
+  const s1 = reconstructStage1Result(row, noteText, config, labels);
+  const parsed = parseStoredNote(noteText);
+  const s2Revised = parsed.stage2Revision || parsed.revision || s1.decision.revisedText || "";
+  const attitude = parsed.stage2?.attitude || "modify";
+
+  s1.decision.stylistReview = {
+    critique: {
+      attitude,
+      rationale: parsed.stage2?.text || parsed.analysis || "文学复审意见",
+      acceptedChanges: [],
+      rejectedChanges: [],
+    },
+    revisedText: s2Revised,
+    summary: parsed.stage2?.text || "",
+  };
+  s1.decision.stage2RevisedText = s2Revised;
+  s1.arbCheck = {
+    triggered: true,
+    reason: parsed.stage2?.text || "分歧仲裁",
+  };
+  return s1;
 }
 
 async function runStage2Stylist(stage1Result, config, labels) {
@@ -3287,7 +3501,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
       status: decision.semanticSame ? "same" : (bilingual ? "target-ok" : "target-better"),
       done: true,
       fastPass: isFastPassDecision(decision),
-      critique: decision.stylistReview?.critique || normalizeCritiqueResult({ attitude: "reject", rationale: decision.summary }),
+      critique: decision.stylistReview?.critique || null,
       arbitration: decision.arbitration || null,
       stageResult: normalizeReviewStageResult({
         stage: effectiveStage,

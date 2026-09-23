@@ -6,7 +6,7 @@
  * and Stylist (Stage 2), or upon unresolved risk flags.
  *
  * Output adheres to ArbitrationResult:
- * - winner: "gatekeeper" | "stylist" | "original" | "neither"
+ * - winner: "gatekeeper" | "stylist" | "synthesis" | "original" | "neither"
  * - reason: string
  * - riskFlags: string[]
  * - finalDecision: "replace" | "keep" | "unclear"
@@ -136,7 +136,9 @@ function applyArbitrationDecision({
 }) {
   const normArb = normalizeArbitrationResult(arbitration);
   const winner = normArb.winner;
-  const finalDecision = normArb.finalDecision || (winner === "original" ? "keep" : "replace");
+  const isOriginal = winner === "original" || winner === "target";
+  const isSynthesis = winner === "synthesis" || winner === "combined" || winner === "compromise" || winner === "结合方案" || winner === "综合方案";
+  const finalDecision = normArb.finalDecision || (isOriginal ? "keep" : "replace");
 
   let finalRevisedText = adjudicatedRevisedText;
   if (!finalRevisedText) {
@@ -144,8 +146,11 @@ function applyArbitrationDecision({
       finalRevisedText = stylistReview.revisedText || gatekeeperDecision.revisedText || "";
     } else if (winner === "gatekeeper") {
       finalRevisedText = gatekeeperDecision.revisedText || "";
-    } else if (winner === "original") {
+    } else if (isOriginal) {
       finalRevisedText = "";
+    } else if (isSynthesis) {
+      // 结合方案在未提供独立定案文本时的安全回退
+      finalRevisedText = stylistReview.revisedText || gatekeeperDecision.revisedText || "";
     } else {
       finalRevisedText = stylistReview.revisedText || gatekeeperDecision.revisedText || "";
     }
@@ -201,11 +206,30 @@ function formatArbitrationNoteLines({
   }
 
   if (arbitration.reason) {
-    const winnerMap = { gatekeeper: "Gatekeeper方案", stylist: "Stylist方案", original: "维持原译", neither: "折中方案" };
+    const winnerMap = {
+      gatekeeper: "初审方案",
+      stylist: "复审方案",
+      synthesis: "结合方案",
+      combined: "结合方案",
+      combination: "结合方案",
+      hybrid: "结合方案",
+      both: "结合方案",
+      "结合方案": "结合方案",
+      "综合方案": "结合方案",
+      original: "维持原译",
+      target: "维持原译",
+      neither: "折中方案",
+      compromise: "结合方案",
+      "折中方案": "结合方案",
+    };
     const winLabel = winnerMap[arbitration.winner] || arbitration.winner || "裁决";
     lines.push(`Arbiter仲裁[${winLabel}]：${arbitration.reason}`);
     const s3Text = String(arbitration.revisedText || gatekeeperDecision.stage3RevisedText || "").trim();
-    if (s3Text && s3Text !== s2Text && s3Text !== gkText) {
+    const isSynthesis = arbitration.winner === "synthesis" ||
+      arbitration.winner === "combined" ||
+      arbitration.winner === "compromise" ||
+      winLabel === "结合方案";
+    if (s3Text && (isSynthesis || (s3Text !== s2Text && s3Text !== gkText))) {
       lines.push(`仲裁改案：${s3Text}`);
     }
   }

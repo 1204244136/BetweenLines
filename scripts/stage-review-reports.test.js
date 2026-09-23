@@ -241,9 +241,10 @@ test("改动演进可视化：renderNoteSummary 与 renderDiffBlock 渲染分步
   assert.match(diffHtml, /步骤 1：事实初审/);
   assert.match(diffHtml, /步骤 2：文学复审/);
 
-  // 2. 检查审核轨迹卡片与版本切换器（renderNoteSummary）：精简轻量，消除重复分析栏
+  // 2. 检查审核轨迹卡片与版本切换器（renderNoteSummary）：精简轻量，消除重复分析栏与冗余改案重复
   const summaryHtml = ui.run(`renderNoteSummary(notes["2"], "2")`);
-  assert.match(summaryHtml, /初审改案:/);
+  assert.match(summaryHtml, /指出语病重复与增补/);
+  assert.doesNotMatch(summaryHtml, /初审改案:/, "右侧审核卡片不再机械重复打印初审改案全文");
   assert.match(summaryHtml, /revision-stage-pills/);
   assert.match(summaryHtml, /data-apply-stage="1"/);
   assert.match(summaryHtml, /data-apply-stage="2"/);
@@ -420,4 +421,98 @@ test("修改结果区结构精炼：长列名提取为轻量徽标，版本工�
   const pillsPos = summaryHtml.indexOf('class="revision-stage-pills"');
   const editorPos = summaryHtml.indexOf('class="revision-editor"');
   assert.ok(headPos > 0 && pillsPos > headPos && editorPos > pillsPos, "排版层次为：顶栏 -> 版本工具栏 -> 编辑框");
+});
+
+test("阶段三仲裁显示：胜出方案标签强制纯中文化，杜绝 Stylist/Gatekeeper 等英文词汇溢出", () => {
+  const ui = createWorkbench();
+
+  const noteWithEnglishWinner = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：事实硬伤",
+    "Stylist复审[调整]：文学润色",
+    "Arbiter仲裁[Stylist方案]：采纳文学复审方案",
+    "修改结果：最终润色文本",
+  ].join("\n");
+
+  const summaryHtml = ui.run(`renderNoteSummary({ note: ${JSON.stringify(noteWithEnglishWinner)} }, "1")`);
+  // 胶囊条中显示纯中文「仲裁·复审方案」
+  assert.match(summaryHtml, /<span class="pipeline-step is-arbiter">仲裁·复审方案<\/span>/);
+  // 卡片标签中显示纯中文「复审方案」
+  assert.match(summaryHtml, /<span class="stage-report-tag is-arbiter">复审方案<\/span>/);
+  // 绝不出现未经翻译的英文单词 Stylist
+  assert.equal(summaryHtml.includes("Stylist方案"), false, "胶囊和卡片标签中不得包含英文单词 Stylist");
+
+  // 测试打破二选一的结合修改方案（synthesis / 结合方案）渲染
+  const noteWithSynthesis = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：事实硬伤",
+    "初审改案：初审纠错",
+    "Stylist复审[调整]：文学润色",
+    "复审改案：复审润色",
+    "Arbiter仲裁[结合方案]：融合初审纠错与复审润色长处",
+    "仲裁改案：最终结合定案文本",
+    "修改结果：最终结合定案文本",
+  ].join("\n");
+  const synthesisSummaryHtml = ui.run(`renderNoteSummary({ note: ${JSON.stringify(noteWithSynthesis)} }, "1")`);
+  assert.match(synthesisSummaryHtml, /<span class="pipeline-step is-arbiter">仲裁·结合方案<\/span>/);
+  assert.match(synthesisSummaryHtml, /<span class="stage-report-tag is-arbiter">结合方案<\/span>/);
+  assert.match(synthesisSummaryHtml, /class="stage-pill-btn is-arbiter is-active"/);
+});
+
+test("修改结果默认版本显示逻辑：无关筛选，默认显示最后的版本（仲裁 ＞ 复审 ＞ 初审）", () => {
+  const ui = createWorkbench(undefined, {
+    rows: [
+      { index: 1, relation: "1:1", jp: "A1", cn: "B1", signature: "sig1" },
+      { index: 2, relation: "1:1", jp: "A2", cn: "B2", signature: "sig2" },
+      { index: 3, relation: "1:1", jp: "A3", cn: "B3", signature: "sig3" },
+    ],
+  });
+
+  ui.run(`
+    // 行 1：只有初审改案
+    notes["1"] = {
+      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：初审意见\\n初审改案：初审案1\\n修改结果：初审案1",
+      manualDone: false,
+    };
+    // 行 2：初审 + 复审改案
+    notes["2"] = {
+      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：初审意见\\n初审改案：初审案2\\nStylist复审[调整]：复审意见\\n复审改案：复审案2\\n修改结果：复审案2",
+      manualDone: false,
+    };
+    // 行 3：初审 + 复审 + 仲裁改案
+    notes["3"] = {
+      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：初审意见\\n初审改案：初审案3\\nStylist复审[提交仲裁]：分歧\\n复审改案：复审案3\\nArbiter仲裁[复审方案]：仲裁意见\\n仲裁改案：仲裁案3\\n修改结果：仲裁案3",
+      manualDone: false,
+    };
+  `);
+
+  // 1. 行 1 默认取初审版本
+  assert.equal(ui.run('revisionTextFor(notes["1"])'), "初审案1");
+  const s1Html = ui.run('renderNoteSummary(notes["1"], "1")');
+  assert.match(s1Html, /class="stage-pill-btn is-gk is-active"/);
+
+  // 2. 行 2 默认取复审版本（复审 ＞ 初审）
+  assert.equal(ui.run('revisionTextFor(notes["2"])'), "复审案2");
+  const s2Html = ui.run('renderNoteSummary(notes["2"], "2")');
+  assert.match(s2Html, /class="stage-pill-btn is-stylist is-active"/);
+
+  // 3. 行 3 默认取仲裁版本（仲裁 ＞ 复审 ＞ 初审）
+  assert.equal(ui.run('revisionTextFor(notes["3"])'), "仲裁案3");
+  const s3Html = ui.run('renderNoteSummary(notes["3"], "3")');
+  assert.match(s3Html, /class="stage-pill-btn is-arbiter is-active"/);
+
+  // 4. 无论处于何种阶段筛选状态（比如筛选了阶段一），默认版本保持不变（仍是最后的版本）
+  ui.run('activeStageFilter = "1"');
+  assert.equal(ui.run('revisionTextFor(notes["3"])'), "仲裁案3");
+  ui.run('activeStageFilter = null');
+
+  // 5. 若用户手动点击了「初审」版本按钮，遵循显式选择
+  ui.run('applyStageRevision("3", "1")');
+  assert.equal(ui.run('revisionTextFor(notes["3"])'), "初审案3");
+  const s3SwitchedHtml = ui.run('renderNoteSummary(notes["3"], "3")');
+  assert.match(s3SwitchedHtml, /class="stage-pill-btn is-gk is-active"/);
 });
