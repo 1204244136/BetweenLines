@@ -243,11 +243,13 @@ node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js
 - **标点被改坏 / 日文泄露**：检查标点规范化（`ai/punctuation.js`）语境判据与 `restoreTerminalPunctuation`；日文泄露检查注音 HTML 覆盖与输出语言护栏（`guardTargetScript`）。
 - **特化规范未生效 / 提示词突然变短**：检查条目是否误加 `features` 或 `characters`，角色名是否与文本匹配，页面点「恢复默认」前需先重新 `npm run build`。
 - **双击 bat 提示拒绝连接**：控制台页面需在 `server.listen` 回调中动态获取端口并打开，不要用固定 timeout。
+- **开关审核轨迹 / 抽屉 / 拖窗口后鼠标变慢、输入延迟**：这是主线程被强制布局占满，不是渲染卡顿。检查是否有事件处理器对整表逐行调用了 `syncRevisionEditorHeight`（读 `scrollHeight` 一次就是一次整表重排），或 `resize` 每次事件都做全量同步。正确做法见「当前限制」里的行内输入框高度缓存契约，回归测试 `scripts/workbench-layout-sync.test.js` 会锁住这条边界。
 - **详细排查指引**：完整的常见故障定位手册、历史回归原因与处置方案详见 **[docs/contracts/troubleshooting.md](docs/contracts/troubleshooting.md)**。
 
 ## 当前限制
 
 - UI 是静态 HTML table，使用客户端分页切片（翻译比较默认 100 行/页，说话人默认 50 行/页），行数据仍随页面整体内嵌；未实现虚拟滚动，超大文本下页面体积增长仍受行数据量限制。
+- **行内输入框高度必须按缓存同步**：`workbench-client.js` 的 `syncVisibleRowLayout` 读 `scrollHeight` 就是一次整表强制布局，逐行读一遍即 O(行数) 次重排（实测 500 行页面单次全量同步 = 533 次布局、311ms 主线程）。因此它只在四种情况下重量：新节点（整页重渲染）、该行内容被改写（`invalidateRevisionEditorHeight`）、视口高度变化、列宽变化（`remeasureEditors`）。面板/抽屉开合只走 `ifFrameMoved` 的可用高度重算，**开关审核轨迹不做任何布局同步**。新增事件处理器时不要直接写 `for (const editor of ...) syncRevisionEditorHeight(editor)`，也不要让 `resize` 每次事件都做全量同步（会合并到一帧并在尺寸稳定后重量一次）。回归测试见 `scripts/workbench-layout-sync.test.js`。
 - 备注按 row index 存储，已核验记录同时带 `rowSig`；新空间只在同一输入项目的历史空间内自动找回有内容证据的记录，其他项目只允许手动预览找回；本页空间挨过旧版损伤时载入自愈一次。只剩行序推断的锚点配对、以及按行号找回，必须逐行核验，不能当作可靠内容匹配。
 - 跨语言 embeddings 只是校对辅助，不是最终权威 alignment。
 - OpenCC 有助于比较中文变体，但无法归一化翻译风格差异。

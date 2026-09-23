@@ -1126,7 +1126,8 @@
           const details = summary.closest("details");
           if (details) {
             details.open = !details.open;
-            window.requestAnimationFrame(syncVisibleRowLayout);
+            // 抽屉开合会把下方表格推上推下：位置真的变了才重算可用高度。
+            scheduleVisibleRowLayoutSync({ ifFrameMoved: true });
           }
         });
         summary.addEventListener("keydown", (event) => {
@@ -1233,9 +1234,8 @@
             });
           }
           updateTabsActiveState();
-          if (typeof syncVisibleRowLayout === "function") {
-            window.requestAnimationFrame(syncVisibleRowLayout);
-          }
+          // 标签页互斥展开会把表格推上推下：位置真的变了才重算可用高度。
+          scheduleVisibleRowLayoutSync({ ifFrameMoved: true });
         });
 
         appendChildSafe(tabsList, tabBtn);
@@ -2347,35 +2347,122 @@
       ].join("");
     }
 
+    // 行内输入框高度缓存。量高必须走"读 scrollHeight"，而读它会先把待处理的样式与布局
+    // 全部算完——逐行读一次就是一次整表强制重排。实测 500 行页面单次全量同步 =
+    // 533 次强制布局、245ms 布局、311ms 主线程占用；抽屉开合、窗口 resize、显示开关
+    // 都会触发同步，于是开关几下就把主线程占满，表现就是鼠标移动变慢、输入出现延迟。
+    // 因此缓存"上一次量出的像素高度"，只有下面四种情况才重新量：
+    //   ① 节点是新的（整页重渲染后是全新节点，缓存自然未命中）
+    //   ② 该行内容被改写（切版本、手动输入 → invalidateRevisionEditorHeight）
+    //   ③ 视口高度变化（40vh 上限随之变化 → 整批失效）
+    //   ④ 列宽变化（显示开关隐藏/恢复整列 → remeasureEditors 整批失效）
+    let editorHeightsViewport = 0;
+    const revisionEditorHeights = new WeakMap();
+    // 表格容器位置缓存：getBoundingClientRect 同样会强制布局，位置没变就不重做整表同步。
+    let frameTopCache = null;
+    // 上次写入的可用高度：值没变就不写。往 .wrap 上写 CSS 变量会让整棵表格子树重算样式
+    // （实测 500 行页面写 20 次不同值 = 40.8ms 样式重算），写同一个值是免费的。
+    let lastMaxHeight = "";
+
+    function invalidateRevisionEditorHeight(editor) {
+      if (editor) revisionEditorHeights.delete(editor);
+    }
+
+    // 整批失效：视口高度或列宽变化时，所有缓存的高度都作废（按节点删，不触发任何布局）。
+    function invalidateRevisionEditorHeights() {
+      for (const editor of tbody.querySelectorAll(".revision-editor")) revisionEditorHeights.delete(editor);
+    }
+
     function syncRevisionEditorHeight(editor) {
       if (!editor) return;
       editor.classList.remove("is-overflowing");
       editor.style.height = "auto";
       const maxHeight = Math.max(120, Math.round(window.innerHeight * 0.4));
-      const nextHeight = Math.min(editor.scrollHeight + 2, maxHeight);
+      // scrollHeight 只读一次：读它是"先把待处理的样式与布局算完"的强制布局，
+      // 读两次就是同一行白付一次整表重排。先写 auto 再读，拿到的是内容自然高度，
+      // 溢出判定用同一个值即可（写回高度不会让内容变高）。
+      const contentHeight = editor.scrollHeight;
+      const nextHeight = Math.min(contentHeight + 2, maxHeight);
       editor.style.height = nextHeight + "px";
-      editor.classList.toggle("is-overflowing", editor.scrollHeight > maxHeight);
+      editor.classList.toggle("is-overflowing", contentHeight > maxHeight);
+      revisionEditorHeights.set(editor, nextHeight);
     }
 
-    function syncVisibleRowLayout() {
-      for (const editor of tbody.querySelectorAll(".revision-editor")) syncRevisionEditorHeight(editor);
+    /**
+     * 重算表格可用高度（写 --results-max-height）。只读一次容器位置；容器没位移且
+     * ifFrameMoved 为真时直接收工。写值前先比对：值没变就不写——往 .wrap 上写 CSS 变量
+     * 会让整棵表格子树重算样式（实测 500 行页面写 20 次不同值 = 40.8ms 样式重算）。
+     */
+    function updateResultsMaxHeight({ ifFrameMoved = false } = {}) {
+      const tableTop = tableFrame.getBoundingClientRect().top;
+      if (ifFrameMoved && tableTop === frameTopCache) return;
+      frameTopCache = tableTop;
 
       const visibleRows = tbody.querySelectorAll("tr[data-index]").length;
       const fitContent = visibleRows <= 3;
       tableFrame.classList.toggle("is-fit-content", fitContent);
-      if (fitContent) {
-        wrap.style.setProperty("--results-max-height", "none");
+      const nextMaxHeight = fitContent
+        ? "none"
+        : Math.max(320, window.innerHeight - tableTop - 88) + "px";
+      if (nextMaxHeight !== lastMaxHeight) {
+        lastMaxHeight = nextMaxHeight;
+        wrap.style.setProperty("--results-max-height", nextMaxHeight);
+      }
+    }
+
+    /**
+     * 整表布局同步：可用高度 + 逐行输入框高度（高度缓存仍然成立的直接跳过）。
+     * @param {{ ifFrameMoved?: boolean, remeasureEditors?: boolean }} [options]
+     *   ifFrameMoved：只更新可用高度，且容器没位移就整段收工。面板/抽屉开合用——它们会把
+     *                 表格往下推，推了才需要重算；行宽没变，逐行高度一律不必重量。
+     *   remeasureEditors：列宽变了（显示开关隐藏/恢复整列、窗口尺寸稳定后），整批高度作废。
+     */
+    function syncVisibleRowLayout({ ifFrameMoved = false, remeasureEditors = false } = {}) {
+      if (ifFrameMoved && !remeasureEditors) {
+        updateResultsMaxHeight({ ifFrameMoved: true });
         return;
       }
 
-      const tableTop = tableFrame.getBoundingClientRect().top;
-      const viewportGap = 88;
-      const available = Math.max(320, window.innerHeight - tableTop - viewportGap);
-      wrap.style.setProperty("--results-max-height", available + "px");
+      // 视口高度决定 40vh 上限：变了就整批失效（缓存的是像素高度，上限一变全部作废）。
+      const viewportHeight = window.innerHeight;
+      if (viewportHeight !== editorHeightsViewport || remeasureEditors) {
+        editorHeightsViewport = viewportHeight;
+        invalidateRevisionEditorHeights();
+      }
+
+      updateResultsMaxHeight();
+
+      for (const editor of tbody.querySelectorAll(".revision-editor")) {
+        // 缓存仍然成立时跳过：跳过的是强制布局，不是正确性。
+        // 新渲染的行是缓存未命中的新节点，切版本/输入走 invalidateRevisionEditorHeight。
+        if (revisionEditorHeights.has(editor)) continue;
+        syncRevisionEditorHeight(editor);
+      }
     }
 
     function renderedRow(id) {
       return renderedRowsById.get(String(id)) || null;
+    }
+
+    // 同一帧内的多次请求合并成一次，取"要求更高"的那个（remeasureEditors 蕴含整段同步）。
+    let layoutSyncFrame = 0;
+    let pendingLayoutSync = null;
+    function scheduleVisibleRowLayoutSync(options = {}) {
+      const pending = pendingLayoutSync || { ifFrameMoved: false, remeasureEditors: false };
+      pendingLayoutSync = {
+        ifFrameMoved: pending.ifFrameMoved || Boolean(options.ifFrameMoved),
+        remeasureEditors: pending.remeasureEditors || Boolean(options.remeasureEditors),
+      };
+      if (layoutSyncFrame) return;
+      const requestFrame = typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (callback) => window.setTimeout(callback, 16);
+      layoutSyncFrame = requestFrame(() => {
+        layoutSyncFrame = 0;
+        const task = pendingLayoutSync || {};
+        pendingLayoutSync = null;
+        syncVisibleRowLayout(task);
+      });
     }
 
     function updateDoneCount() {
@@ -2428,6 +2515,7 @@
       tbody.innerHTML = slice.map(renderRow).join("");
       renderedRowsById.clear();
       for (const row of tbody.querySelectorAll("tr[data-index]")) renderedRowsById.set(row.dataset.index, row);
+      // 整页行都是新节点：高度缓存按节点存，新节点缓存未命中，会按内容量一次高。
       syncVisibleRowLayout();
       updateDoneCount();
       updatePaginationStatus();
@@ -2617,6 +2705,8 @@
     tbody.addEventListener("input", (event) => {
       const revisionEditor = event.target.closest("[data-revision]");
       if (revisionEditor) {
+        // 内容变了：先失效该编辑器的旧高度缓存，再按新内容量一次。
+        invalidateRevisionEditorHeight(revisionEditor);
         syncRevisionEditorHeight(revisionEditor);
         const id = revisionEditor.dataset.revision;
         const current = notes[id] || { note: "", done: false, manualDone: false, aiDone: false };
@@ -2706,6 +2796,9 @@
           details.hidden = !details.hidden;
           const hint = pipelineBtn.querySelector(".pipeline-expand-hint");
           if (hint) hint.textContent = details.hidden ? "审核轨迹 ▾" : "收起 ▴";
+          // 这里刻意不做任何布局同步：展开/收起只改本行行高，既不移动表格容器
+          // （可用高度不用重算），也不改输入框宽度（行高缓存仍然成立）。
+          // 整表同步很贵（500 行页面一次 311ms），能不做就不做。
         }
         return;
       }
@@ -2850,24 +2943,26 @@
     bindStageCardFilters();
     showSource.addEventListener("change", () => {
       document.documentElement.classList.toggle("hide-source", !showSource.checked);
-      syncVisibleRowLayout();
+      // 隐藏/恢复整列会改变输入框宽度（实测 412px → 579px），行高缓存必须整批作废。
+      scheduleVisibleRowLayoutSync({ remeasureEditors: true });
     });
     if (showTranslationDiff) {
       showTranslationDiff.addEventListener("change", () => {
         document.documentElement.classList.toggle("hide-translation-diff", !showTranslationDiff.checked);
-        syncVisibleRowLayout();
+        scheduleVisibleRowLayoutSync({ remeasureEditors: true });
       });
     }
     showRevisionDiff.addEventListener("change", () => {
       document.documentElement.classList.toggle("hide-revision-diff", !showRevisionDiff.checked);
-      syncVisibleRowLayout();
+      scheduleVisibleRowLayoutSync({ remeasureEditors: true });
     });
     if (aiIds.promptVisible) {
       aiIds.promptVisible.addEventListener("change", () => {
         aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
         if (aiIds.promptVisible.checked) aiIds.promptSection.open = true;
         saveAiConfig();
-        syncVisibleRowLayout();
+        // 提示词区在表格上方，开合会把表格推上推下：位置变了才重算可用高度。
+        scheduleVisibleRowLayoutSync({ ifFrameMoved: true });
       });
     }
 
@@ -3133,6 +3228,7 @@
         const editor = rowElem.querySelector('.revision-editor[data-revision="' + CSS.escape(rowId) + '"]');
         if (editor) {
           editor.value = targetText;
+          invalidateRevisionEditorHeight(editor);
           syncRevisionEditorHeight(editor);
         }
         const copyButton = rowElem.querySelector(".copy-revision");
@@ -4626,7 +4722,18 @@
         showToast(error.message, { tone: "error", durationMs: 12000 });
       }
     });
-    window.addEventListener("resize", syncVisibleRowLayout);
+    // resize 会成串触发。原来每个 resize 事件都做一次全量同步，等于每帧一次 O(行数)
+    // 强制重排（500 行页面 311ms/次），拖窗口边缘时主线程被占满、鼠标跟着变慢。
+    // 现在：立刻只更新可用高度（便宜，视觉不跳），逐行高度等尺寸稳定后再整批重量一次。
+    let resizeRemeasureTimer = 0;
+    window.addEventListener("resize", () => {
+      scheduleVisibleRowLayoutSync({ ifFrameMoved: true });
+      window.clearTimeout(resizeRemeasureTimer);
+      resizeRemeasureTimer = window.setTimeout(() => {
+        resizeRemeasureTimer = 0;
+        scheduleVisibleRowLayoutSync({ remeasureEditors: true });
+      }, 200);
+    });
     window.addEventListener("pagehide", flushNotes);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) flushNotes();
