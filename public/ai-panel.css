@@ -184,71 +184,27 @@ details[open] > summary .details-toggle::before {
 
 .ai-service-content {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
-.ai-preset-bar {
-  display: flex;
+.ai-preset-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  gap: 6px;
   align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 4px 10px;
-  border-radius: var(--ai-radius-control, 6px);
-  background: var(--ai-surface-subtle);
-  border: 1px dashed var(--ai-line-strong);
-  width: fit-content;
-  max-width: 100%;
-}
-
-.ai-preset-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 0 0 auto;
-}
-
-.ai-preset-control label {
-  color: var(--ai-muted);
-  font-size: 11px;
-  line-height: 1.25;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.ai-preset-control select,
-.ai-preset-control .select-combobox {
-  width: 220px;
-  flex: 0 0 auto;
-}
-
-.ai-preset-control select {
-  height: var(--ai-control-height-sm, 26px);
-  border-radius: var(--ai-radius-btn, 6px);
-  font-size: 12px;
-}
-
-.ai-preset-control .select-trigger {
-  height: var(--ai-control-height-sm, 26px);
-  border-radius: var(--ai-radius-btn, 6px);
-  font-size: 12px;
 }
 
 .ai-preset-actions {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .ai-preset-actions button {
-  height: var(--ai-control-height-sm, 26px);
-  padding: 0 10px;
+  height: var(--ai-control-height, 30px);
+  padding: 0 9px;
   font-size: 12px;
-  line-height: 24px;
+  line-height: 28px;
   border-radius: var(--ai-radius-btn, 6px);
   white-space: nowrap;
 }
@@ -265,18 +221,40 @@ details[open] > summary .details-toggle::before {
   color: #912018;
 }
 
-.ai-service-fields,
+.ai-service-fields {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-service-row {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  align-items: start;
+}
+
+/* 第一行：模型预设(宽) 接口(窄) 地址(宽) */
+.ai-service-row:first-child {
+  grid-template-columns: minmax(360px, 1.45fr) minmax(130px, 0.65fr) minmax(240px, 1.35fr);
+}
+
+/* 第二行（有推理强度）：API Key(宽) 模型(宽) 推理强度(窄) */
+.ai-service-fields.has-reasoning .ai-service-row:last-child {
+  grid-template-columns: minmax(240px, 1.15fr) minmax(280px, 1.45fr) minmax(130px, 0.65fr);
+}
+
+/* 第二行（无推理强度）：API Key(宽) 模型(宽) */
+.ai-service-fields:not(.has-reasoning) .ai-service-row:last-child {
+  grid-template-columns: minmax(240px, 1fr) minmax(280px, 1.4fr);
+}
+
 .ai-proofread-fields {
   min-width: 0;
   display: grid;
   gap: 6px 10px;
   align-items: start;
-}
-.ai-service-fields {
-  grid-template-columns: minmax(130px, 0.68fr) minmax(220px, 1.5fr) minmax(220px, 1.15fr) minmax(180px, 1fr);
-}
-.ai-service-fields.has-reasoning {
-  grid-template-columns: minmax(120px, 0.6fr) minmax(220px, 1.4fr) minmax(210px, 1.1fr) minmax(110px, 0.55fr) minmax(180px, 1fr);
 }
 .ai-proofread-fields {
   grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(190px, 1.25fr) minmax(210px, 1.15fr) minmax(140px, 0.8fr);
@@ -1226,13 +1204,16 @@ details[open] > summary .details-toggle::before {
 
 @media (max-width: 1100px) {
   .ai-config-band { grid-template-columns: 76px minmax(0, 1fr); }
-  .ai-service-fields,
-  .ai-service-fields.has-reasoning,
+  .ai-service-row:first-child,
+  .ai-service-row:last-child,
+  .ai-service-fields.has-reasoning .ai-service-row:last-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ai-preset-field,
+  .ai-model-field {
+    grid-column: 1 / -1;
+  }
   .ai-proofread-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ai-preset-bar { flex-direction: column; align-items: stretch; gap: 8px; }
-  .ai-preset-control { flex: 1 1 auto; width: 100%; }
-  .ai-preset-control select { max-width: none; }
-  .ai-preset-actions { justify-content: flex-end; }
   .ai-runbar { grid-template-columns: 1fr auto; }
   .ai-runbar--two { grid-template-columns: 1fr; }
   .ai-status { grid-column: 1 / -1; grid-row: 2; }

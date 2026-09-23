@@ -852,55 +852,61 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <section class="ai-config-band ai-service-band" aria-labelledby="aiServiceLabel">
               <div id="aiServiceLabel" class="ai-config-label">AI 服务</div>
               <div class="ai-service-content">
-                <div class="ai-preset-bar">
-                  <div class="ai-preset-control">
-                    <label for="aiPresetSelect">模型预设</label>
-                    <select id="aiPresetSelect">
-                      <option value="">-- 自定义 / 未选择预设 --</option>
-                    </select>
-                  </div>
-                  <div class="ai-preset-actions">
-                    <button id="aiPresetSave" class="btn btn--subtle" type="button" title="将当前填写的配置覆盖保存到选中的预设" disabled>保存修改</button>
-                    <button id="aiPresetSaveAs" class="btn btn--subtle" type="button" title="将当前填写的配置另存为新的模型预设">另存为预设</button>
-                    <button id="aiPresetDelete" class="btn btn--subtle btn--danger-subtle" type="button" title="删除选中的模型预设" disabled>删除预设</button>
-                  </div>
-                </div>
                 <div id="aiServiceFields" class="ai-service-fields has-reasoning">
-                  <div class="ai-field">
-                    <label for="aiProvider">接口</label>
-                    <select id="aiProvider">
-                      <option value="local">本地默认</option>
-                      <option value="claude">Claude</option>
-                      <option value="compatible">第三方兼容服务</option>
-                    </select>
-                  </div>
-                  <div class="ai-field">
-                    <label for="aiBaseUrl">地址</label>
-                    <input id="aiBaseUrl" type="url" value="${escapeHtml(providerDefaults.local.baseUrl)}">
-                  </div>
-                  <div class="ai-field">
-                    <div class="ai-field-head">
-                      <label for="aiModel">模型</label>
-                    </div>
-                    <div class="ai-model-row">
-                      <select id="aiModel">
-                        <option value="${escapeHtml(providerDefaults.local.model)}">${escapeHtml(providerDefaults.local.model)}</option>
-                      </select>
-                      <div class="ai-model-actions">
-                        <button id="aiTestModel" type="button" title="测试当前模型的网络连通性与响应">测试</button>
-                        <button id="aiRefreshModels" type="button" title="从接口获取可用模型列表">刷新</button>
+                  <div class="ai-service-row">
+                    <div class="ai-field ai-preset-field">
+                      <div class="ai-field-head">
+                        <label for="aiPresetSelect">模型预设</label>
+                      </div>
+                      <div class="ai-preset-row">
+                        <select id="aiPresetSelect">
+                          <option value="">-- 自定义 / 未选择预设 --</option>
+                        </select>
+                        <div class="ai-preset-actions">
+                          <button id="aiPresetSave" class="btn btn--subtle" type="button" title="将当前填写的配置覆盖保存到选中的预设" disabled>保存修改</button>
+                          <button id="aiPresetSaveAs" class="btn btn--subtle" type="button" title="将当前填写的配置另存为新的模型预设">另存为预设</button>
+                          <button id="aiPresetDelete" class="btn btn--subtle btn--danger-subtle" type="button" title="删除选中的模型预设" disabled>删除预设</button>
+                        </div>
                       </div>
                     </div>
+                    <div class="ai-field ai-provider-field">
+                      <label for="aiProvider">接口</label>
+                      <select id="aiProvider">
+                        <option value="local">本地默认</option>
+                        <option value="claude">Claude</option>
+                        <option value="compatible">第三方兼容服务</option>
+                      </select>
+                    </div>
+                    <div class="ai-field ai-url-field">
+                      <label for="aiBaseUrl">地址</label>
+                      <input id="aiBaseUrl" type="url" value="${escapeHtml(providerDefaults.local.baseUrl)}">
+                    </div>
                   </div>
-                  <div id="aiReasoningField" class="ai-field">
-                    <label for="aiReasoningEffort">推理强度</label>
-                    <select id="aiReasoningEffort" title="模型默认时不发送推理或采样参数">
-                      <option value="" selected>模型默认</option>
-                    </select>
-                  </div>
-                  <div class="ai-field">
-                    <label for="aiApiKey">API Key</label>
-                    <input id="aiApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(providerDefaults.local.apiKeyPlaceholder || "")}">
+                  <div class="ai-service-row">
+                    <div class="ai-field ai-apikey-field">
+                      <label for="aiApiKey">API Key</label>
+                      <input id="aiApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(providerDefaults.local.apiKeyPlaceholder || "")}">
+                    </div>
+                    <div class="ai-field ai-model-field">
+                      <div class="ai-field-head">
+                        <label for="aiModel">模型</label>
+                      </div>
+                      <div class="ai-model-row">
+                        <select id="aiModel">
+                          <option value="${escapeHtml(providerDefaults.local.model)}">${escapeHtml(providerDefaults.local.model)}</option>
+                        </select>
+                        <div class="ai-model-actions">
+                          <button id="aiTestModel" type="button" title="测试当前模型的网络连通性与响应">测试</button>
+                          <button id="aiRefreshModels" type="button" title="从接口获取可用模型列表">刷新</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="aiReasoningField" class="ai-field">
+                      <label for="aiReasoningEffort">推理强度</label>
+                      <select id="aiReasoningEffort" title="模型默认时不发送推理或采样参数">
+                        <option value="" selected>模型默认</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
               </div>
