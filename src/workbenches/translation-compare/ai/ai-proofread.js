@@ -97,6 +97,9 @@ const {
 const {
   globalFeedbackCollector,
 } = require("./feedback-collector");
+const {
+  extractNeighborContext,
+} = require("./pipeline-butler");
 
 const providerDefaults = {
   claude: {
@@ -2024,43 +2027,6 @@ function reconstructStage2Result(row, noteText, config, labels) {
   return s1;
 }
 
-/**
- * 提取当前行的邻近上下文行（用于 Stylist 语流衔接与 Arbiter 事实因果裁决）。
- * 契约：上下文由短变长。
- * - Stylist: radius = 1（前后各 1 行，中等上下文，用于语流与口吻连贯）；
- * - Arbiter: radius = 2（前后各 2 行，长上下文，用于前因后果、指示代词与结合方案裁判）。
- */
-function extractNeighborContext(allRows, currentIndex, radius = 1, targetKey = "cn") {
-  if (!Array.isArray(allRows) || allRows.length === 0 || !radius || radius <= 0) return null;
-  const idx = Number(currentIndex);
-  const pos = allRows.findIndex((r) => Number(r.index) === idx);
-  if (pos === -1) return null;
-
-  const before = [];
-  const after = [];
-
-  for (let i = Math.max(0, pos - radius); i < pos; i += 1) {
-    const r = allRows[i];
-    before.push({
-      index: r.index,
-      sourceText: r.source || r.jp || "",
-      targetText: r.target || r[targetKey] || r.cn || "",
-    });
-  }
-
-  for (let i = pos + 1; i <= Math.min(allRows.length - 1, pos + radius); i += 1) {
-    const r = allRows[i];
-    after.push({
-      index: r.index,
-      sourceText: r.source || r.jp || "",
-      targetText: r.target || r[targetKey] || r.cn || "",
-    });
-  }
-
-  if (before.length === 0 && after.length === 0) return null;
-  return { before, after };
-}
-
 async function runStage2Stylist(stage1Result, config, labels, extraAllRows = null) {
   const { row, targetLabel, lowScore } = stage1Result;
   let decision = { ...stage1Result.decision };
@@ -2106,7 +2072,9 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
       stylistReview,
       signals: {
         termConflict: isTermConflictRow(config, row.index),
+        termGuidance,
         lowScoreUncertain: lowScore?.active,
+        targetText: stage1Result.targetText,
       },
     });
 
