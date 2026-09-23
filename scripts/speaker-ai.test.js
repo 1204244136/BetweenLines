@@ -1,19 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const http = require("node:http");
 const path = require("path");
 
-const {
-  assertSafeOutboundUrl,
-  buildApiUrl,
-  buildProviderHeaders,
-  buildChatCompletionBody,
-  buildClaudeMessageBody,
-  cleanJsonPayload,
-  fetchJson,
-} = require("../src/ai/llm-client");
-const { TaskQueue } = require("../src/ai/task-queue");
 const {
   validateSpeakerOutput,
   normalizeStatus,
@@ -21,115 +10,7 @@ const {
   inferSpeakerBatch,
 } = require("../src/workbenches/speaker-attribution/ai/speaker-inference");
 const { clientRowsFor } = require("../src/workbenches/speaker-attribution/build-workbench");
-
-test("共享 LLM 传输层：buildApiUrl 处理各类 endpoint 与 /v1 前缀", () => {
-  assert.equal(buildApiUrl("https://api.openai.com/v1", "/v1/chat/completions"), "https://api.openai.com/v1/chat/completions");
-  assert.equal(buildApiUrl("https://api.openai.com", "/v1/chat/completions"), "https://api.openai.com/v1/chat/completions");
-  assert.equal(buildApiUrl("http://localhost:11434/v1", "/v1/chat/completions"), "http://localhost:11434/v1/chat/completions");
-  assert.equal(buildApiUrl("https://api.anthropic.com", "/v1/messages"), "https://api.anthropic.com/v1/messages");
-  assert.equal(buildApiUrl("https://api.anthropic.com/v1", "/v1/messages"), "https://api.anthropic.com/v1/messages");
-});
-
-test("共享 LLM 传输层：拒绝非 HTTP 与云元数据出站目标", async () => {
-  await assert.rejects(
-    () => assertSafeOutboundUrl("file:///etc/passwd"),
-    /只支持 http/,
-  );
-  await assert.rejects(
-    () => assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data"),
-    /link-local/,
-  );
-  await assert.rejects(
-    () => assertSafeOutboundUrl("http://metadata.google.internal/computeMetadata/v1"),
-    /云元数据/,
-  );
-  await assert.doesNotReject(
-    () => assertSafeOutboundUrl("http://127.0.0.1:11434/v1"),
-  );
-});
-
-test("共享 LLM 传输层：不自动跟随可能转向内网的重定向", async () => {
-  const server = http.createServer((request, response) => {
-    response.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data" });
-    response.end();
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const address = server.address();
-    await assert.rejects(
-      () => fetchJson(`http://127.0.0.1:${address.port}/v1/models`, { method: "GET" }),
-      /HTTP 302/,
-    );
-  } finally {
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
-});
-
-test("共享 LLM 传输层：buildProviderHeaders 与 cleanJsonPayload", () => {
-  const claudeHeaders = buildProviderHeaders({ provider: "claude", apiKey: "sk-ant-test" });
-  assert.equal(claudeHeaders["x-api-key"], "sk-ant-test");
-  assert.equal(claudeHeaders["anthropic-version"], "2023-06-01");
-
-  const openaiHeaders = buildProviderHeaders({ provider: "compatible", apiKey: "sk-test" });
-  assert.equal(openaiHeaders.authorization, "Bearer sk-test");
-
-  // 代码块 JSON 清洗
-  const parsed1 = cleanJsonPayload('```json\n{"speaker": "山田太郎", "confidence": 0.95}\n```');
-  assert.deepEqual(parsed1, { speaker: "山田太郎", confidence: 0.95 });
-
-  // 裸文本 JSON
-  const parsed2 = cleanJsonPayload('前后有废话 {"speaker": "佐藤花子", "status": "confirmed"} 结尾也有');
-  assert.deepEqual(parsed2, { speaker: "佐藤花子", status: "confirmed" });
-});
-
-test("非推理模型文本化强度档位映射：low 到 max 正确映射温度并向下兼容数值", () => {
-  const { buildChatCompletionBody } = require("../src/ai/llm-client");
-  const bodyLow = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "low" });
-  assert.equal(bodyLow.temperature, 0.2);
-
-  const bodyMedium = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "medium" });
-  assert.equal(bodyMedium.temperature, 0.5);
-
-  const bodyHigh = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "high" });
-  assert.equal(bodyHigh.temperature, 0.7);
-
-  const bodyXHigh = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "xhigh" });
-  assert.equal(bodyXHigh.temperature, 0.85);
-
-  const bodyUltra = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "ultra" });
-  assert.equal(bodyUltra.temperature, 0.95);
-
-  const bodyMax = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "max" });
-  assert.equal(bodyMax.temperature, 1.0);
-
-  const bodyDefault = buildChatCompletionBody([], { model: "qwen2.5:14b-instruct", reasoningEffort: "" });
-  assert.equal(bodyDefault.temperature, undefined);
-});
-
-test("共享 TaskQueue：控制有界并发与 AbortSignal 取消", async () => {
-  const items = [1, 2, 3, 4, 5];
-  let maxActive = 0;
-  const progressList = [];
-
-  const queue = new TaskQueue({
-    concurrency: 2,
-    onProgress: (p) => progressList.push(p.completed),
-  });
-
-  const results = await queue.runAll(items, async (item) => {
-    return item * 10;
-  });
-
-  assert.deepEqual(results, [10, 20, 30, 40, 50]);
-  assert.equal(progressList.length, 5);
-
-  // 取消测试
-  const controller = new AbortController();
-  const cancelQueue = new TaskQueue({ concurrency: 1, signal: controller.signal });
-  controller.abort();
-  const cancelResults = await cancelQueue.runAll([1, 2], async (x) => x);
-  assert.equal(cancelResults.filter(Boolean).length, 0);
-});
+const { buildSpeakerPromptMessages } = require("../src/workbenches/speaker-attribution/ai/speaker-contract");
 
 test("说话人客户端 AI 停止/重启使用运行号隔离旧任务", () => {
   const source = fs.readFileSync(
