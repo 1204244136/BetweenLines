@@ -1793,15 +1793,6 @@
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
     }
 
-    function normalizeGrade(value) {
-      const text = String(value || "").trim().toLowerCase();
-      if (["excellent", "优等", "优秀", "优", "a"].includes(text)) return "excellent";
-      if (["good", "良好", "良", "b", "minor", "轻微"].includes(text)) return "good";
-      if (["fair", "一般", "待改", "中等", "及格", "c", "major", "严重"].includes(text)) return "fair";
-      if (["poor", "较差", "差", "不及格", "d", "critical", "致命"].includes(text)) return "poor";
-      return "";
-    }
-
     function gradeLabel(grade) {
       return { excellent: "优等", good: "良好", fair: "一般", poor: "较差" }[grade] || "";
     }

@@ -10,6 +10,7 @@ const { isEpubInput } = require("../../ingest/epub-container");
 const { deriveContextUnits, deriveLineUnits } = require("../../ingest/line-units");
 const { shortHash } = require("../../core/project-context");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
+const { writeFileAtomic, writeJsonAtomic } = require("../../core/atomic-fs");
 const { storageLayout } = require("../../core/storage-layout");
 const { detectLanguage, selectionFromArgs } = require("./speaker-selection");
 const { compareTexts, joinTextItems } = require("./text-comparison");
@@ -473,12 +474,13 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 function writeModel(model, targetDir = outputDir) {
-  fs.mkdirSync(targetDir, { recursive: true });
-  fs.writeFileSync(path.join(targetDir, "speaker-attribution.json"), JSON.stringify(model, null, 2), "utf8");
-  fs.writeFileSync(path.join(targetDir, "speaker-attribution.html"), renderHtml(model), "utf8");
+  const jsonFile = path.join(targetDir, "speaker-attribution.json");
+  const htmlFile = path.join(targetDir, "speaker-attribution.html");
+  writeJsonAtomic(jsonFile, model);
+  writeFileAtomic(htmlFile, renderHtml(model), "utf8");
   return {
-    jsonFile: path.join(targetDir, "speaker-attribution.json"),
-    htmlFile: path.join(targetDir, "speaker-attribution.html"),
+    jsonFile,
+    htmlFile,
   };
 }
 

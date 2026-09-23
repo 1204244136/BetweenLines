@@ -31,20 +31,12 @@ const FORMAT_NOTE_PREFIX = "格式自动规范化：";
 // 一次匹配一整串（含两侧的空格与制表符），这样 `abc \n def` 不会留下双空格。
 const BREAK_RUN_PATTERN = /(?:[ \t]*(?:\r\n?|\n|<br\s*\/?>))+[ \t]*/gi;
 const BREAK_MARK_PATTERN = /<br\s*\/?>|\r\n?|\n/gi;
-// 段分隔：连续两个及以上换行——与 `writeback.js` 的 `splitParts`（`/\n{2,}/`）同一口径。
-const PARAGRAPH_SPLIT_PATTERN = /\n{2,}/;
+// 段分隔：直接复用 writeback.splitParts，保证口径永远一致（不再手写同一个正则）。
+const { splitParts: splitParagraphs } = require("../../../ingest/writeback");
 // 目标列的内联注释标记（成品 `<a epub:type="noteref">` 与 Pandoc 的 `class="…noteref…"` 两种写法）。
 // 只认 `<a>` 标签上的 noteref：正文里光一个 `㊟` 符号不算标记（它可能就是普通文字）。
 const NOTEREF_PATTERN = /<a\b[^>]*\bnoteref\b[^>]*>/gi;
 const ASCII_ALNUM = /[A-Za-z0-9]/;
-
-/** 一段到底、按写回口径切段：空行分隔、逐段去空白、丢掉空段（与 `writeback.splitParts` 一致）。 */
-function splitParagraphs(text) {
-  return String(text == null ? "" : text)
-    .split(PARAGRAPH_SPLIT_PATTERN)
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
 
 /** 目标列里有几个 noteref 标记（写回时这些标记必须逐字、原位保留）。 */
 function countNoterefs(text) {

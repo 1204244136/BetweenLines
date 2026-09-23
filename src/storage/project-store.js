@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { projectSignature } = require("../core/project-context");
 const { storageLayout } = require("../core/storage-layout");
+const { readJsonFile, writeJsonAtomic } = require("../core/atomic-fs");
 
 const projectArtifacts = [
   "paragraphs.json",
@@ -14,37 +15,7 @@ const projectArtifacts = [
 ];
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJsonAtomic(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}-${crypto.randomBytes(5).toString("hex")}.tmp`;
-  const backup = `${file}.${process.pid}-${crypto.randomBytes(5).toString("hex")}.bak`;
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2), "utf8");
-  try {
-    fs.renameSync(temp, file);
-    return;
-  } catch (error) {
-    if (!fs.existsSync(file)) {
-      try { fs.rmSync(temp, { force: true }); } catch {}
-      throw error;
-    }
-  }
-
-  let backupCreated = false;
-  try {
-    fs.renameSync(file, backup);
-    backupCreated = true;
-    fs.renameSync(temp, file);
-    try { fs.rmSync(backup, { force: true }); } catch {}
-  } catch (error) {
-    if (backupCreated && !fs.existsSync(file) && fs.existsSync(backup)) {
-      try { fs.renameSync(backup, file); } catch {}
-    }
-    try { fs.rmSync(temp, { force: true }); } catch {}
-    throw error;
-  }
+  return readJsonFile(file);
 }
 
 function renameDirectoryWithRetry(sourceDir, targetDir, options = {}) {

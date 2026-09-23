@@ -3486,6 +3486,7 @@ module.exports = {
   normalizeModelReasoningEffort,
   normalizeNonGptTemperature,
   normalizeReasoningEffort,
+  normalizeGrade,
   normalizeSeverity,
   parseDecision,
   providerDefaults,

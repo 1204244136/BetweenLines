@@ -37,6 +37,7 @@ const {
 } = require("../storage/project-store");
 const { GenerationPipeline } = require("./generation-pipeline");
 const { storageLayout } = require("../core/storage-layout");
+const { readJsonFile, writeJsonAtomic } = require("../core/atomic-fs");
 const {
   applySpeakerAnnotations,
   applyTextReplacements,
@@ -300,13 +301,13 @@ function saveSpeakerInputSelection(payload) {
     parallel: files.parallel,
   });
   fs.mkdirSync(speakerRuntimeDir, { recursive: true });
-  fs.writeFileSync(speakerSelectionFile, JSON.stringify(selection, null, 2), "utf8");
+  writeJsonAtomic(speakerSelectionFile, selection);
   return { selection, selectionFile: speakerSelectionFile };
 }
 
 function readSpeakerSelection() {
   if (!fs.existsSync(speakerSelectionFile)) return null;
-  const stored = JSON.parse(fs.readFileSync(speakerSelectionFile, "utf8"));
+  const stored = readJsonFile(speakerSelectionFile);
   return validateSpeakerSelection({
     source: stored.files?.source || stored.source,
     parallel: stored.files?.parallel || stored.parallel,
@@ -482,7 +483,7 @@ async function handleApi(req, res, pathname, searchParams) {
     }
     if (req.method === "GET" && pathname === "/api/status") {
       const saved = fs.existsSync(selectionFile)
-        ? JSON.parse(fs.readFileSync(selectionFile, "utf8"))
+        ? readJsonFile(selectionFile)
         : null;
       const savedSpeaker = readSpeakerSelection();
       sendJson(res, 200, {
@@ -685,7 +686,7 @@ async function handleApi(req, res, pathname, searchParams) {
         return;
       }
       clearProofreadCache();
-      const selection = validateSelection(JSON.parse(fs.readFileSync(selectionFile, "utf8")));
+      const selection = validateSelection(readJsonFile(selectionFile));
       generation.run(selection);
       sendJson(res, 202, { ok: true, apiVersion: consoleApiVersion, pipeline: generation.status() });
       return;

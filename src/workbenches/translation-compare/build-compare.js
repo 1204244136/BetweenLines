@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
 const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
-const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles } = require("./ai/ai-proofread");
+const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles, normalizeGrade } = require("./ai/ai-proofread");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { buildSpeechHabitLayer } = require("./speech-habit-layer");
 const { TERM_LAYER_VERSION, buildTermLayer, describeTermLayerEntry } = require("./term-layer");
@@ -11,6 +11,7 @@ const { publishProject } = require("../../storage/project-store");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
 const { bigramSet, escapeHtml, jaccard, safeJson } = require("../../core/text-helpers");
+const { reportProgress } = require("../../core/progress");
 
 function readWorkbenchAssets() {
   const publicDir = path.join(__dirname, "..", "..", "..", "public");
@@ -25,12 +26,6 @@ const initialWorkbenchAssets = readWorkbenchAssets();
 const workbenchStyle = initialWorkbenchAssets.workbenchStyle;
 const aiPanelStyle = initialWorkbenchAssets.aiPanelStyle;
 const workbenchClient = initialWorkbenchAssets.workbenchClient;
-const progressPrefix = "@@transcomparator-progress@@";
-
-function reportProgress(percent, label, current = 0, total = 0) {
-  if (process.env.TRANS_COMPARATOR_MACHINE_PROGRESS !== "1") return;
-  console.log(`${progressPrefix}${JSON.stringify({ percent, label, current, total })}`);
-}
 
 function resolveModelOptions(models, selected = "") {
   const values = [];
@@ -1209,6 +1204,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${alignNotesByIndex.toString()}
     ${createNotesTools.toString()}
     ${createPresetTools.toString()}
+    ${normalizeGrade.toString()}
 
     const storageKey = ${JSON.stringify(storageKey)};
     const pageMeta = ${safeJson(clientMeta)};

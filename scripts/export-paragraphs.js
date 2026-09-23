@@ -2,13 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { outputDir, loadParagraphs } = require("./text-utils");
 const { activeLangs, describeSelection, resolveInputSelection, saveSelection, selectionFile } = require("./input-selection");
-
-const progressPrefix = "@@transcomparator-progress@@";
-
-function reportProgress(percent, label) {
-  if (process.env.TRANS_COMPARATOR_MACHINE_PROGRESS !== "1") return;
-  console.log(`${progressPrefix}${JSON.stringify({ percent, label })}`);
-}
+const { reportProgress } = require("../src/core/progress");
 
 async function main() {
   fs.mkdirSync(outputDir, { recursive: true });

@@ -4,6 +4,7 @@ const JSZip = require("jszip");
 const { XMLParser } = require("fast-xml-parser");
 const { directoryEntries, isEpubDirectory } = require("./epub-container");
 const { asArray } = require("../core/text-helpers");
+const { writeFileAtomic } = require("../core/atomic-fs");
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "", removeNSPrefix: true });
 const htmlEntryPattern = /\.(?:x?html?)$/i;
@@ -641,14 +642,7 @@ async function repackEpubZip(zip) {
 }
 
 function atomicWrite(file, content) {
-  const temp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  try {
-    fs.writeFileSync(temp, content);
-    fs.renameSync(temp, file);
-  } catch (error) {
-    try { fs.rmSync(temp, { force: true }); } catch { /* 尽力清理临时文件 */ }
-    throw error;
-  }
+  writeFileAtomic(file, content);
 }
 
 async function saveWritebackDocuments(target, kind, documents, zip, touched) {
@@ -704,5 +698,6 @@ module.exports = {
   applyTextReplacements,
   describeWritebackTarget,
   encodeRevisionForXml,
+  splitParts,
   WRITEBACK_HINT,
 };

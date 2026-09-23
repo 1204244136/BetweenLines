@@ -10,8 +10,8 @@ const {
   resolveProjectArtifact,
 } = require("../storage/project-store");
 const { rootDir } = require("../core/storage-layout");
-
-const progressPrefix = "@@transcomparator-progress@@";
+const { progressPrefix, parseProgressMessage } = require("../core/progress");
+const { readJsonFile } = require("../core/atomic-fs");
 
 function readNotesSpaceKey(projectRef) {
   if (!projectRef?.id) return "";
@@ -19,7 +19,7 @@ function readNotesSpaceKey(projectRef) {
     const file = resolveProjectArtifact(projectRef.id, "translation-compare.json", {
       snapshotId: projectRef.snapshotId,
     });
-    return JSON.parse(fs.readFileSync(file, "utf8"))?.project?.notesStorage?.key || "";
+    return readJsonFile(file)?.project?.notesStorage?.key || "";
   } catch {
     return "";
   }
@@ -42,22 +42,6 @@ function resolveNpmCommand() {
     path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "nodejs", "npm.cmd"),
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || "npm.cmd";
-}
-
-function parseProgressMessage(line) {
-  const text = String(line || "").trim();
-  if (!text.startsWith(progressPrefix)) return null;
-  try {
-    const message = JSON.parse(text.slice(progressPrefix.length));
-    const percent = Number(message.percent);
-    if (!Number.isFinite(percent)) return null;
-    return {
-      ...message,
-      percent: Math.max(0, Math.min(100, percent)),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function mapCommandProgress(message, step, range = {}) {
