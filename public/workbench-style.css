@@ -193,6 +193,25 @@
     .has-workbench-tabs > details.panel-details > summary {
       display: none !important;
     }
+    .has-workbench-tabs .prefilter-body {
+      border-top: 0 !important;
+      margin-top: 0 !important;
+      padding-top: 4px !important;
+    }
+    .has-workbench-tabs .panel-details > .filter-bar:first-of-type {
+      border-top: 0 !important;
+      margin-top: 0 !important;
+      padding-top: 4px !important;
+    }
+    .has-workbench-tabs .ai-config-details {
+      border-top: 0 !important;
+      margin-top: 0 !important;
+    }
+    .has-workbench-tabs .notes-body {
+      border-top: 0 !important;
+      margin-top: 0 !important;
+      padding-top: 4px !important;
+    }
     .has-workbench-tabs > details.panel-details[open] {
       animation: tab-panel-fade-in 140ms ease-out;
     }
@@ -666,6 +685,7 @@
     .panel-details > .filter-bar,
     .panel-details > .action-bar {
       border: 0;
+      border-radius: 0;
       background: transparent;
       padding-left: 0;
       padding-right: 0;
@@ -673,13 +693,15 @@
     }
     .panel-details > .filter-bar:first-of-type,
     .panel-details > .action-bar:only-of-type {
+      margin-top: 0;
+      padding-top: 2px;
+      border-top: 0;
+    }
+    .panel-details > .filter-bar + .action-bar {
       margin-top: 4px;
       padding-top: 6px;
       border-top: 1px solid var(--line);
-    }
-    .panel-details > .filter-bar + .action-bar {
-      border-top: 1px solid var(--line);
-      padding-top: 6px;
+      border-radius: 0;
     }
     input, select, button, textarea {
       height: var(--control-height, 30px);
