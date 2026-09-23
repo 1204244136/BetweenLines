@@ -50,7 +50,7 @@ function createWorkbench(storage = storageFixture()) {
   return { element, context, storage, run: (code) => vm.runInContext(code, context) };
 }
 
-test("generated workbench recovers in memory on quota failure and preserves its source", () => {
+test("工作台在存储超额失败时内存恢复并保护来源数据", () => {
   const raw = JSON.stringify({ 1: { note: "历史备注", manualDone: true, rowSig: "sig-1" } });
   const storage = storageFixture({ [sourceKey]: raw });
   storage.failWrites = true;
@@ -65,7 +65,7 @@ test("generated workbench recovers in memory on quota failure and preserves its 
   assert.equal(JSON.parse(storage.getItem(key))[1].rowSig, "sig-1");
 });
 
-test("exports include unsaved revisions and unverified entries stay unverified across reloads", () => {
+test("导出包含未保存的修订且未校验条目在重载后保持未校验", () => {
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   ui.run('notes["1"] = { note: "待核验", manualDone: true, recoveredUnverified: true, rowSig: "old" }; persistNotes();');
   const saved = JSON.parse(ui.storage.getItem(key));
@@ -77,7 +77,7 @@ test("exports include unsaved revisions and unverified entries stay unverified a
   assert.equal(JSON.parse(backup.spaces[0].raw)[1].revisionText, "尚未保存的修订");
 });
 
-test("explicitly cleared spaces stay empty and malformed current data is protected and backed up", () => {
+test("明确清空的空间保持为空且损坏的当前数据受到保护并备份", () => {
   const old = JSON.stringify({ 1: { note: "旧记录", rowSig: "sig-1" } });
   const cleared = createWorkbench(storageFixture({ [key]: "{}", [sourceKey]: old }));
   assert.equal(cleared.run("Object.keys(notes).length"), 0);
@@ -88,7 +88,7 @@ test("explicitly cleared spaces stay empty and malformed current data is protect
   assert(backup.spaces.some((space) => space.raw === "{broken"));
 });
 
-test("automatic recovery merges contradictory historical notes for the same row signature instead of dropping them", () => {
+test("自动找回按相同行签名合并冲突的历史记录而不是丢弃", () => {
   // 同一行在两份历史空间里记录不同（例如 [规则预筛] 结论 ↔ [AI校对] 结论）：按行内容签名逐字段合并，
   // 不再整条丢弃——那样会把「确认预筛」的人工确认一起丢掉。
   const ui = createWorkbench(storageFixture({
@@ -102,7 +102,7 @@ test("automatic recovery merges contradictory historical notes for the same row 
   assert.notEqual(ui.storage.getItem(key), null);
 });
 
-test("automatic recovery never invents manual confirmation for unconfirmed historical notes", () => {
+test("自动找回绝不为未确认的历史记录凭空伪造人工确认", () => {
   const ui = createWorkbench(storageFixture({
     [sourceKey]: JSON.stringify({ 1: { note: "第一份记录", rowSig: "sig-1" } }),
     "translation-compare-notes-v5:project:rowsPrevious": JSON.stringify({ 1: { note: "不同的记录", rowSig: "sig-1" } }),
@@ -112,7 +112,7 @@ test("automatic recovery never invents manual confirmation for unconfirmed histo
   assert.equal(ui.run('notes["1"].mergedFromSpaces'), undefined);
 });
 
-test("preview requires an explicit index action and never overwrites rows added during preview", async () => {
+test("预览需要显式索引操作且绝不覆盖预览期间新增的行", async () => {
   const unrelated = "translation-compare-notes-v7:other:otherRows";
   const ui = createWorkbench(storageFixture({ [key]: "{}", [unrelated]: JSON.stringify({ 1: { note: "其他项目" } }) }));
   ui.run('previewNotesRecovery(notesSpaceInventory.find(space => !space.current))');
@@ -124,7 +124,7 @@ test("preview requires an explicit index action and never overwrites rows added 
   assert.equal(ui.run('notes["1"].note'), "新写的备注");
 });
 
-test("file imports use the same backup decoder and do not overwrite active state", async () => {
+test("文件导入使用相同备份解码器且不覆盖当前活动状态", async () => {
   const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: "当前备注" } }) }));
   ui.element("importNotesFile").files = [{ text: async () => JSON.stringify({ 1: { note: "旧单空间备份" } }) }];
   await ui.element("importNotesFile").dispatch("change");
@@ -135,7 +135,7 @@ test("file imports use the same backup decoder and do not overwrite active state
   assert.equal(ui.storage.length, 2);
 });
 
-test("individual confirmation clears recovery quarantine and writes a fresh signature", async () => {
+test("单行确认解除找回隔离并写入全新签名", async () => {
   const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: "待核验", recoveredUnverified: true } }) }));
   const box = { dataset: { done: "1" }, checked: true, closest() { return ui.element("row-1"); } };
   await ui.element("tbody").dispatch("change", { target: { closest(selector) { return selector === "[data-done]" ? box : null; } } });
@@ -146,7 +146,7 @@ test("individual confirmation clears recovery quarantine and writes a fresh sign
   assert.equal(saved.rowSig, "sig-1");
 });
 
-test("a second page changing the active space cannot be overwritten by a delayed save or retry", async () => {
+test("第二页面更改活动空间不会被延迟保存或重试覆盖", async () => {
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   ui.run('notes["1"] = { note: "本页编辑" }');
   const other = JSON.stringify({ 1: { note: "另一页修改" } });
@@ -158,7 +158,7 @@ test("a second page changing the active space cannot be overwritten by a delayed
   assert.equal(ui.element("notesSaveWarning").hidden, false);
 });
 
-test("recovery excludes ambiguous signatures and marks text inference as unverified", () => {
+test("找回排除歧义签名并将文本推断标记为未核验", () => {
   const rows = [{ index: 1, signature: "same" }, { index: 2, signature: "same" }];
   assert.equal(helpers.plan({ 3: { note: "note", rowSig: "same" } }, rows, {}).pairs.length, 0);
   assert.equal(helpers.plan({ 3: { note: "a", rowSig: "same" }, 4: { note: "b", rowSig: "same" } }, [rows[0]], {}).pairs.length, 0);
@@ -167,7 +167,7 @@ test("recovery excludes ambiguous signatures and marks text inference as unverif
   assert.equal(plan.unverified, 1);
 });
 
-test("partial file imports preserve every existing space and report remaining failures", () => {
+test("部分文件导入保留每个现有空间并如实报告其余失败", () => {
   const storage = storageFixture({ [key]: "{}" });
   let writes = 0;
   const set = storage.setItem.bind(storage);
@@ -180,7 +180,7 @@ test("partial file imports preserve every existing space and report remaining fa
   assert.throws(() => helpers.decodeBackup({ 1: "not a note" }));
 });
 
-test("clear current notes keeps history, and clear history keeps the current space", async () => {
+test("清空当前备注保留历史，清空历史保留当前空间", async () => {
   const historyKey = "translation-compare-notes-v7:previous:rows";
   const ui = createWorkbench(storageFixture({
     [key]: JSON.stringify({ 1: { note: "当前记录" } }),

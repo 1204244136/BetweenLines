@@ -27,7 +27,7 @@ const {
   getModelProfile,
 } = require("../src/workbenches/translation-compare/ai/scheduler-profile");
 
-test("end-to-end multi-stage pipeline: Fast Pass path", () => {
+test("多阶段流水线端到端：快速直通 Fast Pass 路径", () => {
   const row = { index: 10, jp: "おはようございます。", cn: "早上好。" };
   const gatekeeperDecision = {
     semanticSame: true,
@@ -46,7 +46,7 @@ test("end-to-end multi-stage pipeline: Fast Pass path", () => {
   assert.equal(result.arbitration, null);
 });
 
-test("end-to-end multi-stage pipeline: Stylist critique and revision adoption", () => {
+test("多阶段流水线端到端：Stylist 复审评审与改案微调采纳", () => {
   const row = { index: 15, jp: "彼は静かに扉を開けた。", cn: "他把门给静悄悄地开了。" };
   const gatekeeperDecision = {
     semanticSame: true,
@@ -89,7 +89,7 @@ test("end-to-end multi-stage pipeline: Stylist critique and revision adoption", 
   assert.ok(result.note.includes("修改结果：他轻轻地推开了门。"));
 });
 
-test("end-to-end multi-stage pipeline: Challenger divergence triggers Arbiter adjudication", () => {
+test("多阶段流水线端到端：双角色立场分歧触发 Arbiter 仲裁裁决", () => {
   const row = { index: 20, jp: "それは紛れもない真実だった。", cn: "那是货真价实的真相。" };
   const gatekeeperDecision = {
     semanticSame: true,
@@ -153,7 +153,7 @@ test("end-to-end multi-stage pipeline: Challenger divergence triggers Arbiter ad
   assert.ok(result.note.includes("Arbiter仲裁[Stylist方案]"));
 });
 
-test("human feedback collector records actions and computes calibration rates", () => {
+test("人工反馈收集器：记录反馈行为并计算采纳校准率", () => {
   recordHumanFeedback({
     action: "accepted_ai",
     index: 50,

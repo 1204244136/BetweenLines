@@ -7,7 +7,7 @@ const {
   formatArbitrationNoteLines,
 } = require("../src/workbenches/translation-compare/ai/arbiter");
 
-test("shouldTriggerArbitration detects escalation and stance divergence", () => {
+test("仲裁触发：shouldTriggerArbitration 准确检测主动升级与立场分歧", () => {
   // Escalation by stylist
   const esc = shouldTriggerArbitration({
     stylistReview: { critique: { attitude: "escalate" } },
@@ -36,7 +36,7 @@ test("shouldTriggerArbitration detects escalation and stance divergence", () => 
   assert.equal(agree.triggered, false);
 });
 
-test("resolveDeterministicAgreement catches trivial agreements", () => {
+test("确定性一致判定：resolveDeterministicAgreement 捕获方案完全一致情况", () => {
   const resolved = resolveDeterministicAgreement({
     gatekeeperDecision: { needsEdit: true, revisedText: "修订内容" },
     stylistReview: { critique: { attitude: "accept" }, revisedText: "修订内容" },
@@ -46,7 +46,7 @@ test("resolveDeterministicAgreement catches trivial agreements", () => {
   assert.equal(resolved.revisedText, "修订内容");
 });
 
-test("applyArbitrationDecision selects winning revision accurately", () => {
+test("仲裁决议应用：applyArbitrationDecision 准确选择胜出修订案", () => {
   const applied = applyArbitrationDecision({
     arbitration: { winner: "stylist", finalDecision: "replace" },
     gatekeeperDecision: { revisedText: "初审文本" },
@@ -57,7 +57,7 @@ test("applyArbitrationDecision selects winning revision accurately", () => {
   assert.equal(applied.revisedText, "文学润色文本");
 });
 
-test("formatArbitrationNoteLines generates structured analysis traces", () => {
+test("仲裁备注格式化：formatArbitrationNoteLines 生成结构化分析轨迹", () => {
   const lines = formatArbitrationNoteLines({
     gatekeeperDecision: { summary: "发现漏译形容词" },
     stylistReview: { critique: { attitude: "modify", rationale: "补充形容词但重构为优雅主谓句" } },
@@ -69,7 +69,7 @@ test("formatArbitrationNoteLines generates structured analysis traces", () => {
   assert.ok(lines[2].includes("Arbiter仲裁[Stylist方案]"));
 });
 
-test("formatArbitrationNoteLines records stage-specific revised texts for progression tracking", () => {
+test("仲裁备注格式化：记录各阶段特有修订文本以追踪演进链条", () => {
   const lines = formatArbitrationNoteLines({
     gatekeeperDecision: {
       summary: "指出语病重复与事实增补",

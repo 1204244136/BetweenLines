@@ -9,7 +9,7 @@ const {
   proofreadRow,
 } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 
-test("staged review functions are properly modularized and exported", () => {
+test("分阶段评审函数正确模块化与导出", () => {
   assert.equal(typeof runStage1Gatekeeper, "function");
   assert.equal(typeof runStage2Stylist, "function");
   assert.equal(typeof runStage3Arbiter, "function");
@@ -17,7 +17,7 @@ test("staged review functions are properly modularized and exported", () => {
   assert.equal(typeof proofreadRow, "function");
 });
 
-test("proofreadRow executes modular stages sequentially for single-row calls", async () => {
+test("proofreadRow 在单行调用中按顺序执行模块化阶段", async () => {
   const row = { index: 1, jp: "吾輩は猫である。", cn: "我是猫。" };
   const allRows = [row];
   const config = {
@@ -51,7 +51,7 @@ test("proofreadRow executes modular stages sequentially for single-row calls", a
   assert.equal(result.done, true);
 });
 
-test("pipelined stage handoff preserves decision and critique", async () => {
+test("流水线阶段间数据交接完整保留决策与评审意见", async () => {
   const row = { index: 2, jp: "名前はまだ無い。", cn: "名字还没有。" };
   const s1 = {
     row,

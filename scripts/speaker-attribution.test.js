@@ -51,7 +51,7 @@ async function tempEpub(name, documents) {
   return { dir, file };
 }
 
-test("speaker selection supports monolingual and bilingual inputs", () => {
+test("说话人输入选择支持单语与双语输入", () => {
   const source = tempText("source.txt", "source");
   const parallel = tempText("parallel.txt", "parallel");
   try {
@@ -70,13 +70,13 @@ test("speaker selection supports monolingual and bilingual inputs", () => {
   }
 });
 
-test("speaker language detection recognizes Japanese, Chinese, and Latin text", () => {
+test("说话人语言检测识别日语、中文与拉丁文本", () => {
   assert.equal(detectLanguage("これは日本語の台詞です。"), "jp");
   assert.equal(detectLanguage("这是用于确认说话人的中文台词。"), "cn");
   assert.equal(detectLanguage("This is an English line."), "en");
 });
 
-test("speaker build resolves automatic languages from quoted dialogue inputs", async () => {
+test("说话人构建从引号对话输入中自动推断语言", async () => {
   const source = tempText("source.txt", "「これは原文の台詞です。次の文も同じ発話です。」\n\n地の文です。");
   const parallel = tempText("parallel.txt", "「这是原文对应的主文本。下一句仍属于同一发言。」\n\n这是旁白。");
   try {
@@ -93,7 +93,7 @@ test("speaker build resolves automatic languages from quoted dialogue inputs", a
   }
 });
 
-test("speaker review rows exclude narration while retaining it in context", async () => {
+test("说话人复核行排除叙述文本并在上下文中予以保留", async () => {
   const source = tempText("source.txt", "他停下脚步。『第一句。第二句！』随后离开。");
   try {
     const model = await build(validateSpeakerSelection({ source: source.file }));
@@ -106,7 +106,7 @@ test("speaker review rows exclude narration while retaining it in context", asyn
   }
 });
 
-test("bilingual speaker rows are pre-aligned without reusing parallel lines", () => {
+test("双语说话人行预对齐时不重复复用对照行", () => {
   const result = prealignLineUnits([
     { id: "s1", text: "A long sentence." },
     { id: "s2", text: "Another sentence." },
@@ -120,14 +120,14 @@ test("bilingual speaker rows are pre-aligned without reusing parallel lines", ()
   assert.deepEqual(result.rows.slice(0, 2).map((row) => row.parallel[0]?.id), ["p1", "p2"]);
 });
 
-test("stable EPUB headers retain S5 and S6 identifiers while ignoring wrappers", () => {
+test("稳定 EPUB 表头保留 S5 与 S6 标识符并忽略外层包裹", () => {
   assert.equal(stableEpubHeader("OEBPS/S1_03-05_p-004.xhtml"), "S1_03-05");
   assert.equal(stableEpubHeader("OEBPS/S5_01_03-02_Chapter2.xhtml"), "S5_01_03-02");
   assert.equal(stableEpubHeader("OEBPS/S6_24.06.07-02_Afterwords.xhtml"), "S6_24.06.07-02");
   assert.equal(stableEpubHeader("OEBPS/S1_25-Uiharu_Kazari_Afterwords.xhtml"), "S1_25-UIHARU_KAZARI");
 });
 
-test("header anchors prevent front matter from consuming dialogue lines", () => {
+test("表头锚点防止卷首前置信息侵占对话行", () => {
   const result = prealignEpubHeaderBlocks([
     { header: "S1_01-01", spineIndex: 1, units: [{ id: "s1", text: "原文对话。" }] },
   ], [
@@ -144,7 +144,7 @@ test("header anchors prevent front matter from consuming dialogue lines", () => 
   assert.equal(frontMatter.alignment.status, "unmatched-parallel");
 });
 
-test("header-anchored alignment ignores global paragraph offsets inside a shared header", () => {
+test("基于表头锚点的对齐忽略共享表头内的全局段落偏移", () => {
   const result = prealignEpubHeaderBlocks([
     { header: "H1", spineIndex: 1, units: [{ id: "s1", text: "甲", sourceIndex: 0, parentParagraphId: "jp:0" }] },
     { header: "H2", spineIndex: 2, units: [{ id: "s2", text: "乙", sourceIndex: 10, parentParagraphId: "jp:10" }] },
@@ -158,7 +158,7 @@ test("header-anchored alignment ignores global paragraph offsets inside a shared
   assert.equal(second.alignment.relation, "1:1");
 });
 
-test("EPUB speaker build pairs matching body headers and excludes non-body pages", async () => {
+test("EPUB 说话人构建配对匹配的正文表头并排除非正文页面", async () => {
   const source = await tempEpub("source.epub", [
     { name: "S1_01-COVER.xhtml", label: "封面", text: "封面" },
     { name: "S1_01-01Chapter2.xhtml", label: "第1章", text: "「原文第一句。」\n\n「原文第二句。」" },
@@ -188,7 +188,7 @@ test("EPUB speaker build pairs matching body headers and excludes non-body pages
   }
 });
 
-test("cross-language fallback preserves extra parallel dialogue as an unmatched row", () => {
+test("跨语言回退保留多余的对照对话作为未匹配行", () => {
   const source = Array.from({ length: 4 }, (_, index) => ({
     id: `s${index + 1}`,
     lang: "jp",
@@ -211,7 +211,7 @@ test("cross-language fallback preserves extra parallel dialogue as an unmatched 
   assert.equal(result.rows.filter((row) => row.alignment.relation === "1:2").length, 0);
 });
 
-test("workbench rows exclude lines without source text during comparison", () => {
+test("工作台行在比较时排除无原文文本的行", () => {
   const rows = createRows({
     rows: [{
       source: null,
@@ -230,7 +230,7 @@ test("workbench rows exclude lines without source text during comparison", () =>
   assert.equal(rows[0].index, 1);
 });
 
-test("unmatched parallel dialogue retains its own context when explicitly included", () => {
+test("显式包含时未匹配的对照对话保留其自身上下文", () => {
   const rows = createRows({
     rows: [{
       source: null,
@@ -262,7 +262,7 @@ test("unmatched parallel dialogue retains its own context when explicitly includ
   assert.equal(rows[0].context.at(-1).relation, "target");
 });
 
-test("pre-alignment does not merge distant parallel dialogue units", () => {
+test("预对齐不合并距离过远的对照对话单元", () => {
   const result = prealignLineUnits([
     { id: "s1", text: "「……我到底哪里招惹到你了？」", sourceIndex: 52, parentParagraphId: "jp:52" },
   ], [
@@ -276,7 +276,7 @@ test("pre-alignment does not merge distant parallel dialogue units", () => {
   assert.ok(result.rows.some((row) => row.alignment.relation === "0:1"));
 });
 
-test("pre-alignment leaves an extra distant dialogue unmatched instead of shifting later rows", () => {
+test("预对齐将过远的多余对话置为未匹配而不错位后续行", () => {
   const result = prealignLineUnits([
     { id: "s1", text: "「……我到底做了什么？」", sourceIndex: 52, parentParagraphId: "jp:52" },
     { id: "s2", text: "「我无法容忍比我强的人类。」", sourceIndex: 53, parentParagraphId: "jp:53" },
@@ -292,7 +292,7 @@ test("pre-alignment leaves an extra distant dialogue unmatched instead of shifti
   assert.deepEqual(result.rows.filter((row) => row.source).slice(-2).map((row) => row.parallel.map((item) => item.id)), [["p1"], ["p2"]]);
 });
 
-test("pre-alignment only merges split units when explicitly enabled", () => {
+test("预对齐仅在显式启用时才合并被切分的单元", () => {
   const result = prealignLineUnits([
     { id: "s1", text: "「第一段对应两句。」", sourceIndex: 7, parentParagraphId: "jp:7" },
   ], [
@@ -303,7 +303,7 @@ test("pre-alignment only merges split units when explicitly enabled", () => {
   assert.equal(result.rows[0].alignment.relation, "1:2");
 });
 
-test("pre-alignment preserves unmatched line directions for empty counterparts", () => {
+test("预对齐为空白对照方保留未匹配行方向", () => {
   const sourceOnly = prealignLineUnits([{ id: "s1", text: "原文行。" }], []);
   const parallelOnly = prealignLineUnits([], [{ id: "p1", text: "主文本行。" }]);
 
@@ -313,7 +313,7 @@ test("pre-alignment preserves unmatched line directions for empty counterparts",
   assert.equal(parallelOnly.rows[0].alignment.relation, "0:1");
 });
 
-test("text comparison exposes signals without treating them as semantic proof", () => {
+test("文本对比暴露线索信号而不将其视为语义证明", () => {
   const comparison = compareTexts("第12章「Alice？」", "第13章「Alice！」");
 
   assert.equal(comparison.numberScore, 0);
@@ -322,7 +322,7 @@ test("text comparison exposes signals without treating them as semantic proof", 
   assert.equal(typeof comparison.score, "number");
 });
 
-test("speaker attention prioritizes attribution cues and compresses context", () => {
+test("说话人注意力优先处理归属线索并压缩上下文", () => {
   const row = {
     id: "line-1",
     index: 1,
@@ -347,7 +347,7 @@ test("speaker attention prioritizes attribution cues and compresses context", ()
   assert.deepEqual(quotedContext.candidates, []);
 });
 
-test("speaker attention does not treat the first context item as the target when target is omitted", () => {
+test("未指定目标时说话人注意力不将首个上下文项误当作目标", () => {
   const attention = buildSpeakerAttention({
     id: "line-3",
     sourceText: "「目标」",
@@ -359,7 +359,7 @@ test("speaker attention does not treat the first context item as the target when
   assert.equal(attention.focus[1].id, "before");
 });
 
-test("speaker prompt combines focused evidence with a strict JSON contract", () => {
+test("说话人提示词结合聚焦证据与严格的 JSON 契约", () => {
   const prompt = buildSpeakerPrompt({
     id: "line-2",
     index: 2,
@@ -377,7 +377,7 @@ test("speaker prompt combines focused evidence with a strict JSON contract", () 
   assert.equal(prompt.messages.length, 2);
 });
 
-test("speaker attention plan orders high-signal rows before deferred rows", () => {
+test("说话人注意力计划将高信号行排在推迟行之前", () => {
   const plan = buildAttentionPlan([
     { index: 1, attention: { level: "low", score: 0.2, needsMoreContext: true }, prompt: { user: "low" } },
     { index: 2, attention: { level: "high", score: 0.8, needsMoreContext: false }, prompt: { user: "high" } },
@@ -388,7 +388,7 @@ test("speaker attention plan orders high-signal rows before deferred rows", () =
   assert.equal(plan.strategy, "evidence-priority-v1");
 });
 
-test("speaker workbench renders a paged review workspace", () => {
+test("说话人工作台渲染带分页的复核工作区", () => {
   const html = renderHtml({
     analysisKey: "test",
     sourceLineCount: 1,

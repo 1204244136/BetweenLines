@@ -4,7 +4,7 @@ const { makeHtml } = require("./build-compare");
 const { createWorkbench } = require("./workbench-fixture");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 
-test("build-compare renders stage preset selectors inside stage cards", () => {
+test("工作台构建：在阶段卡片内渲染预设选择下拉框", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
   const selection = {
     comparisonMode: "bilingual",
@@ -28,7 +28,7 @@ test("build-compare renders stage preset selectors inside stage cards", () => {
   assert.match(html, /id="stage3PresetSelect"/);
 });
 
-test("client stage preset binding: cascading activation and aiConfig assembly", async () => {
+test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () => {
   const presetTools = createPresetTools();
   const ui = createWorkbench();
 

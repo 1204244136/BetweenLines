@@ -6,7 +6,7 @@ const {
   splitParagraphs,
 } = require("./text-utils");
 
-test("recognizes Japanese and Chinese episode headings in combined works", () => {
+test("识别合卷作品中的中日文章节/话数标题", () => {
   const jp = splitParagraphs("第一話\n\n本文です。\n\n第二話 別の事件\n\n続きです。", "jp");
   assert.deepEqual(jp.map((paragraph) => paragraph.chapter), ["第一話", "第二話 別の事件"]);
 
@@ -14,7 +14,7 @@ test("recognizes Japanese and Chinese episode headings in combined works", () =>
   assert.deepEqual(cn.map((paragraph) => paragraph.chapter), ["第一话", "第2话 后续"]);
 });
 
-test("does not truncate a later work after an intermediate afterword", () => {
+test("遇到中途后记时不截断后续作品的正文", () => {
   const source = [
     "第一章",
     "\n\n第一部正文内容足够长，可以被正文检测逻辑识别。",
@@ -31,7 +31,7 @@ test("does not truncate a later work after an intermediate afterword", () => {
   assert.doesNotMatch(sliced, /最终后记/);
 });
 
-test("recognizes index-X prologue, intro and epilogue headings", () => {
+test("识别 index-X 的引子、序章与尾声标题", () => {
   const cn = splitParagraphs("引子\n\n引子正文内容。\n\n序章 启程\n\n序章正文。\n\n尾声\n\n尾声叙述。", "cn");
   assert.deepEqual(cn.map((paragraph) => paragraph.chapter), ["引子", "序章 启程", "尾声"]);
 
@@ -40,7 +40,7 @@ test("recognizes index-X prologue, intro and epilogue headings", () => {
   assert.deepEqual(jp.map((paragraph) => paragraph.chapter), ["正文", "プロローグ", "エピローグ"]);
 });
 
-test("treats layered index-X chapter headings as chapter boundaries", () => {
+test("将多层 index-X 章节标题视为章节边界", () => {
   // 层间空格连接后的标题形态（见 epub-utils 的标题分层处理）
   const source = [
     "行间　一",
@@ -57,7 +57,7 @@ test("treats layered index-X chapter headings as chapter boundaries", () => {
   ]);
 });
 
-test("recognizes 〇 and X chapter markers used by index-X headings", () => {
+test("识别 index-X 标题中使用的 〇 与 X 章节编号标记", () => {
   const cn = splitParagraphs("行间X\n\n正文一。\n\n第〇九章 对抗\n\n正文二。", "cn");
   assert.deepEqual(cn.map((paragraph) => paragraph.chapter), ["行间X", "第〇九章 对抗"]);
 

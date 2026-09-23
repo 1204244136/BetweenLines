@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createWorkbench } = require("./workbench-fixture");
 
-test("parseAutomatedNote extracts structured multi-stage review trace", () => {
+test("自动备注解析：parseAutomatedNote 提取结构化多阶段评审轨迹", () => {
   const ui = createWorkbench();
 
   const noteWithStages = [
@@ -27,7 +27,7 @@ test("parseAutomatedNote extracts structured multi-stage review trace", () => {
   assert.equal(parsed.revision, "他终究还是没能推开那扇门。");
 });
 
-test("renderNoteSummary generates compact pipeline capsule and expandable drawer", () => {
+test("备注摘要渲染：renderNoteSummary 生成紧凑流程胶囊与可折叠抽屉", () => {
   const ui = createWorkbench();
 
   const noteWithStages = [
@@ -55,7 +55,7 @@ test("renderNoteSummary generates compact pipeline capsule and expandable drawer
   assert.match(html, /完全认同初审发现/);
 });
 
-test("stage card filter: clicking stage cards filters table rows", async () => {
+test("阶段卡片筛选：点击阶段卡片过滤表格行", async () => {
   const ui = createWorkbench(undefined, {
     rows: [
       { index: 1, relation: "1:1", jp: "A1", cn: "B1", signature: "sig1" },
@@ -95,7 +95,7 @@ test("stage card filter: clicking stage cards filters table rows", async () => {
   assert.deepEqual([...visible], [1, 2, 3]);
 });
 
-test("selecting stage preset or clicking header does not trigger stage filter", async () => {
+test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛选", async () => {
   const ui = createWorkbench(undefined, {
     rows: [
       { index: 1, relation: "1:1", jp: "A1", cn: "B1", signature: "sig1" },
@@ -164,7 +164,7 @@ test("selecting stage preset or clicking header does not trigger stage filter", 
   assert.equal(card2.classList.contains("is-active-filter"), false);
 });
 
-test("parseAutomatedNote extracts stage-specific revisions and supports legacy inference", () => {
+test("自动备注解析：parseAutomatedNote 提取各阶段改案并支持旧版兼容推断", () => {
   const ui = createWorkbench();
 
   // 1. 新格式：显式包含 初审改案 与 复审改案
@@ -199,7 +199,7 @@ test("parseAutomatedNote extracts stage-specific revisions and supports legacy i
   assert.equal(parsedLegacy.stage2Revision, "彼时，亚雷斯塔尚未叩响门扉。");
 });
 
-test("renderNoteSummary and renderDiffBlock visualize step progression and version switcher", async () => {
+test("改动演进可视化：renderNoteSummary 与 renderDiffBlock 渲染分步对比与版本切换器", async () => {
   const ui = createWorkbench(undefined, {
     rows: [
       {
@@ -259,7 +259,7 @@ test("renderNoteSummary and renderDiffBlock visualize step progression and versi
   assert.ok(diffAfterS1);
 });
 
-test("multi-stage rows without explicit stage1Revision still render version buttons and open step progression", () => {
+test("未显式包含 stage1Revision 的多阶段行仍正常渲染版本按钮并可展开演进对比", () => {
   const ui = createWorkbench(undefined, {
     rows: [
       {
@@ -306,7 +306,7 @@ test("multi-stage rows without explicit stage1Revision still render version butt
   assert.match(summaryHtml, /data-apply-stage="2"/);
 });
 
-test("deletion/addition intent does not misinterpret deleted words as stage1Revision", () => {
+test("删除与增译意见不将删除词句误推断为 stage1Revision 改案", () => {
   const ui = createWorkbench(undefined, {
     rows: [
       {

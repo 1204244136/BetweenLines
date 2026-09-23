@@ -23,7 +23,7 @@ const {
   workbenchClientRows,
 } = require("./build-compare");
 
-test("model refresh replaces models from the previous API base URL", () => {
+test("模型刷新：使用新 API 地址返回的模型列表替换旧地址的模型", () => {
   const result = resolveModelOptions([
     { id: "new-model-1" },
     { id: "new-model-2" },
@@ -34,7 +34,7 @@ test("model refresh replaces models from the previous API base URL", () => {
   assert.equal(result.selected, "new-model-1");
 });
 
-test("model refresh preserves the selection only when the new API still provides it", () => {
+test("模型刷新：仅当新 API 仍提供先前选中的模型时才保留选择", () => {
   const result = resolveModelOptions([
     "shared-model",
     "new-model",
@@ -45,7 +45,7 @@ test("model refresh preserves the selection only when the new API still provides
   assert.equal(result.selected, "shared-model");
 });
 
-test("model option cache is restored only for the API base URL that produced it", () => {
+test("模型选项缓存：仅对产生该缓存的 API 地址恢复选项缓存", () => {
   const cached = {
     baseUrl: "https://new.example/v1/",
     modelOptionsBaseUrl: "https://new.example/v1",
@@ -69,7 +69,7 @@ test("旧快照里的多段原文对齐组要求重新对齐，不猜测逐段�
   }]), /一张表格行只对应一段原文/);
 });
 
-test("bilingual workbench fixes AI target to B and omits C", () => {
+test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   const rows = [{
     index: 1,
     chapter: "正文",
@@ -284,7 +284,7 @@ test("bilingual workbench fixes AI target to B and omits C", () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
-test("trilingual workbench lets AI target either B or C", () => {
+test("三语工作台允许 AI 目标列选择 B 或 C", () => {
   const rows = [{
     index: 1,
     chapter: "正文",
@@ -322,13 +322,13 @@ test("trilingual workbench lets AI target either B or C", () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
-test("bilingual CSV contains only source A and target B text columns", () => {
+test("双语 CSV 仅包含原文 A 与目标 B 的文本列", () => {
   const csv = toCsv([{ index: 1, jp: "source", cn: "target", tw: "unused" }], "bilingual");
   const [header] = csv.split("\n");
   assert.equal(header, "index,chapter,relation,score,jpAlignScore,jp,cn");
 });
 
-test("row artifacts keep only the fields the mode actually has", () => {
+test("行产物仅保留当前模式实际具备的字段", () => {
   const row = {
     index: 1,
     chapter: "正文",
@@ -360,7 +360,7 @@ test("row artifacts keep only the fields the mode actually has", () => {
   );
 });
 
-test("legacy notes remap by row signature without depending on row numbering", () => {
+test("历史备注按行签名重新映射，不依赖行号", () => {
   const rows = [
     { index: 1, cn: "第一段译文内容aaaaaaaaaaaa", signature: "sig-a" },
     { index: 2, cn: "第二段译文内容bbbbbbbbbbbb", signature: "sig-b" },
@@ -374,7 +374,7 @@ test("legacy notes remap by row signature without depending on row numbering", (
   assert.equal(result.unmatched, 1);
 });
 
-test("legacy notes combine exact row signatures with safe text-anchor recovery", () => {
+test("历史备注将精确行签名与安全文本锚点找回相结合", () => {
   const rows = Array.from({ length: 7 }, (_, offset) => ({
     index: offset + 11,
     cn: `第${offset + 1}段译文内容占位文本长度足够`,
@@ -391,7 +391,7 @@ test("legacy notes combine exact row signatures with safe text-anchor recovery",
   assert.deepEqual(result.pairs.map((pair) => `${pair.from}->${pair.to}`).sort(), ["50->11", "52->13", "53->14", "54->15", "56->17"]);
 });
 
-test("notes backup round-trips one space and imports conflicts as copies", () => {
+test("备注备份支持单个空间往返并将冲突作为副本导入", () => {
   const tools = createNotesTools(alignLegacyNotes);
   const values = new Map([["translation-compare-notes-v7:project:rows", JSON.stringify({ "1": { note: "备注" } })]]);
   const storage = {
@@ -411,7 +411,7 @@ test("notes backup round-trips one space and imports conflicts as copies", () =>
   assert.equal(JSON.parse(values.get("translation-compare-notes-v7:project:rows"))["1"].note, "备注");
 });
 
-test("notes inventory excludes migration markers and measures UTF-16 storage", () => {
+test("备注清单排除迁移标记并准确统计 UTF-16 存储体积", () => {
   const tools = createNotesTools(alignLegacyNotes);
   const values = new Map([
     ["translation-compare-notes-v7:p:r", JSON.stringify({ "1": { note: "中文", manualDone: true } })],
@@ -427,7 +427,7 @@ test("notes inventory excludes migration markers and measures UTF-16 storage", (
   assert.equal(inventory[1].bytes, 2 * (inventory[1].key.length + values.get(inventory[1].key).length));
 });
 
-test("legacy notes shift as a block when revision anchors agree on one offset", () => {
+test("当修订锚点偏移一致时，历史备注作为整块位移找回", () => {
   const rows = Array.from({ length: 20 }, (_, offset) => ({
     index: offset + 11,
     cn: `第${offset + 1}段译文内容占位文本长度足够`,
@@ -444,7 +444,7 @@ test("legacy notes shift as a block when revision anchors agree on one offset", 
   assert.deepEqual(result.pairs.map((pair) => `${pair.from}->${pair.to}`).sort(), ["13->12", "14->13", "15->14", "17->16"]);
 });
 
-test("too few revision anchors does not prove the notes belong to this row set", () => {
+test("修订锚点过少不足以证明备注属于当前行集", () => {
   const rows = [
     { index: 1, cn: "锚点甲aaaaaaaaaaaaaaaa", signature: "sig-1" },
     { index: 2, cn: "锚点乙aaaaaaaaaaaaaaaa", signature: "sig-2" },
@@ -457,7 +457,7 @@ test("too few revision anchors does not prove the notes belong to this row set",
   assert.equal(result.anchors, 2);
 });
 
-test("legacy notes between conflicting anchors are dropped instead of guessed", () => {
+test("冲突锚点之间的历史备注作废丢弃而不靠猜测找回", () => {
   const rows = [
     { index: 1, cn: "锚点甲aaaaaaaaaaaaaaaa", signature: "sig-1" },
     { index: 2, cn: "锚点乙aaaaaaaaaaaaaaaa", signature: "sig-2" },
@@ -475,7 +475,7 @@ test("legacy notes between conflicting anchors are dropped instead of guessed", 
   assert.equal(result.unmatched, 1);
 });
 
-test("legacy notes from another work match nothing", () => {
+test("来自其他作品的历史备注不匹配当前任何行", () => {
   const result = alignLegacyNotes([
     { from: 1, signature: "", text: "完全不属于本书的译文内容abcdefg" },
     { from: 2, signature: "", text: "" },
@@ -483,7 +483,7 @@ test("legacy notes from another work match nothing", () => {
   assert.equal(result.pairs.length, 0);
 });
 
-test("applying a new layout keeps the browser notes space and ships the recovery helper", () => {
+test("应用新布局保留浏览器备注空间并携带找回辅助工具", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-relayout-"));
   try {
     const selection = {
@@ -510,7 +510,7 @@ test("applying a new layout keeps the browser notes space and ships the recovery
   }
 });
 
-test("index import only moves rows that still exist and never overwrites this page", () => {
+test("按行号导入仅移动依然存在的行且绝不覆盖本页已有记录", () => {
   const rows = Array.from({ length: 5 }, (_, offset) => ({ index: offset + 1, cn: "行" + (offset + 1) }));
   const plan = alignNotesByIndex(["1", "2", "3", "9"], rows, ["2"]);
   assert.deepEqual(plan.pairs, [{ from: 1, to: 1 }, { from: 3, to: 3 }]);
@@ -518,7 +518,7 @@ test("index import only moves rows that still exist and never overwrites this pa
   assert.equal(plan.occupied, 1);
 });
 
-test("workbench ships the notes space panel with export, import and index restore", () => {
+test("工作台页面包含备注空间面板并提供导出、导入与按行号恢复", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "本文", cn: "译文", score: 0.5 }];
   const selection = {
     comparisonMode: "bilingual",

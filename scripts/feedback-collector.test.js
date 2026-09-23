@@ -5,14 +5,14 @@ const {
   normalizeFeedbackEvent,
 } = require("../src/workbenches/translation-compare/ai/feedback-collector");
 
-test("normalizeFeedbackEvent handles invalid values gracefully", () => {
+test("反馈收集：normalizeFeedbackEvent 优雅处理无效事件取值", () => {
   const norm = normalizeFeedbackEvent({ action: "invalid", index: -5 });
   assert.equal(norm.action, "accepted_ai");
   assert.equal(norm.index, 0);
   assert.equal(norm.stage, "gatekeeper");
 });
 
-test("FeedbackCollector tracks events and computes statistics", () => {
+test("反馈收集：FeedbackCollector 追踪人工反馈事件并计算统计指标", () => {
   const collector = new FeedbackCollector();
 
   collector.record({
@@ -52,7 +52,7 @@ test("FeedbackCollector tracks events and computes statistics", () => {
   assert.equal(stats.byStage.gatekeeper.rejected, 1);
 });
 
-test("FeedbackCollector serializes to/from JSON", () => {
+test("反馈收集：FeedbackCollector 支持与 JSON 的序列化及反序列化", () => {
   const c1 = new FeedbackCollector();
   c1.record({ action: "accepted_ai", index: 10 });
   const serialized = c1.toJSON();

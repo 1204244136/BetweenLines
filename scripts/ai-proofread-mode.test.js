@@ -34,7 +34,7 @@ function payload() {
   };
 }
 
-test("bilingual AI prompt treats A as source and B as the only editable target", () => {
+test("双语 AI 提示词将 A 视为原文且 B 为唯一可编辑的目标列", () => {
   const messages = buildMessages(payload(), { proofreadMode: "bilingual", systemPrompt: "base" });
   const user = JSON.parse(messages[1].content);
   assert.match(messages[0].content, /A 是原文.*B 是唯一译文与唯一修改列/);
@@ -48,7 +48,7 @@ test("bilingual AI prompt treats A as source and B as the only editable target",
   assert.equal(Object.hasOwn(user.row, "counterpartText"), false);
 });
 
-test("trilingual AI prompt keeps B and C peer-level and edits only the selected target", () => {
+test("三语 AI 提示词保持 B 与 C 同级且仅编辑选中的目标列", () => {
   const messages = buildMessages(payload(), { proofreadMode: "trilingual", systemPrompt: "base" });
   const user = JSON.parse(messages[1].content);
   assert.match(messages[0].content, /B、C 是同级非原文/);
@@ -58,7 +58,7 @@ test("trilingual AI prompt keeps B and C peer-level and edits only the selected 
   assert.equal(user.row.counterpartText, "原文");
 });
 
-test("bilingual and trilingual workbenches use different default prompts", () => {
+test("双语与三语工作台使用不同的默认提示词", () => {
   const bilingual = proofreadPromptFor("bilingual").system;
   const trilingual = proofreadPromptFor("trilingual").system;
   assert.notEqual(bilingual, trilingual);
@@ -94,7 +94,7 @@ test("bilingual and trilingual workbenches use different default prompts", () =>
   assert.match(bilingual, /只判档位、不自己算分/);
 });
 
-test("bilingual decisions use keep/replace and still accept legacy better values", () => {
+test("双语模式决策使用 keep/replace 结论并兼容旧版 better 取值", () => {
   const keep = parseDecision(JSON.stringify({
     semanticSame: true,
     needsEdit: false,
@@ -179,7 +179,7 @@ test("bilingual decisions use keep/replace and still accept legacy better values
   assert.equal(trilingual.better, "counterpart");
 });
 
-test("bilingual result status never claims the target is better than a counterpart", () => {
+test("双语结果状态绝不声称目标列优于对照列", () => {
   const keepDifferent = parseDecision(JSON.stringify({
     semanticSame: false,
     needsEdit: false,
@@ -198,7 +198,7 @@ test("bilingual result status never claims the target is better than a counterpa
   assert.equal(trilingualResult.status, "target-better");
 });
 
-test("system prompt carries one JSON contract, one mode block, and leaves key names to user.outputSchema", () => {
+test("系统提示词携带单一 JSON 契约与模式块，键名留由 user.outputSchema 定义", () => {
   const countOf = (text, pattern) => (text.match(pattern) || []).length;
   const defaultPrompt = proofreadPromptFor("bilingual").system;
   // 旧版本页面里嵌的默认提示词尾部重复过两份 JSON 约定，重新校对时也必须收敛成一份。
@@ -228,7 +228,7 @@ test("system prompt carries one JSON contract, one mode block, and leaves key na
   }
 });
 
-test("user payload ships nearby rows but no program-side context budget", () => {
+test("用户载荷携带相邻行但不包含程序端上下文配额", () => {
   const messages = buildMessages({
     ...payload(),
     context: [{ index: 2, relative: 1, position: "后 1 行", source: "原文2", target: "译文2" }],
@@ -242,14 +242,14 @@ test("user payload ships nearby rows but no program-side context budget", () => 
   assert.match(user.contextPolicy, /相邻行只作判断依据/);
 });
 
-test("custom AI prompts still receive the mandatory noteref preservation rule", () => {
+test("自定义 AI 提示词依然强制注入 noteref 保留硬性约束", () => {
   const messages = buildMessages(payload(), { proofreadMode: "bilingual", systemPrompt: "custom" });
 
   assert.match(messages[0].content, /硬性格式约束/);
   assert.match(messages[0].content, /noteref 注释标记必须.*逐字、原位保留/);
 });
 
-test("GPT Chat Completions requests include the selected reasoning effort", () => {
+test("GPT Chat Completions 请求包含选定的推理强度", () => {
   const messages = [{ role: "user", content: "proofread" }];
   const body = buildChatCompletionBody(messages, {
     model: "gpt-5.6",
@@ -266,7 +266,7 @@ test("GPT Chat Completions requests include the selected reasoning effort", () =
   assert.equal(normalizeReasoningEffort(" XHIGH ", "openai/gpt-5.6-terra"), "xhigh");
 });
 
-test("non-GPT requests use the selected inference value as sampling temperature", () => {
+test("非 GPT 模型请求将选定的推理强度映射为采样温度", () => {
   const body = buildChatCompletionBody([], {
     model: "qwen2.5:14b-instruct",
     reasoningEffort: "0.8",
@@ -281,13 +281,13 @@ test("non-GPT requests use the selected inference value as sampling temperature"
   assert.equal(normalizeReasoningEffort("unsupported", "gpt-5.6"), "");
 });
 
-test("non-GPT temperature accepts values from 0.0 to 1.0", () => {
+test("非 GPT 模型温度接受 0.0 到 1.0 的数值", () => {
   assert.equal(normalizeNonGptTemperature("0"), 0);
   assert.equal(normalizeNonGptTemperature("0.74"), 0.7);
   assert.equal(normalizeNonGptTemperature("1.1"), null);
 });
 
-test("non-GPT requests omit temperature by default", () => {
+test("非 GPT 模型在默认未选强度时省略发送 temperature", () => {
   const missing = buildChatCompletionBody([], { model: "qwen" });
   const selected = buildChatCompletionBody([], { model: "qwen", reasoningEffort: "" });
   assert.equal(Object.hasOwn(missing, "temperature"), false);
@@ -295,7 +295,7 @@ test("non-GPT requests omit temperature by default", () => {
   assert.equal(normalizeNonGptTemperature(""), null);
 });
 
-test("Claude API URLs accept base URLs with or without /v1", () => {
+test("Claude API 地址兼容带或不带 /v1 的 Base URL", () => {
   assert.equal(buildApiUrl("https://api.anthropic.com", "/v1/messages"), "https://api.anthropic.com/v1/messages");
   assert.equal(buildApiUrl("https://api.anthropic.com/v1/", "/v1/messages"), "https://api.anthropic.com/v1/messages");
   assert.equal(buildApiUrl("https://proxy.example/anthropic/v1", "/v1/models"), "https://proxy.example/anthropic/v1/models");
@@ -307,7 +307,7 @@ test("Claude API URLs accept base URLs with or without /v1", () => {
   assert.equal(buildApiUrl("https://proxy.example/chat/completions", "/v1/chat/completions"), "https://proxy.example/chat/completions");
 });
 
-test("provider URLs accept full endpoints, bare hosts, and version roots", () => {
+test("服务商地址接受完整端点、裸域名及版本根路径", () => {
   const cases = [
     {
       input: "https://api.evomap.ai/v1/chat/completions",
@@ -332,7 +332,7 @@ test("provider URLs accept full endpoints, bare hosts, and version roots", () =>
   }
 });
 
-test("Claude Messages requests use native headers and body shape", () => {
+test("Claude Messages 请求采用原生请求头与请求体结构", () => {
   const messages = [
     { role: "system", content: "proofread carefully" },
     { role: "user", content: "text" },
@@ -357,7 +357,7 @@ test("Claude Messages requests use native headers and body shape", () => {
   }), "{\"needsEdit\":false}");
 });
 
-test("Claude provider calls /v1/messages when the configured address omits /v1", async () => {
+test("Claude 提供方在配置地址缺省 /v1 时调用 /v1/messages", async () => {
   let received = null;
   const server = http.createServer((request, response) => {
     let body = "";
@@ -401,7 +401,7 @@ test("Claude provider calls /v1/messages when the configured address omits /v1",
   }
 });
 
-test("OpenAI-compatible provider adds /v1 when the configured address omits it", async () => {
+test("OpenAI 兼容提供方在配置地址缺省 /v1 时自动补充 /v1", async () => {
   let receivedUrl = "";
   const server = http.createServer((request, response) => {
     receivedUrl = request.url;
@@ -425,7 +425,7 @@ test("OpenAI-compatible provider adds /v1 when the configured address omits it",
   }
 });
 
-test("Claude model discovery calls /v1/models with native authentication", async () => {
+test("Claude 模型发现调用 /v1/models 并使用原生鉴权头", async () => {
   let received = null;
   const server = http.createServer((request, response) => {
     received = { url: request.url, headers: request.headers };
@@ -453,7 +453,7 @@ test("Claude model discovery calls /v1/models with native authentication", async
   }
 });
 
-test("AI decisions normalize MQM-style severity only for definite edits", () => {
+test("AI 决策仅在确定需要修改时归一化 MQM 风格严重程度", () => {
   assert.equal(parseDecision(JSON.stringify({
     semanticSame: false,
     needsEdit: true,
@@ -494,7 +494,7 @@ test("AI decisions normalize MQM-style severity only for definite edits", () => 
   })).severity, "major");
 });
 
-test("AI result notes include severity only for definite edits", () => {
+test("AI 结果备注仅在确定需要修改时包含严重程度信息", () => {
   const edited = parseDecision(JSON.stringify({
     semanticSame: false,
     needsEdit: true,

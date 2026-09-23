@@ -60,7 +60,7 @@ function prepareStaging(dataDir, label = "layout-test") {
   return { dir: stagingDir };
 }
 
-test("invalidateWorkbenchModuleCache clears require.cache for workbenches and core", () => {
+test("模块缓存失效：清理 workbenches 与 core 相关的 require.cache", () => {
   const buildComparePath = require.resolve("../src/workbenches/translation-compare/build-compare");
   require(buildComparePath);
   assert.equal(Boolean(require.cache[buildComparePath]), true);
@@ -69,7 +69,7 @@ test("invalidateWorkbenchModuleCache clears require.cache for workbenches and co
   assert.equal(require.cache[buildComparePath], undefined);
 });
 
-test("readWorkbenchAssets dynamically returns current public assets", () => {
+test("动态读取工作台静态资源并返回最新内容", () => {
   const assets = readWorkbenchAssets();
   assert.equal(typeof assets.workbenchStyle, "string");
   assert.equal(typeof assets.aiPanelStyle, "string");
@@ -78,7 +78,7 @@ test("readWorkbenchAssets dynamically returns current public assets", () => {
   assert.equal(assets.workbenchClient.includes("bindPanelGroups"), true);
 });
 
-test("rebuildProjectHtml in same process generates updated html without restarting server", () => {
+test("同进程重建项目 HTML 即时生效最新样式且无需重启服务", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-layout-test-"));
   const cssFile = path.join(__dirname, "..", "public", "workbench-style.css");
   const originalCss = fs.readFileSync(cssFile, "utf8");
@@ -108,12 +108,12 @@ test("rebuildProjectHtml in same process generates updated html without restarti
   }
 });
 
-test("rebuild-layout CLI resolves target project key accurately", () => {
+test("rebuild-layout 命令行准确解析目标项目标识", () => {
   assert.equal(resolveTargetProjectKey(["--project=custom-key"]), "custom-key");
   assert.equal(resolveTargetProjectKey(["positional-key"]), "positional-key");
 });
 
-test("rebuild-layout CLI main() rebuilds layout and updates active snapshot", () => {
+test("rebuild-layout 主函数重建布局并原子更新活动快照指针", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-cli-test-"));
   const { main } = require("./rebuild-layout");
   try {
@@ -129,7 +129,7 @@ test("rebuild-layout CLI main() rebuilds layout and updates active snapshot", ()
   }
 });
 
-test("rebuild-layout CLI main() throws when no project is found", () => {
+test("rebuild-layout 在未找到任何项目时明确报错", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-cli-empty-"));
   const { main } = require("./rebuild-layout");
   try {

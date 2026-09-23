@@ -4,7 +4,7 @@ const { makeHtml } = require("./build-compare");
 const { createWorkbench, storageFixture } = require("./workbench-fixture");
 const { createStageMetrics } = require("../src/workbenches/translation-compare/ai/stage-results");
 
-test("build-compare renders visible ai stage metrics dashboard", () => {
+test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
   const selection = {
     comparisonMode: "bilingual",
@@ -40,7 +40,7 @@ test("build-compare renders visible ai stage metrics dashboard", () => {
   assert.match(html, /id="stage1ActiveInfo"/);
 });
 
-test("client renderAiStatus updates in-page stage dashboard metrics", () => {
+test("客户端状态渲染：renderAiStatus 实时更新页面内阶段看板指标", () => {
   const ui = createWorkbench();
 
   // Update through ui.run
@@ -85,7 +85,7 @@ test("client renderAiStatus updates in-page stage dashboard metrics", () => {
   assert.equal(elRate.textContent, "快速直通: 70%");
 });
 
-test("client renderAiStatus displays multi-stage pipeline flow status and active pills", () => {
+test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与激活徽标", () => {
   const ui = createWorkbench();
 
   // Simulate active multi-stage execution
@@ -144,7 +144,7 @@ test("client renderAiStatus displays multi-stage pipeline flow status and active
   assert.equal(active2Text.textContent, "68");
 });
 
-test("client restores stage metrics from notes on reload without waiting for AI status", () => {
+test("客户端重新载入时直接从备注中恢复阶段指标，无需等待 AI 状态轮询", () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -194,7 +194,7 @@ test("client restores stage metrics from notes on reload without waiting for AI 
   assert.equal(ui.element("stage3StatusPill").textContent, "就绪");
 });
 
-test("idle AI status with zero stageMetrics does not overwrite restored metrics from notes", () => {
+test("空闲且全为零的 AI 状态不覆盖从备注中恢复的阶段指标", () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -245,7 +245,7 @@ test("idle AI status with zero stageMetrics does not overwrite restored metrics 
   assert.equal(ui.element("metricCritiqueAccept").textContent, 1);
 });
 
-test("recovering notes from historical space restores and updates stage metrics dashboard", async () => {
+test("从历史空间找回备注时同步恢复并更新阶段指标看板", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const historicalKey = "translation-compare-notes-v7:project:rowsPrevious";
   const storage = storageFixture({
@@ -294,7 +294,7 @@ test("recovering notes from historical space restores and updates stage metrics 
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
 });
 
-test("clearing current notes space resets stage metrics dashboard to zero", async () => {
+test("清空当前备注空间时将阶段指标看板归零重置", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({

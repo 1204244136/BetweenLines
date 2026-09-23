@@ -67,7 +67,7 @@ function setupMockProject(rowsCount = 10, prefix = "sc") {
   return { project, rows };
 }
 
-test("smart-concurrency: error detection accurately identifies rate limits, overload and concurrency signals", () => {
+test("智能并发：错误检测准确识别速率限制、过载与并发信号", () => {
   assert.equal(isConcurrencyOrRateLimitError(null), false);
   assert.equal(isConcurrencyOrRateLimitError({}), false);
   assert.equal(isConcurrencyOrRateLimitError(new Error("普通网络中断")), false);
@@ -109,7 +109,7 @@ test("smart-concurrency: error detection accurately identifies rate limits, over
   assert.equal(parseRateLimitReason({ message: "exceeded tokens per minute" }), "Token 速率限制 (TPM)");
 });
 
-test("smart-concurrency: presetTools cleans and preserves smartConcurrency and concurrencyMax", () => {
+test("智能并发：预设工具正确清洗并持久化 smartConcurrency 与 concurrencyMax", () => {
   const tools = createPresetTools();
 
   const cleanedDefault = tools.sanitizePreset({
@@ -141,7 +141,7 @@ test("smart-concurrency: presetTools cleans and preserves smartConcurrency and c
   assert.equal(cleanedClamped.concurrencyMax, 10);
 });
 
-test("smart-concurrency UI: renders smart concurrency controls, labels and toggles visibility", async () => {
+test("智能并发界面：渲染智能并发开关、控件与状态可见性联动", async () => {
   const tools = createPresetTools();
   const storage = {
     data: new Map(),
@@ -188,7 +188,7 @@ test("smart-concurrency UI: renders smart concurrency controls, labels and toggl
   assert.equal(maxWrap.hidden, true);
 });
 
-test("smart-concurrency: dynamic upward probing on consecutive successes", async () => {
+test("智能并发：连续成功触发动态向上探测试探更高并发", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(15, "probe");
 
@@ -256,7 +256,7 @@ test("smart-concurrency: dynamic upward probing on consecutive successes", async
   }
 });
 
-test("smart-concurrency: encounters HTTP 429 rate limit, scales down, backs off and retries to completion", async () => {
+test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在重试中完成", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(8, "ratelimit");
 
@@ -340,7 +340,7 @@ test("smart-concurrency: encounters HTTP 429 rate limit, scales down, backs off 
   }
 });
 
-test("smart-concurrency: persistent 429 beyond max retries records failure without crashing the queue", async () => {
+test("智能并发：超出重试上限的持续 429 记为单行失败且不崩溃队列", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(4, "persistent429");
 

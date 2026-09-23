@@ -25,7 +25,7 @@ function withTextFiles(count, callback) {
   }
 }
 
-test("bilingual selection drops the third role entirely", () => {
+test("双语输入选择完全丢弃第三角色（tw）", () => {
   withTextFiles(2, ([jp, cn]) => {
     const selection = validateSelection({
       comparisonMode: "bilingual",
@@ -43,7 +43,7 @@ test("bilingual selection drops the third role entirely", () => {
   });
 });
 
-test("inline markup selection can disable EPUB noteref preservation", () => {
+test("内联标记选择支持禁用 EPUB noteref 保留", () => {
   withTextFiles(2, ([jp, cn]) => {
     const selection = validateSelection({
       comparisonMode: "bilingual",
@@ -55,7 +55,7 @@ test("inline markup selection can disable EPUB noteref preservation", () => {
   });
 });
 
-test("trilingual selection still requires three files", () => {
+test("三语模式严格要求提供三份文件", () => {
   withTextFiles(2, ([jp, cn]) => {
     assert.throws(
       () => validateSelection({ comparisonMode: "trilingual", files: { jp, cn, tw: "" } }),
@@ -64,7 +64,7 @@ test("trilingual selection still requires three files", () => {
   });
 });
 
-test("bilingual file guessing leaves the third role empty", () => {
+test("双语文件推测保持第三角色为空", () => {
   withTextFiles(2, (files) => {
     const guessed = guessLangOrder(files, "bilingual");
     assert.ok(guessed.jp);
@@ -74,7 +74,7 @@ test("bilingual file guessing leaves the third role empty", () => {
   });
 });
 
-test("bilingual paragraph export does not read or emit a third file", async () => {
+test("双语段落导出不读取也不产出第三份文件", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-paragraphs-"));
   const jp = path.join(dir, "a.txt");
   const cn = path.join(dir, "b.txt");

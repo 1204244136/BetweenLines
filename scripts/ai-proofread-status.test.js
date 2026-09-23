@@ -33,7 +33,7 @@ test.after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test("AI results are consumed through a bounded revision cursor without gaps", async () => {
+test("AI 结果通过有界的修订版本游标无缝连续消费", async () => {
   const selection = {
     comparisonMode: "bilingual",
     inputMode: "txt",
@@ -100,7 +100,7 @@ test("AI results are consumed through a bounded revision cursor without gaps", a
   assert.equal(full.hasMoreResults, false);
 });
 
-test("AI queue stops after a fatal authentication response", async () => {
+test("遭遇致命鉴权失败响应时 AI 队列立即停止", async () => {
   clearProofreadCache();
   const selection = {
     comparisonMode: "bilingual",
@@ -174,7 +174,7 @@ test("AI queue stops after a fatal authentication response", async () => {
   }
 });
 
-test("AI queue stops after the endpoint returns an HTML page instead of JSON", async () => {
+test("端点返回 HTML 页面而非 JSON 时 AI 队列立即停止", async () => {
   clearProofreadCache();
   const selection = {
     comparisonMode: "bilingual",
@@ -248,7 +248,7 @@ test("AI queue stops after the endpoint returns an HTML page instead of JSON", a
   }
 });
 
-test("AI queue trips when the recent error rate reaches the circuit-breaker threshold", async () => {
+test("近期错误率达到熔断阈值时 AI 队列触发熔断", async () => {
   clearProofreadCache();
   const selection = {
     comparisonMode: "bilingual",
@@ -615,7 +615,7 @@ test("译文在原文接续片段末尾引入引述动词时，基础轮主动�
   assert.equal(finished.errors, 0);
 });
 
-test("raised circuit-breaker threshold lets a 50% failure rate run to completion", async () => {
+test("调高熔断阈值允许 50% 错误率的任务继续跑完全程", async () => {
   const { finished, rows } = await runProofreadAgainst({
     label: "raised-threshold",
     rowCount: 24,
@@ -636,7 +636,7 @@ test("raised circuit-breaker threshold lets a 50% failure rate run to completion
   assert.match(finished.logs.join("\n"), /错误率熔断：最近 20 次调用中失败占比达到 90% 时自动终止/);
 });
 
-test("disabling the circuit breaker keeps an all-failing run going row by row", async () => {
+test("禁用熔断器时允许全失败任务逐行执行至完毕", async () => {
   const { finished, requestCount, rows } = await runProofreadAgainst({
     label: "breaker-disabled",
     rowCount: 12,

@@ -12,14 +12,14 @@ const {
   createPersonaContext,
 } = require("../src/workbenches/translation-compare/ai/persona-runtime");
 
-test("persona-runtime exports valid personas and definitions", () => {
+test("角色运行时：导出合法的角色清单与角色定义", () => {
   assert.deepEqual(PERSONAS, ["gatekeeper", "stylist", "arbiter"]);
   assert.ok(PERSONA_DEFINITIONS.gatekeeper.name.includes("Gatekeeper"));
   assert.ok(PERSONA_DEFINITIONS.stylist.name.includes("Stylist"));
   assert.ok(PERSONA_DEFINITIONS.arbiter.name.includes("Arbiter"));
 });
 
-test("adaptPersonaReasoningEffort scales according to persona role", () => {
+test("角色运行时：adaptPersonaReasoningEffort 根据角色动态调整推理强度", () => {
   const o1Caps = { id: "o1", reasoning: true, reasoningEfforts: ["low", "medium", "high"] };
 
   const gkEffort = adaptPersonaReasoningEffort("gatekeeper", "", o1Caps);
@@ -32,7 +32,7 @@ test("adaptPersonaReasoningEffort scales according to persona role", () => {
   assert.equal(arbEffort, "high");
 });
 
-test("buildPersonaSystemPrompt produces distinct instructions per persona", () => {
+test("角色运行时：buildPersonaSystemPrompt 为每个角色生成特化的系统指令", () => {
   const gkPrompt = buildPersonaSystemPrompt("gatekeeper", "base-rules");
   assert.ok(gkPrompt.includes("冷峻严苛"));
   assert.ok(gkPrompt.includes("绝不擅自为了修辞美感而重写译文"));
@@ -46,7 +46,7 @@ test("buildPersonaSystemPrompt produces distinct instructions per persona", () =
   assert.ok(arbPrompt.includes("不重新翻译"));
 });
 
-test("parseStylistResponse extracts normalized critique result", () => {
+test("角色运行时：parseStylistResponse 正确解析结构化的复审评审结果", () => {
   const raw = JSON.stringify({
     critique: {
       attitude: "modify",
@@ -64,7 +64,7 @@ test("parseStylistResponse extracts normalized critique result", () => {
   assert.equal(parsed.revisedText, "更优美的译文");
 });
 
-test("parseArbiterResponse extracts normalized arbitration result", () => {
+test("角色运行时：parseArbiterResponse 正确解析结构化的终审仲裁结果", () => {
   const raw = JSON.stringify({
     winner: "stylist",
     reason: "文学性显著提高且未伤及原文信息",
@@ -79,7 +79,7 @@ test("parseArbiterResponse extracts normalized arbitration result", () => {
   assert.equal(parsed.revisedText, "终审裁定的译文");
 });
 
-test("createPersonaContext builds isolated runtime contexts", () => {
+test("角色运行时：createPersonaContext 构建相互隔离的运行时上下文", () => {
   const baseConfig = { model: "o3-mini", provider: "local" };
   const ctxA = createPersonaContext("gatekeeper", baseConfig);
   const ctxB = createPersonaContext("stylist", baseConfig);

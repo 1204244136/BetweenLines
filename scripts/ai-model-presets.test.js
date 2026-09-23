@@ -3,7 +3,7 @@ const test = require("node:test");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
 
-test("ai-presets: listPresets handles empty, malformed, and non-array storage", () => {
+test("模型预设：listPresets 容错处理空值、畸形与非数组存储", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
 
@@ -20,7 +20,7 @@ test("ai-presets: listPresets handles empty, malformed, and non-array storage", 
   assert.deepEqual(tools.listPresets(storage), []);
 });
 
-test("ai-presets: sanitizePreset validates and cleans all fields with safe fallbacks", () => {
+test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回退", () => {
   const tools = createPresetTools();
 
   assert.equal(tools.sanitizePreset(null), null);
@@ -56,7 +56,7 @@ test("ai-presets: sanitizePreset validates and cleans all fields with safe fallb
   assert.ok(cleaned.updatedAt > 0);
 });
 
-test("ai-presets: savePreset adds new preset and allows retrieval by ID", () => {
+test("模型预设：savePreset 保存新预设并支持按 ID 查询", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
 
@@ -80,7 +80,7 @@ test("ai-presets: savePreset adds new preset and allows retrieval by ID", () => 
   assert.deepEqual(found, preset1);
 });
 
-test("ai-presets: savePreset updates existing preset by ID while preserving createdAt", () => {
+test("模型预设：savePreset 更新已有预设并保留原始创建时间", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
 
@@ -113,7 +113,7 @@ test("ai-presets: savePreset updates existing preset by ID while preserving crea
   assert.equal(list[0].name, "SiliconFlow R1 (更新)");
 });
 
-test("ai-presets: savePreset overwrites existing preset when name matches", () => {
+test("模型预设：savePreset 在名称相同时覆盖已有预设", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
 
@@ -141,7 +141,7 @@ test("ai-presets: savePreset overwrites existing preset when name matches", () =
   assert.equal(list[0].concurrency, 5);
 });
 
-test("ai-presets: deletePreset removes targeted preset safely", () => {
+test("模型预设：deletePreset 安全删除指定目标预设", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
 
@@ -160,7 +160,7 @@ test("ai-presets: deletePreset removes targeted preset safely", () => {
   assert.equal(tools.getPreset(storage, p1.id), null);
 });
 
-test("ai-presets: handles quota exceeded errors gracefully", () => {
+test("模型预设：优雅处理存储配额超额错误", () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   storage.failWrites = true;
@@ -169,7 +169,7 @@ test("ai-presets: handles quota exceeded errors gracefully", () => {
   assert.equal(tools.deletePreset(storage, "some-id"), false);
 });
 
-test("ai-presets UI: renders preset controls and reflects stored presets in dropdown", async () => {
+test("模型预设界面：渲染预设控件并在下拉框中呈现已存预设", async () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   tools.savePreset(storage, {
@@ -203,7 +203,7 @@ test("ai-presets UI: renders preset controls and reflects stored presets in drop
   assert.equal(select.children[1].textContent, "DeepSeek V3 (测试)");
 });
 
-test("ai-presets UI: selecting a preset updates fields and enables action buttons with toast", async () => {
+test("模型预设界面：选择预设时更新表单字段、启用操作按钮并弹出提示", async () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
@@ -239,7 +239,7 @@ test("ai-presets UI: selecting a preset updates fields and enables action button
   assert.ok(toasts.some((msg) => msg.includes("已应用模型预设「Claude 3.7」")));
 });
 
-test("ai-presets UI: save as preset creates a new preset and selects it", async () => {
+test("模型预设界面：另存为预设创建新预设并自动选中", async () => {
   const storage = storageFixture();
   const ui = createWorkbench(storage, {
     prompt: () => "我的新模型预设",
@@ -272,7 +272,7 @@ test("ai-presets UI: save as preset creates a new preset and selects it", async 
   assert.ok(toasts.some((msg) => msg.includes("已保存模型预设「我的新模型预设」")));
 });
 
-test("ai-presets UI: update preset modifies existing preset in storage", async () => {
+test("模型预设界面：修改预设更新存储中的已有配置", async () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
@@ -307,7 +307,7 @@ test("ai-presets UI: update preset modifies existing preset in storage", async (
   assert.ok(toasts.some((msg) => msg.includes("已更新模型预设「本地 Ollama」")));
 });
 
-test("ai-presets UI: delete preset removes it from storage and resets select", async () => {
+test("模型预设界面：删除预设从存储中移除并重置下拉选择", async () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
@@ -336,7 +336,7 @@ test("ai-presets UI: delete preset removes it from storage and resets select", a
   assert.ok(toasts.some((msg) => msg.includes("已删除模型预设「待删预设」")));
 });
 
-test("ai-presets UI: restores previously active preset on page initialization", async () => {
+test("模型预设界面：页面初始化时自动恢复先前激活的预设", async () => {
   const tools = createPresetTools();
   const storage = storageFixture();
   const p = tools.savePreset(storage, {

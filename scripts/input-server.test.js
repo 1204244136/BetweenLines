@@ -25,7 +25,7 @@ async function apiToken(port) {
   return match[1];
 }
 
-test("machine progress messages are parsed and clamped", () => {
+test("机器进度消息被正确解析与区间限制", () => {
   const message = parseProgressMessage(
     '@@transcomparator-progress@@{"percent":125,"label":"编码原文向量","current":256,"total":1000}',
   );
@@ -39,7 +39,7 @@ test("machine progress messages are parsed and clamped", () => {
   assert.equal(parseProgressMessage("@@transcomparator-progress@@not-json"), null);
 });
 
-test("command progress maps local work into its global pipeline range", () => {
+test("命令进度将局部进度映射至全局流水线区间", () => {
   assert.deepEqual(
     mapCommandProgress({ percent: 50, label: "编码原文向量", current: 512, total: 1024 }, "align:jp", { start: 2, end: 84 }),
     {
@@ -52,7 +52,7 @@ test("command progress maps local work into its global pipeline range", () => {
   );
 });
 
-test("status exposes the project API version and completed project slot", async () => {
+test("状态接口暴露项目 API 版本与已完成项目槽位", async () => {
   const server = createServer();
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -73,7 +73,7 @@ test("status exposes the project API version and completed project slot", async 
   }
 });
 
-test("deleting an unknown project is rejected without touching storage", async () => {
+test("删除不存在的项目直接拒绝且不触碰存储", async () => {
   const server = createServer();
   const port = await listen(server);
   try {
@@ -91,7 +91,7 @@ test("deleting an unknown project is rejected without touching storage", async (
   }
 });
 
-test("mutating API requests require the same-origin session token and JSON content type", async () => {
+test("写操作 API 请求要求同源会话 Token 与 JSON 内容类型", async () => {
   const server = createServer();
   const port = await listen(server);
   try {
@@ -138,7 +138,7 @@ test("mutating API requests require the same-origin session token and JSON conte
   }
 });
 
-test("malformed request paths return 400 without terminating the server", async () => {
+test("格式畸形的请求路径返回 400 且不终止服务进程", async () => {
   const server = createServer();
   const port = await listen(server);
   try {
@@ -163,7 +163,7 @@ test("malformed request paths return 400 without terminating the server", async 
   }
 });
 
-test("AI status supports compact incremental polling", async () => {
+test("AI 状态支持紧凑增量轮询", async () => {
   const server = createServer();
   await new Promise((resolve, reject) => {
     server.once("error", reject);

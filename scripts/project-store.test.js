@@ -18,7 +18,7 @@ const {
   writeJsonAtomic,
 } = require("./project-store");
 
-test("explicitly disabled noteref keeps the legacy project identity", () => {
+test("显式禁用 noteref 保持兼容旧版项目标识", () => {
   const base = selection("C:\\books", "legacy");
   const legacy = { ...base, inlineMarkup: { ruby: true, bold: true } };
   const disabled = { ...base, inlineMarkup: { ruby: true, bold: true, noteref: false } };
@@ -65,7 +65,7 @@ function prepareStaging(dataDir, sourceName, generatedAt) {
   return staging;
 }
 
-test("publishes immutable snapshots and switches projects by pointer", () => {
+test("发布不可变快照并通过指针切换活动项目", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const first = publishProject(
@@ -91,7 +91,7 @@ test("publishes immutable snapshots and switches projects by pointer", () => {
   }
 });
 
-test("failed publication leaves the previously published project intact", () => {
+test("发布失败时完整保留先前已发布的项目", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const published = publishProject(
@@ -107,7 +107,7 @@ test("failed publication leaves the previously published project intact", () => 
   }
 });
 
-test("rebuilding page layout publishes a new immutable snapshot", () => {
+test("重建页面布局时发布新的不可变快照", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const published = publishProject(
@@ -137,7 +137,7 @@ test("rebuilding page layout publishes a new immutable snapshot", () => {
   }
 });
 
-test("atomic JSON writes restore the previous file when replacement fails", () => {
+test("原子 JSON 写入在替换失败时还原先前的文件", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   const file = path.join(dataDir, "active-project.json");
   const originalRename = fs.renameSync;
@@ -166,7 +166,7 @@ test("atomic JSON writes restore the previous file when replacement fails", () =
   }
 });
 
-test("active project pointer recovers from the latest atomic-write backup", () => {
+test("活动项目指针可从最新的原子写备份中自动恢复", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const published = publishProject(
@@ -187,7 +187,7 @@ test("active project pointer recovers from the latest atomic-write backup", () =
   }
 });
 
-test("retains only two latest snapshots for the same project", () => {
+test("同一项目仅保留最新的两份快照", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const generated = ["20", "21", "22"].map((day) => publishProject(
@@ -202,7 +202,7 @@ test("retains only two latest snapshots for the same project", () => {
   }
 });
 
-test("deleting the active project falls back to the newest remaining snapshot", () => {
+test("删除活动项目时回退至最新的剩余快照", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const first = publishProject(
@@ -233,7 +233,7 @@ test("deleting the active project falls back to the newest remaining snapshot", 
   }
 });
 
-test("deleting an inactive project keeps the active pointer", () => {
+test("删除非活动项目时保持当前活动指针不变", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     const first = publishProject(
@@ -256,7 +256,7 @@ test("deleting an inactive project keeps the active pointer", () => {
   }
 });
 
-test("rejects project keys that can escape the project directory", () => {
+test("拒绝能够逃逸出项目目录的项目标识", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-projects-"));
   try {
     assert.throws(() => activateProject("../outside", { dataDir }), /项目标识无效/);

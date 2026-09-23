@@ -39,7 +39,7 @@ function createConsole() {
 }
 
 for (const mode of ["file", "folder"]) {
-  test(`console registers ${mode} with shared busy and success feedback`, async () => {
+  test(`控制台登记${mode === "folder" ? "文件夹" : "文件"}：具备忙碌态与成功反馈`, async () => {
     const ui = createConsole();
     let finish;
     const file = { name: "sample", path: `/samples/${mode}`, ext: "epub", size: 1024,
@@ -63,7 +63,7 @@ for (const mode of ["file", "folder"]) {
   });
 }
 
-test("cancel, invalid selection and duplicate selection preserve the previous input", async () => {
+test("取消、无效选择及重复选择时保留先前的输入", async () => {
   const ui = createConsole();
   ui.run('registerLocalFile("jp", { path: "/samples/old.epub", name: "old.epub", ext: "epub", size: 10 })');
   for (const payload of [{ ok: true, canceled: true }, { ok: false, error: "无效的 EPUB 文件夹" }]) {
@@ -79,7 +79,7 @@ test("cancel, invalid selection and duplicate selection preserve the previous in
   assert.match(ui.element("jpImportStatus").textContent, /选择不同的输入/);
 });
 
-test("manual path fallback retains copy provenance and its writeback label", async () => {
+test("手动路径回退保留副本来源与对应写回标签", async () => {
   const ui = createConsole();
   ui.element("jpLocalPath").value = '"/samples/imported.epub"';
   ui.context.fetch = async (url, options) => {
@@ -94,7 +94,7 @@ test("manual path fallback retains copy provenance and its writeback label", asy
   assert.match(ui.element("jpDropzone").innerHTML, /写回已导入副本/);
 });
 
-test("Escape closes the import choices and returns focus to the owning card", () => {
+test("按下 Escape 关闭导入选项菜单并将焦点返还所属卡片", () => {
   const ui = createConsole();
   ui.run('setPickMenuOpen("jp", true)');
   ui.documentEvents.keydown({ key: "Escape", preventDefault() {} });

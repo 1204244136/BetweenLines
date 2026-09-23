@@ -7,7 +7,7 @@ const {
   scheduleModels,
 } = require("../src/workbenches/translation-compare/ai/scheduler-profile");
 
-test("getModelProfile returns curated profiles with correct scores", () => {
+test("模型画像：getModelProfile 返回带有准确评分的精选档案", () => {
   const profile = getModelProfile("deepseek-reasoner");
   assert.equal(profile.source, "curated");
   assert.equal(profile.reasoning, true);
@@ -19,7 +19,7 @@ test("getModelProfile returns curated profiles with correct scores", () => {
   assert.ok(claudeProfile.literary >= 9.0);
 });
 
-test("getModelProfile provides sensible heuristic for unknown models", () => {
+test("模型画像：getModelProfile 为未知模型提供合理的启发式评估", () => {
   const customReasoner = getModelProfile("my-custom-r1-model");
   assert.equal(customReasoner.source, "heuristic");
   assert.ok(customReasoner.reasoningScore >= 8.5);
@@ -29,7 +29,7 @@ test("getModelProfile provides sensible heuristic for unknown models", () => {
   assert.ok(customHaiku.cost <= 2.5);
 });
 
-test("recommendRole identifies model strengths", () => {
+test("角色推荐：recommendRole 准确识别模型特长并推荐合适角色", () => {
   const reasonerRole = recommendRole("deepseek-reasoner");
   // Reasoning models are strong candidates for arbiter or gatekeeper
   assert.ok(["arbiter", "gatekeeper"].includes(reasonerRole.recommendedRole));
@@ -39,7 +39,7 @@ test("recommendRole identifies model strengths", () => {
   assert.ok(["stylist", "arbiter"].includes(claudeRole.recommendedRole));
 });
 
-test("scheduleModels allocates properly across 1, 2, and 3 models", () => {
+test("自动调度：scheduleModels 在 1、2、3 个模型间合理分配流水线角色", () => {
   // 1 model -> recommends persona runtime
   const single = scheduleModels(["deepseek-chat"]);
   assert.equal(single.mode, "single");

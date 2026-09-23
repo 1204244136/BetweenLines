@@ -39,7 +39,7 @@ function publishRows(rows, selection) {
   return project;
 }
 
-test("startPrefilter marks rule-equivalent rows without a model or base URL", async () => {
+test("startPrefilter 在无模型或 Base URL 时对规则等价行直接完成预筛", async () => {
   clearProofreadCache();
   const selection = {
     comparisonMode: "bilingual",
