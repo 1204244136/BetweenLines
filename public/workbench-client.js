@@ -818,10 +818,6 @@
       aiIds.reasoningEffort.title = isReasoning
         ? ("该推理模型专属的推理强度档位（数据源：" + (caps.source || "检测") + "，绝不套用统一档位）")
         : "常规非推理模型文本化强度档位（低~最大，模型默认时不发送采样参数）";
-      const labelElem = aiIds.reasoningField ? aiIds.reasoningField.querySelector("label") : null;
-      if (labelElem) {
-        labelElem.textContent = isReasoning ? "推理强度" : "推理强度";
-      }
       aiIds.reasoningField.hidden = false;
       aiIds.reasoningEffort.disabled = false;
       aiIds.serviceFields.classList.add("has-reasoning");

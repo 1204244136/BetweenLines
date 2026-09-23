@@ -835,10 +835,6 @@
       aiReasoningEffort.dataset.effortsKey = currentEffortsKey;
     }
 
-    const labelElem = aiReasoningField.querySelector("label");
-    if (labelElem) {
-      labelElem.textContent = isReasoning ? "推理强度" : "推理强度";
-    }
     aiReasoningEffort.title = isReasoning
       ? ("该推理模型专属的推理强度档位（数据源：" + (caps.source || "检测") + "，绝不套用统一档位）")
       : "常规非推理模型文本化强度档位（低~最大，模型默认时不发送采样参数）";
@@ -1263,7 +1259,8 @@
     showModelHint("正在获取可用模型...", { timeout: 0 });
 
     try {
-      // 优先尝试后端代理端点
+      // 模型列表只经本地服务的共享传输层获取（出站地址校验、禁止重定向都在那里）；
+      // 浏览器不得直连远端 /models：会把 API key 发给任意用户填入的地址，也绕过 SSRF 护栏。
       const resp = await apiFetch("/api/speaker-ai/models", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1273,22 +1270,17 @@
           apiKey: aiApiKey?.value || "",
         }),
       });
-
-      let models = [];
-      if (resp.ok) {
-        const data = await resp.json();
-        models = data.models || [];
-      } else {
-        // 若无后端服务，回退到直接调用远端 /models 接口
-        const directUrl = requestedUrl.replace(/\/+$/, "") + "/models";
-        const headers = {};
-        if (aiApiKey?.value) headers.authorization = "Bearer " + aiApiKey.value;
-        const directResp = await fetch(directUrl, { headers });
-        const directData = await directResp.json();
-        const items = Array.isArray(directData.data) ? directData.data : (Array.isArray(directData.models) ? directData.models : []);
-        models = items.map((it) => ({ id: it.id || it.name, name: it.name || it.id }));
+      if (!resp.ok) {
+        throw new Error("本地服务返回 HTTP " + resp.status + "，请确认控制台服务正在运行");
       }
+      const data = await resp.json();
+      const models = data.models || [];
 
+      // 地址在等待期间被改过：结果属于旧配置，丢弃，不写入缓存也不覆盖下拉。
+      if (aiBaseUrl.value.trim() !== requestedUrl) {
+        showModelHint("API 地址已变更，已忽略旧地址的模型列表。", { isError: false, timeout: 8000 });
+        return;
+      }
       if (models && models.length) {
         populateModelOptions(models);
         // 保存至该 Base URL 对应的本地缓存
