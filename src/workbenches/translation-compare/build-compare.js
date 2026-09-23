@@ -18,6 +18,7 @@ function readWorkbenchAssets() {
   return {
     workbenchStyle: fs.readFileSync(path.join(publicDir, "workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
+    workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "workbench-client.js"), "utf8"),
   };
 }
@@ -25,6 +26,7 @@ function readWorkbenchAssets() {
 const initialWorkbenchAssets = readWorkbenchAssets();
 const workbenchStyle = initialWorkbenchAssets.workbenchStyle;
 const aiPanelStyle = initialWorkbenchAssets.aiPanelStyle;
+const workbenchShared = initialWorkbenchAssets.workbenchShared;
 const workbenchClient = initialWorkbenchAssets.workbenchClient;
 
 function resolveModelOptions(models, selected = "") {
@@ -1208,6 +1210,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 
     const storageKey = ${JSON.stringify(storageKey)};
     const pageMeta = ${safeJson(clientMeta)};
+${assets.workbenchShared}
 ${assets.workbenchClient}</script>
 </body>
 </html>`;

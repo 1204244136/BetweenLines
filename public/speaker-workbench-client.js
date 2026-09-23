@@ -52,31 +52,6 @@
     saveTimer = window.setTimeout(flushNotes, 180);
   }
 
-  async function apiFetch(url, options = {}) {
-    const method = String(options.method || "GET").toUpperCase();
-    const isApiRequest = String(url).startsWith("/api/");
-    if (!isApiRequest || ["GET", "HEAD", "OPTIONS"].includes(method)) {
-      return fetch(url, options);
-    }
-    const meta = document.querySelector('meta[name="transcomparator-session-token"]');
-    const token = meta?.getAttribute("content") || "";
-    const headers = { ...(options.headers || {}) };
-    if (token) headers["X-TransComparator-Token"] = token;
-    if (options.body != null && !Object.keys(headers).some((name) => name.toLowerCase() === "content-type")) {
-      headers["Content-Type"] = "application/json";
-    }
-    return fetch(url, { ...options, headers });
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   function languageTag(value, fallback = "") {
     return {
       jp: "ja",
@@ -348,7 +323,7 @@
       + '<div class="speaker-field"><label for="evidence-' + escapeHtml(row.id) + '">判断依据</label><textarea id="evidence-' + escapeHtml(row.id) + '" data-field="evidence" data-row-id="' + escapeHtml(row.id) + '" placeholder="记录上下文、称谓或语气线索">' + escapeHtml(record.evidence) + "</textarea></div></td></tr>";
   }
 
-  function totalPages() { return Math.max(1, Math.ceil(filteredRows.length / Number(pageSize.value || 50))); }
+  function totalPages() { return calculateTotalPages(filteredRows.length, pageSize.value, 50); }
 
   function updateStats() {
     let aiProcessed = 0;
@@ -564,20 +539,6 @@
     document.getElementById("speakerVisibleCount").textContent = String(filteredRows.length);
   }
 
-  function copyText(value) {
-    const text = String(value || "");
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch(() => {});
-      return;
-    }
-    const helper = document.createElement("textarea");
-    helper.value = text;
-    document.body.appendChild(helper);
-    helper.select();
-    document.execCommand("copy");
-    helper.remove();
-  }
-
   document.querySelectorAll("[data-status-filter]").forEach((button) => button.addEventListener("click", () => {
     document.querySelectorAll("[data-status-filter]").forEach((item) => item.classList.toggle("is-active", item === button));
     statusFilter = button.dataset.statusFilter || "all";
@@ -760,72 +721,16 @@
   let aiRunSequence = 0;
   let aiActiveRunId = 0;
 
-  const thinkingLevelLabels = {
-    "": "模型默认",
-    off: "关闭思考",
-    none: "无",
-    minimal: "最小",
-    low: "低",
-    medium: "中",
-    high: "高",
-    xhigh: "极高",
-    max: "最大",
-  };
-  const nonReasoningIntensityOptions = [
-    ["", "模型默认"],
-    ["low", "低"],
-    ["medium", "中"],
-    ["high", "高"],
-    ["xhigh", "极高"],
-    ["ultra", "超高"],
-    ["max", "最大"],
-  ];
-  const aiModelMetadataMap = new Map();
-
-  function getClientModelCapabilities(modelName) {
-    const id = String(modelName || "").trim();
-    if (aiModelMetadataMap.has(id)) {
-      return aiModelMetadataMap.get(id);
-    }
-    const lower = id.toLowerCase();
-    if (/(?:^|\/)(?:o1|o3|o4)(?:-|$)/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["low", "medium", "high"], supportsTemperature: false, source: "heuristic" };
-    }
-    if (/(?:^|\/)(?:deepseek-(?:r1|reasoner|v4)|r1\b)/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["high", "max"], supportsTemperature: false, source: "heuristic" };
-    }
-    if (/(?:^|\/)(?:qwq|qvq)\b/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["low", "medium", "high", "xhigh"], supportsTemperature: false, source: "heuristic" };
-    }
-    if (/(?:^|\/)kimi-k3\b/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["max"], supportsTemperature: false, source: "heuristic" };
-    }
-    if (/(?:^|\/)claude-(?:3-7|sonnet-4|sonnet-5|opus-4)/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["low", "medium", "high", "max"], supportsTemperature: true, source: "heuristic" };
-    }
-    if (/(?:^|\/)gpt(?:-|$)/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], supportsTemperature: true, source: "heuristic" };
-    }
-    if (/(?:^|\/|-|_|\b)(?:thinking|reasoner|reasoning)\b/i.test(lower)) {
-      return { reasoning: true, reasoningEfforts: ["low", "medium", "high"], supportsTemperature: false, source: "heuristic" };
-    }
-    return { reasoning: false, reasoningEfforts: [], supportsTemperature: true, source: "default" };
-  }
-
   function updateInferenceSettingOptions() {
     if (!aiReasoningEffort || !aiReasoningField) return;
     const model = aiModel?.value || "";
     const caps = getClientModelCapabilities(model);
     const isReasoning = Boolean(caps.reasoning);
     const mode = isReasoning ? "reasoning" : "temperature";
+    const reasoningOptions = buildReasoningOptions(caps);
     const reasoningEfforts = Array.isArray(caps.reasoningEfforts) && caps.reasoningEfforts.length > 0
       ? caps.reasoningEfforts
       : ["low", "medium", "high"];
-
-    const reasoningOptions = [
-      ["", "模型默认"],
-      ...reasoningEfforts.map((effort) => [effort, thinkingLevelLabels[effort] || effort]),
-    ];
 
     const currentEffortsKey = isReasoning ? reasoningEfforts.join(",") : "text-intensity";
     if (aiReasoningEffort.dataset.effortsKey !== currentEffortsKey) {

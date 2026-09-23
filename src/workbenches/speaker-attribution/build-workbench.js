@@ -35,6 +35,7 @@ function readSpeakerWorkbenchAssets() {
   return {
     workbenchStyle: fs.readFileSync(path.join(publicDir, "speaker-workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
+    workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "speaker-workbench-client.js"), "utf8"),
   };
 }
@@ -42,6 +43,7 @@ function readSpeakerWorkbenchAssets() {
 const initialSpeakerAssets = readSpeakerWorkbenchAssets();
 const workbenchStyle = initialSpeakerAssets.workbenchStyle;
 const aiPanelStyle = initialSpeakerAssets.aiPanelStyle;
+const workbenchShared = initialSpeakerAssets.workbenchShared;
 const workbenchClient = initialSpeakerAssets.workbenchClient;
 
 async function loadUnits(file, lang, inputMode) {
@@ -460,6 +462,7 @@ function renderHtml(model) {
 </div><script id="rowData" type="application/json">${rowsJson}</script><script>
 window.speakerStorageKey = ${safeJson(`between-lines:speaker-attribution:${model.analysisKey}:v2`)};
 window.speakerPageMeta = ${safeJson(pageMeta)};
+${assets.workbenchShared}
 ${assets.workbenchClient}
 </script></body></html>`;
 }
