@@ -153,17 +153,22 @@ test("角色运行时：导出合法的角色清单与角色定义", () => {
   assert.ok(PERSONA_DEFINITIONS.arbiter.name.includes("Arbiter"));
 });
 
-test("角色运行时：adaptPersonaReasoningEffort 根据角色动态调整推理强度", () => {
+test("角色运行时：adaptPersonaReasoningEffort 严格遵从模型预设，角色不改变推理强度", () => {
   const o1Caps = { id: "o1", reasoning: true, reasoningEfforts: ["low", "medium", "high"] };
 
-  const gkEffort = adaptPersonaReasoningEffort("gatekeeper", "", o1Caps);
-  assert.equal(gkEffort, "low");
+  // 1. 预设明确指定强度时，所有角色均保留预设强度，绝不擅自篡改
+  assert.equal(adaptPersonaReasoningEffort("gatekeeper", "high", o1Caps), "high");
+  assert.equal(adaptPersonaReasoningEffort("stylist", "high", o1Caps), "high");
+  assert.equal(adaptPersonaReasoningEffort("arbiter", "high", o1Caps), "high");
 
-  const styEffort = adaptPersonaReasoningEffort("stylist", "", o1Caps);
-  assert.equal(styEffort, "medium");
+  assert.equal(adaptPersonaReasoningEffort("gatekeeper", "low", o1Caps), "low");
+  assert.equal(adaptPersonaReasoningEffort("stylist", "low", o1Caps), "low");
+  assert.equal(adaptPersonaReasoningEffort("arbiter", "low", o1Caps), "low");
 
-  const arbEffort = adaptPersonaReasoningEffort("arbiter", "", o1Caps);
-  assert.equal(arbEffort, "high");
+  // 2. 预设未配置推理强度时，角色不擅自填充默认强度
+  assert.equal(adaptPersonaReasoningEffort("gatekeeper", "", o1Caps), "");
+  assert.equal(adaptPersonaReasoningEffort("stylist", "", o1Caps), "");
+  assert.equal(adaptPersonaReasoningEffort("arbiter", "", o1Caps), "");
 });
 
 test("角色运行时：buildPersonaSystemPrompt 为每个角色生成特化的系统指令", () => {

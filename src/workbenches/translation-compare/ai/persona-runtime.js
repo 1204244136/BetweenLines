@@ -40,28 +40,17 @@ const PERSONA_DEFINITIONS = Object.freeze({
 });
 
 /**
- * Adapt reasoning effort level according to persona responsibility and model capabilities.
- * Gatekeeper -> low/minimal/off
- * Stylist -> medium
- * Arbiter -> high/max
+ * 契约：推理强度根据规则只由模型预设提供，角色绝不改变推理强度。
+ * 仅对模型预设传入的 baseEffort 进行合法性归一化与保留，角色不覆写强度。
  */
 function adaptPersonaReasoningEffort(persona, baseEffort, modelCapabilities = {}) {
+  const raw = String(baseEffort || "").trim();
+  if (!raw) return "";
+
   const caps = modelCapabilities || {};
-  if (!caps.reasoning) return baseEffort || "";
+  if (!caps.reasoning) return raw;
 
-  const supported = Array.isArray(caps.reasoningEfforts) ? caps.reasoningEfforts : [];
-  if (supported.length === 0) return baseEffort || "";
-
-  let target = "medium";
-  if (persona === "gatekeeper") {
-    target = supported.includes("low") ? "low" : (supported.includes("minimal") ? "minimal" : supported[0]);
-  } else if (persona === "stylist") {
-    target = supported.includes("medium") ? "medium" : supported[Math.floor(supported.length / 2)];
-  } else if (persona === "arbiter") {
-    target = supported.includes("high") ? "high" : (supported.includes("max") ? "max" : supported[supported.length - 1]);
-  }
-
-  return normalizeModelReasoningEffort(target, caps.id, caps) || baseEffort || target;
+  return normalizeModelReasoningEffort(raw, caps.id, caps) || raw;
 }
 
 /**
