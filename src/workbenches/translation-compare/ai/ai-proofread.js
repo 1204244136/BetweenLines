@@ -99,6 +99,7 @@ const {
 } = require("./feedback-collector");
 const {
   extractNeighborContext,
+  resolveStageContext,
 } = require("./pipeline-butler");
 
 const providerDefaults = {
@@ -2047,7 +2048,14 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
   const termGuidance = config.termContext?.get(Number(row.index)) || null;
   const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : (config.glossary || "");
   const allRows = extraAllRows || stage1Result.allRows || config.allRows || null;
-  const stylistContext = extractNeighborContext(allRows, row.index, 1, stage1Result.targetKey);
+  const stylistContext = resolveStageContext({
+    stage: "stylist",
+    allRows,
+    rowIndex: row.index,
+    row,
+    gatekeeperDecision: decision,
+    targetKey: stage1Result.targetKey,
+  });
 
   const stylistMessages = buildStylistMessages(row, decision, {
     targetLabel,
@@ -2118,7 +2126,15 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
   const termGuidance = config.termContext?.get(Number(row.index)) || null;
   const glossary = config.glossaryFile ? glossaryPrompt(loadGlossary(config.glossaryFile)) : (config.glossary || "");
   const allRows = extraAllRows || stage2Result.allRows || config.allRows || null;
-  const arbiterContext = extractNeighborContext(allRows, row.index, 2, stage2Result.targetKey);
+  const arbiterContext = resolveStageContext({
+    stage: "arbiter",
+    allRows,
+    rowIndex: row.index,
+    row,
+    gatekeeperDecision: decision,
+    targetKey: stage2Result.targetKey,
+    forceContext: true,
+  });
 
   const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
     targetLabel,

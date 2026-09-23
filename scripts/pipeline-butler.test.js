@@ -8,6 +8,9 @@ const {
   checkCorrectionRegression,
   inspectStylistDrift,
   extractNeighborContext,
+  needsFlowContext,
+  resolveStageContext,
+  STAGE_CONTEXT_PROFILES,
 } = require("../src/workbenches/translation-compare/ai/pipeline-butler");
 
 const {
@@ -227,4 +230,72 @@ test("管家上下文供给：extractNeighborContext 准确按梯度切割", () 
   const tailCtx = extractNeighborContext(allRows, 14, 2);
   assert.equal(tailCtx.before.length, 2);
   assert.equal(tailCtx.after.length, 0);
+});
+
+test("管家按需柔和供给：needsFlowContext 准确探测语流欲望", () => {
+  // 1. 含有指示代词“この事実” -> 欲望激活
+  assert.equal(needsFlowContext({ jp: "この事実をもってすれば真意が滲む。" }, {}), true);
+
+  // 2. 含有因果连词“正是因为如此” -> 欲望激活
+  assert.equal(needsFlowContext({ cn: "正是因为如此，真相显现。" }, {}), true);
+
+  // 3. 对话行 -> 欲望激活
+  assert.equal(needsFlowContext({ jp: "「待ってください！」" }, {}), true);
+
+  // 4. 初审意见提及承接 -> 欲望激活
+  assert.equal(needsFlowContext({ jp: "晴天。" }, { summary: "语序有些生硬，需要考虑前文承接" }), true);
+
+  // 5. 独立普通单句 -> 欲望静默
+  assert.equal(needsFlowContext({ jp: "空は青い。", cn: "天空是蓝色的。" }, { summary: "错别字修改" }), false);
+});
+
+test("管家按需柔和供给：resolveStageContext 遵从阶段欲望与配额额度", () => {
+  const allRows = [
+    { index: 1, jp: "昨日は大雨だった。", cn: "昨天下了大雨。" },
+    { index: 2, jp: "空は青い。", cn: "天空是蓝色的。" }, // 独立单句
+    { index: 3, jp: "この事実をもってすれば真意が滲む。", cn: "正是因为如此，真意显现。" }, // 语流指示代词
+    { index: 4, jp: "明日も晴れるだろう。", cn: "明天也会是晴天吧。" },
+    { index: 5, jp: "楽しみだ。", cn: "真期待。" },
+  ];
+
+  // 1. Stylist 遇到独立单句：欲望静默，柔和免供上下文，不硬塞
+  const styNoNeed = resolveStageContext({
+    stage: "stylist",
+    allRows,
+    rowIndex: 2,
+    row: allRows[1],
+    gatekeeperDecision: { summary: "文字微调" },
+  });
+  assert.equal(styNoNeed, null, "独立单句不应机械硬塞上下文");
+
+  // 2. Stylist 遇到指示代词/承接句：语流欲望激活，按需供给前后各 1 行 (radius=1)
+  const styWants = resolveStageContext({
+    stage: "stylist",
+    allRows,
+    rowIndex: 3,
+    row: allRows[2],
+    gatekeeperDecision: { summary: "删除无中生有台词" },
+  });
+  assert.ok(styWants, "指示代词句必须按需供给上下文");
+  assert.equal(styWants.before.length, 1);
+  assert.equal(styWants.before[0].index, 2);
+  assert.equal(styWants.after.length, 1);
+  assert.equal(styWants.after[0].index, 4);
+
+  // 3. Arbiter 阶段：争议裁决驱动，供给完整因果证据链 (radius=2)
+  const arbCtx = resolveStageContext({
+    stage: "arbiter",
+    allRows,
+    rowIndex: 3,
+    row: allRows[2],
+    gatekeeperDecision: { summary: "删除无中生有台词" },
+    forceContext: true,
+  });
+  assert.ok(arbCtx);
+  assert.equal(arbCtx.before.length, 2);
+  assert.equal(arbCtx.before[0].index, 1);
+  assert.equal(arbCtx.before[1].index, 2);
+  assert.equal(arbCtx.after.length, 2);
+  assert.equal(arbCtx.after[0].index, 4);
+  assert.equal(arbCtx.after[1].index, 5);
 });

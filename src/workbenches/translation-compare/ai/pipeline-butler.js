@@ -211,6 +211,76 @@ function inspectStylistDrift({
   };
 }
 
+const STAGE_CONTEXT_PROFILES = Object.freeze({
+  gatekeeper: {
+    appetite: "strict-evidence", // 极克制：严格依赖显式语法线索（由 continuation/inferredSubject 等负责）
+    maxRadius: 1,
+    maxRows: 2,
+  },
+  stylist: {
+    appetite: "flow-sensitive",   // 语流敏感：仅当检测到指示代词、承接连词、对话或衔接改动时按需激活
+    maxRadius: 1,
+    maxRows: 2,
+  },
+  arbiter: {
+    appetite: "dispute-evidence", // 争议证据：终审裁决涉及双方分歧或放飞熔断，调阅最充分证据链
+    maxRadius: 2,
+    maxRows: 4,
+  },
+});
+
+/**
+ * 探测当前行是否具有“语流承接敏感性”（供 Stylist 阶段按需激活上下文欲望）。
+ * 拒绝无脑硬塞：若句子完全独立自洽，则不激活上下文欲望，保持单行专注。
+ */
+function needsFlowContext(row = {}, gatekeeperDecision = {}, targetKey = "cn") {
+  const source = String(row.source || row.jp || "");
+  const target = String(row.target || row[targetKey] || row.cn || "");
+  const summary = String(gatekeeperDecision.summary || "");
+
+  // 1. 原文或译文包含指示代词、承接连词、因果前提等语流关联词
+  const flowPattern = /(?:この|その|あの|これ|それ|あれ|というのも|しかし|だが|そして|なぜなら|をもってすれば|この事実|まさに|正是|因此|然而|但是|这一|有了这|随后|不过|与此同时|话虽如此|尽管|既然|反之|由此可见)/i;
+  if (flowPattern.test(source) || flowPattern.test(target)) return true;
+
+  // 2. 属于对话行、心声或带引号的片段（需要关注说话人来回与语气承接）
+  if (/[「『]/.test(source) || /[「『“”]/.test(target)) return true;
+
+  // 3. 初审意见中直接指出了承接、语序、指代或连词问题
+  if (/(?:上下文|连词|主语|代词|指代|承接|语序|衔接|倒装|前文|后文|话语)/.test(summary)) return true;
+
+  return false;
+}
+
+/**
+ * 管家按需上下文供给器 (On-Demand Context Dispatcher)。
+ *
+ * 契约：按需供给、柔和分配。
+ * - Gatekeeper: 严格证据驱动（默认 0 行，语法硬线索由专有探测器挂载）；
+ * - Stylist: 语流敏感驱动（仅在命中指示代词、承接连词、对话语境或衔接改动时，在 1 行额度内按需供给）；
+ * - Arbiter: 争议裁决驱动（终审分歧必然涉及语境辨析，在 2 行额度内按需供给完整证据链）。
+ */
+function resolveStageContext({
+  stage = "stylist",
+  allRows = null,
+  rowIndex = null,
+  row = {},
+  gatekeeperDecision = {},
+  targetKey = "cn",
+  forceContext = false,
+}) {
+  if (!Array.isArray(allRows) || allRows.length === 0 || rowIndex == null) return null;
+  const profile = STAGE_CONTEXT_PROFILES[stage] || STAGE_CONTEXT_PROFILES.stylist;
+
+  // Stylist 阶段：仅当探测到语流承接需求时才唤醒上下文供给，否则保持单行专注
+  if (stage === "stylist" && !forceContext) {
+    const wantsContext = needsFlowContext(row, gatekeeperDecision, targetKey);
+    if (!wantsContext) return null; // 独立普通句子，柔和免供上下文
+  }
+
+  // 根据阶段配额额度提取上下文行
+  return extractNeighborContext(allRows, rowIndex, profile.maxRadius, targetKey);
+}
+
 /**
  * 管家上下文分发器：按阶段梯度提取邻近行上下文。
  * 契约：上下文由短变长。
@@ -251,10 +321,13 @@ function extractNeighborContext(allRows, currentIndex, radius = 1, targetKey = "
 
 module.exports = {
   DEFAULT_DRIFT_THRESHOLDS,
+  STAGE_CONTEXT_PROFILES,
   calculateCharacterOverlap,
   measureTextDrift,
   checkTermPreservation,
   checkCorrectionRegression,
   inspectStylistDrift,
+  needsFlowContext,
+  resolveStageContext,
   extractNeighborContext,
 };
