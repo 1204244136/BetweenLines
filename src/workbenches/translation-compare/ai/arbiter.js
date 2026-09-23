@@ -176,7 +176,16 @@ function formatArbitrationNoteLines({
     lines.push(`Gatekeeper初审：${gatekeeperDecision.summary}`);
   }
   const gkText = String(gatekeeperDecision.stage1RevisedText || gatekeeperDecision.revisedText || "").trim();
-  if (gatekeeperDecision.needsEdit !== false && gkText) {
+  const isGkDeleteIntent = Boolean(
+    gatekeeperDecision.summary &&
+    /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(gatekeeperDecision.summary) &&
+    (gatekeeperDecision.summary.includes(`「${gkText}」`) ||
+     gatekeeperDecision.summary.includes(`“${gkText}”`) ||
+     gatekeeperDecision.summary.includes(`‘${gkText}’`) ||
+     (gkText.length <= 12 && gatekeeperDecision.summary.includes(gkText)))
+  );
+  const hasKana = /[\u3040-\u309F\u30A0-\u30FF]/.test(gkText);
+  if (gatekeeperDecision.needsEdit !== false && gkText && !isGkDeleteIntent && !hasKana) {
     lines.push(`初审改案：${gkText}`);
   }
 

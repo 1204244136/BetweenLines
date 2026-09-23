@@ -1715,6 +1715,21 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
     }
   }
   decision = ensureRevisedText(decision, targetKey, targetText, counterpartText, config.proofreadMode);
+  // 防呆：如果初审判定需要修改且说明是删除/增译，但 revisedText 却填了待删除词，作废该局部短语避免误导下游 Stylist
+  if (decision.needsEdit && decision.revisedText) {
+    const isDeleteWord = Boolean(
+      decision.summary &&
+      /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(decision.summary) &&
+      (decision.summary.includes(`「${decision.revisedText}」`) ||
+       decision.summary.includes(`“${decision.revisedText}”`) ||
+       decision.summary.includes(`‘${decision.revisedText}’`) ||
+       (decision.revisedText.length <= 12 && decision.summary.includes(decision.revisedText))) &&
+      (targetText.includes(decision.revisedText) || decision.revisedText.length < targetText.length * 0.6)
+    );
+    if (isDeleteWord) {
+      decision = { ...decision, revisedText: "" };
+    }
+  }
   return {
     row,
     decision,

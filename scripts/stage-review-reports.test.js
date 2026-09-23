@@ -305,3 +305,61 @@ test("multi-stage rows without explicit stage1Revision still render version butt
   assert.match(summaryHtml, /data-apply-stage="1"/);
   assert.match(summaryHtml, /data-apply-stage="2"/);
 });
+
+test("deletion/addition intent does not misinterpret deleted words as stage1Revision", () => {
+  const ui = createWorkbench(undefined, {
+    rows: [
+      {
+        index: 58,
+        relation: "1:1",
+        jp: "ずばーん!! と大きく扉を開け放ってメイザースが入室してきた。",
+        cn: "哐！！门被人猛地推开，马瑟斯大步流星地走了进来。",
+        signature: "sig58",
+      },
+    ],
+  });
+
+  const noteRow58 = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "质量评分：97分 (-3)",
+    "Gatekeeper初审：需要修改：译文加入原文没有的入室方式「大步流星」，属轻微增译，删除后与原文一致。",
+    "Stylist复审[调整]：Gatekeeper 正确指出了原译「大步流星」属于无中生有的成语化增译；但 Gatekeeper 依然保留了「门被人猛地推开」这一生硬的无名被动结构。原文中推门与进门的主体皆为马瑟斯（大きく扉を開け放ってメイザースが入室してきた），直接使用主动语序连贯叙述，不仅能彻底消除「门被人……」的机械翻译腔，而且更能传达原文推门而入的冲击感与镜头张力。",
+    "修改结果：哐！！马瑟斯猛地推开门，走了进来。",
+  ].join("\n");
+
+  const parsed = ui.run(`parseAutomatedNote(${JSON.stringify(noteRow58)})`);
+  assert.equal(parsed.stage1Revision, "", "待删除的增译词「大步流星」绝不可误提取为初审改案");
+
+  ui.run(`
+    notes["58"] = {
+      note: ${JSON.stringify(noteRow58)},
+      revisionText: "哐！！马瑟斯猛地推开门，走了进来。",
+      manualDone: false,
+    };
+  `);
+
+  const rowObj = ui.run('allRows.find(r => r.index === 58)');
+  const diffHtml = ui.run(`renderDiffBlock(${JSON.stringify(rowObj)}, notes["58"])`);
+  assert.equal(diffHtml.includes("建议替换为："), false, "删除意图绝不可显示为「建议替换为：大步流星」");
+  assert.match(diffHtml, /事实审查重点/);
+  assert.match(diffHtml, /审查要点：/);
+  assert.match(diffHtml, /全句文学润色/);
+
+  const summaryHtml = ui.run(`renderNoteSummary(notes["58"], "58")`);
+  assert.equal(summaryHtml.includes("初审改案:"), false, "初审仅为审查要点时卡片不得挂出初审改案标签");
+
+  // 脏数据测试：即便历史 note 显式包含「初审改案：大步流星」，解析与渲染层亦应防呆清洗
+  const dirtyNote = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：需要修改：译文加入原文没有的入室方式「大步流星」，属轻微增译，删除后与原文一致。",
+    "初审改案：大步流星",
+    "Stylist复审[调整]：采纳删除建议并润色全句",
+    "修改结果：哐！！马瑟斯猛地推开门，走了进来。",
+  ].join("\n");
+  const parsedDirty = ui.run(`parseAutomatedNote(${JSON.stringify(dirtyNote)})`);
+  assert.equal(parsedDirty.stage1Revision, "", "历史脏数据中的待删除词亦被自动清洗为空");
+});

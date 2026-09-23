@@ -1488,16 +1488,30 @@
           let s1DiffHtml = "";
           let s2DiffHtml = "";
 
-          if (s1Rev) {
-            const isPartialPhrase = s1Rev.length < targetText.length * 0.45;
+          // 防呆校验：若 s1Rev 包含日文假名，或初审意图为删除/增译且 s1Rev 恰为被指出待删除的缺陷短语，不能作为初审改案展示
+          const isDeleteWord = Boolean(
+            s1Rev &&
+            noteData?.stage1 &&
+            /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(noteData.stage1) &&
+            (noteData.stage1.includes("「" + s1Rev + "」") ||
+             noteData.stage1.includes("“" + s1Rev + "”") ||
+             noteData.stage1.includes("‘" + s1Rev + "’") ||
+             (s1Rev.length <= 12 && noteData.stage1.includes(s1Rev)) ||
+             targetText.includes(s1Rev))
+          );
+          const hasKana = Boolean(s1Rev && /[\u3040-\u309F\u30A0-\u30FF]/.test(s1Rev));
+          const validS1Rev = (isDeleteWord || hasKana) ? "" : s1Rev;
+
+          if (validS1Rev) {
+            const isPartialPhrase = validS1Rev.length < targetText.length * 0.45;
             s1StepSubLabel = isPartialPhrase ? "局部修正提议" : (escapeHtml(pageLabels[targetKey] || targetKey) + " → 初审改案");
             s1DiffHtml = isPartialPhrase
-              ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(s1Rev) + '</ins></div>'
-              : inlineDiffHtml(targetText, s1Rev);
+              ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(validS1Rev) + '</ins></div>'
+              : inlineDiffHtml(targetText, validS1Rev);
 
             s2DiffHtml = isPartialPhrase
               ? inlineDiffHtml(targetText, revision)
-              : inlineDiffHtml(s1Rev, revision);
+              : inlineDiffHtml(validS1Rev, revision);
           } else {
             s1StepSubLabel = "事实审查重点";
             s1DiffHtml = '<div class="diff-partial-phrase"><span>审查要点：</span><span class="diff-step-audit-point">' + escapeHtml(noteData.stage1 || "指出事实性硬伤") + '</span></div>';
@@ -1512,7 +1526,7 @@
                 '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s1DiffHtml + '</div>' +
               '</div>' +
               '<div class="diff-comparison is-stage-step is-stylist" data-diff-kind="stage2-step">' +
-                '<div class="version-label"><span class="diff-step-pill is-stylist">步骤 2：文学复审</span><span>' + (s1Rev && s1Rev.length >= targetText.length * 0.45 ? '初审改案 → 最终修改' : '全句文学润色') + '</span></div>' +
+                '<div class="version-label"><span class="diff-step-pill is-stylist">步骤 2：文学复审</span><span>' + (validS1Rev && validS1Rev.length >= targetText.length * 0.45 ? '初审改案 → 最终修改' : '全句文学润色') + '</span></div>' +
                 '<div lang="' + (targetKey === "tw" ? "zh-Hant" : "zh-Hans") + '">' + s2DiffHtml + '</div>' +
               '</div>' +
             '</div>' +
@@ -1732,17 +1746,26 @@
       // 兼容历史数据：若无独立改案行，从 Stylist 分析与 Gatekeeper 评语中推断阶段改案
       if (data.stage2 && !data.stage1Revision) {
         if (data.stage2.text) {
-          const legacyGkMatch = data.stage2.text.match(/(?:Gatekeeper|初审(?:员)?|初审修改稿?)\s*(?:处理为|建议为|改为|提出|译为|修正为|写作|方案为|采用)[‘“](.*?)[’”]/)
-            || data.stage2.text.match(/(?:建议(?:为)?|应为|修正为)[‘“](.*?)[’”]/);
+          const legacyGkMatch = data.stage2.text.match(/(?:Gatekeeper|初审(?:员)?|初审修改稿?)\s*(?:处理为|建议为|改为|提出|译为|修正为|写作|方案为|采用)[‘“「](.*?)[’”」]/)
+            || data.stage2.text.match(/(?:建议(?:为)?|应为|修正为)[‘“「](.*?)[’”」]/);
           if (legacyGkMatch && legacyGkMatch[1]?.trim()) {
-            data.stage1Revision = legacyGkMatch[1].trim();
+            const cand = legacyGkMatch[1].trim();
+            if (!/[\u3040-\u309F\u30A0-\u30FF]/.test(cand)) {
+              data.stage1Revision = cand;
+            }
           }
         }
         if (!data.stage1Revision && data.stage1) {
-          const gkMatch = data.stage1.match(/(?:建议(?:为|改为|改写为)?|处理为|改为|修正为|漏译(?:原文)?(?:限定语)?)[：:‘“「](.*?)[’”」]/)
-            || data.stage1.match(/「(.*?)」/);
-          if (gkMatch && gkMatch[1]?.trim()) {
-            data.stage1Revision = gkMatch[1].trim();
+          // 仅当包含明确的修改/改译动词，且不是删除/增译/漏译语境时才推断
+          const isDeleteOrOmission = /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有|漏译)/.test(data.stage1);
+          if (!isDeleteOrOmission) {
+            const gkMatch = data.stage1.match(/(?:建议(?:改为|改写为|为)?|处理为|改为|修正为|译为)[：:‘“「](.*?)[’”」]/);
+            if (gkMatch && gkMatch[1]?.trim()) {
+              const cand = gkMatch[1].trim();
+              if (!/[\u3040-\u309F\u30A0-\u30FF]/.test(cand)) {
+                data.stage1Revision = cand;
+              }
+            }
           }
         }
       }
@@ -1751,6 +1774,23 @@
           data.stage2Revision = data.stage1Revision;
         } else if (!data.stage3 && data.revision) {
           data.stage2Revision = data.revision;
+        }
+      }
+
+      // 防呆清洗：无论 stage1Revision 来自何处（显式行或历史推断），
+      // 若初审意图是指出删除/增译，而 stage1Revision 恰是被指出的待删除缺陷短语，或者包含日文假名，绝不能当作初审改案
+      if (data.stage1Revision) {
+        const isDeleteWord = Boolean(
+          data.stage1 &&
+          /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(data.stage1) &&
+          (data.stage1.includes("「" + data.stage1Revision + "」") ||
+           data.stage1.includes("“" + data.stage1Revision + "”") ||
+           data.stage1.includes("‘" + data.stage1Revision + "’") ||
+           (data.stage1Revision.length <= 12 && data.stage1.includes(data.stage1Revision)))
+        );
+        const hasKana = /[\u3040-\u309F\u30A0-\u30FF]/.test(data.stage1Revision);
+        if (isDeleteWord || hasKana) {
+          data.stage1Revision = "";
         }
       }
 
