@@ -1382,16 +1382,45 @@
       border-top: 1px dashed var(--line);
       color: var(--muted);
     }
+    .note-detail.note-revision {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid var(--line);
+    }
     .note-detail-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 3px;
+      margin-bottom: 4px;
     }
     .note-summary-key {
       color: var(--muted);
       font-weight: 700;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .revision-title-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      flex: 1 1 auto;
+      white-space: nowrap;
+    }
+    .revision-target-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--surface-subtle);
+      color: var(--muted);
+      border: 1px solid var(--line);
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .note-summary-value {
       color: #344054;
@@ -1455,6 +1484,7 @@
       align-items: center;
       gap: 6px;
       flex: 0 0 auto;
+      white-space: nowrap;
     }
     .writeback-revision,
     .copy-revision {
@@ -1463,7 +1493,10 @@
       padding: 2px 8px;
       border-radius: 6px;
       font-size: 12px;
+      font-weight: 600;
       line-height: 1.2;
+      cursor: pointer;
+      white-space: nowrap;
     }
     .writeback-revision {
       border-color: #b8dec5;
@@ -1473,10 +1506,49 @@
     .writeback-revision:hover {
       border-color: #93d0a9;
     }
+    .revision-stage-pills {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin: 4px 0 2px;
+      padding: 3px 6px;
+      background: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .stage-pills-label {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+      margin-right: 2px;
+    }
+    .stage-pill-btn {
+      padding: 1px 7px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.3;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 120ms ease;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .stage-pill-btn:hover {
+      border-color: var(--focus);
+      color: var(--text);
+    }
     .revision-editor {
       min-height: 76px;
       max-height: 40vh;
-      margin-top: 5px;
+      margin-top: 4px;
       overflow-y: hidden;
       background: var(--surface);
     }

@@ -1989,8 +1989,27 @@
         '</div>';
       }
 
+      const cleanTargetLabel = String(revisionLabel || "").replace(/[（(][^）)]*[）)]/g, "").trim() || String(revisionLabel || "").trim();
+      const shortTargetLabel = cleanTargetLabel.length > 6 ? cleanTargetLabel.slice(0, 5) + "…" : cleanTargetLabel;
+      const targetBadgeHtml = (!bilingualMode || (shortTargetLabel && shortTargetLabel !== "译文" && shortTargetLabel !== "修改结果"))
+        ? '<span class="revision-target-badge" title="修改目标：' + escapeHtml(revisionLabel) + '">' + escapeHtml(shortTargetLabel) + '</span>'
+        : "";
+
       const revision = revisionText
-        ? '<div class="note-detail note-revision"><div class="note-detail-head"><span class="note-summary-key">' + escapeHtml(revisionLabel) + '修改结果</span>' + stagePillsHtml + '<div class="revision-head-actions"><button type="button" class="writeback-revision" data-writeback-revision="' + escapeHtml(id || "") + '" title="将修改结果直接写回原文件">写回</button><button type="button" class="copy-revision" data-copy-text="' + escapeHtml(revisionText) + '" title="复制修改结果">复制</button></div></div><textarea class="revision-editor" data-revision="' + escapeHtml(id || "") + '" aria-label="第 ' + escapeHtml(id || "") + ' 行 AI 修改结果">' + escapeHtml(revisionText) + '</textarea></div>'
+        ? '<div class="note-detail note-revision">' +
+            '<div class="note-detail-head">' +
+              '<div class="revision-title-wrap">' +
+                '<span class="note-summary-key">修改结果</span>' +
+                targetBadgeHtml +
+              '</div>' +
+              '<div class="revision-head-actions">' +
+                '<button type="button" class="writeback-revision" data-writeback-revision="' + escapeHtml(id || "") + '" title="将修改结果直接写回原文件">写回</button>' +
+                '<button type="button" class="copy-revision" data-copy-text="' + escapeHtml(revisionText) + '" title="复制修改结果">复制</button>' +
+              '</div>' +
+            '</div>' +
+            stagePillsHtml +
+            '<textarea class="revision-editor" data-revision="' + escapeHtml(id || "") + '" aria-label="第 ' + escapeHtml(id || "") + ' 行 AI 修改结果">' + escapeHtml(revisionText) + '</textarea>' +
+          '</div>'
         : "";
       
       let ratingBadges = "";

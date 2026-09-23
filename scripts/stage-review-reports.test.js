@@ -363,3 +363,61 @@ test("删除与增译意见不将删除词句误推断为 stage1Revision 改案"
   const parsedDirty = ui.run(`parseAutomatedNote(${JSON.stringify(dirtyNote)})`);
   assert.equal(parsedDirty.stage1Revision, "", "历史脏数据中的待删除词亦被自动清洗为空");
 });
+
+test("修改结果区结构精炼：长列名提取为轻量徽标，版本工具栏与操作按钮分层排布不拥挤", () => {
+  const ui = createWorkbench(undefined, {
+    labels: {
+      jp: "日文原文",
+      cn: "主文本（待修改文本）",
+    },
+    rows: [
+      {
+        index: 2,
+        relation: "1:1",
+        jp: "未だアレイスターが門を叩く前の、ある意味においては平和な時代のお話。",
+        cn: "这个故事发生在某种意义上尚算和平的时代——彼时，亚雷斯塔尚未登门拜师。",
+        signature: "sig2",
+      },
+    ],
+  });
+
+  const noteRow2 = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "质量评分：97分 (-3)",
+    "Gatekeeper初审：事实初审意见",
+    "初审改案：初审修改案文本",
+    "Stylist复审[调整]：文学复审意见",
+    "修改结果：文学复审最终修改结果",
+  ].join("\n");
+
+  ui.run(`
+    pageLabels.cn = "主文本（待修改文本）";
+    notes["2"] = {
+      note: ${JSON.stringify(noteRow2)},
+      revisionText: "文学复审最终修改结果",
+      revisionTarget: "cn",
+      manualDone: false,
+    };
+  `);
+
+  const summaryHtml = ui.run(`renderNoteSummary(notes["2"], "2")`);
+
+  // 1. 标题必须保持简洁统一的「修改结果」，绝不可把长文本拼成「主文本（待修改文本）修改结果」
+  assert.match(summaryHtml, /<span class="note-summary-key">修改结果<\/span>/);
+  assert.equal(summaryHtml.includes("主文本（待修改文本）修改结果"), false, "冗长列名不得直接拼接在 key 中");
+
+  // 2. 括号内的注释被剥离，以简洁的 badge 展示，并保留完整描述在 title 中
+  assert.match(summaryHtml, /<span class="revision-target-badge" title="修改目标：主文本（待修改文本）">主文本<\/span>/);
+
+  // 3. 顶行操作区包含写回和复制按钮
+  assert.match(summaryHtml, /<div class="revision-head-actions"><button[^>]*class="writeback-revision"/);
+  assert.match(summaryHtml, /<button[^>]*class="copy-revision"/);
+
+  // 4. 版本切换栏作为独立工具栏行，位于顶栏之后、文本框之前
+  const headPos = summaryHtml.indexOf('class="note-detail-head"');
+  const pillsPos = summaryHtml.indexOf('class="revision-stage-pills"');
+  const editorPos = summaryHtml.indexOf('class="revision-editor"');
+  assert.ok(headPos > 0 && pillsPos > headPos && editorPos > pillsPos, "排版层次为：顶栏 -> 版本工具栏 -> 编辑框");
+});
