@@ -1972,6 +1972,32 @@
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
     }
 
+    function getStage3RowStatus(item) {
+      if (!item || item.manualDone) return { isArbitrated: false, isPending: false, isRelevant: false };
+      const text = String(item.note || "").trim();
+      if (!text || !hasAutomatedDecisionNote(text)) return { isArbitrated: false, isPending: false, isRelevant: false };
+      const p = parseAutomatedNote(text);
+      if (!p) return { isArbitrated: false, isPending: false, isRelevant: false };
+
+      const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
+      if (hasS3) {
+        return { isArbitrated: true, isPending: false, isRelevant: true };
+      }
+
+      const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
+      const att = String(p.stage2?.attitude || "");
+      const isDiverged = att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
+        att === "modify" || att === "reject" || att === "escalate" ||
+        text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate") ||
+        Boolean(p.stage1Revision && p.stage2Revision && p.stage1Revision !== p.stage2Revision);
+
+      if (hasS2 && isDiverged) {
+        return { isArbitrated: false, isPending: true, isRelevant: true };
+      }
+
+      return { isArbitrated: false, isPending: false, isRelevant: false };
+    }
+
     function gradeLabel(grade) {
       return { excellent: "优等", good: "良好", fair: "一般", poor: "较差" }[grade] || "";
     }
@@ -2520,15 +2546,7 @@
       };
       const isStage3PendingRow = (r) => {
         const rowId = String(r.index);
-        const text = String(notes[rowId]?.note || "");
-        if (!text) return false;
-        const p = parseAutomatedNote(text);
-        if (!p) return false;
-        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-        const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
-        const att = String(p.stage2?.attitude || "");
-        const isDiverged = att.includes("调整") || att.includes("驳回") || att.includes("仲裁") || att === "modify" || att === "reject" || att === "escalate";
-        return hasS2 && isDiverged && !hasS3;
+        return getStage3RowStatus(notes[rowId]).isPending;
       };
       const matchesSummary = !activeSummaryFilter ||
         (activeSummaryFilter === "needsEdit" && aiResultState(row) === "modify") ||
@@ -3839,8 +3857,8 @@
         } else if (finishedStage === "stage2" && stage3WaitingForStage2) {
           stage3WaitingForStage2 = false;
           const hasDisputes = Object.values(notes).some((item) => {
-            const text = String(item?.note || "");
-            return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
+            const s = getStage3RowStatus(item);
+            return s.isPending || s.isArbitrated;
           });
           if (hasDisputes) {
             showToast("阶段二复审已完成，自动接力启动阶段三终审仲裁...", { tone: "info", durationMs: 4000 });
@@ -4783,50 +4801,50 @@
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
           return;
         }
+
+        let arbitratedCount = 0;
+        let pendingArbCount = 0;
+        for (const [id, item] of Object.entries(notes)) {
+          const s = getStage3RowStatus(item);
+          if (s.isArbitrated) arbitratedCount += 1;
+          else if (s.isPending) pendingArbCount += 1;
+        }
+
         if (currentAiRunning || stage2WaitingForStage1 || runningAiStage === "stage1" || runningAiStage === "stage2") {
           stage3WaitingForStage2 = true;
           setAllStageButtonsRunning(currentAiRunning);
           updateStageMetricsDashboard();
-          const hasDisputesNow = Object.values(notes).some((item) => {
-            const text = String(item?.note || "");
-            return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
-          });
+          const hasDisputesNow = (arbitratedCount > 0 || pendingArbCount > 0);
           showToast(hasDisputesNow
             ? "已排队：当前已有分歧行，等待前序阶段全部完成后自动启动终审仲裁。"
             : "已排队：当前暂无分歧行，等待阶段二复审产生分歧后自动启动终审仲裁。", { tone: "info", durationMs: 5000 });
           return;
         }
-        const hasDisputes = Object.values(notes).some((item) => {
-          const text = String(item?.note || "");
-          return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
-        });
-        if (!hasDisputes) {
+
+        if (arbitratedCount === 0 && pendingArbCount === 0) {
           showToast("当前没有需要终审仲裁的分歧行。", { tone: "info", durationMs: 5000 });
           return;
-        }
-
-        let arbitratedCount = 0;
-        let pendingArbCount = 0;
-        for (const [id, item] of Object.entries(notes)) {
-          if (!item || item.manualDone) continue;
-          const text = String(item.note || "");
-          const p = parseAutomatedNote(text);
-          if (!p) continue;
-          const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
-          const hasDispute = Boolean(text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
-          if (hasS3) arbitratedCount += 1;
-          else if (hasDispute) pendingArbCount += 1;
         }
 
         if (arbitratedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
             if (aiConfirmIds.message) {
-              aiConfirmIds.message.innerHTML = `检测到当前已有 <strong>${arbitratedCount}</strong> 条终审仲裁方案${pendingArbCount > 0 ? `，<strong>${pendingArbCount}</strong> 条分歧行待仲裁` : ""}。<br>请选择本次启动方式：`;
+              const statusDesc = pendingArbCount > 0
+                ? `<strong>${arbitratedCount}</strong> 条终审仲裁方案${pendingArbCount > 0 ? `，<strong>${pendingArbCount}</strong> 条分歧行待仲裁` : ""}`
+                : `<strong>${arbitratedCount}</strong> 条终审仲裁方案（已全部完成仲裁）`;
+              aiConfirmIds.message.innerHTML = `检测到当前已有 ${statusDesc}。<br>请选择本次启动方式：`;
             }
             aiConfirmIds.dialog.showModal();
             return;
           }
-          if (confirm(`检测到已有 ${arbitratedCount} 条终审仲裁方案${pendingArbCount > 0 ? `，${pendingArbCount} 条待仲裁` : ""}。\n\n点击「确定」：继续仲裁剩余待处理分歧行（保留已有 ${arbitratedCount} 条方案，推荐）\n点击「取消」：全部重新仲裁（清空已有仲裁重新执行）`)) {
+          const promptDesc = pendingArbCount > 0
+            ? `检测到已有 ${arbitratedCount} 条终审仲裁方案，${pendingArbCount} 条待仲裁。\n\n点击「确定」：继续仲裁剩余待处理分歧行（保留已有 ${arbitratedCount} 条方案，推荐）\n点击「取消」：全部重新仲裁（清空已有仲裁重新执行）`
+            : `检测到所有 ${arbitratedCount} 条分歧行均已完成终审仲裁。\n\n点击「确定」：保留已有仲裁方案\n点击「取消」：全部重新仲裁（清空未人工确认的仲裁重新执行）`;
+          if (confirm(promptDesc)) {
+            if (pendingArbCount === 0) {
+              showToast("所有分歧行均已完成终审仲裁；如需重跑请点击「全部重新仲裁」。", { tone: "info", durationMs: 5000 });
+              return;
+            }
             await startAiProofread({ continueOnly: true, stage: "stage3" });
           } else {
             const cleared = clearUnconfirmedStageNotes("stage3");
@@ -4979,7 +4997,11 @@
           if (cleared > 0) {
             const msg = pendingStartStage === "stage1"
               ? `已清空 ${cleared} 条未人工确认的 AI 校对信息。`
-              : `已清空 ${cleared} 条未人工确认的方案。`;
+              : (pendingStartStage === "stage3"
+                ? `已清空 ${cleared} 条未人工确认的终审仲裁方案。`
+                : (pendingStartStage === "stage2"
+                  ? `已清空 ${cleared} 条未人工确认的文学复审方案。`
+                  : `已清空 ${cleared} 条未人工确认的方案。`));
             showToast(msg, { tone: "info", durationMs: 6000 });
           }
           await startAiProofread({ continueOnly: false, stage: pendingStartStage });
@@ -4988,6 +5010,16 @@
       if (aiConfirmIds.keep) {
         aiConfirmIds.keep.addEventListener("click", async () => {
           aiConfirmIds.dialog.close();
+          if (pendingStartStage === "stage3") {
+            let pendingArb = 0;
+            for (const [, item] of Object.entries(notes)) {
+              if (getStage3RowStatus(item).isPending) pendingArb += 1;
+            }
+            if (pendingArb === 0) {
+              showToast("所有分歧行均已完成终审仲裁；如需重跑请选择「从未人工确认处开始」。", { tone: "info", durationMs: 5000 });
+              return;
+            }
+          }
           showToast("保留已有方案，仅校对剩余未处理行。", { tone: "info", durationMs: 4000 });
           await startAiProofread({ continueOnly: true, stage: pendingStartStage });
         });

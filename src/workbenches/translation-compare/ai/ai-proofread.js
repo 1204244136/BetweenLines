@@ -937,16 +937,13 @@ async function startProofread(input) {
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       const memoryResult = status.results.get(idx);
-      const hasDispute = Boolean(
-        (memoryResult && (memoryResult.critique?.attitude === "escalate" || memoryResult.stageResult?.decision === "escalate")) ||
-        (noteText && (noteText.includes("提交仲裁") || noteText.includes("分歧") || noteText.includes("escalate")))
-      );
+      const hasDispute = isStage3DisputeRow(row, noteText, memoryResult);
       if (hasDispute) {
         if (config.continueOnly && (noteText.includes("Arbiter仲裁") || memoryResult?.arbitration)) {
           status.skippedDone += 1;
           continue;
         }
-        const s2Item = (memoryResult && memoryResult.stageResult)
+        const s2Item = (memoryResult && memoryResult.stageResult && config.continueOnly)
           ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null, arbCheck: { triggered: true } }
           : reconstructStage2Result(row, noteText, config, labels);
         items.push(s2Item);
@@ -1936,6 +1933,36 @@ function parseStoredNote(note = "") {
   return data;
 }
 
+function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
+  if (memoryResult) {
+    if (memoryResult.arbitration) return true;
+    if (memoryResult.arbCheck?.triggered || memoryResult.decision?.arbCheck?.triggered) return true;
+    const critiqueAtt = memoryResult.critique?.attitude || memoryResult.stageResult?.critique?.attitude;
+    if (critiqueAtt === "modify" || critiqueAtt === "reject" || critiqueAtt === "escalate") return true;
+    if (memoryResult.stageResult?.decision === "escalate") return true;
+  }
+  if (noteText) {
+    if (noteText.includes("Arbiter仲裁")) return true;
+    if (noteText.includes("提交仲裁") || noteText.includes("分歧") || noteText.includes("escalate")) return true;
+    const parsed = parseStoredNote(noteText);
+    if (parsed.stage3) return true;
+    if (parsed.stage2 || noteText.includes("Stylist复审")) {
+      const att = String(parsed.stage2?.attitude || "");
+      if (att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
+          att === "modify" || att === "reject" || att === "escalate") {
+        return true;
+      }
+      if (parsed.stage1Revision && parsed.stage2Revision && parsed.stage1Revision !== parsed.stage2Revision) {
+        return true;
+      }
+      if (parsed.modify === "是" && (att.includes("驳回") || att === "reject")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function reconstructStage1Result(row, noteText, config, labels) {
   const parsed = parseStoredNote(noteText);
   const bilingual = config.proofreadMode === "bilingual";
@@ -1975,7 +2002,7 @@ function reconstructStage1Result(row, noteText, config, labels) {
 function reconstructStage2Result(row, noteText, config, labels) {
   const s1 = reconstructStage1Result(row, noteText, config, labels);
   const parsed = parseStoredNote(noteText);
-  const s2Revised = parsed.stage2Revision || parsed.revision || s1.decision.revisedText || "";
+  const s2Revised = parsed.stage2Revision || (parsed.stage3 ? (parsed.stage1Revision || "") : (parsed.revision || s1.decision.revisedText || ""));
   const attitude = parsed.stage2?.attitude || "modify";
 
   s1.decision.stylistReview = {
@@ -3764,6 +3791,7 @@ module.exports = {
   runStage1Gatekeeper,
   runStage2Stylist,
   runStage3Arbiter,
+  isStage3DisputeRow,
   finalizeRowResult,
   proofreadRow,
   testModel,

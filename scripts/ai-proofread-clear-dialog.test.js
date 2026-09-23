@@ -186,3 +186,83 @@ test("复合备注（手写备注 + AI校对）清空时剥离 AI 部分，保�
   assert.equal(ui.run('notes["1"]?.aiDone'), false, "aiDone 重置为 false");
   assert.deepEqual(toastMessages(ui), ["已清空 1 条未人工确认的 AI 校对信息。"]);
 });
+
+test("阶段三终审仲裁完全结束后，点击阶段3「开始」弹出确认弹窗，可选择「从未人工确认处开始」重跑仲裁", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stage3-rerun", results: [] } },
+    },
+  });
+
+  // 配置阶段三预设，并设置两行分歧行：均已完成阶段三仲裁，但未人工确认，且文本中无「提交仲裁/分歧/escalate」字样
+  ui.run(`
+    aiIds.stage3Preset.value = "preset-s3";
+    notes["1"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\nArbiter仲裁[初审方案]：采纳初审方案\\n仲裁改案：初审案1\\n修改结果：初审案1",
+      revisionText: "初审案1",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+    notes["2"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案2\\nStylist复审[驳回]：原译文意顺畅\\nArbiter仲裁[结合方案]：融合两者长处\\n仲裁改案：结合案2\\n修改结果：结合案2",
+      revisionText: "结合案2",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+    notes["3"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：否\\nGatekeeper初审：无需修改\\n分析：正常。",
+      manualDone: true,
+      done: true,
+      aiDone: true,
+    };
+  `);
+
+  // 点击阶段三「开始」按钮
+  await ui.element("stage3Start").dispatch("click");
+
+  // 必须弹出确认弹窗，不能被直接拦截报错
+  assert.equal(ui.element("aiConfirmDialog").open, true, "阶段三完全结束后点击开始必须打开确认弹窗");
+  assert.match(ui.element("aiConfirmMessage").innerHTML, /2.*条终审仲裁方案/, "提示信息中必须包含已有的2条终审仲裁方案");
+
+  // 1. 测试选择「继续剩下的」：因为全部已仲裁，应当友好提示并关闭弹窗，不发起空请求
+  await ui.element("aiConfirmKeep").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, false, "点击继续后弹窗关闭");
+  assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 0, "全部已完成时不发起启动请求");
+  assert.equal(
+    toastMessages(ui).some((m) => m.includes("所有分歧行均已完成终审仲裁") && m.includes("从未人工确认处开始")),
+    true,
+    "必须提示用户若要重跑请选择「从未人工确认处开始」"
+  );
+
+  // 2. 再次点击阶段三「开始」，这次选择「从未人工确认处开始」
+  await ui.element("stage3Start").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, true);
+  await ui.element("aiConfirmClear").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, false);
+
+  // 验证启动请求
+  const startPosts = ui.posts.filter((p) => p.url === "/api/ai-proofread/start");
+  assert.equal(startPosts.length, 1, "必须发起重跑启动请求");
+  const lastPost = startPosts[0];
+  assert.equal(lastPost.body.stage, "stage3", "启动请求 stage 必须是 stage3");
+  assert.equal(lastPost.body.continueOnly, false, "从未人工确认处开始时 continueOnly 必须是 false");
+
+  // 验证未人工确认行的 Arbiter 仲裁记录已被清空，但保留初审与复审方案
+  const note1 = ui.run('notes["1"]?.note');
+  assert.equal(note1.includes("Arbiter仲裁"), false, "第1行的仲裁记录已被清空");
+  assert.equal(note1.includes("仲裁改案"), false, "第1行的仲裁改案已被清空");
+  assert.equal(note1.includes("Stylist复审[调整]"), true, "第1行的文学复审记录必须保留");
+  assert.equal(note1.includes("Gatekeeper初审"), true, "第1行的事实初审记录必须保留");
+
+  const note2 = ui.run('notes["2"]?.note');
+  assert.equal(note2.includes("Arbiter仲裁"), false, "第2行的仲裁记录已被清空");
+  assert.equal(note2.includes("Stylist复审[驳回]"), true, "第2行的复审驳回记录必须保留");
+
+  // 验证已人工确认的第3行完好无损
+  assert.equal(ui.run('Boolean(notes["3"]?.manualDone)'), true, "已确认的第3行记录保持不变");
+
+  // 验证 Toast 提示
+  assert.equal(toastMessages(ui).some((m) => m.includes("已清空 2 条未人工确认的终审仲裁方案")), true);
+});

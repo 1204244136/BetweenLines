@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   decisionToResult,
   clientStatus,
+  isStage3DisputeRow,
 } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 
 const {
@@ -227,4 +228,75 @@ test("多阶段流水线端到端：初审与复审各有长处，Arbiter 给出
   assert.ok(result.note.includes("Arbiter仲裁[结合方案]：初审纠正术语'术式'准确无误"));
   assert.ok(result.note.includes(`仲裁改案：${combinedText}`));
   assert.ok(result.note.includes(`修改结果：${combinedText}`));
+});
+
+test("阶段三队列判定：isStage3DisputeRow 全面覆盖已仲裁行与各类分歧行", () => {
+  const row = { index: 1, jp: "テスト原文", cn: "测试译文" };
+
+  // 1. 已有仲裁方案的行（完全结束状态）：无论 noteText 还是 memoryResult 均必须被识别为阶段三候选行
+  const noteArbitrated = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：建议修改",
+    "初审改案：改案A",
+    "Stylist复审[调整]：深化文学修辞",
+    "复审改案：改案B",
+    "Arbiter仲裁[初审方案]：初审术语准确",
+    "仲裁改案：改案A",
+    "修改结果：改案A",
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(row, noteArbitrated, null), true, "包含 Arbiter仲裁 的行必须被识别为阶段三行");
+
+  // 2. 复审为调整（modify）分歧行，但无「提交仲裁/分歧/escalate」字样
+  const noteModifyDiverged = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：建议修改硬伤",
+    "初审改案：改案A",
+    "Stylist复审[调整]：深化文学修辞",
+    "复审改案：改案B",
+    "修改结果：改案B",
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(row, noteModifyDiverged, null), true, "复审调整且存在改案差异必须被识别为分歧行");
+
+  // 3. 复审为驳回（reject）分歧行，但无「提交仲裁/分歧/escalate」字样
+  const noteRejectDiverged = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：建议修改",
+    "初审改案：改案A",
+    "Stylist复审[驳回]：原译顺畅无瑕疵",
+    "修改结果：改案A",
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(row, noteRejectDiverged, null), true, "初审提改且复审驳回必须被识别为分歧行");
+
+  // 4. 复审为采纳（accept），两阶段一致，无需进入仲裁
+  const noteAcceptAgreed = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：是",
+    "Gatekeeper初审：建议修改",
+    "初审改案：改案A",
+    "Stylist复审[采纳]：赞同初审修改",
+    "修改结果：改案A",
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(row, noteAcceptAgreed, null), false, "复审采纳且无仲裁记录不应被识别为分歧行");
+
+  // 5. 初审无需修改（快速直通），不进入仲裁
+  const notePassed = [
+    "[AI校对]",
+    "语义是否相同：相同",
+    "是否需要修改：否",
+    "Gatekeeper初审：无需修改",
+    "分析：原译准确。",
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(row, notePassed, null), false, "初审直接通过的行不应被识别为分歧行");
+
+  // 6. 内存 memoryResult 存在分歧标记
+  assert.equal(isStage3DisputeRow(row, "", { critique: { attitude: "modify" } }), true, "内存 critique attitude 为 modify 时必须被识别为分歧");
+  assert.equal(isStage3DisputeRow(row, "", { critique: { attitude: "reject" } }), true, "内存 critique attitude 为 reject 时必须被识别为分歧");
+  assert.equal(isStage3DisputeRow(row, "", { arbitration: { winner: "gatekeeper" } }), true, "内存存在 arbitration 必须被识别为已仲裁行");
 });
