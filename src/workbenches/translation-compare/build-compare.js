@@ -898,8 +898,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                           <option value="${escapeHtml(providerDefaults.local.model)}">${escapeHtml(providerDefaults.local.model)}</option>
                         </select>
                         <div class="ai-model-actions">
-                          <button id="aiTestModel" type="button" title="测试当前模型的网络连通性与响应">测试</button>
                           <button id="aiRefreshModels" type="button" title="从接口获取可用模型列表">刷新</button>
+                          <button id="aiTestModel" type="button" title="测试当前模型的网络连通性与响应">测试</button>
                         </div>
                       </div>
                     </div>

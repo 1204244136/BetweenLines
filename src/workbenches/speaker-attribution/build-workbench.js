@@ -391,8 +391,8 @@ function renderHtml(model) {
                   <option value="qwen2.5:14b-instruct">qwen2.5:14b-instruct</option>
                 </select>
                 <div class="ai-model-actions">
-                  <button id="speakerAiTestModel" type="button" title="测试当前模型的网络连通性与 API 响应">测试</button>
                   <button id="speakerAiRefreshModels" type="button" title="从当前 API 地址拉取可用模型列表">拉取模型</button>
+                  <button id="speakerAiTestModel" type="button" title="测试当前模型的网络连通性与 API 响应">测试</button>
                 </div>
               </div>
             </div>
