@@ -9,6 +9,8 @@ const {
 
 const {
   createPersonaContext,
+  extractSpecializedRules,
+  buildPersonaSystemPrompt,
   buildStylistMessages,
   buildArbiterMessages,
   parseStylistResponse,
@@ -407,4 +409,95 @@ test("多阶段流水线：无术语命中行优雅降级，不引入多余 term
   const arbiterUserJson = JSON.parse(arbiterMessages[1].content.slice(start, end));
   assert.equal(arbiterUserJson.terms, undefined, "无术语命中行不注入 terms 字段");
   assert.equal(arbiterUserJson.glossary, undefined);
+});
+
+test("多阶段流水线：提示词由长变短，职责逐步收敛（Gatekeeper > Stylist > Arbiter）", () => {
+  const fullBasePrompt = [
+    "【通用校对规则】",
+    "你是严谨的翻译校对助手，辅助人工；按“原文边界→语义完整性→语言质量”内部判断，不输出推理，不把偏好当错误。",
+    "证据优先级：原文人物、数字、否定、时态、因果动作 > 目标列完整准确 > 术语语体一致 > 局部措辞；无法证明的不猜。",
+    "semanticSame = 目标列与原文（双语）或另一非原文列（三语）的核心语义是否相同；needsEdit = 目标列是否需改动。两者独立：语义通顺但生硬或有明显问题时可 semanticSame=true、needsEdit=true。",
+    "只判档位、不自己算分：按缺陷档位（融合 MQM 风格分级与缺陷扣分口径）判 grade——poor=致命缺陷（颠倒核心事实/主谓宾/因果，反转性误译，专名灾难错译，关键语义大段脱落）；fair=严重缺陷（主干误漏译，关键否定/时态/语态/指代错误，口吻严重倒错）；good=轻微缺陷（轻度翻译腔、词句标点瑕疵、冗余）；excellent=无缺陷或仅修辞偏好。severity 映射：excellent→none、good→minor、fair→major、poor→critical。",
+    "penalty 与 score 的关系是 score=100-penalty；能估整数就给，拿不准填 null 由程序按 grade 折算。needsEdit=false 时固定 score=100、penalty=0、grade=excellent、severity=none、revisedText 留空；needsContext=true 时 score/penalty 填 null 转人工，不自行扣分。",
+    "A 常省略主语或人称代词。B 因照搬而成为无主句、成分残缺或指代不明时，可在 revisedText 中按中文习惯适当补上缺失的主语（代词或 A 与上下文已确立的称谓），只要其指代符合前文已确立的行为主体，属于合规翻译，不得误判为改变主体；仅当 B 臆造不合前文事实的主语、或确实改变行为主体/因果归属时才按误译处理。",
+    "用 decision 表达结论：B 无需修改时 decision=keep；需要修改时 decision=replace 并给出可替换当前行的 revisedText；依据完全不足无法判断时用 decision=unclear（转人工确认），不用它表达“不确定要不要改”。",
+    "只返回一个 JSON 对象，不要返回 Markdown、代码块、分析过程或额外解释。",
+    "【成品校对规范：测试规范】",
+    "— 排版与呈现层",
+    "标点全角化：中文正文里的标点一律用全角字形，省略号用「……」。",
+    "目标列内联标记必须原样原位保留，严禁日文假名泄露。",
+    "— 作品专有信息与语言特征",
+    "系列名写作「某魔法的禁书目录」。",
+  ].join("\n");
+
+  const row = { index: 120, jp: "この事実をもってすれば、アーサー=エドワード=ウェイトの言葉の真意が滲む。", cn: "正是因为如此，亚瑟·爱德华·伟特的那句「我喜欢你」背后的真意也随之显现。" };
+  const gkDecision = { needsEdit: true, revisedText: "正是因为如此，伟特话语中的真意也随之显现。" };
+  const styReview = { attitude: "modify", revisedText: "有了这一事实，伟特言语间的真意便浮现了出来。" };
+
+  const gkPrompt = buildPersonaSystemPrompt("gatekeeper", fullBasePrompt);
+  const styPrompt = buildPersonaSystemPrompt("stylist", fullBasePrompt);
+  const arbPrompt = buildPersonaSystemPrompt("arbiter", fullBasePrompt);
+
+  const gkRules = extractSpecializedRules(fullBasePrompt, "gatekeeper");
+  const styRules = extractSpecializedRules(fullBasePrompt, "stylist");
+  const arbRules = extractSpecializedRules(fullBasePrompt, "arbiter");
+
+  // 1. 验证特化提取的基础规则长度严格单调递减（Gatekeeper > Stylist > Arbiter）
+  assert.ok(gkRules.length > styRules.length, "Gatekeeper 基础规则长度必须长于 Stylist");
+  assert.ok(styRules.length > arbRules.length, "Stylist 基础规则长度必须长于 Arbiter");
+
+  // 2. 验证总系统提示词规模由长变短（Gatekeeper > Stylist > Arbiter）
+  assert.ok(gkPrompt.length > styPrompt.length, "Gatekeeper 总提示词必须长于 Stylist");
+  assert.ok(styPrompt.length > arbPrompt.length, "Stylist 总提示词必须长于 Arbiter");
+
+  // 2. 验证 Gatekeeper 包含 MQM 打分体系
+  assert.ok(gkPrompt.includes("只判档位、不自己算分"));
+  assert.ok(gkPrompt.includes("score=100-penalty"));
+
+  // 3. 验证 Stylist 剥离了初审打分体系，但保留了排版规范与文学审阅
+  assert.ok(!styPrompt.includes("只判档位、不自己算分"));
+  assert.ok(!styPrompt.includes("score=100-penalty"));
+  assert.ok(styPrompt.includes("标点全角化"));
+  assert.ok(styPrompt.includes("文学责编"));
+
+  // 4. 验证 Arbiter 极致精简：彻底剥离通用校对流程与打分冲突指令，仅保留核心审判原则与排版硬红线
+  assert.ok(!arbPrompt.includes("【通用校对规则】"));
+  assert.ok(!arbPrompt.includes("只判档位、不自己算分"));
+  assert.ok(!arbPrompt.includes("用 decision 表达结论"));
+  assert.ok(arbPrompt.includes("【当前身份与任务契约：终审法官 (Chief Arbiter)】"));
+  assert.ok(arbPrompt.includes("忠实度第一"));
+  assert.ok(arbPrompt.includes("核心结合方案"));
+  assert.ok(arbPrompt.includes("标点全角化"));
+  assert.ok(arbPrompt.includes("系列名写作「某魔法的禁书目录」"));
+});
+
+test("多阶段流水线：上下文由短变长（Stylist 前后各 1 行，Arbiter 前后各 2 行提供完整因果证据）", () => {
+  const row = { index: 120, jp: "この事実をもってすれば、アーサー=エドワード=ウェイトの言葉の真意が滲む。", cn: "正是因为如此，亚瑟·爱德华·伟特的那句「我喜欢你」背后的真意也随之显现。" };
+  const gkDecision = { needsEdit: true, revisedText: "修改文本" };
+  const styReview = { attitude: "modify", revisedText: "润色文本" };
+
+  const mockContext = {
+    before: [
+      { index: 118, sourceText: "前第2行原文", targetText: "前第2行译文" },
+      { index: 119, sourceText: "前第1行原文", targetText: "前第1行译文" },
+    ],
+    after: [
+      { index: 121, sourceText: "后第1行原文", targetText: "后第1行译文" },
+      { index: 122, sourceText: "后第2行原文", targetText: "后第2行译文" },
+    ],
+  };
+
+  const arbiterMessages = buildArbiterMessages(row, gkDecision, styReview, {
+    targetLabel: "当前译文",
+    context: mockContext,
+  });
+
+  const start = arbiterMessages[1].content.indexOf("{");
+  const end = arbiterMessages[1].content.indexOf("\n\n请按如下");
+  const payload = JSON.parse(arbiterMessages[1].content.slice(start, end));
+
+  assert.ok(payload.context, "Arbiter payload 必须接收 context 语境");
+  assert.equal(payload.context.before.length, 2, "Arbiter 拥有更长的前置语境（2行）");
+  assert.equal(payload.context.after.length, 2, "Arbiter 拥有更长的后置语境（2行）");
+  assert.ok(payload.context.note.includes("前后文语境依据"));
 });

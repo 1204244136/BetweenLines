@@ -55,7 +55,10 @@ function adaptPersonaReasoningEffort(persona, baseEffort, modelCapabilities = {}
 
 /**
  * Extract applicable rules from basePrompt for downstream personas (stylist/arbiter).
- * Strips out Gatekeeper-specific JSON schema declarations and grading rules to prevent contract conflicts.
+ * 契约：提示词由长变短、职责逐步收敛。
+ * - Gatekeeper: 接收全量 basePrompt（最长：包含完整 MQM 打分标准、判定流程、排版与专有规范）。
+ * - Stylist: 精简 basePrompt（中等：剥离初审打分、扣分、MQM 评级、初审决策字段，保留语言质感与排版呈现规范）。
+ * - Arbiter: 极致精简 basePrompt（最短：彻底剥离初审打分、通用校对流程与冲突格式指令，仅保留排版硬约束与作品专有事实）。
  */
 function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
   if (!basePrompt) return "";
@@ -65,8 +68,10 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
   const filtered = [];
   let skippingJsonFormat = false;
   let skippingTermBlock = false;
+  let skippingGeneralRulesForArbiter = false;
 
   for (const line of lines) {
+    // 1. 过滤任何初审输出格式约定与 JSON 声明
     if (/【输出格式约定】|```json|JSON 格式如下|请输出合法的 JSON|输出字段说明/i.test(line)) {
       skippingJsonFormat = true;
       continue;
@@ -78,7 +83,8 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
         continue;
       }
     }
-    // 剥离 basePrompt 中可能残留的术语块，避免与 options.termBlock 重复注入
+
+    // 2. 剥离 basePrompt 中可能残留的术语块，避免与 options.termBlock 重复注入
     if (line.includes("【译名对照表")) {
       skippingTermBlock = true;
       continue;
@@ -90,9 +96,47 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
         continue;
       }
     }
-    if (/needsEdit|score|better.*target|counterpart/i.test(line) && /字段|必须包含|返回/i.test(line)) {
+
+    // 3. 针对所有下游角色（Stylist/Arbiter），剥离初审特有的打分体系与字段指令
+    if (/只判档位|不自己算分|MQM|penalty|score=|按缺陷档位|poor=|fair=|good=|excellent=|severity/i.test(line)) {
       continue;
     }
+    if (/semanticSame|needsEdit|better.*target|counterpartText/i.test(line)) {
+      continue;
+    }
+    if (/用 decision 表达结论|decision=keep|decision=replace|decision=unclear/i.test(line)) {
+      continue;
+    }
+    if (/只返回一个 JSON 对象，不要返回 Markdown/i.test(line)) {
+      continue;
+    }
+
+    // 4. 针对 Arbiter 的极致精简（最短提示词）：
+    // Arbiter 专注于裁判原则与成品硬红线，跳过通用初审工作流程描述（如【通用校对规则】大段流程）
+    if (persona === "arbiter") {
+      if (/【通用校对规则】/.test(line)) {
+        skippingGeneralRulesForArbiter = true;
+        continue;
+      }
+      if (skippingGeneralRulesForArbiter) {
+        // 遇到成品排版规范、作品专有事实或硬性格式约束时恢复接入
+        if (line.startsWith("【成品校对规范") ||
+            line.startsWith("【作品专有") ||
+            line.startsWith("— 作品专有") ||
+            line.startsWith("— 排版与呈现层") ||
+            line.startsWith("— 文本层规范") ||
+            line.startsWith("硬性格式约束")) {
+          skippingGeneralRulesForArbiter = false;
+        } else {
+          continue;
+        }
+      }
+      // 过滤与法官仲裁无关的初审流程说明
+      if (/原文那一侧的分行|不要在说明中索要上下文|系统会自动补行|A 不是可复制进 B|按“原文边界|无法证明的不猜/i.test(line)) {
+        continue;
+      }
+    }
+
     filtered.push(line);
   }
   return filtered.join("\n").trim();
@@ -174,11 +218,18 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
   const sourceText = row.source || row.jp || "";
   const targetText = row.target || row.cn || "";
   const termGuidance = options.termGuidance || null;
+  const context = options.context || null;
 
   const userPayload = {
     index: row.index,
     sourceText,
     targetText,
+    ...(context ? {
+      context: {
+        note: "相邻行上下文（仅供判断语流衔接与语气连贯性，非当前修改目标）",
+        ...context,
+      },
+    } : {}),
     ...(termGuidance ? {
       terms: {
         source: "译名对照表（本行命中的条目）",
@@ -224,11 +275,18 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
   const sourceText = row.source || row.jp || "";
   const targetText = row.target || row.cn || "";
   const termGuidance = options.termGuidance || null;
+  const context = options.context || null;
 
   const userPayload = {
     index: row.index,
     sourceText,
     targetText,
+    ...(context ? {
+      context: {
+        note: "前后文语境依据（用于理清前因后果、指示代词与上下文事实，请作为终审裁决与结合方案的核心证据）",
+        ...context,
+      },
+    } : {}),
     ...(termGuidance ? {
       terms: {
         source: "译名对照表（本行命中的条目）",
@@ -396,6 +454,7 @@ module.exports = {
   PERSONAS,
   PERSONA_DEFINITIONS,
   adaptPersonaReasoningEffort,
+  extractSpecializedRules,
   buildPersonaSystemPrompt,
   buildStylistMessages,
   buildArbiterMessages,
