@@ -409,3 +409,94 @@ test("智能并发：超出重试上限的持续 429 记为单行失败且不崩
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("智能并发：状态与并发设置随项目独立持久化，跨项目切换互不污染", async () => {
+  const storage = {
+    data: new Map(),
+    getItem(k) { return this.data.get(k) ?? null; },
+    setItem(k, v) { this.data.set(k, v); },
+    removeItem(k) { this.data.delete(k); },
+  };
+
+  // 1. 打开项目 A（proj-alpha）：开启智能并发，设置初始并发 4，上限 12
+  const uiA = createWorkbench(storage, { projectKey: "proj-alpha" });
+  const chkA = uiA.element("aiSmartConcurrency");
+  const concA = uiA.element("aiConcurrency");
+  const maxA = uiA.element("aiConcurrencyMax");
+
+  assert.equal(chkA.checked, false);
+  concA.value = "4";
+  maxA.value = "12";
+  chkA.checked = true;
+  await chkA.dispatch("change");
+
+  // 验证全局与项目 A 专属 key 均持久化
+  const globalA = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
+  assert.equal(globalA.smartConcurrency, true);
+  assert.equal(globalA.concurrency, "4");
+  assert.equal(globalA.concurrencyMax, "12");
+
+  const projectAConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-alpha") || "{}");
+  assert.equal(projectAConfig.smartConcurrency, true);
+  assert.equal(projectAConfig.concurrency, "4");
+  assert.equal(projectAConfig.concurrencyMax, "12");
+
+  // 2. 打开项目 B（proj-beta）：关闭智能并发，并将并发设为 2
+  const uiB = createWorkbench(storage, { projectKey: "proj-beta" });
+  const chkB = uiB.element("aiSmartConcurrency");
+  const concB = uiB.element("aiConcurrency");
+
+  // 新项目继承全局 baseline，初始为 true
+  assert.equal(chkB.checked, true);
+  // 用户在项目 B 中关闭智能并发并调整为固定并发 2
+  chkB.checked = false;
+  concB.value = "2";
+  await chkB.dispatch("change");
+
+  const projectBConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-beta") || "{}");
+  assert.equal(projectBConfig.smartConcurrency, false);
+  assert.equal(projectBConfig.concurrency, "2");
+
+  // 3. 重新加载项目 A：验证依然保持项目 A 的配置（开启，并发 4，上限 12），未受项目 B 影响
+  const uiAReloaded = createWorkbench(storage, { projectKey: "proj-alpha" });
+  assert.equal(uiAReloaded.element("aiSmartConcurrency").checked, true);
+  assert.equal(uiAReloaded.element("aiConcurrency").value, "4");
+  assert.equal(uiAReloaded.element("aiConcurrencyMax").value, "12");
+  assert.equal(uiAReloaded.element("aiConcurrencyLabel").textContent, "初始并发");
+  assert.equal(uiAReloaded.element("aiConcurrencyMaxWrap").hidden, false);
+
+  // 4. 重新加载项目 B：验证依然保持项目 B 的配置（关闭，并发 2）
+  const uiBReloaded = createWorkbench(storage, { projectKey: "proj-beta" });
+  assert.equal(uiBReloaded.element("aiSmartConcurrency").checked, false);
+  assert.equal(uiBReloaded.element("aiConcurrency").value, "2");
+  assert.equal(uiBReloaded.element("aiConcurrencyLabel").textContent, "并发");
+  assert.equal(uiBReloaded.element("aiConcurrencyMaxWrap").hidden, true);
+});
+
+test("智能并发：历史快照页面缺失控件时具备防冲刷保护，不将已有智能并发覆写为 false", async () => {
+  const storage = {
+    data: new Map([
+      ["translation-compare-ai-config-v1", JSON.stringify({ smartConcurrency: true, concurrencyMax: 15 })],
+      ["translation-compare-ai-project-config-v1:proj-legacy", JSON.stringify({ smartConcurrency: true, concurrencyMax: 15 })],
+    ]),
+    getItem(k) { return this.data.get(k) ?? null; },
+    setItem(k, v) { this.data.set(k, v); },
+    removeItem(k) { this.data.delete(k); },
+  };
+
+  const uiLegacy = createWorkbench(storage, { projectKey: "proj-legacy" });
+  // 模拟历史快照 DOM 中缺失 aiSmartConcurrency 控件
+  uiLegacy.run("aiIds.smartConcurrency = null; aiIds.concurrencyMax = null;");
+
+  // 触发一次保存（如在历史快照页面中调整其他选项）
+  uiLegacy.run("saveAiConfig();");
+
+  // 验证防冲刷保护生效：已有的 smartConcurrency 依然为 true，上限 15 未被重置
+  const globalAfter = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
+  assert.equal(globalAfter.smartConcurrency, true);
+  assert.equal(globalAfter.concurrencyMax, 15);
+
+  const projectAfter = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-legacy") || "{}");
+  assert.equal(projectAfter.smartConcurrency, true);
+  assert.equal(projectAfter.concurrencyMax, 15);
+});

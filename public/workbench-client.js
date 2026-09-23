@@ -1,6 +1,7 @@
     const pageLabels = pageMeta.pageLabels;
     const bilingualMode = pageMeta.comparisonMode === "bilingual";
     const aiConfigStorageKey = "translation-compare-ai-config-v1";
+    const projectAiConfigStorageKey = "translation-compare-ai-project-config-v1:" + (pageMeta.projectKey || "unscoped");
     const aiPromptStorageKey = "translation-compare-ai-prompt-v1:" + (pageMeta.projectKey || "unscoped");
 
     const gptReasoningOptions = [
@@ -717,11 +718,23 @@
     }
 
     function loadSavedAiConfig() {
+      let globalConfig = {};
       try {
-        return JSON.parse(localStorage.getItem(aiConfigStorageKey) || "{}");
+        globalConfig = JSON.parse(localStorage.getItem(aiConfigStorageKey) || "{}");
       } catch {
-        return {};
+        globalConfig = {};
       }
+      let projectConfig = {};
+      try {
+        if (projectAiConfigStorageKey) {
+          projectConfig = JSON.parse(localStorage.getItem(projectAiConfigStorageKey) || "{}");
+        }
+      } catch {
+        projectConfig = {};
+      }
+      if (!globalConfig || typeof globalConfig !== "object" || Array.isArray(globalConfig)) globalConfig = {};
+      if (!projectConfig || typeof projectConfig !== "object" || Array.isArray(projectConfig)) projectConfig = {};
+      return { ...globalConfig, ...projectConfig };
     }
 
     function isReasoningModelName(model) {
@@ -951,26 +964,33 @@
 
     function saveAiConfig() {
       rememberInferenceSetting();
+      const prevSaved = loadSavedAiConfig();
+      const smartConcurrency = aiIds.smartConcurrency
+        ? Boolean(aiIds.smartConcurrency.checked)
+        : Boolean(prevSaved.smartConcurrency);
+      const concurrencyMax = aiIds.concurrencyMax
+        ? aiIds.concurrencyMax.value
+        : (prevSaved.concurrencyMax != null ? prevSaved.concurrencyMax : 10);
       const config = {
-        provider: aiIds.provider.value,
-        baseUrl: aiIds.baseUrl.value,
-        model: aiIds.model.value,
-        reasoningEffort: aiIds.reasoningEffort.value,
+        provider: aiIds.provider ? aiIds.provider.value : (prevSaved.provider || ""),
+        baseUrl: aiIds.baseUrl ? aiIds.baseUrl.value : (prevSaved.baseUrl || ""),
+        model: aiIds.model ? aiIds.model.value : (prevSaved.model || ""),
+        reasoningEffort: aiIds.reasoningEffort ? aiIds.reasoningEffort.value : (prevSaved.reasoningEffort || ""),
         inferenceSettingVersion: 3,
         gptReasoningEffort: savedGptReasoningEffort,
         nonGptIntensity: savedNonGptIntensity,
         modelOptions: aiModelOptions,
-        modelOptionsBaseUrl: aiModelOptions.length ? normalizeApiBaseUrl(aiIds.baseUrl.value) : "",
-        apiKey: aiIds.apiKey.value,
-        proofreadMode: aiIds.proofreadMode.value,
-        target: aiIds.target.value,
-        profileId: aiIds.profile.value,
-        concurrency: aiIds.concurrency.value,
-        smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
-        concurrencyMax: aiIds.concurrencyMax ? aiIds.concurrencyMax.value : 10,
-        breakerThreshold: formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
-        breakerDisabled: aiIds.breakerDisabled.checked,
-        similarity: formatPercentRatio(prefilterIds.similarity.value),
+        modelOptionsBaseUrl: aiModelOptions.length && aiIds.baseUrl ? normalizeApiBaseUrl(aiIds.baseUrl.value) : (prevSaved.modelOptionsBaseUrl || ""),
+        apiKey: aiIds.apiKey ? aiIds.apiKey.value : (prevSaved.apiKey || ""),
+        proofreadMode: aiIds.proofreadMode ? aiIds.proofreadMode.value : (prevSaved.proofreadMode || ""),
+        target: aiIds.target ? aiIds.target.value : (prevSaved.target || ""),
+        profileId: aiIds.profile ? aiIds.profile.value : (prevSaved.profileId || ""),
+        concurrency: aiIds.concurrency ? aiIds.concurrency.value : (prevSaved.concurrency != null ? prevSaved.concurrency : "3"),
+        smartConcurrency,
+        concurrencyMax,
+        breakerThreshold: aiIds.breakerThreshold ? formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1) : (prevSaved.breakerThreshold || "50%"),
+        breakerDisabled: aiIds.breakerDisabled ? aiIds.breakerDisabled.checked : Boolean(prevSaved.breakerDisabled),
+        similarity: prefilterIds.similarity ? formatPercentRatio(prefilterIds.similarity.value) : (prevSaved.similarity || "92%"),
         promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
         stage1PresetId: aiIds.stage1Preset?.value || "",
@@ -978,6 +998,9 @@
         stage3PresetId: aiIds.stage3Preset?.value || "",
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
+      if (projectAiConfigStorageKey) {
+        localStorage.setItem(projectAiConfigStorageKey, JSON.stringify(config));
+      }
     }
 
     function saveAiPrompt() {

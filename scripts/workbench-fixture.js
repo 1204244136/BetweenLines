@@ -85,9 +85,11 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     }
     return elements.get(id);
   };
+  const targetProjectKey = options.projectKey || projectKey;
+  const targetCurrentKey = options.currentKey || `translation-compare-notes-v7:${targetProjectKey}:rows`;
   const html = makeHtml(options.rows || ROWS, {
     comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" },
-  }, { projectKey, rowsSignature: "rows", notesStorage: { key: currentKey } });
+  }, { projectKey: targetProjectKey, rowsSignature: options.rowsSignature || "rows", notesStorage: { key: targetCurrentKey } });
   element("rowData").textContent = html.match(/<script id="rowData" type="application\/json">([\s\S]*?)<\/script>/)[1];
   const script = html.match(/<script>\s*([\s\S]*?)<\/script>\s*<\/body>/)[1];
   const statusQueue = options.statusQueue ? options.statusQueue.slice() : [];
