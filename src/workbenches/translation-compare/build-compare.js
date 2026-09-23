@@ -909,6 +909,19 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                         <option value="" selected>模型默认</option>
                       </select>
                     </div>
+                    <div class="ai-field" id="aiConcurrencyField">
+                      <div class="ai-field-head">
+                        <label for="aiConcurrency" id="aiConcurrencyLabel">并发</label>
+                        <label class="ai-concurrency-smart" for="aiSmartConcurrency" title="开启智能并发：以初始并发启动，连续请求稳定后自动向上试探，遇到并发/频控限制（HTTP 429 等）自动降低并发并退避重试。"><input id="aiSmartConcurrency" type="checkbox">智能并发</label>
+                      </div>
+                      <div class="ai-concurrency-inputs">
+                        <input id="aiConcurrency" type="number" min="1" max="12" value="3" title="并发数（开启智能并发时为初始并发，默认 3）">
+                        <div id="aiConcurrencyMaxWrap" class="ai-concurrency-max-wrap" hidden>
+                          <span class="ai-concurrency-sep">上限</span>
+                          <input id="aiConcurrencyMax" type="number" min="1" max="20" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10）">
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -935,23 +948,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     ${profileOptions.map((profile) => `<option value="${escapeHtml(profile.id)}"${profile.id === proofreadPrompt.profileId ? " selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}
                   </select>
                 </div>
-                <div class="ai-field ai-field--wide">
-                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
-                  <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
-                </div>
-                <div class="ai-field" id="aiConcurrencyField">
-                  <div class="ai-field-head">
-                    <label for="aiConcurrency" id="aiConcurrencyLabel">并发</label>
-                    <label class="ai-concurrency-smart" for="aiSmartConcurrency" title="开启智能并发：以初始并发启动，连续请求稳定后自动向上试探，遇到并发/频控限制（HTTP 429 等）自动降低并发并退避重试。"><input id="aiSmartConcurrency" type="checkbox">智能并发</label>
-                  </div>
-                  <div class="ai-concurrency-inputs">
-                    <input id="aiConcurrency" type="number" min="1" max="12" value="3" title="并发数（开启智能并发时为初始并发，默认 3）">
-                    <div id="aiConcurrencyMaxWrap" class="ai-concurrency-max-wrap" hidden>
-                      <span class="ai-concurrency-sep">上限</span>
-                      <input id="aiConcurrencyMax" type="number" min="1" max="20" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10）">
-                    </div>
-                  </div>
-                </div>
                 <div class="ai-field" id="aiBreakerField">
                   <div class="ai-field-head">
                     <label for="aiBreakerThreshold">熔断阈值</label>
@@ -961,6 +957,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <input id="aiBreakerThreshold" type="text" inputmode="decimal" value="${Math.round(errorCircuitBreaker.errorRate * 100)}%"
                       title="最近 ${errorCircuitBreaker.windowSize} 次 AI 调用中失败占比达到该比例时自动终止任务；累计满 ${errorCircuitBreaker.minimumSamples} 次结果后开始判定。范围 ${Math.round(errorCircuitBreaker.minErrorRate * 100)}%–100%。">
                   </div>
+                </div>
+                <div class="ai-field ai-field--wide">
+                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
+                  <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
                 </div>
               </div>
             </section>

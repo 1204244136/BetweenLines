@@ -830,13 +830,18 @@
       if (aiIds.stage1Preset) {
         const currentStage1 = aiIds.stage1Preset.value;
         const s1Options = [
-          { id: "", name: "使用主配置" },
-          ...presets.map((p) => ({ id: p.id, name: p.name })),
+          { id: "", name: "使用主配置", title: "使用顶部 AI 服务填写的配置与并发" },
+          ...presets.map((p) => {
+            const conc = p.concurrency || 3;
+            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 10) + "智能并发" : conc + "并发";
+            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
+          }),
         ];
         aiIds.stage1Preset.replaceChildren(...s1Options.map((opt) => {
           const option = document.createElement("option");
           option.value = opt.id;
           option.textContent = opt.name;
+          if (opt.title) option.title = opt.title;
           if (opt.id === currentStage1) option.selected = true;
           return option;
         }));
@@ -846,13 +851,18 @@
       if (aiIds.stage2Preset) {
         const currentStage2 = aiIds.stage2Preset.value;
         const s2Options = [
-          { id: "", name: "未启用" },
-          ...presets.map((p) => ({ id: p.id, name: p.name })),
+          { id: "", name: "未启用", title: "未启用文学复审" },
+          ...presets.map((p) => {
+            const conc = p.concurrency || 3;
+            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 10) + "智能并发" : conc + "并发";
+            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
+          }),
         ];
         aiIds.stage2Preset.replaceChildren(...s2Options.map((opt) => {
           const option = document.createElement("option");
           option.value = opt.id;
           option.textContent = opt.name;
+          if (opt.title) option.title = opt.title;
           if (opt.id === currentStage2) option.selected = true;
           return option;
         }));
@@ -862,13 +872,18 @@
       if (aiIds.stage3Preset) {
         const currentStage3 = aiIds.stage3Preset.value;
         const s3Options = [
-          { id: "", name: "未启用" },
-          ...presets.map((p) => ({ id: p.id, name: p.name })),
+          { id: "", name: "未启用", title: "未启用终审仲裁" },
+          ...presets.map((p) => {
+            const conc = p.concurrency || 2;
+            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 5) + "智能并发" : conc + "并发";
+            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
+          }),
         ];
         aiIds.stage3Preset.replaceChildren(...s3Options.map((opt) => {
           const option = document.createElement("option");
           option.value = opt.id;
           option.textContent = opt.name;
+          if (opt.title) option.title = opt.title;
           if (opt.id === currentStage3) option.selected = true;
           return option;
         }));
@@ -3286,6 +3301,10 @@
       let mainReasoningEffort = aiIds.reasoningEffort.value;
       let mainApiKey = aiIds.apiKey.value;
 
+      let mainConcurrency = Number(aiIds.concurrency.value);
+      let mainSmartConcurrency = Boolean(aiIds.smartConcurrency?.checked);
+      let mainConcurrencyMax = aiIds.concurrencyMax ? Number(aiIds.concurrencyMax.value) : 10;
+
       if (s1PresetId) {
         const s1Preset = presetTools.getPreset(localStorage, s1PresetId);
         if (s1Preset) {
@@ -3294,6 +3313,9 @@
           mainModel = s1Preset.model || mainModel;
           mainReasoningEffort = s1Preset.reasoningEffort || mainReasoningEffort;
           mainApiKey = s1Preset.apiKey || mainApiKey;
+          if (s1Preset.concurrency != null) mainConcurrency = Number(s1Preset.concurrency);
+          if (s1Preset.smartConcurrency != null) mainSmartConcurrency = Boolean(s1Preset.smartConcurrency);
+          if (s1Preset.concurrencyMax != null) mainConcurrencyMax = Number(s1Preset.concurrencyMax);
         }
       }
 
@@ -3319,9 +3341,9 @@
         arbiterEnabled,
         stylistConfig,
         arbiterConfig,
-        concurrency: Number(aiIds.concurrency.value),
-        smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
-        concurrencyMax: aiIds.concurrencyMax ? Number(aiIds.concurrencyMax.value) : 10,
+        concurrency: mainConcurrency,
+        smartConcurrency: mainSmartConcurrency,
+        concurrencyMax: mainConcurrencyMax,
         circuitBreakerErrorRate: parsePercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
         circuitBreakerEnabled: !aiIds.breakerDisabled.checked,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
@@ -3573,7 +3595,8 @@
       if (active1 && activeText1) {
         if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
           active1.hidden = false;
-          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "");
+          const concText = p1.concurrency ? "（并发 " + p1.concurrency + (p1.smartConcurrency && p1.concurrencyMax ? "/" + p1.concurrencyMax : "") + "）" : "";
+          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active1.hidden = true;
           activeText1.textContent = "";
@@ -3611,7 +3634,8 @@
       if (active2 && activeText2) {
         if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
           active2.hidden = false;
-          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "");
+          const concText = p2.concurrency ? "（并发 " + p2.concurrency + (p2.smartConcurrency && p2.concurrencyMax ? "/" + p2.concurrencyMax : "") + "）" : "";
+          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active2.hidden = true;
           activeText2.textContent = "";
@@ -3649,7 +3673,8 @@
       if (active3 && activeText3) {
         if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
           active3.hidden = false;
-          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "");
+          const concText = p3.concurrency ? "（并发 " + p3.concurrency + (p3.smartConcurrency && p3.concurrencyMax ? "/" + p3.concurrencyMax : "") + "）" : "";
+          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active3.hidden = true;
           activeText3.textContent = "";
@@ -3952,9 +3977,6 @@
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
         : "尚未运行预筛选。";
-      const concurrencyInfo = ai.smartConcurrency && ai.currentConcurrency
-        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || 10) + "）"
-        : "";
       const isMultiStage = Boolean(
         (ai.stagePipelines && (
           (ai.stagePipelines.stage2 && (ai.stagePipelines.stage2.inFlight > 0 || ai.stagePipelines.stage2.pending > 0)) ||
@@ -3963,6 +3985,9 @@
         (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
         aiIds.stage2Preset?.value
       );
+      const concurrencyInfo = ai.smartConcurrency && ai.currentConcurrency
+        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || 10) + "）"
+        : "";
 
       let pipelineText = "";
       if (isMultiStage && ai.stagePipelines) {

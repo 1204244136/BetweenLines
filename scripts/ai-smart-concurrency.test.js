@@ -16,6 +16,8 @@ const {
   parseRateLimitReason,
   startProofread,
   stopProofread,
+  cleanConfig,
+  cleanSubStageConfig,
 } = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
 const {
@@ -499,4 +501,105 @@ test("智能并发：历史快照页面缺失控件时具备防冲刷保护，�
   const projectAfter = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-legacy") || "{}");
   assert.equal(projectAfter.smartConcurrency, true);
   assert.equal(projectAfter.concurrencyMax, 15);
+});
+
+test("多阶段独立并发：各子阶段预设能够正确保留并清洗并发配置", () => {
+  const conf = cleanConfig({
+    concurrency: 3,
+    smartConcurrency: true,
+    concurrencyMax: 10,
+    stylistConfig: {
+      provider: "compatible",
+      model: "gemini-3.8-flash",
+      concurrency: 4,
+      smartConcurrency: true,
+      concurrencyMax: 8,
+    },
+    arbiterConfig: {
+      provider: "claude",
+      model: "claude-opus-4.6-thinking",
+      concurrency: 2,
+      smartConcurrency: false,
+      concurrencyMax: 3,
+    },
+  });
+
+  // 主阶段
+  assert.equal(conf.concurrency, 3);
+  assert.equal(conf.smartConcurrency, true);
+  assert.equal(conf.concurrencyMax, 10);
+
+  // 阶段二文学复审预设
+  assert.ok(conf.stylistConfig);
+  assert.equal(conf.stylistConfig.concurrency, 4);
+  assert.equal(conf.stylistConfig.smartConcurrency, true);
+  assert.equal(conf.stylistConfig.concurrencyMax, 8);
+
+  // 阶段三终审仲裁预设
+  assert.ok(conf.arbiterConfig);
+  assert.equal(conf.arbiterConfig.concurrency, 2);
+  assert.equal(conf.arbiterConfig.smartConcurrency, false);
+  assert.equal(conf.arbiterConfig.concurrencyMax, 3);
+});
+
+test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
+  const tools = createPresetTools();
+  const storage = {
+    data: new Map([
+      [
+        "translation-compare-ai-presets-v1",
+        JSON.stringify([
+          { id: "p1", name: "Gemini初审", provider: "compatible", model: "gemini-flash", concurrency: 4, smartConcurrency: true, concurrencyMax: 8 },
+          { id: "p2", name: "Claude仲裁", provider: "claude", model: "claude-opus", concurrency: 2, smartConcurrency: true, concurrencyMax: 3 },
+        ]),
+      ],
+    ]),
+    getItem(k) { return this.data.get(k) ?? null; },
+    setItem(k, v) { this.data.set(k, v); },
+    removeItem(k) { this.data.delete(k); },
+  };
+
+  const ui = createWorkbench(storage);
+
+  // 验证预设选项生成时携带了并发提示
+  const s2Preset = ui.element("stage2PresetSelect");
+  const options = s2Preset.children || [];
+  const geminiOpt = options.find((o) => o.textContent === "Gemini初审");
+  assert.ok(geminiOpt);
+  assert.match(geminiOpt.title, /4~8智能并发/);
+
+  // 模拟带有各阶段独立并发的多阶段运行状态
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      total: 100,
+      queued: 100,
+      modelProcessed: 20,
+      suggested: 5,
+      errors: 0,
+      smartConcurrency: true,
+      currentConcurrency: 3,
+      concurrencyMax: 10,
+      stagePipelines: {
+        stage1: { inFlight: 3, pending: 50, concurrency: 3, concurrencyMax: 10, smartConcurrency: true, activeRows: [1, 2, 3] },
+        stage2: { inFlight: 4, pending: 10, concurrency: 4, concurrencyMax: 8, smartConcurrency: true, activeRows: [4, 5, 6, 7] },
+        stage3: { inFlight: 2, pending: 2, concurrency: 2, concurrencyMax: 3, smartConcurrency: true, activeRows: [8, 9] },
+      },
+      results: [],
+    });
+  `);
+
+  const activeText1 = ui.element("stage1ActiveRowsText").textContent;
+  const activeText2 = ui.element("stage2ActiveRowsText").textContent;
+  const activeText3 = ui.element("stage3ActiveRowsText").textContent;
+
+  assert.match(activeText1, /1, 2, 3/);
+  assert.match(activeText1, /并发 3\/10/);
+
+  assert.match(activeText2, /4, 5, 6\.\.\./);
+  assert.match(activeText2, /并发 4\/8/);
+
+  assert.match(activeText3, /8, 9/);
+  assert.match(activeText3, /并发 2\/3/);
 });

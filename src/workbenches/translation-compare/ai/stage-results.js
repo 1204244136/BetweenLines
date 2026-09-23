@@ -109,6 +109,9 @@ function createStagePipelines(value = {}) {
   const normalizeStageState = (stage = {}) => ({
     inFlight: Math.max(0, Number(stage.inFlight) || 0),
     pending: Math.max(0, Number(stage.pending) || 0),
+    concurrency: stage.concurrency != null ? Math.max(1, Number(stage.concurrency) || 1) : null,
+    concurrencyMax: stage.concurrencyMax != null ? Math.max(1, Number(stage.concurrencyMax) || 1) : null,
+    smartConcurrency: stage.smartConcurrency != null ? Boolean(stage.smartConcurrency) : null,
     activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
   });
   return {

@@ -521,8 +521,8 @@ function cleanConfig(input = {}) {
     challengerEnabled: Boolean(input.challengerEnabled),
     singleModelPersona: Boolean(input.singleModelPersona),
     arbiterEnabled: input.arbiterEnabled !== false,
-    stylistConfig: input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults) : (input.stage2Preset ? cleanSubStageConfig(input.stage2Preset, defaults) : null),
-    arbiterConfig: input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults) : (input.stage3Preset ? cleanSubStageConfig(input.stage3Preset, defaults) : null),
+    stylistConfig: input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults, concurrency) : (input.stage2Preset ? cleanSubStageConfig(input.stage2Preset, defaults, concurrency) : null),
+    arbiterConfig: input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults, 2) : (input.stage3Preset ? cleanSubStageConfig(input.stage3Preset, defaults, 2) : null),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
     // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
@@ -530,7 +530,7 @@ function cleanConfig(input = {}) {
   };
 }
 
-function cleanSubStageConfig(input = {}, fallbackDefaults = {}) {
+function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurrency = 3) {
   if (!input || typeof input !== "object") return null;
   const provider = providerDefaults[input.provider] ? input.provider : "local";
   const defaults = providerDefaults[provider] || fallbackDefaults;
@@ -541,12 +541,22 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}) {
   const reasoningEffort = (isGptModel(model) || isReasoningModel(model))
     ? normalizeReasoningEffort(input.reasoningEffort, model)
     : normalizeNonGptIntensity(input.reasoningEffort);
+
+  const rawConcurrency = input.concurrency != null ? Number(input.concurrency) : defaultConcurrency;
+  const concurrency = clampInteger(rawConcurrency, 1, 12, defaultConcurrency);
+  const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : false;
+  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : 10;
+  const concurrencyMax = Math.max(concurrency, clampInteger(rawConcurrencyMax, 1, 20, 10));
+
   return {
     provider,
     baseUrl,
     model,
     apiKey,
     reasoningEffort,
+    concurrency,
+    smartConcurrency,
+    concurrencyMax,
   };
 }
 
@@ -1262,20 +1272,6 @@ function parseRateLimitReason(error) {
 }
 
 async function runQueue(queue, allRows, config, labels, stageItems = {}) {
-  const isSmart = Boolean(config.smartConcurrency);
-  let currentConcurrency = config.concurrency;
-  const maxConcurrency = isSmart ? config.concurrencyMax : config.concurrency;
-  const minConcurrency = 1;
-
-  status.smartConcurrency = isSmart;
-  status.concurrency = config.concurrency;
-  status.currentConcurrency = currentConcurrency;
-  status.concurrencyMax = maxConcurrency;
-  status.peakConcurrency = currentConcurrency;
-  status.concurrencyUps = 0;
-  status.concurrencyDowns = 0;
-  status.concurrencyLimits = 0;
-
   // 流水线阶段解耦队列（Staged Pipelining Queues）
   // 正常流程下各阶段独立控制，仅在显式 all 模式下连贯自动推进
   const shouldCascade = config.targetStage === "all";
@@ -1287,32 +1283,147 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   let stage2InFlight = 0;
   let stage3InFlight = 0;
 
+  const minConcurrency = 1;
+  const scaleUpThreshold = 5;
+  const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
+  const maxRowRetries = 3;
+
+  function createStageCtrl(stageKey, label, conf, defaultConcurrency = 3, defaultMax = 10) {
+    const rawConc = conf?.concurrency != null ? Number(conf.concurrency) : defaultConcurrency;
+    const initialConcurrency = clampInteger(rawConc, 1, 12, defaultConcurrency);
+    const isSmart = conf?.smartConcurrency != null ? Boolean(conf.smartConcurrency) : Boolean(config.smartConcurrency);
+    const rawMax = conf?.concurrencyMax != null ? Number(conf.concurrencyMax) : (config.concurrencyMax || defaultMax);
+    const maxConcurrency = isSmart ? Math.max(initialConcurrency, clampInteger(rawMax, 1, 20, defaultMax)) : initialConcurrency;
+
+    return {
+      stageKey,
+      label,
+      isSmart,
+      currentConcurrency: initialConcurrency,
+      maxConcurrency,
+      initialConcurrency,
+      consecutiveSuccesses: 0,
+      consecutiveLimits: 0,
+      lastAdjustmentAt: Date.now(),
+      lastScaleDownAt: 0,
+      backoffUntil: 0,
+      backoffTimer: null,
+      rowRetryCounts: new Map(),
+    };
+  }
+
+  const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency, config.concurrencyMax);
+  const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency || 3, config.concurrencyMax || 10);
+  const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2, 5);
+
+  const isSmart = s1Ctrl.isSmart;
+  let currentConcurrency = s1Ctrl.currentConcurrency;
+  const maxConcurrency = s1Ctrl.maxConcurrency;
+
+  status.smartConcurrency = isSmart;
+  status.concurrency = config.concurrency;
+  status.currentConcurrency = currentConcurrency;
+  status.concurrencyMax = maxConcurrency;
+  status.peakConcurrency = currentConcurrency;
+  status.concurrencyUps = 0;
+  status.concurrencyDowns = 0;
+  status.concurrencyLimits = 0;
+
   function syncStagePipelineQueues() {
     status.stagePipelines.stage1.pending = stage1Pending.length;
     status.stagePipelines.stage1.inFlight = stage1InFlight;
+    status.stagePipelines.stage1.concurrency = s1Ctrl.currentConcurrency;
+    status.stagePipelines.stage1.concurrencyMax = s1Ctrl.maxConcurrency;
+    status.stagePipelines.stage1.smartConcurrency = s1Ctrl.isSmart;
+
     status.stagePipelines.stage2.pending = stage2Pending.length;
     status.stagePipelines.stage2.inFlight = stage2InFlight;
+    status.stagePipelines.stage2.concurrency = s2Ctrl.currentConcurrency;
+    status.stagePipelines.stage2.concurrencyMax = s2Ctrl.maxConcurrency;
+    status.stagePipelines.stage2.smartConcurrency = s2Ctrl.isSmart;
+
     status.stagePipelines.stage3.pending = stage3Pending.length;
     status.stagePipelines.stage3.inFlight = stage3InFlight;
+    status.stagePipelines.stage3.concurrency = s3Ctrl.currentConcurrency;
+    status.stagePipelines.stage3.concurrencyMax = s3Ctrl.maxConcurrency;
+    status.stagePipelines.stage3.smartConcurrency = s3Ctrl.isSmart;
   }
   syncStagePipelineQueues();
 
-  const stage2Concurrency = Math.max(1, Math.min(config.concurrencyMax || config.concurrency || 3, 4));
-  const stage3Concurrency = 2;
+  function onStageSuccess(ctrl) {
+    if (!ctrl.isSmart) return;
+    ctrl.consecutiveLimits = 0;
+    ctrl.consecutiveSuccesses += 1;
+    const elapsed = Date.now() - ctrl.lastAdjustmentAt;
+    if (ctrl.consecutiveSuccesses >= scaleUpThreshold && elapsed >= minProbeIntervalMs && ctrl.currentConcurrency < ctrl.maxConcurrency) {
+      const prev = ctrl.currentConcurrency;
+      ctrl.currentConcurrency = Math.min(ctrl.maxConcurrency, ctrl.currentConcurrency + 1);
+      status.peakConcurrency = Math.max(status.peakConcurrency, ctrl.currentConcurrency);
+      if (ctrl.stageKey === "stage1") {
+        currentConcurrency = ctrl.currentConcurrency;
+        status.currentConcurrency = currentConcurrency;
+      }
+      status.concurrencyUps += 1;
+      ctrl.consecutiveSuccesses = 0;
+      ctrl.lastAdjustmentAt = Date.now();
+      const prefix = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`;
+      pushLog(`[智能并发] ${prefix}连续 ${scaleUpThreshold} 次请求正常，并发从 ${prev} 上探至 ${ctrl.currentConcurrency}（上限 ${ctrl.maxConcurrency}）。`);
+    }
+  }
 
-  let consecutiveSuccesses = 0;
-  let consecutiveLimits = 0;
-  let lastAdjustmentAt = Date.now();
-  let lastScaleDownAt = 0;
-  let backoffUntil = 0;
-  let backoffTimer = null;
-  const rowRetryCounts = new Map();
-  const maxRowRetries = 3;
-  const scaleUpThreshold = 5;
-  const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
+  function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry) {
+    status.concurrencyLimits += 1;
+    ctrl.consecutiveSuccesses = 0;
+    ctrl.consecutiveLimits += 1;
+
+    const now = Date.now();
+    if (now - ctrl.lastScaleDownAt > 800) {
+      const prev = ctrl.currentConcurrency;
+      const next = prev > 3
+        ? Math.max(minConcurrency, Math.floor(prev * 0.7))
+        : Math.max(minConcurrency, prev - 1);
+      if (next < prev) {
+        ctrl.currentConcurrency = next;
+        if (ctrl.stageKey === "stage1") {
+          currentConcurrency = next;
+          status.currentConcurrency = next;
+        }
+        status.concurrencyDowns += 1;
+        ctrl.lastScaleDownAt = now;
+        ctrl.lastAdjustmentAt = now;
+      }
+    }
+
+    const retries = (ctrl.rowRetryCounts.get(rowIndex) || 0) + 1;
+    ctrl.rowRetryCounts.set(rowIndex, retries);
+
+    let delayMs = Math.min(10000, 1500 * Math.pow(1.5, Math.min(4, ctrl.consecutiveLimits - 1))) + Math.floor(Math.random() * 500);
+    if (error.retryAfter) {
+      const parsed = parseFloat(error.retryAfter);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        delayMs = Math.min(15000, parsed * 1000);
+      }
+    }
+    ctrl.backoffUntil = Math.max(ctrl.backoffUntil, Date.now() + delayMs);
+
+    if (retries <= maxRowRetries && !status.stopRequested) {
+      const stageNamePart = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}`;
+      pushLog(`[智能并发] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${ctrl.currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
+      pendingQueue.unshift(itemToRetry);
+      syncStagePipelineQueues();
+      return true;
+    }
+    return false;
+  }
 
   return new Promise((resolve) => {
     let settled = false;
+
+    function clearAllTimers() {
+      if (s1Ctrl.backoffTimer) { clearTimeout(s1Ctrl.backoffTimer); s1Ctrl.backoffTimer = null; }
+      if (s2Ctrl.backoffTimer) { clearTimeout(s2Ctrl.backoffTimer); s2Ctrl.backoffTimer = null; }
+      if (s3Ctrl.backoffTimer) { clearTimeout(s3Ctrl.backoffTimer); s3Ctrl.backoffTimer = null; }
+    }
 
     function checkDone() {
       if (settled) return;
@@ -1322,10 +1433,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
       if (status.stopRequested || allEmpty) {
         settled = true;
-        if (backoffTimer) {
-          clearTimeout(backoffTimer);
-          backoffTimer = null;
-        }
+        clearAllTimers();
         currentQueueWakeup = null;
         finish();
         resolve();
@@ -1333,10 +1441,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
 
     currentQueueWakeup = () => {
-      if (backoffTimer) {
-        clearTimeout(backoffTimer);
-        backoffTimer = null;
-      }
+      clearAllTimers();
       dispatch();
     };
 
@@ -1346,35 +1451,55 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         return;
       }
 
-      // 1. 优先调度 Stage 3 (Arbiter 终审仲裁)，尽快完成已产生分歧的行
-      while (stage3InFlight < stage3Concurrency && stage3Pending.length > 0 && !status.stopRequested && !settled) {
-        const s2Item = stage3Pending.shift();
-        stage3InFlight += 1;
-        syncStagePipelineQueues();
-        executeStage3(s2Item);
-      }
-
-      // 2. 调度 Stage 2 (Stylist 文学复审)，消费 Stage 1 已经初审完且建议修改的行
-      while (stage2InFlight < stage2Concurrency && stage2Pending.length > 0 && !status.stopRequested && !settled) {
-        const s1Item = stage2Pending.shift();
-        stage2InFlight += 1;
-        syncStagePipelineQueues();
-        executeStage2(s1Item);
-      }
-
-      // 3. 调度 Stage 1 (Gatekeeper 事实初审)
       const now = Date.now();
-      const inBackoff = now < backoffUntil;
-      if (inBackoff && !backoffTimer) {
-        const waitMs = Math.max(10, backoffUntil - now);
-        backoffTimer = setTimeout(() => {
-          backoffTimer = null;
+
+      // 1. 优先调度 Stage 3 (Arbiter 终审仲裁)，尽快完成已产生分歧的行
+      const s3InBackoff = now < s3Ctrl.backoffUntil;
+      if (s3InBackoff && !s3Ctrl.backoffTimer) {
+        const waitMs = Math.max(10, s3Ctrl.backoffUntil - now);
+        s3Ctrl.backoffTimer = setTimeout(() => {
+          s3Ctrl.backoffTimer = null;
           dispatch();
         }, waitMs);
       }
+      if (!s3InBackoff) {
+        while (stage3InFlight < s3Ctrl.currentConcurrency && stage3Pending.length > 0 && !status.stopRequested && !settled) {
+          const s2Item = stage3Pending.shift();
+          stage3InFlight += 1;
+          syncStagePipelineQueues();
+          executeStage3(s2Item);
+        }
+      }
 
-      if (!inBackoff) {
-        while (stage1InFlight < currentConcurrency && stage1Pending.length > 0 && !status.stopRequested && !settled) {
+      // 2. 调度 Stage 2 (Stylist 文学复审)，消费 Stage 1 已经初审完且建议修改的行
+      const s2InBackoff = now < s2Ctrl.backoffUntil;
+      if (s2InBackoff && !s2Ctrl.backoffTimer) {
+        const waitMs = Math.max(10, s2Ctrl.backoffUntil - now);
+        s2Ctrl.backoffTimer = setTimeout(() => {
+          s2Ctrl.backoffTimer = null;
+          dispatch();
+        }, waitMs);
+      }
+      if (!s2InBackoff) {
+        while (stage2InFlight < s2Ctrl.currentConcurrency && stage2Pending.length > 0 && !status.stopRequested && !settled) {
+          const s1Item = stage2Pending.shift();
+          stage2InFlight += 1;
+          syncStagePipelineQueues();
+          executeStage2(s1Item);
+        }
+      }
+
+      // 3. 调度 Stage 1 (Gatekeeper 事实初审)
+      const s1InBackoff = now < s1Ctrl.backoffUntil;
+      if (s1InBackoff && !s1Ctrl.backoffTimer) {
+        const waitMs = Math.max(10, s1Ctrl.backoffUntil - now);
+        s1Ctrl.backoffTimer = setTimeout(() => {
+          s1Ctrl.backoffTimer = null;
+          dispatch();
+        }, waitMs);
+      }
+      if (!s1InBackoff) {
+        while (stage1InFlight < s1Ctrl.currentConcurrency && stage1Pending.length > 0 && !status.stopRequested && !settled) {
           const row = stage1Pending.shift();
           stage1InFlight += 1;
           syncStagePipelineQueues();
@@ -1393,21 +1518,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
           recordModelOutcome(false, config);
-          if (isSmart) {
-            consecutiveLimits = 0;
-            consecutiveSuccesses += 1;
-            const elapsed = Date.now() - lastAdjustmentAt;
-            if (consecutiveSuccesses >= scaleUpThreshold && elapsed >= minProbeIntervalMs && currentConcurrency < maxConcurrency) {
-              const prev = currentConcurrency;
-              currentConcurrency = Math.min(maxConcurrency, currentConcurrency + 1);
-              status.currentConcurrency = currentConcurrency;
-              status.peakConcurrency = Math.max(status.peakConcurrency, currentConcurrency);
-              status.concurrencyUps += 1;
-              consecutiveSuccesses = 0;
-              lastAdjustmentAt = Date.now();
-              pushLog(`[智能并发] 连续 ${scaleUpThreshold} 次请求正常，并发从 ${prev} 上探至 ${currentConcurrency}（上限 ${maxConcurrency}）。`);
-            }
-          }
+          onStageSuccess(s1Ctrl);
         }
 
         const isFastPass = !s1.decision.needsEdit && isFastPassDecision(s1.decision);
@@ -1425,7 +1536,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        const isRateLimit = s1Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
 
         if (isRefusal) {
@@ -1435,42 +1546,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
-          status.concurrencyLimits += 1;
-          consecutiveSuccesses = 0;
-          consecutiveLimits += 1;
-
-          const now = Date.now();
-          if (now - lastScaleDownAt > 800) {
-            const prev = currentConcurrency;
-            const next = prev > 3
-              ? Math.max(minConcurrency, Math.floor(prev * 0.7))
-              : Math.max(minConcurrency, prev - 1);
-            if (next < prev) {
-              currentConcurrency = next;
-              status.currentConcurrency = currentConcurrency;
-              status.concurrencyDowns += 1;
-              lastScaleDownAt = now;
-              lastAdjustmentAt = now;
-            }
-          }
-
-          const retries = (rowRetryCounts.get(row.index) || 0) + 1;
-          rowRetryCounts.set(row.index, retries);
-
-          let delayMs = Math.min(10000, 1500 * Math.pow(1.5, Math.min(4, consecutiveLimits - 1))) + Math.floor(Math.random() * 500);
-          if (error.retryAfter) {
-            const parsed = parseFloat(error.retryAfter);
-            if (Number.isFinite(parsed) && parsed > 0) {
-              delayMs = Math.min(15000, parsed * 1000);
-            }
-          }
-          backoffUntil = Math.max(backoffUntil, Date.now() + delayMs);
-
-          if (retries <= maxRowRetries && !status.stopRequested) {
-            pushLog(`[智能并发] 第 ${row.index} 行遭遇${parseRateLimitReason(error)}，并发下调至 ${currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
-            stage1Pending.unshift(row);
-            syncStagePipelineQueues();
-          } else {
+          const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row);
+          if (!retried) {
             pushLog(`[智能并发] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             addResult({
               runId: status.runId,
@@ -1515,6 +1592,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
+        if (!status.stopRequested) {
+          onStageSuccess(s2Ctrl);
+        }
         if (s2.arbCheck?.triggered && shouldCascade && config.arbiterEnabled !== false) {
           // 产生分歧，仅在 all 级联流水线模式下推入 Stage 3 队列！
           stage3Pending.push(s2);
@@ -1527,15 +1607,27 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== s2.row.index);
         }
       } catch (error) {
-        pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
-        status.stageMetrics.stage2Errors += 1;
-        const result = finalizeRowResult(s1Item, config);
-        addResult(result);
-        status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+        const isRefusal = isModelRefusalError(error);
+        const isRateLimit = s2Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        if (isRateLimit && onStageRateLimit(s2Ctrl, s1Item.row.index, error, stage2Pending, s1Item)) {
+          // 成功推回 stage2Pending 重试
+        } else {
+          if (isRateLimit) {
+            pushLog(`[智能并发] 第 ${s1Item.row.index} 行文学复审连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至初审方案。`);
+          } else {
+            pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
+          }
+          status.stageMetrics.stage2Errors += 1;
+          const result = finalizeRowResult(s1Item, config);
+          addResult(result);
+          status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+        }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
         if (!shouldCascade || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
-          status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+          if (!stage2Pending.some((item) => item.row?.index === s1Item.row.index)) {
+            status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+          }
         }
         stage2InFlight -= 1;
         syncStagePipelineQueues();
@@ -1549,16 +1641,33 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels, allRows);
+        if (!status.stopRequested) {
+          onStageSuccess(s3Ctrl);
+        }
         const result = finalizeRowResult(s3, config);
         addResult(result);
+        status.active = status.active.filter((idx) => idx !== s2Item.row.index);
       } catch (error) {
-        pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
-        status.stageMetrics.stage3Errors += 1;
-        const result = finalizeRowResult(s2Item, config);
-        addResult(result);
+        const isRefusal = isModelRefusalError(error);
+        const isRateLimit = s3Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        if (isRateLimit && onStageRateLimit(s3Ctrl, s2Item.row.index, error, stage3Pending, s2Item)) {
+          // 成功推回 stage3Pending 重试
+        } else {
+          if (isRateLimit) {
+            pushLog(`[智能并发] 第 ${s2Item.row.index} 行终审仲裁连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至复审方案。`);
+          } else {
+            pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
+          }
+          status.stageMetrics.stage3Errors += 1;
+          const result = finalizeRowResult(s2Item, config);
+          addResult(result);
+          status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+        }
       } finally {
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
-        status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+        if (!stage3Pending.some((item) => item.row?.index === s2Item.row.index)) {
+          status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+        }
         stage3InFlight -= 1;
         syncStagePipelineQueues();
         dispatch();
@@ -3833,4 +3942,6 @@ module.exports = {
   finalizeRowResult,
   proofreadRow,
   testModel,
+  cleanConfig,
+  cleanSubStageConfig,
 };
