@@ -275,6 +275,35 @@ test("仲裁触发：shouldTriggerArbitration 准确检测主动升级与立场�
   });
   assert.equal(textDiff.triggered, true);
 
+  // 良性文学润色：全盘采纳初审纠正且无驳回项，不触发仲裁
+  const benignPolish = shouldTriggerArbitration({
+    gatekeeperDecision: { needsEdit: true, revisedText: "方案A" },
+    stylistReview: {
+      critique: {
+        attitude: "modify",
+        acceptedChanges: ["修正错译点"],
+        rejectedChanges: [],
+      },
+      revisedText: "方案A润色版",
+    },
+  });
+  assert.equal(benignPolish.triggered, false);
+
+  // 存在明确驳回项的分歧：必须触发仲裁
+  const explicitRejection = shouldTriggerArbitration({
+    gatekeeperDecision: { needsEdit: true, revisedText: "方案A" },
+    stylistReview: {
+      critique: {
+        attitude: "modify",
+        acceptedChanges: ["修辞调整"],
+        rejectedChanges: ["初审改动过于机械"],
+      },
+      revisedText: "方案C",
+    },
+  });
+  assert.equal(explicitRejection.triggered, true);
+  assert.ok(explicitRejection.reason.includes("初审改动过于机械"));
+
   const agree = shouldTriggerArbitration({
     gatekeeperDecision: { needsEdit: true, revisedText: "方案A" },
     stylistReview: { critique: { attitude: "accept" }, revisedText: "方案A" },

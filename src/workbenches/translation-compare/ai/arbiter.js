@@ -52,10 +52,31 @@ function shouldTriggerArbitration({
   const gkText = String(gatekeeperDecision.revisedText || "").trim();
   const styText = String(stylistReview.revisedText || "").trim();
   if (gkNeedsEdit && gkText && styText && gkText !== styText) {
-    return {
-      triggered: true,
-      reason: "Gatekeeper 与 Stylist 提出了不同的修订方案。",
-    };
+    const critique = stylistReview.critique || {};
+    const rejectedChanges = Array.isArray(critique.rejectedChanges) ? critique.rejectedChanges : null;
+    const acceptedChanges = Array.isArray(critique.acceptedChanges) ? critique.acceptedChanges : null;
+
+    // 良性修辞演进（Benign Stylistic Polish）判定：
+    // 当 Stylist 为 modify 且明确全盘采纳了初审的所有纠正（rejectedChanges 显式为空数组，且 acceptedChanges 非空），
+    // 同时不存在术语冲突、低分不确定性与高风险标记时，判定为顺畅的文学润色深化，不强制触发终审仲裁。
+    const hasExplicitRejection = rejectedChanges && rejectedChanges.length > 0;
+    const isBenignPolish = attitude === "modify" &&
+      rejectedChanges !== null &&
+      rejectedChanges.length === 0 &&
+      acceptedChanges !== null &&
+      acceptedChanges.length > 0 &&
+      !signals.termConflict &&
+      !signals.lowScoreUncertain &&
+      (!Array.isArray(signals.riskFlags) || signals.riskFlags.length === 0);
+
+    if (!isBenignPolish) {
+      return {
+        triggered: true,
+        reason: hasExplicitRejection
+          ? `Gatekeeper 与 Stylist 存在具体改动分歧（驳回项：${rejectedChanges.join("、")}）。`
+          : "Gatekeeper 与 Stylist 提出了不同的修订方案。",
+      };
+    }
   }
 
   // 4. High-risk signals requiring arbitration
