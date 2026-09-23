@@ -40,15 +40,20 @@
   --ai-focus: var(--focus, var(--speaker-focus));
   --ai-focus-hover: var(--focus-hover, var(--speaker-focus-hover));
   --ai-info: var(--info, var(--speaker-focus-soft, #e9f1ff));
-  --ai-radius: var(--radius, var(--speaker-radius));
+  --ai-radius: var(--radius, var(--speaker-radius, 8px));
   --ai-radius-sm: var(--radius-sm, var(--speaker-radius-sm, 6px));
+  --ai-radius-btn: var(--radius-btn, 6px);
+  --ai-radius-badge: var(--radius-badge, 4px);
+  --ai-radius-control: var(--radius-control, 6px);
+  --ai-control-height: var(--control-height, 30px);
+  --ai-control-height-sm: var(--control-height-sm, 26px);
   --ai-shadow: var(--shadow-panel, var(--speaker-shadow));
 }
 
 /* ---- 面板容器 ---------------------------------------------------------- */
 
 .ai-panel {
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--ai-line);
   border-radius: var(--ai-radius);
   background: var(--ai-surface-subtle);
@@ -81,8 +86,8 @@
 }
 .ai-status-badge {
   flex: 0 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
+  padding: 2px 7px;
+  border-radius: var(--ai-radius-badge, 4px);
   background: var(--ai-surface-selected);
   color: var(--ai-focus);
   font-size: 11px;
@@ -150,18 +155,18 @@ details[open] > summary .details-toggle::before {
 .ai-config-band {
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
-  gap: 12px;
+  gap: 10px;
   align-items: start;
-  padding: 9px 0;
+  padding: 6px 0;
 }
 .ai-config-band + .ai-config-band {
   border-top: 1px solid var(--ai-line);
 }
 .ai-config-label {
-  min-height: 28px;
+  min-height: 26px;
   display: flex;
   align-items: center;
-  padding-left: 8px;
+  padding-left: 6px;
   border-left: 3px solid var(--ai-focus);
   color: var(--ai-focus-hover);
   font-size: 11px;
@@ -181,19 +186,21 @@ details[open] > summary .details-toggle::before {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .ai-preset-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 12px;
   flex-wrap: wrap;
-  padding: 6px 10px;
-  border-radius: var(--ai-radius-sm);
+  padding: 4px 10px;
+  border-radius: var(--ai-radius-control, 6px);
   background: var(--ai-surface-subtle);
   border: 1px dashed var(--ai-line-strong);
+  width: fit-content;
+  max-width: 100%;
 }
 
 .ai-preset-control {
@@ -201,7 +208,7 @@ details[open] > summary .details-toggle::before {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1 1 260px;
+  flex: 0 0 auto;
 }
 
 .ai-preset-control label {
@@ -214,18 +221,19 @@ details[open] > summary .details-toggle::before {
 
 .ai-preset-control select,
 .ai-preset-control .select-combobox {
-  min-width: 210px;
-  max-width: 320px;
-  flex: 1 1 auto;
+  width: 220px;
+  flex: 0 0 auto;
 }
 
 .ai-preset-control select {
-  height: 28px;
+  height: var(--ai-control-height-sm, 26px);
+  border-radius: var(--ai-radius-btn, 6px);
   font-size: 12px;
 }
 
 .ai-preset-control .select-trigger {
-  height: 28px;
+  height: var(--ai-control-height-sm, 26px);
+  border-radius: var(--ai-radius-btn, 6px);
   font-size: 12px;
 }
 
@@ -237,10 +245,11 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-preset-actions button {
-  height: 28px;
+  height: var(--ai-control-height-sm, 26px);
   padding: 0 10px;
   font-size: 12px;
-  line-height: 26px;
+  line-height: 24px;
+  border-radius: var(--ai-radius-btn, 6px);
   white-space: nowrap;
 }
 
@@ -260,18 +269,27 @@ details[open] > summary .details-toggle::before {
 .ai-proofread-fields {
   min-width: 0;
   display: grid;
-  gap: 8px 10px;
+  gap: 6px 10px;
   align-items: start;
 }
 .ai-service-fields {
-  grid-template-columns: minmax(140px, 0.68fr) minmax(250px, 1.5fr) minmax(240px, 1.15fr) minmax(210px, 1fr);
+  grid-template-columns: minmax(130px, 0.68fr) minmax(220px, 1.5fr) minmax(220px, 1.15fr) minmax(180px, 1fr);
 }
 .ai-service-fields.has-reasoning {
-  grid-template-columns: minmax(140px, 0.65fr) minmax(240px, 1.45fr) minmax(230px, 1.1fr) minmax(125px, 0.58fr) minmax(200px, 1fr);
+  grid-template-columns: minmax(120px, 0.6fr) minmax(220px, 1.4fr) minmax(210px, 1.1fr) minmax(110px, 0.55fr) minmax(180px, 1fr);
 }
 .ai-proofread-fields {
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 1.2fr);
+  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(190px, 1.25fr) minmax(210px, 1.15fr) minmax(140px, 0.8fr);
+  grid-template-areas:
+    "mode target profile concurrency breaker"
+    "hints hints  hints   hints       hints";
 }
+.ai-proofread-fields > .ai-field:nth-child(1) { grid-area: mode; }
+.ai-proofread-fields > .ai-field:nth-child(2) { grid-area: target; }
+.ai-proofread-fields > .ai-field:nth-child(3) { grid-area: profile; }
+.ai-proofread-fields > #aiConcurrencyField   { grid-area: concurrency; }
+.ai-proofread-fields > #aiBreakerField       { grid-area: breaker; }
+.ai-proofread-fields > .ai-field--wide       { grid-area: hints; }
 .ai-field {
   min-width: 0;
 }
@@ -283,7 +301,7 @@ details[open] > summary .details-toggle::before {
 .ai-field > label {
   display: flex;
   align-items: center;
-  min-height: 18px;
+  min-height: 16px;
   margin-bottom: 2px;
   color: var(--ai-muted);
   font-size: 11px;
@@ -295,7 +313,7 @@ details[open] > summary .details-toggle::before {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  min-height: 18px;
+  min-height: 16px;
   margin-bottom: 2px;
   min-width: 0;
 }
@@ -310,15 +328,17 @@ details[open] > summary .details-toggle::before {
 .ai-model-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 6px;
 }
 .ai-model-actions {
   display: flex;
   gap: 6px;
 }
 .ai-model-actions button {
-  min-width: 48px;
-  padding: 0 10px;
+  min-width: 44px;
+  height: var(--ai-control-height, 30px);
+  border-radius: var(--ai-radius-btn, 6px);
+  padding: 0 8px;
   white-space: nowrap;
 }
 /* 并发与智能并发设置 */
@@ -402,6 +422,12 @@ details[open] > summary .details-toggle::before {
 
 .ai-field--wide {
   grid-column: 1 / -1;
+  order: 10;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 2px;
 }
 .ai-term-hint {
   color: var(--ai-muted-2);
@@ -433,41 +459,43 @@ details[open] > summary .details-toggle::before {
 /* ---- 运行栏：状态/进度 + 操作按钮 -------------------------------------- */
 
 .ai-runbar {
-  display: grid;
-  grid-template-columns: minmax(260px, auto) minmax(260px, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 14px;
-  padding-top: 8px;
-  margin-top: 8px;
+  gap: 16px;
+  padding-top: 6px;
+  margin-top: 6px;
   border-top: 1px solid var(--ai-line);
   min-width: 0;
 }
 /* 两列变体：无选项开关时仅 [状态][操作] */
 .ai-runbar--two {
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  align-items: center;
 }
 .ai-options {
   min-width: 0;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 .ai-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
   gap: 6px;
+  margin-left: auto;
   flex: 0 0 auto;
   white-space: nowrap;
 }
 .ai-actions button {
-  min-width: 76px;
-  height: 32px;
+  min-width: 72px;
+  height: var(--ai-control-height, 30px);
+  border-radius: var(--ai-radius-btn, 6px);
 }
 .ai-status {
-  display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(120px, 180px);
-  gap: 8px;
+  display: flex;
   align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 520px;
   color: var(--ai-muted);
   font-size: 11px;
 }
@@ -478,7 +506,9 @@ details[open] > summary .details-toggle::before {
   white-space: nowrap;
 }
 .ai-progress {
+  width: 140px;
   height: 6px;
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid var(--ai-line);
   border-radius: 999px;
@@ -583,10 +613,10 @@ details[open] > summary .details-toggle::before {
 /* ---- 阶段统计面板 (ai-stage-dashboard) ----------------------------------- */
 
 .ai-stage-dashboard {
-  margin-top: 10px;
-  padding: 8px 10px;
+  margin-top: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius-sm);
+  border-radius: var(--ai-radius-control, 6px);
   background: var(--ai-surface-subtle);
 }
 
@@ -594,7 +624,7 @@ details[open] > summary .details-toggle::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .ai-stage-dashboard-title {
@@ -608,7 +638,7 @@ details[open] > summary .details-toggle::before {
   font-size: 11px;
   font-weight: 700;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--ai-radius-badge, 4px);
   background: var(--ai-surface-selected);
   color: var(--ai-focus);
 }
@@ -616,17 +646,17 @@ details[open] > summary .details-toggle::before {
 .ai-stage-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .ai-stage-card {
-  padding: 6px 8px;
+  padding: 4px 8px;
   border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius-sm);
+  border-radius: var(--ai-radius-control, 6px);
   background: var(--ai-surface);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .ai-stage-card.is-disabled {
@@ -638,7 +668,7 @@ details[open] > summary .details-toggle::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   min-height: 22px;
   cursor: default;
   user-select: none;
@@ -647,7 +677,7 @@ details[open] > summary .details-toggle::before {
 .ai-stage-card-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -661,8 +691,8 @@ details[open] > summary .details-toggle::before {
 .ai-stage-status-pill {
   font-size: 10px;
   line-height: 1.2;
-  padding: 1px 6px;
-  border-radius: 999px;
+  padding: 1px 5px;
+  border-radius: var(--ai-radius-badge, 4px);
   font-weight: 600;
   display: inline-flex;
   align-items: center;
@@ -725,7 +755,7 @@ details[open] > summary .details-toggle::before {
   padding: 0 4px;
   font-size: 11px;
   border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius-sm);
+  border-radius: var(--ai-radius-btn, 5px);
   background: var(--ai-surface-subtle);
   color: var(--ai-text);
   cursor: pointer;
@@ -739,12 +769,15 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-card-body {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
   cursor: pointer;
-  border-radius: var(--ai-radius-sm);
-  padding: 3px 5px;
-  margin: 0 -5px -2px -5px;
+  border-radius: var(--ai-radius-btn, 5px);
+  padding: 2px 4px;
+  margin: 0;
   transition: background 120ms ease;
 }
 
@@ -753,32 +786,32 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-card-value {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  gap: 4px;
-  font-size: 15px;
+  gap: 3px;
+  font-size: 14px;
   color: var(--ai-text);
 }
 
 .ai-stage-card-value strong {
   font-weight: 700;
+  font-size: 15px;
   color: var(--ai-focus);
 }
 
 .ai-stage-unit {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ai-muted-2);
 }
 
 .ai-stage-card-sub {
   font-size: 11px;
   color: var(--ai-muted);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 6px;
-  line-height: 1.4;
-  min-height: 16px;
+  gap: 3px 6px;
+  line-height: 1.3;
 }
 
 .ai-stage-sub-item {
@@ -822,7 +855,7 @@ details[open] > summary .details-toggle::before {
   gap: 3px;
   padding: 2px 7px;
   margin-bottom: 6px;
-  border-radius: 999px;
+  border-radius: var(--ai-radius-badge, 4px);
   background: var(--ai-surface-subtle);
   border: 1px solid var(--ai-line);
   font-size: 11px;
@@ -926,7 +959,7 @@ details[open] > summary .details-toggle::before {
   font-size: 10px;
   font-weight: 700;
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--ai-radius-badge, 4px);
 }
 
 .stage-report-tag.is-accept {
@@ -1156,7 +1189,7 @@ details[open] > summary .details-toggle::before {
   padding: 1px 6px;
   font-size: 11px;
   font-weight: 600;
-  border-radius: 999px;
+  border-radius: var(--ai-radius-badge, 4px);
   border: 1px solid var(--ai-line);
   background: var(--ai-surface-subtle);
   color: var(--ai-muted);

@@ -1088,6 +1088,179 @@
       });
     }
 
+    // ---- 浏览器标签页式控制栈 (Browser Tab Bar) ----
+    function initWorkbenchTabs() {
+      if (typeof HTMLElement === "undefined" || typeof document === "undefined" || !document.querySelector || !document.createElement) return;
+      const panelGroup = document.getElementById("controlStackPanel");
+      const groupBody = document.querySelector(".panel-group-body");
+      if (!groupBody || groupBody.dataset.tabsInitialized) return;
+      groupBody.dataset.tabsInitialized = "1";
+
+      const tabConfigs = [
+        { id: "prefilterPanel", title: "预筛选", icon: "🔍", stateId: "prefilterPanelState" },
+        { id: "aiPanel", title: "AI 辅助校对", icon: "🤖", stateId: "aiPanelState" },
+        { id: "filterPanel", title: "筛选与批处理", icon: "⚡", stateId: "filterPanelState" },
+        { id: "notesPanel", title: "备注空间与找回", icon: "💾", stateId: "notesSaveState" },
+      ];
+
+      const panels = tabConfigs
+        .map((cfg) => ({ ...cfg, el: document.getElementById(cfg.id) }))
+        .filter((item) => item.el);
+      if (panels.length === 0) return;
+
+      function appendChildSafe(parent, child) {
+        if (typeof parent.appendChild === "function") {
+          parent.appendChild(child);
+        } else if (typeof parent.append === "function") {
+          parent.append(child);
+        }
+      }
+
+      const tabsBar = document.createElement("div");
+      tabsBar.className = "workbench-tabs-bar";
+      tabsBar.setAttribute("role", "tablist");
+      tabsBar.setAttribute("aria-label", "控制面板标签页");
+
+      const tabsList = document.createElement("div");
+      tabsList.className = "workbench-tabs-list";
+
+      const tabMap = new Map();
+
+      panels.forEach(({ id, title, icon, stateId, el }) => {
+        const tabBtn = document.createElement("button");
+        tabBtn.type = "button";
+        tabBtn.className = "workbench-tab";
+        tabBtn.setAttribute("role", "tab");
+        tabBtn.setAttribute("aria-controls", id);
+        tabBtn.setAttribute("aria-selected", el.open ? "true" : "false");
+        if (el.open) tabBtn.classList.add("is-active");
+
+        const iconSpan = document.createElement("span");
+        iconSpan.className = "workbench-tab-icon";
+        iconSpan.textContent = icon;
+
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "workbench-tab-title";
+        titleSpan.textContent = title;
+
+        const badgeSpan = document.createElement("span");
+        badgeSpan.className = "workbench-tab-badge";
+        const stateEl = document.getElementById(stateId);
+        badgeSpan.textContent = stateEl ? stateEl.textContent.trim() : "";
+
+        appendChildSafe(tabBtn, iconSpan);
+        appendChildSafe(tabBtn, titleSpan);
+        appendChildSafe(tabBtn, badgeSpan);
+
+        tabBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          const wasOpen = el.open;
+          if (wasOpen) {
+            // 点击已展开的活跃标签：收起面板！
+            el.open = false;
+          } else {
+            // 点击其他标签：展开目标面板，并互斥收起所有其他面板！
+            panels.forEach((p) => {
+              p.el.open = p.id === id;
+            });
+          }
+          updateTabsActiveState();
+          if (typeof syncVisibleRowLayout === "function") {
+            window.requestAnimationFrame(syncVisibleRowLayout);
+          }
+        });
+
+        appendChildSafe(tabsList, tabBtn);
+        tabMap.set(id, { btn: tabBtn, badge: badgeSpan, stateId, el });
+      });
+
+      const actionsDiv = document.createElement("div");
+      actionsDiv.className = "workbench-tabs-actions";
+
+      const collapseBtn = document.createElement("button");
+      collapseBtn.type = "button";
+      collapseBtn.className = "workbench-tab-action btn-collapse-panel";
+      collapseBtn.title = "收起当前标签页，留出最大表格对比空间";
+      collapseBtn.setAttribute("aria-label", "收起面板");
+      collapseBtn.innerHTML = '<span class="collapse-icon">▲</span><span class="collapse-text">收起面板</span>';
+      collapseBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        panels.forEach((p) => { p.el.open = false; });
+        updateTabsActiveState();
+        if (typeof syncVisibleRowLayout === "function") {
+          window.requestAnimationFrame(syncVisibleRowLayout);
+        }
+      });
+      appendChildSafe(actionsDiv, collapseBtn);
+
+      appendChildSafe(tabsBar, tabsList);
+      appendChildSafe(tabsBar, actionsDiv);
+
+      if (typeof groupBody.insertBefore === "function") {
+        groupBody.insertBefore(tabsBar, groupBody.firstChild);
+      } else if (typeof groupBody.append === "function") {
+        groupBody.append(tabsBar);
+      }
+      groupBody.classList.add("has-workbench-tabs");
+      if (panelGroup) panelGroup.classList.add("tabs-mode");
+
+      function updateTabsActiveState() {
+        let anyOpen = false;
+        panels.forEach(({ id, el }) => {
+          const entry = tabMap.get(id);
+          if (!entry) return;
+          if (el.open) {
+            anyOpen = true;
+            entry.btn.classList.add("is-active");
+            entry.btn.setAttribute("aria-selected", "true");
+          } else {
+            entry.btn.classList.remove("is-active");
+            entry.btn.setAttribute("aria-selected", "false");
+          }
+        });
+        collapseBtn.style.visibility = anyOpen ? "visible" : "hidden";
+      }
+
+      // 监听原生 details 的 toggle 事件，保持与外部脚本控制双向同步
+      panels.forEach(({ id, el }) => {
+        el.addEventListener("toggle", () => {
+          if (el.open) {
+            // 互斥打开：确保只有一个面板处于展开状态
+            panels.forEach((other) => {
+              if (other.id !== id && other.el.open) {
+                other.el.open = false;
+              }
+            });
+          }
+          updateTabsActiveState();
+        });
+      });
+
+      // 同步标签徽章文字与运行状态
+      function syncTabBadges() {
+        tabMap.forEach(({ badge, stateId }) => {
+          const src = document.getElementById(stateId);
+          if (src) {
+            badge.textContent = src.textContent.trim();
+            if (src.classList.contains("is-running")) {
+              badge.classList.add("is-running");
+            } else {
+              badge.classList.remove("is-running");
+            }
+            if (src.classList.contains("is-warn")) {
+              badge.classList.add("is-warn");
+            } else {
+              badge.classList.remove("is-warn");
+            }
+          }
+        });
+      }
+
+      setInterval(syncTabBadges, 800);
+      syncTabBadges();
+      updateTabsActiveState();
+    }
+
     function setRuntimeStatus(message) {
       aiIds.status.dataset.runtimeMessage = "1";
       aiIds.status.textContent = message;
@@ -4381,6 +4554,7 @@
 
     bindDetailsToggle();
     bindPanelGroups();
+    initWorkbenchTabs();
     document.querySelectorAll("select").forEach(enhanceSelect);
     restoreAiConfig();
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
