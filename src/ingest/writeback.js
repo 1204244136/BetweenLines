@@ -469,7 +469,15 @@ function seekRow(state, text, unresolved, options = {}) {
  * 前一行没能落地（定位失败或命中不唯一）时，它没占住的那段文字记为「未落地」：后面遇到同一段
  * 文字的行报歧义，不猜第一处候选是不是它的。
  */
-function planReplacements(documents, entries, options = {}) {
+/**
+ * 行序定位的公共骨架：去重 → 按行号登记锚点 → 逐行推进（无条目的行只占锚点）→ 落地 → 按文档分组。
+ * 文本写回与说话人标注只在「实体字段名、落地方式、报告措辞」上不同，由 `strategy` 提供：
+ * - `textOf(entry)`：该条目的正文（`searchText` / `text`）
+ * - `report(entry, reason)`：missed/ambiguous 里一条记录的形状
+ * - `commit(state, entry, options)`：返回 `{ empty?, failed?, conflict?, skipped?, placements: [] }`
+ * - `blockedReason(preview)`：前面同段文字没落地时的歧义措辞
+ */
+function planPlacements(documents, entries, options, strategy) {
   const state = createPlacementState(documents);
   const rowTexts = Array.isArray(options.rowTexts) ? options.rowTexts : [];
   const placements = [];
@@ -485,9 +493,10 @@ function planReplacements(documents, entries, options = {}) {
   const loose = [];
   const futureAnchors = [];
   let updated = 0;
+  let skipped = 0;
 
   for (const entry of entries) {
-    const key = `${entry?.id ?? entry?.index ?? ""}\u0000${String(entry?.searchText || "")}`;
+    const key = `${strategy.idOf(entry) ?? ""}\u0000${String(strategy.textOf(entry) || "")}`;
     if (seenEntries.has(key)) continue;
     seenEntries.add(key);
     const row = entryRowIndex(entry);
@@ -498,28 +507,21 @@ function planReplacements(documents, entries, options = {}) {
     if (!byRow.has(row)) byRow.set(row, entry);
   }
   for (const [row, entry] of byRow) {
-    futureAnchors.push({ row, text: comparableText(splitParts(entry.searchText)[0]) });
+    futureAnchors.push({ row, text: comparableText(splitParts(strategy.textOf(entry))[0]) });
   }
   const blockIndex = buildBlockIndex(state.documents);
 
-  const commitEntry = (entry, options = {}) => {
-    const outcome = placeEntry(state, entry, options);
+  const commitEntry = (entry, commitOptions = {}) => {
+    const outcome = strategy.commit(state, entry, commitOptions);
     if (outcome.empty) return;
     if (outcome.failed || outcome.conflict) {
-      noteUnresolved(unresolved, splitParts(entry.searchText));
-      if (outcome.conflict) {
-        ambiguous.push({
-          index: entry.id ?? entry.index ?? null,
-          searchText: previewText(entry.searchText),
-          reason: `原文件中有多处同样的段落，无法确定该改哪一处：${previewText(outcome.conflict.search)}`,
-        });
-      } else {
-        missed.push({
-          index: entry.id ?? entry.index ?? null,
-          searchText: previewText(entry.searchText),
-          reason: `未能在原文件中定位段落：${previewText(outcome.failed.search)}`,
-        });
-      }
+      noteUnresolved(unresolved, splitParts(strategy.textOf(entry)));
+      const target = outcome.conflict ? ambiguous : missed;
+      target.push(strategy.report(entry, outcome.conflict ? outcome.conflict.reason : outcome.failed.reason));
+      return;
+    }
+    if (outcome.skipped) {
+      skipped += 1;
       return;
     }
     placements.push(...outcome.placements);
@@ -535,114 +537,11 @@ function planReplacements(documents, entries, options = {}) {
       seekRow(state, rowTexts[row - 1], unresolved, { maxBlock });
       continue;
     }
-    const blocked = splitParts(entry.searchText).find((part) => unresolved.has(comparableText(part)));
+    const parts = splitParts(strategy.textOf(entry));
+    const blocked = parts.find((part) => unresolved.has(comparableText(part)));
     if (blocked) {
-      noteUnresolved(unresolved, splitParts(entry.searchText));
-      ambiguous.push({
-        index: entry.id ?? entry.index ?? null,
-        searchText: previewText(entry.searchText),
-        reason: `本行前面有同一段文字的行没能写回（${previewText(blocked)}），无法确定原文件里的这一处属于哪一行`,
-      });
-      continue;
-    }
-    commitEntry(entry, { maxBlock });
-  }
-  for (const entry of loose) commitEntry(entry);
-  const byDocument = new Map();
-  for (const placement of placements) {
-    if (!byDocument.has(placement.docIndex)) byDocument.set(placement.docIndex, []);
-    byDocument.get(placement.docIndex).push(placement);
-  }
-  const planned = [];
-  for (const [docIndex, list] of byDocument) {
-    list.sort((a, b) => b.start - a.start);
-    planned.push({ docIndex, list });
-  }
-  return { planned, touched, updated, missed, ambiguous };
-}
-
-// 说话人标注与文本写回共用同一套定位纪律（行序锚定 + 单调 + 不占用已写块 + 近处重复即歧义）。
-function planSpeakerAnnotations(documents, entries, options = {}) {
-  const state = createPlacementState(documents);
-  const rowTexts = Array.isArray(options.rowTexts) ? options.rowTexts : [];
-  const placements = [];
-  const touched = new Set();
-  const missed = [];
-  const ambiguous = [];
-  const unresolved = new Set();
-  const seenEntries = new Set();
-  const byRow = new Map();
-  const loose = [];
-  const futureAnchors = [];
-  let updated = 0;
-  let skipped = 0;
-
-  for (const entry of entries) {
-    const key = `${entry?.index ?? ""}\u0000${String(entry?.text || "")}`;
-    if (seenEntries.has(key)) continue;
-    seenEntries.add(key);
-    const row = entryRowIndex(entry);
-    if (!row) {
-      loose.push(entry);
-      continue;
-    }
-    if (!byRow.has(row)) byRow.set(row, entry);
-  }
-  for (const [row, entry] of byRow) {
-    futureAnchors.push({ row, text: comparableText(splitParts(entry.text)[0]) });
-  }
-  const blockIndex = buildBlockIndex(state.documents);
-
-  const commitEntry = (entry, options = {}) => {
-    const snapshot = state.snapshot();
-    const speaker = String(entry.speaker || "").replace(/-{2,}/g, "-").trim();
-    const located = state.placeBlockForInsert(entry.text, speaker, options);
-    const placement = located.hit;
-    if (!placement) {
-      // 定位失败或命中不唯一时锚点不动，后面的行按各自的位置重来。
-      state.restore(snapshot);
-      noteUnresolved(unresolved, splitParts(entry.text));
-      if (located.ambiguous) {
-        ambiguous.push({
-          index: entry.index ?? null,
-          text: previewText(entry.text),
-          reason: `原文件中有多处同样的发话段落，无法确定该标注哪一处：${previewText(entry.text)}`,
-        });
-      } else {
-        missed.push({
-          index: entry.index ?? null,
-          text: previewText(entry.text),
-          reason: `未能在原文件中定位发话段落：${previewText(entry.text)}`,
-        });
-      }
-      return;
-    }
-    state.commit(placement);
-    if (placement.skipped) {
-      skipped += 1;
-      return;
-    }
-    placements.push(placement);
-    touched.add(placement.docIndex);
-    updated += 1;
-  };
-
-  const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
-  for (let row = 1; row <= maxRow; row += 1) {
-    const maxBlock = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
-    const entry = byRow.get(row);
-    if (!entry) {
-      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock });
-      continue;
-    }
-    const blocked = splitParts(entry.text).find((part) => unresolved.has(comparableText(part)));
-    if (blocked) {
-      noteUnresolved(unresolved, splitParts(entry.text));
-      ambiguous.push({
-        index: entry.index ?? null,
-        text: previewText(entry.text),
-        reason: `本行前面有同一段发话的行没能写回（${previewText(blocked)}），无法确定原文件里的这一处属于哪一行`,
-      });
+      noteUnresolved(unresolved, parts);
+      ambiguous.push(strategy.report(entry, strategy.blockedReason(previewText(blocked))));
       continue;
     }
     commitEntry(entry, { maxBlock });
@@ -659,6 +558,62 @@ function planSpeakerAnnotations(documents, entries, options = {}) {
     planned.push({ docIndex, list });
   }
   return { planned, touched, updated, skipped, missed, ambiguous };
+}
+
+function planReplacements(documents, entries, options = {}) {
+  const result = planPlacements(documents, entries, options, {
+    idOf: (entry) => entry?.id ?? entry?.index,
+    textOf: (entry) => entry?.searchText,
+    report: (entry, reason) => ({
+      index: entry.id ?? entry.index ?? null,
+      searchText: previewText(entry.searchText),
+      reason,
+    }),
+    blockedReason: (preview) => `本行前面有同一段文字的行没能写回（${preview}），无法确定原文件里的这一处属于哪一行`,
+    commit: (state, entry, commitOptions) => {
+      const outcome = placeEntry(state, entry, commitOptions);
+      if (outcome.conflict) {
+        outcome.conflict.reason = `原文件中有多处同样的段落，无法确定该改哪一处：${previewText(outcome.conflict.search)}`;
+      } else if (outcome.failed) {
+        outcome.failed.reason = `未能在原文件中定位段落：${previewText(outcome.failed.search)}`;
+      }
+      return outcome;
+    },
+  });
+  // 文本写回没有「已存在即跳过」的语义，对外形状保持不带 skipped。
+  const { skipped, ...rest } = result;
+  return rest;
+}
+
+// 说话人标注与文本写回共用同一套定位纪律（行序锚定 + 单调 + 不占用已写块 + 近处重复即歧义）。
+function planSpeakerAnnotations(documents, entries, options = {}) {
+  return planPlacements(documents, entries, options, {
+    idOf: (entry) => entry?.index,
+    textOf: (entry) => entry?.text,
+    report: (entry, reason) => ({
+      index: entry.index ?? null,
+      text: previewText(entry.text),
+      reason,
+    }),
+    blockedReason: (preview) => `本行前面有同一段发话的行没能写回（${preview}），无法确定原文件里的这一处属于哪一行`,
+    commit: (state, entry, commitOptions) => {
+      const snapshot = state.snapshot();
+      const speaker = String(entry.speaker || "").replace(/-{2,}/g, "-").trim();
+      const located = state.placeBlockForInsert(entry.text, speaker, commitOptions);
+      const placement = located.hit;
+      if (!placement) {
+        // 定位失败或命中不唯一时锚点不动，后面的行按各自的位置重来。
+        state.restore(snapshot);
+        const preview = previewText(entry.text);
+        return located.ambiguous
+          ? { conflict: { reason: `原文件中有多处同样的发话段落，无法确定该标注哪一处：${preview}` }, placements: [] }
+          : { failed: { reason: `未能在原文件中定位发话段落：${preview}` }, placements: [] };
+      }
+      state.commit(placement);
+      if (placement.skipped) return { skipped: true, placements: [] };
+      return { placements: [placement] };
+    },
+  });
 }
 
 function applyPlacements(planned, documents) {
