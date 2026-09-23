@@ -1474,6 +1474,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
 
     async function executeStage2(s1Item) {
+      if (!status.active.includes(s1Item.row.index)) status.active.push(s1Item.row.index);
       status.stagePipelines.stage2.activeRows.push(s1Item.row.index);
       syncStagePipelineQueues();
       try {
@@ -1497,6 +1498,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         status.active = status.active.filter((idx) => idx !== s1Item.row.index);
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
+        if (!shouldCascade || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
+          status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+        }
         stage2InFlight -= 1;
         syncStagePipelineQueues();
         dispatch();
@@ -1504,6 +1508,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
 
     async function executeStage3(s2Item) {
+      if (!status.active.includes(s2Item.row.index)) status.active.push(s2Item.row.index);
       status.stagePipelines.stage3.activeRows.push(s2Item.row.index);
       syncStagePipelineQueues();
       try {
@@ -1532,6 +1537,7 @@ function finish() {
   if (!status.running) return;
   status.running = false;
   status.finishedAt = new Date().toISOString();
+  status.active = [];
   status.stagePipelines = createStagePipelines();
   const isPrefilter = status.kind === "prefilter";
   if (!isPrefilter) {

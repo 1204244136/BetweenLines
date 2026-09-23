@@ -44,6 +44,7 @@
       --fs-caption: 12px;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html {
       background: var(--bg);
     }

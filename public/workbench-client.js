@@ -3400,6 +3400,7 @@
           activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "");
         } else {
           active1.hidden = true;
+          activeText1.textContent = "";
         }
       }
 
@@ -3437,6 +3438,7 @@
           activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "");
         } else {
           active2.hidden = true;
+          activeText2.textContent = "";
         }
       }
 
@@ -3474,6 +3476,7 @@
           activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "");
         } else {
           active3.hidden = true;
+          activeText3.textContent = "";
         }
       }
     }
@@ -3607,7 +3610,7 @@
       currentAiRunning = Boolean(ai.running);
       const isRunning = Boolean(ai.running);
 
-      if (previousRunning && !isRunning) {
+      if (!isRunning && (previousRunning || runningAiStage)) {
         const finishedStage = runningAiStage;
         runningAiStage = null;
         if (finishedStage === "stage1" && stage2WaitingForStage1) {
@@ -4443,19 +4446,24 @@
           showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
           return;
         }
+        if (currentAiRunning || runningAiStage === "stage1") {
+          stage2WaitingForStage1 = true;
+          setAllStageButtonsRunning(currentAiRunning);
+          updateStageMetricsDashboard();
+          const hasSuggestionsNow = Object.values(notes).some((item) => {
+            const text = String(item?.note || "");
+            return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
+          });
+          showToast(hasSuggestionsNow
+            ? "已排队：当前已有初审建议，等待阶段一全部完成后自动启动文学复审。"
+            : "已排队：当前暂无初审修改建议，等待阶段一产出建议后自动启动文学复审。", { tone: "info", durationMs: 5000 });
+          return;
+        }
         const hasStage1Suggestions = Object.values(notes).some((item) => {
           const text = String(item?.note || "");
           return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
         });
         if (!hasStage1Suggestions) {
-          // 若没有可以校对的行，但阶段一仍在继续，则「等待」阶段一！
-          if (currentAiRunning || runningAiStage === "stage1") {
-            stage2WaitingForStage1 = true;
-            setAllStageButtonsRunning(currentAiRunning);
-            updateStageMetricsDashboard();
-            showToast("已排队：当前暂无初审修改建议，等待阶段一产出建议后自动启动文学复审。", { tone: "info", durationMs: 5000 });
-            return;
-          }
           showToast("当前没有未人工确认的初审修改建议行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
           return;
         }
@@ -4464,19 +4472,24 @@
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
           return;
         }
+        if (currentAiRunning || stage2WaitingForStage1 || runningAiStage === "stage1" || runningAiStage === "stage2") {
+          stage3WaitingForStage2 = true;
+          setAllStageButtonsRunning(currentAiRunning);
+          updateStageMetricsDashboard();
+          const hasDisputesNow = Object.values(notes).some((item) => {
+            const text = String(item?.note || "");
+            return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
+          });
+          showToast(hasDisputesNow
+            ? "已排队：当前已有分歧行，等待前序阶段全部完成后自动启动终审仲裁。"
+            : "已排队：当前暂无分歧行，等待阶段二复审产生分歧后自动启动终审仲裁。", { tone: "info", durationMs: 5000 });
+          return;
+        }
         const hasDisputes = Object.values(notes).some((item) => {
           const text = String(item?.note || "");
           return !item.manualDone && (text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate"));
         });
         if (!hasDisputes) {
-          // 若没有可以仲裁的行，但阶段一或阶段二仍在继续，则「等待」阶段二！
-          if (currentAiRunning || stage2WaitingForStage1) {
-            stage3WaitingForStage2 = true;
-            setAllStageButtonsRunning(currentAiRunning);
-            updateStageMetricsDashboard();
-            showToast("已排队：当前暂无分歧行，等待阶段二复审产生分歧后自动启动终审仲裁。", { tone: "info", durationMs: 5000 });
-            return;
-          }
           showToast("当前没有需要终审仲裁的分歧行。", { tone: "info", durationMs: 5000 });
           return;
         }

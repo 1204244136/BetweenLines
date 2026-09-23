@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { makeHtml } = require("./build-compare");
 const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
 const { createStageMetrics } = require("../src/workbenches/translation-compare/ai/stage-results");
@@ -591,4 +593,73 @@ test("阶段等待与接力：阶段一运行中点击阶段二进入「等待�
   // 阶段一完成后，阶段二应自动解除等待，并准备接力调用
   assert.equal(ui.run("stage2WaitingForStage1"), false);
   assert.match(toastMessages(ui).join("|"), /自动接力启动阶段二/);
+});
+
+test("阶段等待与接力：已有建议行时在阶段一运行中点击阶段二依然安全排队，不发起并发启动请求", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
+    },
+    statusQueue: [
+      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
+      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
+      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
+    ],
+  });
+
+  // 1. 启动阶段一
+  await ui.element("stage1Start").dispatch("click");
+  assert.equal(ui.run("runningAiStage"), "stage1");
+  const postsBefore = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
+  assert.equal(postsBefore, 1);
+
+  // 2. 模拟阶段一在运行过程中产出了初审建议行，并配置了阶段二预设
+  ui.run(`
+    aiIds.stage2Preset.value = "preset-s2";
+    notes["1"] = {
+      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：建议修改\\n初审改案：新方案",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+  `);
+
+  // 3. 虽然 notes 中已有初审建议行，但阶段一仍在运行中，点击阶段二应排队而不是发起并发 start 请求
+  await ui.element("stage2Start").dispatch("click");
+  assert.equal(ui.run("stage2WaitingForStage1"), true, "必须安全进入排队状态");
+  const postsAfter = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
+  assert.equal(postsAfter, 1, "绝不发起并发 start 请求");
+  assert.match(toastMessages(ui).join("|"), /已有初审建议，等待阶段一全部完成/);
+});
+
+test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确隐藏并清空内容，CSS包含[hidden]保护", () => {
+  const css = fs.readFileSync(path.resolve(__dirname, "../public/ai-panel.css"), "utf8");
+  assert.match(css, /\.ai-stage-active-info\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/, "ai-panel.css 必须包含 .ai-stage-active-info[hidden] 隐藏规则");
+
+  const baseCss = fs.readFileSync(path.resolve(__dirname, "../public/workbench-style.css"), "utf8");
+  assert.match(baseCss, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/, "workbench-style.css 必须包含全局 [hidden] 隐藏规则");
+
+  const ui = createWorkbench(storageFixture({}));
+  const active1 = ui.element("stage1ActiveInfo");
+  const activeText1 = ui.element("stage1ActiveRowsText");
+  assert.equal(active1.hidden, true);
+  assert.equal(activeText1.textContent, "");
+
+  // 模拟运行中有活跃行
+  ui.run(`
+    updateStageMetricsDashboard(null, {
+      stage1: { inFlight: 1, pending: 0, activeRows: [5, 6] }
+    }, true);
+  `);
+  assert.equal(active1.hidden, false);
+  assert.equal(activeText1.textContent, "5, 6");
+
+  // 模拟运行结束
+  ui.run(`
+    updateStageMetricsDashboard(null, {
+      stage1: { inFlight: 0, pending: 0, activeRows: [] }
+    }, false);
+  `);
+  assert.equal(active1.hidden, true);
+  assert.equal(activeText1.textContent, "", "隐藏时清空活跃行文本");
 });

@@ -780,6 +780,10 @@ details[open] > summary .details-toggle::before {
   box-sizing: border-box;
 }
 
+.ai-stage-active-info[hidden] {
+  display: none !important;
+}
+
 .ai-stage-active-dot {
   display: inline-block;
   width: 5px;
