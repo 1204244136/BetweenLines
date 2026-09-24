@@ -844,3 +844,140 @@ test("顶部审核结论指标筛选：点击建议修改/无需修改筛选对�
   assert.equal(ui.run("activeSummaryFilter"), null);
   assert.equal(ui.run("filteredRows.length"), 4);
 });
+
+test("三语语境校对：认知审核阶段指标严格闭环且待确认行不误入复审排队", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：原译准确无需修改\n分析：目标列与原文贴合。",
+        aiDone: true,
+      },
+      2: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\nGatekeeper初审：存疑转人工\n分析：两份非原文材料各有证据，上下文不足以定论。",
+        aiDone: false,
+      },
+      3: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：建议融入对照列更优片段\n初审改案：融入改案A\nStylist复审[采纳]：同意初审方案\n修改结果：融入改案A",
+        aiDone: true,
+      },
+      4: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：是\nGatekeeper初审：两版本均生硬需调整\n初审改案：初审案B\nStylist复审[调整]：文学润色改案C\n复审改案：复审案C\nArbiter仲裁[结合方案]：融合初审与复审优点\n仲裁改案：定案D\n修改结果：定案D",
+        aiDone: true,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "JP1", cn: "CN1", tw: "TW1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "JP2", cn: "CN2", tw: "TW2", relation: "1:1", score: 0.85, signature: "sig-2" },
+      { index: 3, jp: "JP3", cn: "CN3", tw: "TW3", relation: "1:1", score: 0.8, signature: "sig-3" },
+      { index: 4, jp: "JP4", cn: "CN4", tw: "TW4", relation: "1:1", score: 0.75, signature: "sig-4" },
+    ],
+  });
+
+  // 1. 全局最终审核结论指标：严格闭环
+  assert.equal(ui.element("metricFinalNeedsEdit").textContent, 2, "行3与行4最终需修改");
+  assert.equal(ui.element("metricFinalUnchanged").textContent, 1, "行1无需修改");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "行2存疑待人工确认");
+
+  // 2. 阶段一初审指标：待人工确认行绝不计入初审提改
+  assert.equal(ui.element("metricStage1Passed").textContent, 1, "行1初审直接通过");
+  assert.equal(ui.element("metricFastPassHits").textContent, 1, "行1快速直通");
+  assert.equal(ui.element("metricStage1NeedsEdit").textContent, 2, "只有行3和行4初审建议修改，行2绝不计入提改！");
+
+  // 3. 阶段二文学复审指标：排队复审数精准等于提改数 - 已复审数
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 2, "行3与行4经历了复审");
+  assert.equal(ui.element("metricCritiqueAccept").textContent, 1, "行3采纳");
+  assert.equal(ui.element("metricCritiqueModify").textContent, 1, "行4调整");
+  // 关键断言：2提改 - 2复审 = 0排队，行2绝不能伪造出排队复审！
+  assert.equal(ui.element("metricStage2Pending").textContent, 0, "待文学复审排队数必须为 0");
+  assert.equal(ui.element("stage2PendingItem").hidden, true, "待复审徽标在无排队时必须正确隐藏");
+
+  // 4. 阶段三终审仲裁指标
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 1, "行4仲裁");
+  assert.equal(ui.element("metricArbSynthesis").textContent, 1, "行4结合方案");
+
+  // 5. 待人工确认指标徽标在有存疑行时可见，并支持点击筛选
+  const checkBadge = ui.element("aiStageSummaryNeedsCheck");
+  assert.equal(checkBadge.hidden, false, "存在待确认行时待确认徽标必须展示");
+  await checkBadge.dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "needsCheck");
+  assert.equal(ui.run("filteredRows.length"), 1, "准确筛选出 1 行待人工确认");
+  assert.equal(ui.run("filteredRows[0].index"), 2);
+});
+
+test("三语语境校对：Stylist 与 Arbiter 正确接收非原文目标列与带隔离防线的对照列语境", () => {
+  const { buildStylistMessages, buildArbiterMessages } = require("../src/workbenches/translation-compare/ai/persona-runtime");
+
+  const row = {
+    index: 10,
+    jp: "それは仕方のないことだ。",
+    cn: "那是没办法的事。",
+    tw: "那是莫可奈何的事。",
+  };
+
+  // 模拟三语校对，用户指定目标列为 tw（台版），对照列为 cn（简中）
+  const gatekeeperDecision = {
+    needsEdit: true,
+    better: "counterpart",
+    summary: "建议融入简中更贴合原文的词汇",
+    revisedText: "那是莫可奈何的既定事实。",
+    score: 85,
+  };
+
+  const stylistMessages = buildStylistMessages(row, gatekeeperDecision, {
+    targetLabel: "非原文 C（台版）",
+    targetText: row.tw,
+    counterpartLabel: "非原文 B（简中）",
+    counterpartText: row.cn,
+    basePrompt: "通用提示词",
+  });
+
+  const stylistUserJson = JSON.parse(stylistMessages[1].content.split("\n\n")[0].replace(/^请审阅第 \d+ 行的翻译与初审方案：\n/, ""));
+  assert.equal(stylistUserJson.sourceText, row.jp);
+  assert.equal(stylistUserJson.targetText, row.tw, "目标文本必须是台版，绝不能取错为简中");
+  assert.ok(stylistUserJson.referenceText, "必须提供对照列参考文本");
+  assert.equal(stylistUserJson.referenceText.text, row.cn);
+  assert.match(stylistUserJson.referenceText.note, /绝对不是修改目标.*严禁将参考文本.*强行搬入/, "必须包含严格的参考文本防污染隔离提示");
+
+  // Arbiter 阶段验证
+  const stylistCritique = {
+    attitude: "modify",
+    rationale: "微调语感",
+    revisedText: "那是无可奈何的既定事实。",
+  };
+
+  const arbiterMessages = buildArbiterMessages(row, gatekeeperDecision, stylistCritique, {
+    targetLabel: "非原文 C（台版）",
+    targetText: row.tw,
+    counterpartLabel: "非原文 B（简中）",
+    counterpartText: row.cn,
+    basePrompt: "通用提示词",
+  });
+
+  const arbiterUserJson = JSON.parse(arbiterMessages[1].content.split("\n\n")[0].replace(/^请裁决第 \d+ 行的分歧：\n/, ""));
+  assert.equal(arbiterUserJson.targetText, row.tw, "Arbiter 目标文本必须是台版");
+  assert.ok(arbiterUserJson.referenceText, "Arbiter 必须收到对照列参考文本");
+  assert.equal(arbiterUserJson.referenceText.text, row.cn);
+  assert.match(arbiterUserJson.referenceText.note, /严禁因为参考文本表述不同而强行引入无关改动/, "Arbiter 必须具备参考文本防偏向防线");
+});
+
+test("差异辅助：diffSummary 严格限制片段数量并对大范围差异智能平滑收敛", () => {
+  const { diffSummary } = require("../src/workbenches/translation-compare/ai/ai-proofread");
+  const labels = { cn: "简中版", tw: "台版" };
+
+  // 1. 正常小差异：保留紧凑差异列表
+  const normalDiff = diffSummary("那是没办法的事情。", "那是莫可奈何的事情。", labels);
+  assert.match(normalDiff, /简中版 -> 台版简体化/);
+  assert.match(normalDiff, /- 没办法/);
+  assert.match(normalDiff, /\+ 莫可奈何/);
+
+  // 2. 差异过大或句式完全不同：平滑收敛为高层防杂乱提示，避免输出长篇乱码碎词
+  const heavyFrom = "在那个寂静无声的深夜里，少年独自一人静静地凝视着窗外繁星点点的夜空。";
+  const heavyTo = "万籁俱寂的午夜时分，他默默站在窗前眺望着漫天星宿闪烁的苍穹宇宙。";
+  const heavyDiff = diffSummary(heavyFrom, heavyTo, labels);
+  assert.match(heavyDiff, /差异较大（行文与句式各有特色）：仅供理解参考，严禁把参考列的风格差异当成错误/);
+  assert.equal(heavyDiff.includes("- "), false, "大范围差异时收敛，不输出杂乱碎词列表");
+});

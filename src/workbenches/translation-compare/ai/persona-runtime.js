@@ -215,8 +215,10 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
 function buildStylistMessages(row, gatekeeperDecision, options = {}) {
   const baseSystem = buildPersonaSystemPrompt("stylist", options.basePrompt || "", options);
   const targetLabel = options.targetLabel || "当前译文";
-  const sourceText = row.source || row.jp || "";
-  const targetText = row.target || row.cn || "";
+  const sourceText = options.sourceText || row.source || row.jp || "";
+  const targetText = options.targetText || row.target || (options.targetKey && row[options.targetKey]) || row.cn || "";
+  const counterpartText = options.counterpartText || row.counterpart || "";
+  const counterpartLabel = options.counterpartLabel || "参考版本";
   const termGuidance = options.termGuidance || null;
   const context = options.context || null;
 
@@ -224,6 +226,13 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
     index: row.index,
     sourceText,
     targetText,
+    ...(counterpartText ? {
+      referenceText: {
+        label: counterpartLabel,
+        text: counterpartText,
+        note: "参考文本仅供理解句意与术语核对参考，绝对不是修改目标；严禁将参考文本的无关差异、非目标列用词风格或整句句式强行搬入目标列。修改必须立足于目标列本身，保持目标列的原有文风。",
+      },
+    } : {}),
     ...(context ? {
       context: {
         note: "相邻行上下文（仅供判断语流衔接与语气连贯性，非当前修改目标）",
@@ -272,8 +281,10 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
 function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options = {}) {
   const baseSystem = buildPersonaSystemPrompt("arbiter", options.basePrompt || "", options);
   const targetLabel = options.targetLabel || "当前译文";
-  const sourceText = row.source || row.jp || "";
-  const targetText = row.target || row.cn || "";
+  const sourceText = options.sourceText || row.source || row.jp || "";
+  const targetText = options.targetText || row.target || (options.targetKey && row[options.targetKey]) || row.cn || "";
+  const counterpartText = options.counterpartText || row.counterpart || "";
+  const counterpartLabel = options.counterpartLabel || "参考版本";
   const termGuidance = options.termGuidance || null;
   const context = options.context || null;
 
@@ -281,6 +292,13 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
     index: row.index,
     sourceText,
     targetText,
+    ...(counterpartText ? {
+      referenceText: {
+        label: counterpartLabel,
+        text: counterpartText,
+        note: "参考文本仅供理解句意与核对事实参考；终审裁决必须以原文 A 为最高准入准则，以待修改文本为基准，严禁因为参考文本表述不同而强行引入无关改动。",
+      },
+    } : {}),
     ...(context ? {
       context: {
         note: "前后文语境依据（用于理清前因后果、指示代词与上下文事实，请作为终审裁决与结合方案的核心证据）",

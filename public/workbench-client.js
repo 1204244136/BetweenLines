@@ -3847,6 +3847,8 @@
           fastPassHits += 1;
         } else if (parsed.modify === "否" && !hasStage1Revision) {
           stage1Passed += 1;
+        } else if (parsed.modify === "待人工确认" || parsed.modify === "人工确认") {
+          // 待人工确认不属于初审提改，也不流入阶段二排队
         } else {
           stage1NeedsEdit += 1;
         }

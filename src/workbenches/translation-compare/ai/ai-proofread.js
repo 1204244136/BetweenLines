@@ -1,5 +1,5 @@
 const fs = require("fs");
-const { diffWordsWithSpace } = require("diff");
+const { diffWordsWithSpace, diffChars } = require("diff");
 const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
@@ -778,15 +778,30 @@ function addResult(result, { prefilterKind = "" } = {}) {
     }
   }
 
+  const noteText = String(result.note || "");
+  const isExplicitNeedsCheck = noteText.includes("是否需要修改：待人工确认") ||
+    result.stageResult?.decision === "unclear" ||
+    result.stageResult?.needsContext === true;
+  const isExplicitNeedsEdit = (noteText.includes("是否需要修改：是") || Boolean(result.stageResult?.needsEdit && result.stageResult?.revisedText)) && !isExplicitNeedsCheck;
+
   // 最终审核结论与阶段流转指标
-  if (result.status === "suggestion" && result.done === false) {
-    status.stageMetrics.finalNeedsEdit = (status.stageMetrics.finalNeedsEdit || 0) + 1;
-  } else if (result.done === true) {
+  if (result.done === true) {
     status.stageMetrics.finalUnchanged = (status.stageMetrics.finalUnchanged || 0) + 1;
+  } else if (isExplicitNeedsCheck) {
+    status.stageMetrics.finalNeedsCheck = (status.stageMetrics.finalNeedsCheck || 0) + 1;
+  } else if (result.status === "suggestion" && isExplicitNeedsEdit) {
+    status.stageMetrics.finalNeedsEdit = (status.stageMetrics.finalNeedsEdit || 0) + 1;
   } else if (result.status !== "error") {
     status.stageMetrics.finalNeedsCheck = (status.stageMetrics.finalNeedsCheck || 0) + 1;
   }
-  if (result.status === "suggestion" || result.stageResult?.needsEdit || result.stylistReview || result.arbitration) {
+
+  const s1NeedsEdit = Boolean(
+    isExplicitNeedsEdit ||
+    (result.stageResult?.needsEdit && !isExplicitNeedsCheck) ||
+    result.stylistReview ||
+    result.arbitration
+  );
+  if (s1NeedsEdit) {
     status.stageMetrics.stage1NeedsEdit = (status.stageMetrics.stage1NeedsEdit || 0) + 1;
   }
   status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0);
@@ -892,6 +907,14 @@ async function startProofread(input) {
     status.speechHabitCharacters = activatedCharacters;
     pushLog(`${speechTableSummary(tables)}：按${scope === "volume" ? "卷" : "章"}命中 ${activatedChapters} ${scope === "volume" ? "卷" : "章"} / ${activatedCharacters.length} 个角色${volume?.code ? `（${volume.code}）` : ""}，这些角色的说话特色不会被判为翻译错误。`);
   }
+  const bilingual = config.proofreadMode === "bilingual";
+  const defaultTargetKey = bilingual ? "cn" : config.target;
+  const defaultCounterpartKey = bilingual ? "jp" : (defaultTargetKey === "cn" ? "tw" : "cn");
+  const defaultTargetLabel = defaultTargetKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C");
+  const defaultCounterpartLabel = defaultCounterpartKey === "jp"
+    ? (labels.jp || "原文 A")
+    : (defaultCounterpartKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C"));
+
   let stageItems = { stage2: [], stage3: [] };
 
   if (config.targetStage === "stage2") {
@@ -916,7 +939,17 @@ async function startProofread(input) {
           continue;
         }
         const s1Item = (memoryResult && memoryResult.stageResult && memoryResult.stageResult.needsEdit)
-          ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null }
+          ? {
+              row,
+              decision: memoryResult.decision || memoryResult.stageResult,
+              targetKey: memoryResult.targetKey || defaultTargetKey,
+              targetLabel: memoryResult.targetLabel || defaultTargetLabel,
+              counterpartKey: memoryResult.counterpartKey || defaultCounterpartKey,
+              counterpartLabel: memoryResult.counterpartLabel || defaultCounterpartLabel,
+              targetText: memoryResult.targetText || textForKey(row, memoryResult.targetKey || defaultTargetKey),
+              counterpartText: memoryResult.counterpartText || textForKey(row, memoryResult.counterpartKey || defaultCounterpartKey),
+              lowScore: null,
+            }
           : reconstructStage1Result(row, noteText, config, labels);
         items.push(s1Item);
       } else {
@@ -958,7 +991,18 @@ async function startProofread(input) {
           continue;
         }
         const s2Item = (memoryResult && memoryResult.stageResult && config.continueOnly)
-          ? { row, decision: memoryResult.decision || memoryResult.stageResult, targetKey: memoryResult.targetKey || "cn", targetLabel: labels.cn || "译文", counterpartKey: "jp", counterpartLabel: labels.jp || "原文", targetText: textForKey(row, "cn"), counterpartText: textForKey(row, "jp"), lowScore: null, arbCheck: { triggered: true } }
+          ? {
+              row,
+              decision: memoryResult.decision || memoryResult.stageResult,
+              targetKey: memoryResult.targetKey || defaultTargetKey,
+              targetLabel: memoryResult.targetLabel || defaultTargetLabel,
+              counterpartKey: memoryResult.counterpartKey || defaultCounterpartKey,
+              counterpartLabel: memoryResult.counterpartLabel || defaultCounterpartLabel,
+              targetText: memoryResult.targetText || textForKey(row, memoryResult.targetKey || defaultTargetKey),
+              counterpartText: memoryResult.counterpartText || textForKey(row, memoryResult.counterpartKey || defaultCounterpartKey),
+              lowScore: null,
+              arbCheck: { triggered: true },
+            }
           : reconstructStage2Result(row, noteText, config, labels);
         items.push(s2Item);
       } else {
@@ -1521,18 +1565,20 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           onStageSuccess(s1Ctrl);
         }
 
-        const isFastPass = !s1.decision.needsEdit && isFastPassDecision(s1.decision);
+        const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
+        const isUnclearOrNeedsContext = s1.decision?.needsContext === true || s1.decision?.better === "unclear" || s1.decision?.decision === "unclear";
+        const canCascadeToStage2 = shouldCascade && isNeedsEdit && !isUnclearOrNeedsContext;
 
-        if (isFastPass || !shouldCascade) {
-          // 命中 Fast Pass 或独立执行模式（stage1 模式）：无需 Stage 2，直接完成输出
+        if (!canCascadeToStage2) {
+          // 命中无需修改、待人工确认或独立执行模式（stage1 模式）：无需 Stage 2，直接完成输出
           const result = finalizeRowResult(s1, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
-          // 仅在 all 级联流水线模式下推入 Stage 2 队列！
+          // 仅在 all 级联流水线模式下且确实提出具体修改建议时推入 Stage 2 队列！
           stage2Pending.push(s1);
           syncStagePipelineQueues();
-          pushLog(`第 ${row.index} 行：事实初审完成，移交 Stage 2 (Stylist 文学复审队列)。`);
+          pushLog(`第 ${row.index} 行：事实初审提出修改，移交 Stage 2 (Stylist 文学复审队列)。`);
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
@@ -2090,10 +2136,15 @@ function reconstructStage1Result(row, noteText, config, labels) {
   const counterpartText = textForKey(row, counterpartKey);
 
   const revisedText = parsed.stage1Revision || parsed.revision || "";
+  const better = bilingual
+    ? (parsed.modify === "是" ? "neither" : "keep")
+    : (parsed.modify === "是"
+        ? (noteText.includes("参考") || noteText.includes("对照") ? "counterpart" : "neither")
+        : (parsed.modify === "否" ? "target" : "unclear"));
   const decision = {
     needsEdit: parsed.modify === "是" || Boolean(revisedText),
     semanticSame: parsed.semantic !== "不同",
-    better: bilingual ? (parsed.modify === "是" ? "neither" : "keep") : "target",
+    better,
     summary: parsed.analysis || parsed.stage1 || (parsed.modify === "是" ? "初审建议修改" : "无需修改"),
     revisedText,
     score: parsed.score || 80,
@@ -2168,6 +2219,9 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
 
   const stylistMessages = buildStylistMessages(row, decision, {
     targetLabel,
+    targetText: stage1Result.targetText,
+    counterpartText: stage1Result.counterpartText,
+    counterpartLabel: stage1Result.counterpartLabel,
     basePrompt: config.systemPrompt,
     termGuidance,
     glossary,
@@ -2247,6 +2301,9 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
 
   const arbiterMessages = buildArbiterMessages(row, decision, stylistReview, {
     targetLabel,
+    targetText: stage2Result.targetText,
+    counterpartText: stage2Result.counterpartText,
+    counterpartLabel: stage2Result.counterpartLabel,
     basePrompt: config.systemPrompt,
     termGuidance,
     glossary,
@@ -3061,20 +3118,46 @@ function convertToTargetScript(text, targetKey) {
 }
 
 function diffSummary(fromText, toText, labels) {
-  const parts = diffWordsWithSpace(fromText, toText);
+  if (!fromText || !toText) return "差异辅助未发现明显词级差异。";
+  const hasCjk = /[\u4e00-\u9fa5\u3040-\u30ff]/.test(fromText + toText);
+  const rawParts = hasCjk ? diffChars(fromText, toText) : diffWordsWithSpace(fromText, toText);
+  // 合并连续的同类型片段，使字符级差异聚合为自然的词块
+  const parts = [];
+  for (const part of rawParts) {
+    const last = parts[parts.length - 1];
+    if (last && Boolean(last.added) === Boolean(part.added) && Boolean(last.removed) === Boolean(part.removed)) {
+      last.value += part.value;
+    } else {
+      parts.push({ ...part });
+    }
+  }
+
   const changes = [];
+  let totalChangedChars = 0;
   for (const part of parts) {
     const value = String(part.value || "").trim();
     if (!value) continue;
-    if (part.removed) changes.push(`- ${value}`);
-    if (part.added) changes.push(`+ ${value}`);
-    if (changes.length >= 24) break;
+    if (part.removed || part.added) {
+      totalChangedChars += value.length;
+      if (part.removed) changes.push(`- ${value}`);
+      if (part.added) changes.push(`+ ${value}`);
+    }
   }
   const left = labels.cn || "非原文 B";
   const right = labels.tw || "非原文 C";
-  return changes.length
-    ? `${left} -> ${right}简体化\n${changes.join("\n")}`
-    : "差异辅助未发现明显词级差异。";
+  if (!changes.length) {
+    return "差异辅助未发现明显词级差异。";
+  }
+  // 限制与防杂乱收敛：若整句差异过于密集（超过12处变动或变更比例过高），碎词diff只会造成视觉与认知噪音，
+  // 此时收敛为概括性边界提示，防止模型被参考列的琐碎差异误导或将非目标列句式强行搬运。
+  const maxLen = Math.max(fromText.length, toText.length, 1);
+  if (changes.length > 12 || (changes.length >= 6 && totalChangedChars / maxLen > 0.7)) {
+    return `${left} 与 ${right} 差异较大（行文与句式各有特色）：仅供理解参考，严禁把参考列的风格差异当成错误，校对仍以原文 A 语义为唯一准绳。`;
+  }
+  // 正常微小差异，最多保留前 8 条关键差异，避免过长膨胀
+  const cappedChanges = changes.slice(0, 8);
+  const suffix = changes.length > 8 ? `\n...（其余 ${changes.length - 8} 处微小差异已折叠）` : "";
+  return `${left} -> ${right}简体化\n${cappedChanges.join("\n")}${suffix}`;
 }
 
 /**
@@ -3895,6 +3978,7 @@ module.exports = {
   clientStatus,
   decisionToResult,
   detectModelCapabilities,
+  diffSummary,
   errorCircuitBreaker,
   extractClaudeText,
   findContinuationContext,
