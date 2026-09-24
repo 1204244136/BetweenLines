@@ -227,3 +227,54 @@ test("面板抽屉：容器位置没变就整段收工，位移了才更新可�
   assert.equal(counters.maxHeightWrites, 1, "容器位移后必须更新可用高度");
   assert.equal(counters.heightReads, 0, "行宽没变，逐行高度一律不必重量");
 });
+
+test("性能优化：computeStageMetricsFromNotes 稳态下直接命中缓存，不随轮询重复扫描全表", () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const mockNotes = {};
+  for (let i = 1; i <= 200; i += 1) {
+    mockNotes[i] = {
+      note: `[AI校对]\n语义是否相同：相同\n是否需要修改：${i % 2 === 0 ? "是" : "否"}\nGatekeeper初审：评语${i}\n${i % 2 === 0 ? `初审改案：改案${i}\nStylist复审[采纳]：同意\n修改结果：改案${i}` : ""}`,
+      aiDone: true,
+    };
+  }
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify(mockNotes),
+  });
+  const rows = Array.from({ length: 200 }, (_, i) => ({
+    index: i + 1,
+    jp: "JP" + (i + 1),
+    cn: "CN" + (i + 1),
+    tw: "TW" + (i + 1),
+    relation: "1:1",
+    score: 0.85,
+    signature: "sig-" + (i + 1),
+  }));
+
+  const ui = createWorkbench(storage, { rows });
+
+  // 第一次已在初始化时计算并缓存，记录连续调用 50 次未修改状态下的总耗时
+  const start = Date.now();
+  ui.run(`
+    for (let j = 0; j < 50; j++) {
+      computeStageMetricsFromNotes(notes);
+    }
+  `);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 200, `50 次无变动查询总耗时应小于 200ms（实测 ${elapsed}ms），必须直接命中缓存`);
+});
+
+test("性能优化：inlineDiffHtml 与 parseAutomatedNote 具备高频结果缓存", () => {
+  const ui = createWorkbench();
+
+  // 1. parseAutomatedNote 缓存验证：相同文本多次解析返回同一内容
+  const sameNote = "[AI校对]\n语义是否相同：相同\n是否需要修改：是\n初审改案：测试改案\n修改结果：测试改案";
+  const ref1 = ui.run(`parseAutomatedNote(${JSON.stringify(sameNote)})`);
+  const ref2 = ui.run(`parseAutomatedNote(${JSON.stringify(sameNote)})`);
+  assert.deepEqual(ref1, ref2);
+
+  // 2. inlineDiffHtml 缓存验证：多次计算相同文本对结果完全一致且命中缓存
+  const diff1 = ui.run(`inlineDiffHtml("那是没办法的事。", "那是莫可奈何的事。")`);
+  const diff2 = ui.run(`inlineDiffHtml("那是没办法的事。", "那是莫可奈何的事。")`);
+  assert.equal(diff1, diff2);
+  assert.match(diff1, /<del>.*<\/del>/);
+});

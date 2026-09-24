@@ -33,6 +33,16 @@
     let savedGptReasoningEffort = "";
     let savedNonGptIntensity = "";
     const automatedNoteMarkers = ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[对照表]"];
+    const parsedAutomatedNoteCache = new Map();
+    const MAX_PARSED_NOTE_CACHE = 5000;
+    let cachedStageMetrics = null;
+    let notesMetricsVersion = 0;
+    let lastComputedMetricsVersion = -1;
+
+    function markNotesDirtyForMetrics() {
+      notesMetricsVersion += 1;
+    }
+
     let notesPersistFailed = false;
     const allRows = JSON.parse(document.getElementById("rowData").textContent);
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
@@ -517,6 +527,7 @@
     }
 
     function saveNotes({ immediate = false } = {}) {
+      markNotesDirtyForMetrics();
       if (immediate) {
         cancelScheduledNotesSave();
         persistNotes();
@@ -1745,11 +1756,28 @@
         : "";
     }
 
+    const inlineDiffCache = new Map();
+    const MAX_INLINE_DIFF_CACHE = 3000;
+
     function inlineDiffHtml(oldText, newText) {
       const oldValue = String(oldText || "");
       const newValue = String(newText || "");
       if (!oldValue && !newValue) return "";
       if (oldValue === newValue) return escapeHtml(newValue);
+      const cacheKey = oldValue + "\0" + newValue;
+      if (inlineDiffCache.has(cacheKey)) {
+        return inlineDiffCache.get(cacheKey);
+      }
+      const html = computeInlineDiffHtml(oldValue, newValue);
+      if (inlineDiffCache.size >= MAX_INLINE_DIFF_CACHE) {
+        const oldest = inlineDiffCache.keys().next().value;
+        inlineDiffCache.delete(oldest);
+      }
+      inlineDiffCache.set(cacheKey, html);
+      return html;
+    }
+
+    function computeInlineDiffHtml(oldValue, newValue) {
       const oldChars = Array.from(oldValue);
       const newChars = Array.from(newValue);
       if (oldChars.length * newChars.length > 50000) {
@@ -1822,6 +1850,21 @@
     }
 
     function parseAutomatedNote(note) {
+      if (!note) return null;
+      const str = String(note);
+      if (parsedAutomatedNoteCache.has(str)) {
+        return parsedAutomatedNoteCache.get(str);
+      }
+      const data = parseAutomatedNoteUncached(str);
+      if (parsedAutomatedNoteCache.size >= MAX_PARSED_NOTE_CACHE) {
+        const oldestKey = parsedAutomatedNoteCache.keys().next().value;
+        parsedAutomatedNoteCache.delete(oldestKey);
+      }
+      parsedAutomatedNoteCache.set(str, data);
+      return data;
+    }
+
+    function parseAutomatedNoteUncached(note) {
       const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
       if (!automatedNoteMarker(lines[0])) return null;
       if (isAiFailureNote(note)) return null;
@@ -2522,7 +2565,7 @@
     }
 
     function updateRenderedAiActive() {
-      for (const row of tbody.querySelectorAll("tr[data-index]")) {
+      for (const row of renderedRowsById.values()) {
         row.classList.toggle("ai-active", aiActiveIds.has(row.dataset.index));
       }
     }
@@ -2551,6 +2594,7 @@
       cleanAiFailureState(current);
       notes[id] = current;
       pruneEmptyNote(id);
+      markNotesDirtyForMetrics();
       const rendered = renderedRow(id);
       const summary = rendered?.querySelector(".note-summary");
       if (summary) {
@@ -2694,6 +2738,22 @@
         filterPanelState.textContent = filteredRows.length === allRows.length
           ? "未筛选"
           : "筛选 " + filteredRows.length + "/" + allRows.length + " 行";
+      }
+    }
+
+    let throttledApplyFiltersTimer = 0;
+    function scheduleThrottledApplyFilters() {
+      if (throttledApplyFiltersTimer) return;
+      if (typeof window !== "undefined" && window.requestAnimationFrame) {
+        throttledApplyFiltersTimer = window.requestAnimationFrame(() => {
+          throttledApplyFiltersTimer = 0;
+          applyFilters({ reset: false });
+        });
+      } else {
+        throttledApplyFiltersTimer = window.setTimeout(() => {
+          throttledApplyFiltersTimer = 0;
+          applyFilters({ reset: false });
+        }, 16);
       }
     }
 
@@ -3779,6 +3839,10 @@
     }
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
+      if (sourceNotes === notes && cachedStageMetrics && notesMetricsVersion === lastComputedMetricsVersion) {
+        return cachedStageMetrics;
+      }
+
       let stage1Passed = 0;
       let stage1NeedsEdit = 0;
       let stage1Errors = 0;
@@ -3821,7 +3885,6 @@
           continue;
         }
 
-        if (!hasAutomatedDecisionNote(noteText)) continue;
         const parsed = parseAutomatedNote(noteText);
         if (!parsed) continue;
 
@@ -3897,7 +3960,7 @@
       const stage2Pending = Math.max(0, stage1NeedsEdit - stage2Reviewed);
       const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
 
-      return {
+      const resultMetrics = {
         stage1Passed,
         stage1NeedsEdit,
         stage1Total,
@@ -3926,6 +3989,12 @@
         lowScoreHits,
         webLookupHits,
       };
+
+      if (sourceNotes === notes) {
+        cachedStageMetrics = resultMetrics;
+        lastComputedMetricsVersion = notesMetricsVersion;
+      }
+      return resultMetrics;
     }
 
     function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false) {
@@ -4221,7 +4290,11 @@
       }
       lastAiResultRevision = Math.max(lastAiResultRevision, Number(ai.resultRevision) || 0);
       if (appliedResult && (prefilterResultFilterActive || query.value.trim() || notesOnly || doneMode !== "all" || aiResultFilter !== "all" || issueSeverityFilter !== "all")) {
-        applyFilters({ reset: false });
+        if (ai.running) {
+          scheduleThrottledApplyFilters();
+        } else {
+          applyFilters({ reset: false });
+        }
       }
       updatePrefilterConfirmButton(ai);
     }
@@ -5434,6 +5507,8 @@
       if (notesStorageBlocked) { notesPanelStatus("请先解决保存冲突，再找回记录。", { tone: "watch" }); return; }
       applyRecovery(space, plan);
       saveNotes({ immediate: true });
+      markNotesDirtyForMetrics();
+      updateStageMetricsDashboard(null, {}, false);
       updateDoneCount();
       applyFilters({ reset: false });
       notesPanelIds.dialog.close();
@@ -5455,6 +5530,8 @@
       try {
         localStorage.setItem(storageKey, "{}");
         for (const id of Object.keys(notes)) delete notes[id];
+        markNotesDirtyForMetrics();
+        updateStageMetricsDashboard(null, {}, false);
         lastPersistedNotesRaw = "{}";
         notesPersistFailed = false;
         notesStorageBlocked = false;
