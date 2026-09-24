@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
-const { outputDir, toCn, loadParagraphs } = require("../../ingest/text-utils");
+const { toCn, loadParagraphs } = require("../../ingest/text-utils");
+const { resolveBuildOutputDir } = require("../../core/storage-layout");
 const { resolveInputSelection, activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
 const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles, normalizeGrade } = require("./ai/ai-proofread");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
@@ -432,10 +433,44 @@ function alignGroups(left, right, band = 60) {
   return groups;
 }
 
+function mergePivotOrphanGroups(groups, pivotLang) {
+  const result = [];
+  for (let idx = 0; idx < groups.length; idx += 1) {
+    const group = groups[idx];
+    const isOrphan = groupPivotStart(group, pivotLang) == null;
+    if (!isOrphan) {
+      result.push({ ...group });
+      continue;
+    }
+    // 孤儿组：pivot 方段落为空（如 pivotLang 为 cn 时的 0:1 组，或 pivotLang 为 tw 时的 1:0 组）
+    // 必须并入相邻的有 pivot 坐标的组，绝不能丢弃非 pivot 侧的真实译文段落
+    if (idx + 1 < groups.length && groupPivotStart(groups[idx + 1], pivotLang) != null) {
+      const next = groups[idx + 1];
+      next.left = [...group.left, ...next.left];
+      next.right = [...group.right, ...next.right];
+      next.cnStart = next.left[0]?.sourceIndex ?? null;
+      next.cnEnd = next.left.length ? next.left[next.left.length - 1].sourceIndex + 1 : null;
+      next.twStart = next.right[0]?.sourceIndex ?? null;
+      next.twEnd = next.right.length ? next.right[next.right.length - 1].sourceIndex + 1 : null;
+      next.relation = `${next.left.length}:${next.right.length}`;
+    } else if (result.length > 0) {
+      const prev = result[result.length - 1];
+      prev.left = [...prev.left, ...group.left];
+      prev.right = [...prev.right, ...group.right];
+      prev.cnStart = prev.left[0]?.sourceIndex ?? null;
+      prev.cnEnd = prev.left.length ? prev.left[prev.left.length - 1].sourceIndex + 1 : null;
+      prev.twStart = prev.right[0]?.sourceIndex ?? null;
+      prev.twEnd = prev.right.length ? prev.right[prev.right.length - 1].sourceIndex + 1 : null;
+      prev.relation = `${prev.left.length}:${prev.right.length}`;
+    }
+  }
+  return result;
+}
+
 function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
   const bilingual = comparisonMode === "bilingual";
   // 双语模式只有一份译文：不伪造 cn↔tw 对齐组，每个主文本段落直接作为技术 pivot 单元。
-  const cnTw = bilingual
+  const rawCnTw = bilingual
     ? cn.map((item) => ({
         left: [item],
         right: [],
@@ -453,8 +488,9 @@ function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
         twStart: group.right[0]?.sourceIndex ?? null,
         twEnd: group.right.length ? group.right[group.right.length - 1].sourceIndex + 1 : null,
       }));
-  const jpPivotGroups = loadJpGroupAlignmentList(jp);
   const pivotLang = loadJpPivotLang(comparisonMode);
+  const cnTw = bilingual ? rawCnTw : mergePivotOrphanGroups(rawCnTw, pivotLang);
+  const jpPivotGroups = loadJpGroupAlignmentList(jp);
   const rows = [];
 
   for (let i = 0; i < cnTw.length;) {
@@ -658,7 +694,7 @@ function assertSingleJpParagraphGroups(groups) {
 }
 
 function loadJpGroupAlignmentList(jp) {
-  const alignFile = path.join(outputDir, "jp-align.json");
+  const alignFile = path.join(resolveBuildOutputDir(), "jp-align.json");
   if (!fs.existsSync(alignFile)) return [];
 
   const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
@@ -684,7 +720,7 @@ function loadJpGroupAlignmentList(jp) {
 
 function loadJpPivotLang(comparisonMode = "trilingual") {
   if (comparisonMode === "bilingual") return "cn";
-  const alignFile = path.join(outputDir, "jp-align.json");
+  const alignFile = path.join(resolveBuildOutputDir(), "jp-align.json");
   if (!fs.existsSync(alignFile)) return "tw";
 
   const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
@@ -1257,6 +1293,7 @@ function toCsv(rows, comparisonMode = "trilingual") {
 }
 
 async function main() {
+  const outputDir = resolveBuildOutputDir();
   fs.mkdirSync(outputDir, { recursive: true });
 
   reportProgress(5, "读取段落与对齐结果");

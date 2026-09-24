@@ -143,12 +143,25 @@ function isFrontMatterBlock(block, lang) {
   return false;
 }
 
+function isDialogueBlock(normalized) {
+  const trimmed = normalized.trim();
+  const startsWithQuote = /^[「『“"]/.test(trimmed);
+  const hasPairedQuotes = /[「『“][^」』”]+[」』”]/.test(trimmed);
+  const hasDialogueMarks = /[。．.!！？?，、…—~～]/.test(trimmed);
+  return (startsWithQuote || hasPairedQuotes) && (hasDialogueMarks || trimmed.length >= 4);
+}
+
 function isLikelyBodyBlock(block, lang) {
   const normalized = normalizeBlock(block);
   if (isFrontMatterBlock(normalized, lang)) return false;
-  if (textLength(normalized) < 18) return false;
-  const sentenceMarks = (normalized.match(/[。．.!！？?」』”’）)]/g) || []).length;
-  return sentenceMarks > 0 || textLength(normalized) >= 80;
+  if (isDialogueBlock(normalized)) return true;
+  const sentenceMarks = (normalized.match(/[。．.!！？?]/g) || []).length;
+  if (sentenceMarks > 0 && textLength(normalized) >= 6) return true;
+  return textLength(normalized) >= 80;
+}
+
+function isOpeningChapterTitle(title) {
+  return /^(引子|序\s*章|プロローグ|第[一1１〇0]章|第[一1１〇0]話|Prologue|Before_the_Prologue|Chapter\s*1\b)/i.test(title);
 }
 
 function findBodyStart(text, lang, markers = {}) {
@@ -159,7 +172,9 @@ function findBodyStart(text, lang, markers = {}) {
   }
 
   let inSynopsis = false;
-  for (const range of blockRanges(text)) {
+  const ranges = blockRanges(text);
+  for (let k = 0; k < ranges.length; k += 1) {
+    const range = ranges[k];
     const normalized = normalizeBlock(range.text);
     if (/^(简介|簡介)(?:\s|：|:|$)/i.test(normalized)) {
       inSynopsis = true;
@@ -173,7 +188,16 @@ function findBodyStart(text, lang, markers = {}) {
       if (normalizeTitle(normalized, lang)) inSynopsis = false;
       else continue;
     }
-    if (isLikelyBodyBlock(range.text, lang)) return range.start;
+    if (isLikelyBodyBlock(range.text, lang)) {
+      if (k > 0) {
+        const prevRange = ranges[k - 1];
+        const prevTitle = normalizeTitle(normalizeBlock(prevRange.text), lang);
+        if (prevTitle && isOpeningChapterTitle(prevTitle)) {
+          return prevRange.start;
+        }
+      }
+      return range.start;
+    }
   }
   return -1;
 }

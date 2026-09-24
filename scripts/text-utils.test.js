@@ -64,3 +64,33 @@ test("识别 index-X 标题中使用的 〇 与 X 章节编号标记", () => {
   const jp = splitParagraphs("行間　Ｘ\n\n本文一。\n\n第〇九章　対決\n\n本文二。", "jp");
   assert.deepEqual(jp.map((paragraph) => paragraph.chapter), ["行間 Ｘ", "第〇九章 対決"]);
 });
+
+test("正文起点检测：保留短于 18 字的开篇对话段落且不将其当作前言过滤", () => {
+  const source = [
+    "目錄",
+    "\n\n序章　四名少女",
+    "\n\n第一章　白井黑子毫不猶豫",
+    "\n\n「啊，御坂學姊！這裡這裡！」",
+    "\n\n身穿制服的佐天淚子，下意識地起身朝對方揮手。在放學後的鬧區若不做到這種地步，就算待在同個地方也很容易錯過彼此。",
+  ].join("");
+
+  const sliced = sliceMainDocument(source, "tw");
+  assert.match(sliced, /「啊，御坂學姊！這裡這裡！」/);
+  const paras = splitParagraphs(sliced, "tw");
+  assert.equal(paras[0].text, "「啊，御坂學姊！這裡這裡！」");
+});
+
+test("正文起点检测：保留紧挨正文开篇的章节标题而非切除降级为正文", () => {
+  const source = [
+    "彩页",
+    "\n\n序章 四位少女",
+    "\n\n「学姐，御坂学姐！看这边！我们在这！」",
+    "\n\n身穿校服的佐天泪子下意识地从座位上站了起来，使劲地挥着手。",
+  ].join("");
+
+  const sliced = sliceMainDocument(source, "cn");
+  assert.match(sliced, /^序章 四位少女/);
+  const paras = splitParagraphs(sliced, "cn");
+  assert.equal(paras[0].chapter, "序章 四位少女");
+  assert.equal(paras[0].text, "「学姐，御坂学姐！看这边！我们在这！」");
+});

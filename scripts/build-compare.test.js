@@ -12,6 +12,7 @@ const { createWorkbench } = require("./workbench-fixture");
 const {
   alignLegacyNotes,
   alignNotesByIndex,
+  alignRows,
   exportRows,
   makeHtml,
   rebuildCompareHtmlFromSnapshot,
@@ -589,4 +590,43 @@ test("AI 辅助校对栏位标题与状态解耦，且状态徽章随任务运�
   ui.run("renderClearedAiStatus()");
   assert.equal(ui.element("aiPanelState").textContent, "就绪");
   assert.equal(ui.element("aiPanelState").className, "ai-status-badge");
+});
+
+test("三语对齐：保留技术 pivot 侧为空的孤儿段落，安全归并至相邻表格行", () => {
+  const cn = [
+    { sourceIndex: 0, text: "简中第一句" },
+    { sourceIndex: 1, text: "简中第二句" },
+  ];
+  const tw = [
+    { sourceIndex: 0, text: "台版前置句" },
+    { sourceIndex: 1, text: "台版第一句" },
+    { sourceIndex: 2, text: "台版第二句" },
+  ];
+  const jp = [
+    { sourceIndex: 0, text: "原文第一句" },
+    { sourceIndex: 1, text: "原文第二句" },
+  ];
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "orphan-align-"));
+  const prevOutputDir = process.env.TRANSCOMPARATOR_OUTPUT_DIR;
+  try {
+    process.env.TRANSCOMPARATOR_OUTPUT_DIR = tempDir;
+    fs.writeFileSync(path.join(tempDir, "jp-align.json"), JSON.stringify({
+      pivotLang: "cn",
+      groups: [
+        { jpStart: 0, jpEnd: 1, pivotStart: 0, pivotEnd: 1, score: 0.9, relation: "1:1" },
+        { jpStart: 1, jpEnd: 2, pivotStart: 1, pivotEnd: 2, score: 0.9, relation: "1:1" },
+      ],
+    }));
+
+    const rows = alignRows(cn, tw, jp, "trilingual");
+    const allTwText = rows.map((r) => r.tw).join(" ");
+    assert.match(allTwText, /台版前置句/);
+    assert.match(allTwText, /台版第一句/);
+    assert.match(allTwText, /台版第二句/);
+  } finally {
+    if (prevOutputDir) process.env.TRANSCOMPARATOR_OUTPUT_DIR = prevOutputDir;
+    else delete process.env.TRANSCOMPARATOR_OUTPUT_DIR;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
