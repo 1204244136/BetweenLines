@@ -271,19 +271,19 @@ function mergePivotOrphanGroups(groups, pivotLang) {
 
 function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
   const bilingual = comparisonMode === "bilingual";
-  const jpPivotGroups = loadJpGroupAlignmentList(jp, { includeEmptyPivot: bilingual });
-
-  // 双语模式的 jp-align pivot 就是 cn。必须以对齐产物的原文区间建行，
-  // 不能把 cn 顺序重新当作 pivot 再套一遍 jp-align，否则前置 1:0 组会把
-  // 第一个译文段落错接到第二个原文段落。
-  if (bilingual) {
-    return jpPivotGroups.map((jpGroup, rowIndex) => {
-      const cnItems = cn.slice(jpGroup.pivotStart, jpGroup.pivotEnd);
-      return makeRow(rowIndex + 1, [{ left: cnItems, right: [] }], [jpGroup], comparisonMode);
-    });
-  }
-
-  const rawCnTw = alignGroups(cn, tw).map((group) => ({
+  // 双语模式只有一份译文：不伪造 cn↔tw 对齐组，每个主文本段落直接作为技术 pivot 单元。
+  const rawCnTw = bilingual
+    ? cn.map((item) => ({
+        left: [item],
+        right: [],
+        score: 0,
+        relation: "1:0",
+        cnStart: item.sourceIndex,
+        cnEnd: item.sourceIndex + 1,
+        twStart: null,
+        twEnd: null,
+      }))
+    : alignGroups(cn, tw).map((group) => ({
         ...group,
         cnStart: group.left[0]?.sourceIndex ?? null,
         cnEnd: group.left.length ? group.left[group.left.length - 1].sourceIndex + 1 : null,
@@ -291,7 +291,8 @@ function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
         twEnd: group.right.length ? group.right[group.right.length - 1].sourceIndex + 1 : null,
       }));
   const pivotLang = loadJpPivotLang(comparisonMode);
-  const cnTw = mergePivotOrphanGroups(rawCnTw, pivotLang);
+  const cnTw = bilingual ? rawCnTw : mergePivotOrphanGroups(rawCnTw, pivotLang);
+  const jpPivotGroups = loadJpGroupAlignmentList(jp);
   const rows = [];
 
   for (let i = 0; i < cnTw.length;) {

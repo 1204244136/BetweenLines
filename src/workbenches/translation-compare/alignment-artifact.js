@@ -23,15 +23,14 @@ function assertSingleJpParagraphGroups(groups) {
   return groups;
 }
 
-function loadJpGroupAlignmentList(jp, options = {}) {
+function loadJpGroupAlignmentList(jp) {
   const alignFile = path.join(resolveBuildOutputDir(), "jp-align.json");
   if (!fs.existsSync(alignFile)) return [];
 
   const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
   const groups = (data.groups || [])
     .map((group) => ({ group, range: pivotRangeOf(group) }))
-    .filter(({ range }) => range.start != null && range.end != null
-      && (options.includeEmptyPivot || range.start !== range.end))
+    .filter(({ range }) => range.start != null && range.end != null && range.start !== range.end)
     .filter(({ group }) => group.jpStart !== group.jpEnd)
     .map(({ group, range }) => ({
       score: group.score,
