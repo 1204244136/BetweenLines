@@ -236,7 +236,7 @@ test("从旧版快照重建页面时按当前对照表重算术语对", () => {
 
 test("页面按构建期判定给未跑过的行标出术语徽标，并跟随档案与目标列", () => {
   const { html, pageMeta } = buildFixturePage("badges");
-  const script = html.split("<script>")[1].split("</script>")[0];
+  const script = html.split("<script>")[1].split("</script>")[0].replace(/\r\n?/g, "\n");
   const source = [
     script.match(/function termVariantKeyForPage\(\) \{[\s\S]*?\n    \}/)[0],
     script.match(/function currentTermVariant\(\) \{[\s\S]*?\n    \}/)[0],
@@ -280,7 +280,7 @@ test("页面按构建期判定给未跑过的行标出术语徽标，并跟随�
 test("页面在跑任务之前就显示本行命中了哪些术语", () => {
   const { html, pageMeta } = buildFixturePage("termlist");
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"], ["山田太郎 → 山田太郎（人名）"]);
-  const script = html.split("<script>")[1].split("</script>")[0];
+  const script = html.split("<script>")[1].split("</script>")[0].replace(/\r\n?/g, "\n");
   const grab = (name) => {
     const found = script.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n    \\}\\n`));
     assert.ok(found, `页面脚本里应有 ${name}`);
