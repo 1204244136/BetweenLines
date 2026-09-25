@@ -3495,7 +3495,7 @@
         const response = await apiFetch("/api/translation-export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entries, rowTexts: writebackRowTexts(entries) }),
+          body: JSON.stringify({ projectKey: pageMeta.projectKey, rowsSignature: pageMeta.rowsSignature, entries, rowTexts: writebackRowTexts(entries) }),
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
@@ -3551,7 +3551,7 @@
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
       if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote)) return;
       try {
-        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries, rowTexts: writebackRowTexts(entries) }) });
+        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: pageMeta.projectKey, rowsSignature: pageMeta.rowsSignature, entries, rowTexts: writebackRowTexts(entries) }) });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
         // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，

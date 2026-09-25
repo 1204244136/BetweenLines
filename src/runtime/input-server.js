@@ -430,7 +430,12 @@ async function handleApi(req, res, pathname, searchParams) {
     if (req.method === "POST" && pathname === "/api/translation-export") {
       const payload = await readJson(req);
       const project = getActiveProject();
-      const selection = readProjectSelection(project?.id, { snapshotId: project?.snapshotId });
+      if (!payload.projectKey || !payload.rowsSignature
+        || payload.projectKey !== project?.id || payload.rowsSignature !== project?.rowsSignature) {
+        sendError(res, 409, new Error("写回请求与当前项目内容不一致，请切回对应项目并重新打开工作台；旧页面请先应用新布局。"));
+        return;
+      }
+      const selection = readProjectSelection(project.id, { snapshotId: project.snapshotId });
       if (!selection?.files) throw new Error("没有可写回的输入选择，请先生成工作台。");
       // 按写回目标列（targetKey）分组：cn 写回主文本，tw 写回参考文本，互不混写。
       const groups = new Map();

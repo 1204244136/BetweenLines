@@ -145,6 +145,7 @@ function publicProject(manifest, activePointer = null) {
   return {
     id: manifest.id,
     snapshotId: manifest.snapshotId,
+    rowsSignature: manifest.rowsSignature,
     name: manifest.name,
     generatedAt: manifest.generatedAt,
     comparisonMode: manifest.comparisonMode,
