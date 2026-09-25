@@ -418,3 +418,51 @@ test("写回队列在请求失败后继续处理后续请求", async () => {
     assert.equal(fs.readFileSync(target, "utf8"), "<p>改段。</p>");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test("TXT 写回保留 BOM、CRLF、缩进、空行与字面标签及实体", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-txt-"));
+  const target = path.join(dir, "sample.txt");
+  try {
+    const before = "\uFEFF  首段。  \r\n \r\n  字面 <b>标签</b>与 &amp;。\r\n续行。  \r\n\r\n尾段。\r\n";
+    fs.writeFileSync(target, before);
+    const searchText = "字面 <b>标签</b>与 &amp;。 续行。";
+    const replaceText = "保留 <b>字样</b> &amp; 与 <符号>。";
+    const result = await applyTextReplacements(target, [{ id: 2, searchText, replaceText }], { rowTexts: ["首段。", searchText] });
+    assert.equal(result.updated, 1);
+    assert.equal(fs.readFileSync(target, "utf8"), before.replace("字面 <b>标签</b>与 &amp;。\r\n续行。", replaceText));
+    await assert.rejects(applySpeakerAnnotations(target, [{ text: "首段。", speaker: "甲" }]), /暂不支持说话人写回/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("TXT 多段写回使用原生换行，不注入 HTML", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-txt-parts-"));
+  const target = path.join(dir, "sample.txt");
+  try {
+    fs.writeFileSync(target, "首段。\r\n\r\n尾段。");
+    const result = await applyTextReplacements(target, [{ id: 1, searchText: "首段。", replaceText: "改案一。\n\n改案二。" }]);
+    assert.equal(result.updated, 1);
+    assert.equal(fs.readFileSync(target, "utf8"), "改案一。\r\n\r\n改案二。\r\n\r\n尾段。");
+    const merged = await applyTextReplacements(target, [{ id: 1, searchText: "改案一。\r\n\r\n改案二。", replaceText: "合并改案。" }]);
+    assert.equal(merged.updated, 1);
+    assert.equal(fs.readFileSync(target, "utf8"), "合并改案。\r\n\r\n\r\n\r\n尾段。");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("TXT 重复段落与缺失段落拒绝猜写，字面标签不被剥离", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-txt-ambiguity-"));
+  const target = path.join(dir, "sample.txt");
+  try {
+    const before = "同段。\n\n旁白。\n\n同段。\n\n<b>字面。</b>";
+    fs.writeFileSync(target, before);
+    const result = await applyTextReplacements(target, [
+      { searchText: "同段。", replaceText: "改段。" },
+      { searchText: "不存在。", replaceText: "改段。" },
+      { searchText: "字面。", replaceText: "改段。" },
+    ]);
+    assert.equal(result.updated, 0);
+    assert.equal(result.ambiguous.length, 1);
+    assert.equal(result.missed.length, 2);
+    assert.equal(fs.readFileSync(target, "utf8"), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

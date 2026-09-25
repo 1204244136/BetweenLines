@@ -105,7 +105,7 @@ function encodeRevisionForXml(text) {
 
 function splitParts(text) {
   return String(text || "")
-    .split(/\n{2,}/)
+    .split(/\r?\n\s*\r?\n+/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
@@ -117,32 +117,32 @@ function previewText(text) {
 
 // 把 searchParts 与 replaceParts 对齐成逐段替换指令。
 // 段数一致时一一对应；原文段更多时多余的原文段清空；替换段更多时多余段以 <br/> 连接到末段。
-function alignParts(searchParts, replaceParts) {
+function alignParts(searchParts, replaceParts, encode = encodeRevisionForXml, separator = "<br/>") {
   const n = searchParts.length;
   const m = replaceParts.length;
   const instructions = [];
   if (n === m) {
     for (let index = 0; index < n; index += 1) {
-      instructions.push({ search: searchParts[index], replacement: encodeRevisionForXml(replaceParts[index]) });
+      instructions.push({ search: searchParts[index], replacement: encode(replaceParts[index]) });
     }
     return instructions;
   }
   if (n > m) {
     for (let index = 0; index < m - 1; index += 1) {
-      instructions.push({ search: searchParts[index], replacement: encodeRevisionForXml(replaceParts[index]) });
+      instructions.push({ search: searchParts[index], replacement: encode(replaceParts[index]) });
     }
     for (let index = m - 1; index < n; index += 1) {
       instructions.push({
         search: searchParts[index],
-        replacement: index === m - 1 ? encodeRevisionForXml(replaceParts[m - 1]) : "",
+        replacement: index === m - 1 ? encode(replaceParts[m - 1]) : "",
       });
     }
     return instructions;
   }
   for (let index = 0; index < n - 1; index += 1) {
-    instructions.push({ search: searchParts[index], replacement: encodeRevisionForXml(replaceParts[index]) });
+    instructions.push({ search: searchParts[index], replacement: encode(replaceParts[index]) });
   }
-  const tail = replaceParts.slice(n - 1).map((part) => encodeRevisionForXml(part)).join("<br/>");
+  const tail = replaceParts.slice(n - 1).map((part) => encode(part)).join(separator);
   instructions.push({ search: searchParts[n - 1], replacement: tail });
   return instructions;
 }
@@ -203,7 +203,7 @@ async function orderEpubDocuments(names, readText) {
 
 async function loadWritebackDocuments(target, kind) {
   if (kind === TARGET_TEXT || kind === TARGET_HTML) {
-    return { documents: [{ key: target, html: fs.readFileSync(target, "utf8") }], zip: null };
+    return { documents: [{ key: target, kind, html: fs.readFileSync(target, "utf8") }], zip: null };
   }
   if (kind === TARGET_EPUB_DIRECTORY) {
     const allNames = directoryEntries(target).map((entry) => entry.path.replace(/\\/g, "/"));
@@ -227,8 +227,35 @@ async function loadWritebackDocuments(target, kind) {
 // 每次 `prepareDocuments` 重置，避免同一进程里多次写回互相污染序号。
 let blockIndexCursor = 0;
 
+// TXT 按空行划分段落，保留原字符串偏移；只替换段落正文，不触碰 BOM、缩进和分隔符。
+function textDocumentBlocks(doc, docIndex) {
+  const blocks = [];
+  const separators = /\r?\n\s*\r?\n+/g;
+  let start = 0;
+  const append = (end) => {
+    const raw = doc.html.slice(start, end);
+    const text = raw.trim();
+    if (!text) return;
+    const innerStart = start + raw.length - raw.trimStart().length;
+    blocks.push({ docIndex, index: blockIndexCursor++, start: innerStart, openEnd: innerStart,
+      innerStart, innerEnd: innerStart + text.length, end: innerStart + text.length,
+      comparable: plainComparableText(text), used: false });
+  };
+  for (const match of doc.html.matchAll(separators)) {
+    append(match.index);
+    start = match.index + match[0].length;
+  }
+  append(doc.html.length);
+  return blocks;
+}
+
+function plainComparableText(value) {
+  return String(value || "").replace(/\s+/g, "");
+}
+
 function documentBlocks(doc, docIndex = -1) {
   if (doc.blocks) return doc.blocks;
+  if (doc.kind === TARGET_TEXT) return (doc.blocks = textDocumentBlocks(doc, docIndex));
   const blocks = [];
   const pattern = new RegExp(blockElementPattern.source, "gi");
   let match;
@@ -309,13 +336,14 @@ function createPlacementState(documents) {
   prepareDocuments(documents);
   return {
     documents,
+    comparableText: documents[0]?.kind === TARGET_TEXT ? plainComparableText : comparableText,
     docIndex: 0,
     // 仅用于整行放弃后的回滚：有「已占用」标记在，定位本身不再依赖字符偏移。
     offset: 0,
     lastBlock: 0,
     // 为 searchPart 定位一个替换区间；命中不唯一时报歧义。
     place(searchPart, options = {}) {
-      const text = comparableText(searchPart);
+      const text = this.comparableText(searchPart);
       if (!text) return { hit: null, ambiguous: false };
       return locate(text, this, options);
     },
@@ -442,7 +470,11 @@ function placeEntry(state, entry, options = {}) {
   const searchParts = splitParts(entry.searchText);
   const replaceParts = splitParts(entry.replaceText);
   if (!searchParts.length || !replaceParts.length) return { placements: [], empty: true };
-  const instructions = alignParts(searchParts, replaceParts);
+  const textDocument = state.documents[0]?.kind === TARGET_TEXT ? state.documents[0] : null;
+  const newline = textDocument?.html.includes("\r\n") ? "\r\n" : "\n";
+  const instructions = textDocument
+    ? alignParts(searchParts, replaceParts, (text) => text.replace(/\r?\n/g, newline), newline + newline)
+    : alignParts(searchParts, replaceParts);
   const snapshot = state.snapshot();
   const placements = [];
   let failed = null;
@@ -466,9 +498,9 @@ function placeEntry(state, entry, options = {}) {
 }
 
 // 没能落地的行文本：后面出现同一段文字时，第一处候选可能正是它该改而没占住的那一处。
-function noteUnresolved(unresolved, parts) {
+function noteUnresolved(unresolved, parts, normalize = comparableText) {
   for (const part of parts) {
-    const text = comparableText(part);
+    const text = normalize(part);
     if (text) unresolved.add(text);
   }
 }
@@ -480,7 +512,7 @@ function seekRow(state, text, unresolved, options = {}) {
   for (let index = 0; index < parts.length; index += 1) {
     const located = state.place(parts[index], options);
     if (!located.hit) {
-      noteUnresolved(unresolved, parts.slice(index));
+      noteUnresolved(unresolved, parts.slice(index), state.comparableText);
       return false;
     }
     state.commit(located.hit);
@@ -538,7 +570,7 @@ function planPlacements(documents, entries, options, strategy) {
     if (!byRow.has(row)) byRow.set(row, entry);
   }
   for (const [row, entry] of byRow) {
-    futureAnchors.push({ row, text: comparableText(splitParts(strategy.textOf(entry))[0]) });
+    futureAnchors.push({ row, text: state.comparableText(splitParts(strategy.textOf(entry))[0]) });
   }
   const blockIndex = buildBlockIndex(state.documents);
 
@@ -546,7 +578,7 @@ function planPlacements(documents, entries, options, strategy) {
     const outcome = strategy.commit(state, entry, commitOptions);
     if (outcome.empty) return;
     if (outcome.failed || outcome.conflict) {
-      noteUnresolved(unresolved, splitParts(strategy.textOf(entry)));
+      noteUnresolved(unresolved, splitParts(strategy.textOf(entry)), state.comparableText);
       const target = outcome.conflict ? ambiguous : missed;
       target.push(strategy.report(entry, outcome.conflict ? outcome.conflict.reason : outcome.failed.reason));
       return;
@@ -569,9 +601,9 @@ function planPlacements(documents, entries, options, strategy) {
       continue;
     }
     const parts = splitParts(strategy.textOf(entry));
-    const blocked = parts.find((part) => unresolved.has(comparableText(part)));
+    const blocked = parts.find((part) => unresolved.has(state.comparableText(part)));
     if (blocked) {
-      noteUnresolved(unresolved, parts);
+      noteUnresolved(unresolved, parts, state.comparableText);
       ambiguous.push(strategy.report(entry, strategy.blockedReason(previewText(blocked))));
       continue;
     }
