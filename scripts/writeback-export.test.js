@@ -58,8 +58,8 @@ function createFixture(name) {
     const file = path.join(staging.dir, artifact);
     if (!fs.existsSync(file)) fs.writeFileSync(file, `${name}:${artifact}`, "utf8");
   }
-  publishProject(staging.dir, { dataDir });
-  return { source };
+  const project = publishProject(staging.dir, { dataDir });
+  return { source, projectKey: project.id, rowsSignature: project.rowsSignature };
 }
 
 async function exportRevisions(port, payload) {
@@ -78,6 +78,7 @@ test("写回按整卷行序落位：只写第二处相同段落时不会改到�
   const port = await listen(server);
   try {
     const { status, result } = await exportRevisions(port, {
+      projectKey: fixture.projectKey, rowsSignature: fixture.rowsSignature,
       entries: [{ id: "6", targetKey: "cn", searchText: "尽管如此。", replaceText: "尽管如此（第二处改）。" }],
       rowTexts: { cn: PARAGRAPHS.slice(0, 6) },
     });
@@ -99,6 +100,7 @@ test("写回按整卷行序落位：两处同段各归其位", async () => {
   const port = await listen(server);
   try {
     const { status, result } = await exportRevisions(port, {
+      projectKey: fixture.projectKey, rowsSignature: fixture.rowsSignature,
       entries: [
         { id: "2", targetKey: "cn", searchText: "尽管如此。", replaceText: "第一处改。" },
         { id: "6", targetKey: "cn", searchText: "尽管如此。", replaceText: "第二处改。" },
