@@ -181,7 +181,9 @@ function findBodyStart(text, lang, markers = {}) {
       continue;
     }
     if (inSynopsis) {
-      if (isMediaOnlyBlock(normalized)) {
+      // 图片可能在 EPUB 转换时被移除，只剩独立彩页标题。
+      // 该标题已结束简介章节，不能继续吞掉随后无标题的引子。
+      if (isMediaOnlyBlock(normalized) || /^(彩[页頁]|插[图圖]|Illustrations)$/i.test(normalized)) {
         inSynopsis = false;
         continue;
       }

@@ -5,6 +5,30 @@ const {
   sliceMainDocument,
   splitParagraphs,
 } = require("./text-utils");
+const { epubHtmlToText } = require("./epub-utils");
+
+test("简介后的彩页标题结束简介范围，保留全部无标题引子", () => {
+  for (const [lang, title] of [["cn", "彩页"], ["tw", "彩頁"], ["cn", "插图"], ["tw", "插圖"], ["cn", "Illustrations"]]) {
+    const text = epubHtmlToText(
+      '<h1>简介</h1><p>这是简介中的故事介绍。</p>'
+      + '<p>「简介也可以包含对话！」</p>'
+      + '<h1>' + title + '</h1><p><img src="cover.jpg"/></p>'
+      + '<p>调查员走进了寂静的城市。</p><p>「怎么回事？」</p>'
+      + '<h1>序章</h1><p>故事转到了另一处。</p>'
+      + '<h1>後記</h1><p>作者的话。</p>',
+    );
+    const paragraphs = splitParagraphs(sliceMainDocument(text, lang), lang);
+    assert.deepEqual(paragraphs.map((p) => p.text), [
+      "调查员走进了寂静的城市。", "「怎么回事？」", "故事转到了另一处。",
+    ], title);
+    assert.deepEqual(paragraphs.map((p) => p.sourceIndex), [0, 1, 2]);
+  }
+});
+
+test("简介正文中提到彩页不结束简介过滤", () => {
+  const text = ["简介", "彩页里的城市正等待主角拯救。", "序章", "这里才是真正的故事。"].join(String.fromCharCode(10, 10));
+  assert.deepEqual(splitParagraphs(sliceMainDocument(text, "cn"), "cn").map((p) => p.text), ["这里才是真正的故事。"]);
+});
 
 test("识别合卷作品中的中日文章节/话数标题", () => {
   const jp = splitParagraphs("第一話\n\n本文です。\n\n第二話 別の事件\n\n続きです。", "jp");

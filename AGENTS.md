@@ -261,6 +261,8 @@ node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js
 
 ## 常见故障定位
 
+- **两种语言从不同情节开始**：先比较转换后的完整文本和过滤后的段落，不能仅凭行数或首个空对齐组判定成功。findBodyStart 的简介状态必须在独立彩页/插图标题处结束；图片已被移除时仍须保留随后的无标题引子。回归见 scripts/text-utils.test.js；修复后重新导出、对齐、构建，并核验真实首段对应内容。
+
 - **原文重复 / 为空**：检查是否重新引入了无 reuse tracking 的 fallback，或正文过滤是否改变了段落索引。
 - **双语产物出现第三列内容**：确认活动快照是否由旧版本生成（重新运行 `npm run align:jp && npm run build`），若仍存在检查 `validateSelection`、`loadParagraphs`、`rowFieldsFor`、`pageLabels`。
 - **写回定位失败或写错位置**：确认目标类型识别（四种 `TARGET_*` 之一），检查含内联标记段落是否走块级匹配路径；同一卷多处相同段落需携带 `rowTexts` 坐标。

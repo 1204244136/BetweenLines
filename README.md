@@ -149,6 +149,8 @@ npm run export:paragraphs -- --work-id S1_01
 
 配合上游 `index-X` 项目（同级目录 `../index-X`，或用 `INDEX_X_DIR` 指定）时，脚本会自动解析简中译本与日文原文，并支持该项目的正文格式契约（L1-L6 行模板、`heading-lines` 标题、`ruby` 注音、`noteref` 译注标记、引子/尾声章节结构）。具体的作品编号、文件命名与章节边界规范见 `AGENTS.md`。
 
+简介与彩页之后、序章之前的无标题引子会保留在正文中。旧项目若出现开头缺失或两种语言从不同情节开始，需要重新执行导出、对齐和构建；仅刷新或应用新布局不会修复已生成的对齐数据。
+
 若 Pandoc 不在 `PATH` 中，设置 `PANDOC_BIN` 指向 `pandoc.exe`。运行时数据目录可通过 `TRANSCOMPARATOR_DATA_DIR` 覆盖。
 
 ## 输出与隐私边界
