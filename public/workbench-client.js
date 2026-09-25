@@ -4203,11 +4203,7 @@
       return resultMetrics;
     }
 
-    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = null, aiRunning = null) {
-      const isAiRunning = aiRunning != null ? Boolean(aiRunning) : currentAiRunning;
-      const pipelines = (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0)
-        ? stagePipelines
-        : (latestStagePipelines || {});
+    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false) {
       const localMetrics = computeStageMetricsFromNotes(notes);
       let stageMetrics = localMetrics;
       const hasOverride = overrideMetrics && Object.values(overrideMetrics).some((v) => Number(v) > 0);
@@ -4251,10 +4247,7 @@
       if (aiIds.status) aiIds.status.dataset.stageMetrics = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
 
-      renderStageMetricsDashboard(stageMetrics, pipelines, isAiRunning);
-      if (typeof setAllStageButtonsRunning === "function") {
-        setAllStageButtonsRunning(isAiRunning, pipelines);
-      }
+      renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning);
       return stageMetrics;
     }
 

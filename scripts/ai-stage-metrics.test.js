@@ -1095,3 +1095,43 @@ test("多阶段控制：阶段一执行时阶段二与阶段三开始按钮状�
   assert.equal(s2Stop.disabled, true, "取消排队后阶段二停止按钮恢复禁用");
   assert.equal(s1Stop.disabled, false, "阶段一仍然在运行，未被误停止");
 });
+
+test("待判行各阶段审查记录完整保留且卡片默认直接展开", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      33: {
+        note: "[AI校对]\n语义是否相同：不同\n是否需要修改：待人工确认\nGatekeeper初审：译文遗漏句首惊叹反应「ハッ!?」及关键动作「外に出て」，且将强调语气的「这一定是」误译。\nStylist复审[提交仲裁]：两处瑕疵属实，但句尾语气是否需强行重构存疑，建议终审裁定\nArbiter仲裁[存疑待定]：经终审法官全面权衡各方证据，依据依然不足，建议转人工确认\n分析：依据依然不足，转人工确认。",
+        aiDone: false,
+      },
+      36: {
+        // 向后兼容存量仅有「分析：需要修改……」的历史待判备注
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\n分析：需要修改：译文多出原文没有的“源自”，造成语句修饰关系与搭配不当，应做最小删改。",
+        aiDone: false,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 33, jp: "JP33", cn: "CN33", tw: "TW33", relation: "1:1", score: 0.7, signature: "sig-33" },
+      { index: 36, jp: "JP36", cn: "CN36", tw: "TW36", relation: "1:1", score: 0.77, signature: "sig-36" },
+    ],
+  });
+
+  // 行 33: 完整包含初审、复审、终审，且默认展开
+  const html33 = ui.run('renderNoteSummary(notes["33"], "33")');
+  assert.match(html33, /阶段一：事实初审/);
+  assert.match(html33, /译文遗漏句首惊叹反应/);
+  assert.match(html33, /阶段二：文学复审/);
+  assert.match(html33, /两处瑕疵属实/);
+  assert.match(html33, /阶段三：终审仲裁/);
+  assert.match(html33, /依据依然不足/);
+  assert.doesNotMatch(html33, /id="pipelineDetails_33"\s+hidden/, "待人工确认行审核轨迹默认直接展开呈现，不加 hidden");
+
+  // 行 36: 向后兼容存量初审分析，自动以初审卡片形式展开
+  const html36 = ui.run('renderNoteSummary(notes["36"], "36")');
+  assert.match(html36, /阶段一：事实初审/);
+  assert.match(html36, /译文多出原文没有的“源自”/);
+  assert.doesNotMatch(html36, /id="pipelineDetails_36"\s+hidden/, "存量待判行同样默认展开初审审查卡片");
+});
