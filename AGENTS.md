@@ -156,6 +156,14 @@ index-X 结构与命名规范契约：
 - `docs/contracts/`：面向代理与维护者的详细领域契约、算法规格与故障排查手册。
 - 新增通用格式转换优先扩展 `pandoc-utils.js`；新增特定格式的业务准入与提取逻辑在 `src/ingest/` 中独立实现。
 
+## 控制台模块边界
+
+- src/runtime/input-server.js 只组装依赖、执行统一鉴权、分派请求和管理监听生命周期。
+- request-security.js 管理来源校验与会话令牌；http-json.js 负责 JSON 请求/响应；artifact-response.js 负责静态文件与产物响应。
+- input-files.js 管理本机文件选择、扫描和翻译输入选择；speaker-runtime.js 封装说话人输入持久化及独立任务状态，并允许注入构建与写入函数进行隔离测试。
+- routes/ 按输入、状态、项目、生成、写回和 AI 划分。处理函数命中后返回 true，未命中返回 false；未命中不得读取请求体或发送响应。鉴权必须在路由分派之前完成，路由不得反向依赖服务入口。
+- 修改这些边界需运行 node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts/writeback-export.test.js；接口路径、响应形状、错误状态码和写回定位参数必须兼容。
+
 ## 正文过滤原则
 
 - 正文的起点和终点必须通过结构性标记确定（如 Heading、特定标签或语义标记）。
