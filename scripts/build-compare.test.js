@@ -630,3 +630,37 @@ test("三语对齐：保留技术 pivot 侧为空的孤儿段落，安全归并�
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("双语对齐：按 jp-align 原文区间取译文，保留前置原文孤儿段", () => {
+  const cn = [
+    { sourceIndex: 0, text: "译文第一句" },
+    { sourceIndex: 1, text: "译文第二句" },
+  ];
+  const jp = [
+    { sourceIndex: 0, text: "原文前置句" },
+    { sourceIndex: 1, text: "原文第一句" },
+  ];
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bilingual-align-"));
+  const prevOutputDir = process.env.TRANSCOMPARATOR_OUTPUT_DIR;
+  try {
+    process.env.TRANSCOMPARATOR_OUTPUT_DIR = tempDir;
+    fs.writeFileSync(path.join(tempDir, "jp-align.json"), JSON.stringify({
+      pivotLang: "cn",
+      groups: [
+        { jpStart: 0, jpEnd: 1, pivotStart: 0, pivotEnd: 0, score: -0.26, relation: "1:0" },
+        { jpStart: 1, jpEnd: 2, pivotStart: 0, pivotEnd: 1, score: 0.9, relation: "1:1" },
+      ],
+    }));
+
+    const rows = alignRows(cn, [], jp, "bilingual");
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].jp, "原文前置句");
+    assert.equal(rows[0].cn, "");
+    assert.equal(rows[1].jp, "原文第一句");
+    assert.equal(rows[1].cn, "译文第一句");
+  } finally {
+    if (prevOutputDir) process.env.TRANSCOMPARATOR_OUTPUT_DIR = prevOutputDir;
+    else delete process.env.TRANSCOMPARATOR_OUTPUT_DIR;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
