@@ -2778,9 +2778,7 @@
         const p = parseAutomatedNote(text);
         if (!p) return false;
         const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-        const isS1Edit = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && !p.stage1.includes("无需修改") && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
-        const isS1Unclear = p.stage1?.includes("存疑") || p.modify === "待人工确认" || p.modify === "人工确认" || text.includes("存疑转人工") || text.includes("初审存疑");
-        return (isS1Edit || isS1Unclear) && !hasS2;
+        return isStage2CandidateNote(p, text) && !hasS2;
       };
       const isStage1UnclearRow = (r) => {
         const rowId = String(r.index);
@@ -4091,9 +4089,7 @@
         const parsed = parseAutomatedNote(noteText);
         if (!parsed) return false;
         const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
-        const hasStage1Edit = parsed.modify === "是" || Boolean(parsed.stage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
-        const hasStage1Unclear = parsed.stage1?.includes("存疑") || parsed.modify === "待人工确认" || parsed.modify === "人工确认" || noteText.includes("存疑转人工") || noteText.includes("初审存疑");
-        return (hasStage1Edit || hasStage1Unclear) && !hasStage2;
+        return isStage2CandidateNote(parsed, noteText) && !hasStage2;
       }).length;
       const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
 
@@ -5157,7 +5153,7 @@
           updateStageMetricsDashboard();
           const hasSuggestionsNow = Object.values(notes).some((item) => {
             const text = String(item?.note || "");
-            return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
+            return !item.manualDone && isStage2CandidateNote(parseAutomatedNote(text), text);
           });
           showToast(hasSuggestionsNow
             ? "已排队：当前已有初审建议，等待阶段一全部完成后自动启动文学复审。"
@@ -5166,7 +5162,7 @@
         }
         const hasStage1Suggestions = Object.values(notes).some((item) => {
           const text = String(item?.note || "");
-          return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
+          return !item.manualDone && isStage2CandidateNote(parseAutomatedNote(text), text);
         });
         if (!hasStage1Suggestions) {
           showToast("当前没有未人工确认的初审修改建议行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
@@ -5181,9 +5177,8 @@
           const p = parseAutomatedNote(text);
           if (!p) continue;
           const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-          const hasS1 = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
           if (hasS2) reviewedCount += 1;
-          else if (hasS1) pendingCount += 1;
+          else if (isStage2CandidateNote(p, text)) pendingCount += 1;
         }
 
         if (reviewedCount > 0) {
@@ -5331,8 +5326,7 @@
             if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
           } else if (stage === "stage2") {
             const hasS2 = hasCompletedStage2Note(p, noteText);
-            const hasS1 = Boolean(p?.modify === "是" || p?.stage1Revision || (p?.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
-            if (hasS2 || !hasS1) {
+            if (hasS2 || !isStage2CandidateNote(p, noteText)) {
               completedSet.add(num);
             }
           } else if (stage === "stage3") {
@@ -5369,6 +5363,21 @@
       // A review marker without a conclusion is an interrupted/incomplete run.
       return Boolean(parsed?.stage2 && (parsed.stage2Revision || parsed.revision || parsed.stage3)) ||
         /Stylist复审\[(?:采纳|调整|驳回|提交仲裁|升级仲裁|保留原译|复审方案)\]/.test(text);
+    }
+
+    function isStage2CandidateNote(parsed, noteText = "") {
+      const text = String(noteText || "");
+      if (!parsed) return false;
+      const hasEdit = parsed.modify === "是" || Boolean(
+        parsed.stage1Revision ||
+        (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议")))
+      );
+      const isUnclear = parsed.stage1?.includes("存疑") ||
+        parsed.modify === "待人工确认" ||
+        parsed.modify === "人工确认" ||
+        text.includes("存疑转人工") ||
+        text.includes("初审存疑");
+      return hasEdit || isUnclear;
     }
 
     async function stopAiProofread(targetBtnStage = "") {
