@@ -5,6 +5,7 @@ const {
   decisionToResult,
   clientStatus,
   isStage3DisputeRow,
+  isStage2Candidate,
 } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 
 const {
@@ -27,6 +28,17 @@ const {
   scheduleModels,
   getModelProfile,
 } = require("../src/workbenches/translation-compare/ai/scheduler-profile");
+
+test("阶段二队列判定：初审存疑行必须进入文学复审", () => {
+  const note = [
+    "[AI校对]",
+    "语义是否相同：待确认",
+    "是否需要修改：待人工确认",
+    "Gatekeeper初审：存在疑点，需结合上下文判断",
+  ].join("\\n");
+  assert.equal(isStage2Candidate(note), true);
+  assert.equal(isStage2Candidate("[AI校对]\\n是否需要修改：否\\nGatekeeper初审：无需修改"), false);
+});
 
 test("多阶段流水线端到端：快速直通 Fast Pass 路径", () => {
   const row = { index: 10, jp: "おはようございます。", cn: "早上好。" };

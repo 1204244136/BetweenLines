@@ -970,14 +970,14 @@ async function startProofread(input) {
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       const memoryResult = status.results.get(idx);
+      const hasSuggestion = isStage2Candidate(noteText, memoryResult);
       const isUnclear = Boolean(
-        (memoryResult && (memoryResult.stageResult?.decision === "unclear" || memoryResult.stageResult?.better === "unclear" || memoryResult.stageResult?.needsContext)) ||
-        (noteText && (noteText.includes("是否需要修改：待人工确认") || noteText.includes("存疑转人工") || noteText.includes("初审存疑")))
-      );
-      const hasSuggestion = Boolean(
-        (memoryResult && memoryResult.stageResult?.needsEdit) ||
-        (noteText && (noteText.includes("是否需要修改：是") || noteText.includes("初审改案") || noteText.includes("Gatekeeper初审：建议修改"))) ||
-        isUnclear
+        memoryResult?.stageResult?.decision === "unclear" ||
+        memoryResult?.stageResult?.better === "unclear" ||
+        memoryResult?.stageResult?.needsContext === true ||
+        noteText.includes("是否需要修改：待人工确认") ||
+        noteText.includes("存疑转人工") ||
+        noteText.includes("初审存疑")
       );
       if (hasSuggestion) {
         if (config.continueOnly && (noteText.includes("Stylist复审") || memoryResult?.stylistReview)) {
@@ -2151,6 +2151,27 @@ function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
     }
   }
   return false;
+}
+
+// Stage 2 consumes both Gatekeeper edits and unresolved/unclear rows.
+function isStage2Candidate(noteText = "", memoryResult = null) {
+  const text = String(noteText || "");
+  const stageResult = memoryResult?.stageResult || memoryResult?.decision || {};
+  const isUnclear = Boolean(
+    stageResult.decision === "unclear" ||
+    stageResult.better === "unclear" ||
+    stageResult.needsContext === true ||
+    text.includes("是否需要修改：待人工确认") ||
+    text.includes("存疑转人工") ||
+    text.includes("初审存疑")
+  );
+  const hasEdit = Boolean(
+    stageResult.needsEdit === true ||
+    text.includes("是否需要修改：是") ||
+    text.includes("初审改案") ||
+    text.includes("Gatekeeper初审：建议修改")
+  );
+  return hasEdit || isUnclear;
 }
 
 function reconstructStage1Result(row, noteText, config, labels) {
@@ -4006,6 +4027,7 @@ module.exports = {
   runStage2Stylist,
   runStage3Arbiter,
   isStage3DisputeRow,
+  isStage2Candidate,
   finalizeRowResult,
   proofreadRow,
   testModel,

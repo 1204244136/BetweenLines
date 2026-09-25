@@ -2779,7 +2779,7 @@
         if (!p) return false;
         const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
         const isS1Edit = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && !p.stage1.includes("无需修改") && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
-        const isS1Unclear = p.stage1?.includes("存疑") || (!hasS2 && (p.modify === "待人工确认" || p.modify === "人工确认")) || text.includes("存疑转人工") || text.includes("初审存疑");
+        const isS1Unclear = p.stage1?.includes("存疑") || p.modify === "待人工确认" || p.modify === "人工确认" || text.includes("存疑转人工") || text.includes("初审存疑");
         return (isS1Edit || isS1Unclear) && !hasS2;
       };
       const isStage1UnclearRow = (r) => {
@@ -4081,7 +4081,20 @@
 
       stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
       const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
-      const stage2Pending = Math.max(0, (stage1NeedsEdit + stage1Unclear) - stage2Reviewed);
+      // The visible count follows the same note-level predicate as the filter,
+      // so incomplete/failed Stylist rows remain actionable instead of being
+      // hidden by subtracting aggregate counts from unrelated stages.
+      const stage2Pending = Object.values(sourceNotes || {}).filter((item) => {
+        if (!item || item.manualDone) return false;
+        const noteText = latestAiNotePart(item.note || "").trim();
+        if (!noteText || isAiFailureNote(noteText)) return false;
+        const parsed = parseAutomatedNote(noteText);
+        if (!parsed) return false;
+        const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
+        const hasStage1Edit = parsed.modify === "是" || Boolean(parsed.stage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
+        const hasStage1Unclear = parsed.stage1?.includes("存疑") || parsed.modify === "待人工确认" || parsed.modify === "人工确认" || noteText.includes("存疑转人工") || noteText.includes("初审存疑");
+        return (hasStage1Edit || hasStage1Unclear) && !hasStage2;
+      }).length;
       const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
 
       const resultMetrics = {
