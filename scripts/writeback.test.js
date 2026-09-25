@@ -383,3 +383,38 @@ test("写回：EPUB 目录中的 nav 导航文件不参与正文写回与定位�
   assert.match(chapContent, /<p>小说正文第一段改后。<\/p>/);
   assert.match(chapContent, /<p>8章节标题改后。<\/p>/);
 });
+
+
+test("并发 EPUB 写回保留所有修改，文本与说话人共用队列", async () => {
+  const JSZip = require("jszip");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-concurrent-"));
+  const target = path.join(dir, "book.epub");
+  try {
+    const zip = new JSZip();
+    zip.file("mimetype", "application/epub+zip");
+    zip.file("chapter.xhtml", "<p>甲段。</p><p>乙段。</p><p>「对白。」</p>");
+    fs.writeFileSync(target, await zip.generateAsync({ type: "nodebuffer" }));
+    const results = await Promise.all([
+      applyTextReplacements(target, [{ id: 1, searchText: "甲段。", replaceText: "甲段改后。" }]),
+      applyTextReplacements(path.join(dir, ".", "book.epub"), [{ id: 2, searchText: "乙段。", replaceText: "乙段改后。" }]),
+      applySpeakerAnnotations(target, [{ index: 3, text: "「对白。」", speaker: "角色甲" }]),
+    ]);
+    assert.deepEqual(results.map(result => result.updated), [1, 1, 1]);
+    const saved = await JSZip.loadAsync(fs.readFileSync(target));
+    assert.equal(await saved.file("chapter.xhtml").async("string"),
+      "<p>甲段改后。</p><p>乙段改后。</p><p><!--Speaker:角色甲-->「对白。」</p>");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("写回队列在请求失败后继续处理后续请求", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-queue-failure-"));
+  const target = path.join(dir, "sample.html");
+  try {
+    fs.writeFileSync(target, "<p>原段。</p>");
+    const failed = applyTextReplacements(target, null);
+    const success = applyTextReplacements(target, [{ id: 1, searchText: "原段。", replaceText: "改段。" }]);
+    await assert.rejects(failed);
+    assert.equal((await success).updated, 1);
+    assert.equal(fs.readFileSync(target, "utf8"), "<p>改段。</p>");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

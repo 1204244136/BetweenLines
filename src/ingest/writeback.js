@@ -689,38 +689,58 @@ async function saveWritebackDocuments(target, kind, documents, zip, touched) {
   atomicWrite(target, buffer);
 }
 
+// 同一服务进程内，按真实路径串行化整个读改写事务；失败不阻塞后续请求。
+const writebackQueues = new Map();
+async function withWritebackLock(target, operation) {
+  const resolved = fs.realpathSync(target);
+  const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const previous = writebackQueues.get(key) || Promise.resolve();
+  const current = previous.then(() => operation(resolved));
+  const settled = current.then(() => {}, () => {});
+  writebackQueues.set(key, settled);
+  try {
+    return await current;
+  } finally {
+    if (writebackQueues.get(key) === settled) writebackQueues.delete(key);
+  }
+}
+
 // 把一组 { searchText, replaceText } 写回目标（TXT / XHTML / EPUB 文件 / 解压 EPUB 目录）。
 // 返回 `updated`（真正写入的行数）、`missed`（定位失败，未写入）与 `ambiguous`（命中不唯一，未写入）。
 // 两类未写入的行都必须如实上报：静默跳过会让用户以为已经写回，模糊兜底则会把内容写到别的段落上。
 // `options.rowTexts`（可选）是目标列**按行序**排列的整卷行文本（第 i 行对应下标 i-1）：
 // 未改动的行也按序占锚点，重复段落才能各归其位，详见 planReplacements。
 async function applyTextReplacements(target, entries, options = {}) {
-  const described = describeWritebackTarget(target);
-  if (!described.ok) throw new Error(described.message);
-  const { documents, zip } = await loadWritebackDocuments(target, described.kind);
-  const plan = planReplacements(documents, entries, options);
-  if (plan.planned.length) {
-    applyPlacements(plan.planned, documents);
-    await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
-  }
-  return { updated: plan.updated, missed: plan.missed, ambiguous: plan.ambiguous };
+  return withWritebackLock(target, async (target) => {
+    const described = describeWritebackTarget(target);
+    if (!described.ok) throw new Error(described.message);
+    const { documents, zip } = await loadWritebackDocuments(target, described.kind);
+    const plan = planReplacements(documents, entries, options);
+    if (plan.planned.length) {
+      applyPlacements(plan.planned, documents);
+      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
+    }
+    return { updated: plan.updated, missed: plan.missed, ambiguous: plan.ambiguous };
+  });
 }
 
 // 把说话人标记 <!--Speaker:xxx--> 注入包含发话文本的块级元素。
 // `options.rowTexts` 与文本写回同义：那一路是发话所在列的整卷行文本。
 async function applySpeakerAnnotations(target, entries, options = {}) {
-  const described = describeWritebackTarget(target);
-  if (!described.ok) throw new Error(described.message);
-  if (described.kind === TARGET_TEXT) {
-    throw new Error(`TXT 纯文本没有块级段落结构，暂不支持说话人写回。${WRITEBACK_HINT}`);
-  }
-  const { documents, zip } = await loadWritebackDocuments(target, described.kind);
-  const plan = planSpeakerAnnotations(documents, entries, options);
-  if (plan.planned.length) {
-    applyPlacements(plan.planned, documents);
-    await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
-  }
-  return { updated: plan.updated, skipped: plan.skipped, missed: plan.missed, ambiguous: plan.ambiguous };
+  return withWritebackLock(target, async (target) => {
+    const described = describeWritebackTarget(target);
+    if (!described.ok) throw new Error(described.message);
+    if (described.kind === TARGET_TEXT) {
+      throw new Error(`TXT 纯文本没有块级段落结构，暂不支持说话人写回。${WRITEBACK_HINT}`);
+    }
+    const { documents, zip } = await loadWritebackDocuments(target, described.kind);
+    const plan = planSpeakerAnnotations(documents, entries, options);
+    if (plan.planned.length) {
+      applyPlacements(plan.planned, documents);
+      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
+    }
+    return { updated: plan.updated, skipped: plan.skipped, missed: plan.missed, ambiguous: plan.ambiguous };
+  });
 }
 
 module.exports = {
