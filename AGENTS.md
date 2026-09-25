@@ -166,6 +166,13 @@ index-X 结构与命名规范契约：
 - 这些模块不得反向依赖 build-compare.js。新增领域调用优先直接引用职责模块，兼容入口只服务现有调用方。
 - 修改边界需运行 npm test，覆盖模式裁剪、备注恢复、快照重渲染与布局缓存回归。纯结构移动不要求重新运行语义对齐。
 
+## 客户端与 AI 调度边界
+
+- `public/workbench-diff.js` 只负责纯文本差异算法和 HTML 转义回调，不读取 DOM、备注、筛选或任务状态。`public/workbench-client.js` 只持有缓存并决定差异插槽的展示。
+- AI 调度的 `concurrency-controller.js` 只负责阶段控制器参数归一化、频控后的并发下调、退避时间和重试判定；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
+- 调整客户端资源后，执行 `npm run layout` 或控制台「应用新布局」，再 F5；不需要重新对齐。调整纯 AI 服务或调度后需重启控制台服务。
+- 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
+
 ## 控制台模块边界
 
 - src/runtime/input-server.js 只组装依赖、执行统一鉴权、分派请求和管理监听生命周期。
