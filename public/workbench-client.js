@@ -687,28 +687,112 @@
       return value === "tw" || value === "cn" ? value : "";
     }
 
-    function revisionTextFor(item) {
-      if (!item) return "";
-      // 1. 若用户曾通过版本切换按钮手动切换了版本，尊重用户的显式选择
-      if (item.revisionStageActive && Object.prototype.hasOwnProperty.call(item, "revisionText")) {
-        return String(item.revisionText || "");
+    function countNoterefs(text) {
+      return (String(text || "").match(/<a\b[^>]*\bnoteref\b[^>]*>/gi) || []).length;
+    }
+
+    function isPartialProposal(candidate, targetText = "", noteText = "", { isInitialProposal = false } = {}) {
+      const cand = String(candidate || "").trim();
+      const target = String(targetText || "").trim();
+      if (!cand) return false;
+
+      // 1. 若 note 文本中明确记载了 noteref 丢失、段落结构不一致或格式门禁作废，
+      // 说明原本完整的修订文本已被作废，此时残存的短文本或初审文本绝不是合格全量改案
+      const hasVoidMarker = noteText && (
+        noteText.includes("丢失了目标列的 EPUB noteref 注释标记") ||
+        noteText.includes("补入了目标列没有的 EPUB noteref 注释标记") ||
+        noteText.includes("段落结构与目标列不一致") ||
+        (noteText.includes("格式自动规范化") && noteText.includes("已作废"))
+      );
+      if (hasVoidMarker) {
+        if (target && countNoterefs(target) > 0 && countNoterefs(cand) < countNoterefs(target)) {
+          return true;
+        }
+        if (target && target.includes("\n\n") && !cand.includes("\n\n")) {
+          return true;
+        }
+        if (cand.length <= 20) {
+          return true;
+        }
       }
-      // 2. 对于多阶段校对行：无关当前筛选，默认显示最后的版本（仲裁 ＞ 复审 ＞ 初审）
-      const noteData = parseAutomatedNote(item.note || "");
+
+      // 2. 结构完整性校验：目标列有 noteref 标记，而候选改案缺失 noteref 标记
+      if (target) {
+        const targetNoterefs = countNoterefs(target);
+        const candNoterefs = countNoterefs(cand);
+        if (targetNoterefs > 0 && candNoterefs < targetNoterefs) {
+          return true;
+        }
+        // 目标列包含多段（\n\n），而候选改案仅为单段且长度明显缩水
+        if (target.includes("\n\n") && !cand.includes("\n\n") && cand.length < target.length * 0.6) {
+          return true;
+        }
+        // 初审提议（stage1Revision / p1）或明确标记作废时的局部短语比例校验
+        if ((isInitialProposal || hasVoidMarker) && target.length >= 15 && cand.length < target.length * 0.45) {
+          return true;
+        }
+      } else if (noteText) {
+        // targetText 未传入时的兜底特征识别
+        if ((noteText.includes("已作废") || noteText.includes("待人工确认")) && cand.length <= 12) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function revisionTextFor(item) {
+      const targetTextOrRow = arguments[1];
+      if (!item) return "";
+      let targetText = "";
+      if (typeof targetTextOrRow === "string") {
+        targetText = targetTextOrRow;
+      } else if (targetTextOrRow && typeof targetTextOrRow === "object") {
+        const targetKey = revisionTargetFor(item);
+        targetText = String(targetTextOrRow[targetKey] || targetTextOrRow.cn || "");
+      }
+      if (!targetText && typeof rowsById !== "undefined" && rowsById) {
+        for (const [id, n] of Object.entries(typeof notes !== "undefined" ? notes : {})) {
+          if (n === item) {
+            const r = rowsById.get(String(id));
+            if (r) {
+              const targetKey = revisionTargetFor(item);
+              targetText = String(r[targetKey] || r.cn || "");
+            }
+            break;
+          }
+        }
+      }
+
+      // 1. 若用户曾通过版本切换按钮手动切换了版本，尊重用户的显式选择（非局部短语时）
+      if (item.revisionStageActive && Object.prototype.hasOwnProperty.call(item, "revisionText")) {
+        const explicit = String(item.revisionText || "");
+        if (!isPartialProposal(explicit, targetText, item.note)) {
+          return explicit;
+        }
+      }
+      // 2. 对于多阶段校对行：无关当前筛选，默认显示最后的合格全量版本（仲裁 ＞ 复审 ＞ 初审）
+      const noteData = parseAutomatedNote(item.note || "", targetText);
       if (noteData && (noteData.stage2 || noteData.stage3)) {
         if (noteData.stage3) {
           const s3 = noteData.stage3Revision || noteData.revision || noteData.stage2Revision || noteData.stage1Revision;
-          if (s3) return s3;
+          if (s3 && !isPartialProposal(s3, targetText, item.note)) return s3;
         }
         if (noteData.stage2) {
           const s2 = noteData.stage2Revision || (!noteData.stage3 ? noteData.revision : "") || noteData.stage1Revision;
-          if (s2) return s2;
+          if (s2 && !isPartialProposal(s2, targetText, item.note)) return s2;
         }
-        if (noteData.stage1Revision) return noteData.stage1Revision;
+        if (noteData.stage1Revision && !isPartialProposal(noteData.stage1Revision, targetText, item.note)) {
+          return noteData.stage1Revision;
+        }
       }
       // 3. 普通单阶段行或已明确指定 revisionText 的行：优先遵循 item.revisionText
-      if (Object.prototype.hasOwnProperty.call(item, "revisionText")) return String(item.revisionText || "");
-      return noteData?.revision || "";
+      if (Object.prototype.hasOwnProperty.call(item, "revisionText")) {
+        const direct = String(item.revisionText || "");
+        if (!isPartialProposal(direct, targetText, item.note)) return direct;
+      }
+      const finalRev = noteData?.revision || "";
+      return isPartialProposal(finalRev, targetText, item.note) ? "" : finalRev;
     }
 
     function revisionTargetFor(item) {
@@ -1613,7 +1697,7 @@
 
     function renderDiffBlock(row, item) {
       const twDiffHtml = renderRowDiffHtml(row);
-      const revision = revisionTextFor(item);
+      const revision = revisionTextFor(item, row);
       const targetKey = revisionTargetFor(item);
       const targetText = targetKey === "tw" ? row.tw : row.cn;
       const revisionDiffHtml = targetText && revision ? inlineDiffHtml(targetText, revision) : "";
@@ -1633,7 +1717,7 @@
           ? '<span class="diff-match-badge" title="与' + escapeHtml(pageLabels.tw) + '简体化的差异完全相同">同' + escapeHtml(pageLabels.tw) + '简体化</span>'
           : "";
 
-        const noteData = parseAutomatedNote(item?.note);
+        const noteData = parseAutomatedNote(item?.note, targetText);
         const s1Rev = noteData?.stage1Revision;
         const hasStage2 = Boolean(noteData && (noteData.stage2 || String(item?.note || "").includes("Stylist复审")));
         const hasStage3 = Boolean(noteData && (noteData.stage3 || String(item?.note || "").includes("Arbiter仲裁")));
@@ -1656,12 +1740,13 @@
           );
           const hasKana = Boolean(s1Rev && /[\u3040-\u309F\u30A0-\u30FF]/.test(s1Rev));
           const p1 = (isDeleteWord || hasKana) ? "" : s1Rev;
+          const p1IsPartial = isPartialProposal(p1, targetText, item?.note);
 
           // p2: 复审改案
           let p2 = String(noteData?.stage2Revision || "").trim();
           if (!p2 && hasStage2) {
             if (noteData.stage2?.attitude?.includes("采纳")) {
-              p2 = p1 || targetText;
+              p2 = p1IsPartial ? "" : (p1 || targetText);
             } else if (!hasStage3 && noteData.revision) {
               p2 = String(noteData.revision || "").trim();
             }
@@ -1670,7 +1755,9 @@
           // p3: 仲裁定案
           let p3 = String(noteData?.stage3Revision || "").trim();
           if (!p3 && hasStage3) {
-            if (noteData.stage3) p3 = String(noteData.revision || "").trim();
+            if (noteData.stage3 && noteData.revision && !isPartialProposal(noteData.revision, targetText, item?.note)) {
+              p3 = String(noteData.revision || "").trim();
+            }
           }
 
           // 步骤 1：事实初审 (p0 -> p1)
@@ -1678,7 +1765,7 @@
           let s1StepSubLabel = "初审改案";
           let s1DiffHtml = "";
           if (p1) {
-            const isPartialPhrase = p1.length < targetText.length * 0.45;
+            const isPartialPhrase = p1IsPartial;
             s1StepSubLabel = isPartialPhrase ? "局部修正提议" : (escapeHtml(pageLabels[targetKey] || targetKey) + " → 初审改案");
             s1DiffHtml = isPartialPhrase
               ? '<div class="diff-partial-phrase"><span>建议替换为：</span><ins>' + escapeHtml(p1) + '</ins></div>'
@@ -1689,14 +1776,16 @@
           }
 
           // p2 diff: p1 -> p2
-          const baseForP2 = p1 || targetText;
-          let s2StepSubLabel = p1 ? "初审改案 → 复审改案" : "全句文学润色";
-          if (p2 && p2 === p1) {
+          const baseForP2 = p1IsPartial ? targetText : (p1 || targetText);
+          let s2StepSubLabel = p1 ? (p1IsPartial ? "复审审查初审局部提议" : "初审改案 → 复审改案") : "全句文学润色";
+          if (p2 && p2 === p1 && !p1IsPartial) {
             s2DiffHtml = '<div class="diff-partial-phrase"><span>复审采纳初审方案，无进一步文字调整</span></div>';
+          } else if (p1IsPartial && noteData.stage2?.attitude?.includes("采纳") && !p2) {
+            s2DiffHtml = '<div class="diff-partial-phrase"><span>复审采纳初审局部提议，无进一步全句重写</span></div>';
           } else if (p2) {
             s2DiffHtml = inlineDiffHtml(baseForP2, p2);
           } else {
-            s2DiffHtml = inlineDiffHtml(baseForP2, revision);
+            s2DiffHtml = inlineDiffHtml(baseForP2, revision || targetText);
           }
 
           // 步骤 3：终审仲裁 (p2 -> p3，若有仲裁)
@@ -1706,14 +1795,16 @@
             let s3DiffHtml = "";
             if (p3 && p3 === p2 && p2) {
               s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定采纳复审方案</span></div>';
-            } else if (p3 && p3 === p1 && p1) {
+            } else if (p3 && p3 === p1 && p1 && !p1IsPartial) {
               s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定采纳初审方案</span></div>';
+            } else if (p1IsPartial && (!p3 || p3 === p1)) {
+              s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定采纳复审建议（维持原译主结构，局部修正见初审）</span></div>';
             } else if (p3 && p3 === targetText) {
               s3DiffHtml = '<div class="diff-partial-phrase"><span>终审裁定维持原译</span></div>';
             } else if (p3) {
               s3DiffHtml = inlineDiffHtml(baseForP3, p3);
             } else {
-              s3DiffHtml = inlineDiffHtml(baseForP3, revision);
+              s3DiffHtml = inlineDiffHtml(baseForP3, revision || targetText);
             }
             stage3StepBlock = '<div class="diff-comparison is-stage-step is-arbiter" data-diff-kind="stage3-step">' +
               '<div class="version-label"><span class="diff-step-pill is-arbiter">步骤 3：终审仲裁</span><span>' + (p2 ? '复审改案 → 仲裁定案' : '初审改案 → 仲裁定案') + '</span></div>' +
@@ -1849,22 +1940,23 @@
       }).join("");
     }
 
-    function parseAutomatedNote(note) {
+    function parseAutomatedNote(note, targetText = "") {
       if (!note) return null;
       const str = String(note);
-      if (parsedAutomatedNoteCache.has(str)) {
-        return parsedAutomatedNoteCache.get(str);
+      const cacheKey = targetText ? (str + "\u0000" + String(targetText)) : str;
+      if (parsedAutomatedNoteCache.has(cacheKey)) {
+        return parsedAutomatedNoteCache.get(cacheKey);
       }
-      const data = parseAutomatedNoteUncached(str);
+      const data = parseAutomatedNoteUncached(str, targetText);
       if (parsedAutomatedNoteCache.size >= MAX_PARSED_NOTE_CACHE) {
         const oldestKey = parsedAutomatedNoteCache.keys().next().value;
         parsedAutomatedNoteCache.delete(oldestKey);
       }
-      parsedAutomatedNoteCache.set(str, data);
+      parsedAutomatedNoteCache.set(cacheKey, data);
       return data;
     }
 
-    function parseAutomatedNoteUncached(note) {
+    function parseAutomatedNoteUncached(note, targetText = "") {
       const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
       if (!automatedNoteMarker(lines[0])) return null;
       if (isAiFailureNote(note)) return null;
@@ -2005,24 +2097,6 @@
           }
         }
       }
-      if (data.stage3 && !data.stage3Revision) {
-        if (data.revision) {
-          data.stage3Revision = data.revision;
-        } else if (data.stage2Revision) {
-          data.stage3Revision = data.stage2Revision;
-        } else if (data.stage1Revision) {
-          data.stage3Revision = data.stage1Revision;
-        }
-      }
-      if (data.stage2 && !data.stage2Revision) {
-        if (data.stage2.attitude.includes("采纳") && data.stage1Revision) {
-          data.stage2Revision = data.stage1Revision;
-        } else if (!data.stage3 && data.revision) {
-          data.stage2Revision = data.revision;
-        } else if (data.stage1Revision) {
-          data.stage2Revision = data.stage1Revision;
-        }
-      }
 
       // 防呆清洗：无论 stage1Revision 来自何处（显式行或历史推断），
       // 若初审意图是指出删除/增译，而 stage1Revision 恰是被指出的待删除缺陷短语，或者包含日文假名，绝不能当作初审改案
@@ -2041,13 +2115,53 @@
         }
       }
 
+      // 阶段改案安全回退：检查各个候选改案是否属于局部修正提议（非整段改案）
+      const isS1Partial = isPartialProposal(data.stage1Revision, targetText, note, { isInitialProposal: true });
+      const isS2Partial = isPartialProposal(data.stage2Revision, targetText, note);
+      const isS3Partial = isPartialProposal(data.stage3Revision, targetText, note);
+      const isRevPartial = isPartialProposal(data.revision, targetText, note);
+
+      // 若 revision 本身就是局部提议或已被门禁作废，置为空避免被当作整段修改写回
+      if (isRevPartial) {
+        data.revision = "";
+      }
+
+      // 只有非局部提议的完整全量改案，才允许在采纳/维持时向下游阶段传播
+      if (data.stage2 && !data.stage2Revision) {
+        if (data.stage2.attitude.includes("采纳") && data.stage1Revision && !isS1Partial) {
+          data.stage2Revision = data.stage1Revision;
+        } else if (!data.stage3 && data.revision && !isRevPartial) {
+          data.stage2Revision = data.revision;
+        } else if (data.stage1Revision && !isS1Partial) {
+          data.stage2Revision = data.stage1Revision;
+        }
+      }
+      if (data.stage3 && !data.stage3Revision) {
+        if (data.revision && !isRevPartial) {
+          data.stage3Revision = data.revision;
+        } else if (data.stage2Revision && !isS2Partial) {
+          data.stage3Revision = data.stage2Revision;
+        } else if (data.stage1Revision && !isS1Partial) {
+          data.stage3Revision = data.stage1Revision;
+        }
+      }
+
       // 默认版本显示逻辑：最后阶段的版本优先（仲裁 ＞ 复审 ＞ 初审）
+      // 安全红线：局部提议（isPartialProposal）绝不能直接作为全量成品文本覆盖 data.revision！
       if (data.stage3 && (data.stage3Revision || data.revision)) {
-        data.revision = data.stage3Revision || data.revision;
+        if (data.stage3Revision && !isPartialProposal(data.stage3Revision, targetText, note)) {
+          data.revision = data.stage3Revision;
+        } else if (isPartialProposal(data.stage3Revision, targetText, note) && data.revision === data.stage3Revision) {
+          data.revision = "";
+        }
       } else if (data.stage2 && (data.stage2Revision || data.revision)) {
-        data.revision = data.stage2Revision || data.revision;
-      } else if (data.stage1Revision) {
-        data.revision = data.stage1Revision || data.revision;
+        if (data.stage2Revision && !isPartialProposal(data.stage2Revision, targetText, note)) {
+          data.revision = data.stage2Revision;
+        } else if (isPartialProposal(data.stage2Revision, targetText, note) && data.revision === data.stage2Revision) {
+          data.revision = "";
+        }
+      } else if (data.stage1Revision && !isPartialProposal(data.stage1Revision, targetText, note)) {
+        data.revision = data.stage1Revision;
       }
 
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
@@ -2131,11 +2245,14 @@
 
     function renderNoteSummary(item, id) {
       const noteText = item?.note || "";
-      const note = parseAutomatedNote(noteText);
+      const row = typeof rowsById !== "undefined" && rowsById ? rowsById.get(String(id || "")) : null;
+      const targetKey = revisionTargetFor(item);
+      const rowTargetText = row ? String(row[targetKey] || row.cn || "") : "";
+      const note = parseAutomatedNote(noteText, rowTargetText);
       if (!note) return '<div class="note-summary" hidden></div>';
 
-      const revisionText = revisionTextFor(item);
-      const revisionTarget = revisionTargetFor(item);
+      const revisionText = revisionTextFor(item, row || rowTargetText);
+      const revisionTarget = targetKey;
       const revisionLabel = pageLabels[revisionTarget] || (revisionTarget === "tw" ? "非原文 C" : "非原文 B");
 
       let pipelineHtml = "";
@@ -2190,7 +2307,15 @@
         const s2Rev = String(note.stage2Revision || (!note.stage3 ? note.revision : "") || "").trim();
         const s3Rev = String(note.stage3Revision || (note.stage3 ? note.revision : "") || "").trim();
 
-        // 默认显示最后的版本：仲裁 ＞ 复审 ＞ 初审
+        const s1IsPartial = isPartialProposal(s1Rev, rowTargetText, noteText);
+        const s2IsPartial = isPartialProposal(s2Rev, rowTargetText, noteText);
+        const s3IsPartial = isPartialProposal(s3Rev, rowTargetText, noteText);
+
+        const s1Title = s1IsPartial ? "阶段一事实初审提议（局部修正）" : "切换为阶段一事实初审文本";
+        const s2Title = s2IsPartial ? "阶段二文学复审提议（局部修正）" : "切换为阶段二文学复审文本";
+        const s3Title = s3IsPartial ? "阶段三终审仲裁提议（局部修正）" : "切换为阶段三终审仲裁文本";
+
+        // 默认显示最后的合法全量版本：仲裁 ＞ 复审 ＞ 初审
         let activeStage = note.stage3 ? "3" : (note.stage2 ? "2" : "1");
         if (item?.revisionStageActive) {
           activeStage = String(item.revisionStageActive);
@@ -2208,9 +2333,9 @@
 
         stagePillsHtml = '<div class="revision-stage-pills" data-row-id="' + escapeHtml(id || "") + '" title="在不同阶段的修改版本间快速切换">' +
           '<span class="stage-pills-label">版本:</span>' +
-          '<button type="button" class="stage-pill-btn is-gk ' + (isS1Active ? 'is-active' : '') + '" data-apply-stage="1" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段一事实初审文本">初审</button>' +
-          '<button type="button" class="stage-pill-btn is-stylist ' + (isS2Active ? 'is-active' : '') + '" data-apply-stage="2" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段二文学复审文本">复审</button>' +
-          (note.stage3 ? '<button type="button" class="stage-pill-btn is-arbiter ' + (isS3Active ? 'is-active' : '') + '" data-apply-stage="3" data-row-id="' + escapeHtml(id || "") + '" title="切换为阶段三终审仲裁文本">仲裁</button>' : '') +
+          '<button type="button" class="stage-pill-btn is-gk ' + (isS1Active ? 'is-active' : '') + '" data-apply-stage="1" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s1Title) + '">初审</button>' +
+          '<button type="button" class="stage-pill-btn is-stylist ' + (isS2Active ? 'is-active' : '') + '" data-apply-stage="2" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s2Title) + '">复审</button>' +
+          (note.stage3 ? '<button type="button" class="stage-pill-btn is-arbiter ' + (isS3Active ? 'is-active' : '') + '" data-apply-stage="3" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s3Title) + '">仲裁</button>' : '') +
         '</div>';
       }
 
@@ -3265,7 +3390,11 @@
     function applyStageRevision(id, stage) {
       const rowId = String(id || "");
       if (!rowId || !notes[rowId]) return;
-      const noteData = parseAutomatedNote(notes[rowId].note);
+      const row = typeof rowsById !== "undefined" && rowsById ? rowsById.get(rowId) : null;
+      const current = notes[rowId] || { note: "", done: false };
+      const targetKey = revisionTargetFor(current);
+      const rowTargetText = row ? String(row[targetKey] || row.cn || "") : "";
+      const noteData = parseAutomatedNote(notes[rowId].note, rowTargetText);
       if (!noteData) return;
 
       let targetText = "";
@@ -3289,7 +3418,13 @@
         return;
       }
 
-      const current = notes[rowId] || { note: "", done: false };
+      // 核心安全防线：若该阶段提供的内容是局部修正提议（非整段改案），
+      // 绝不能直接作为整行 revisionText 覆盖输入框（否则会导致整段正文被砍掉）！
+      if (isPartialProposal(targetText, rowTargetText, current.note)) {
+        showToast("第 " + rowId + " 行" + stageName + "为局部修正提议「" + targetText + "」（非整段改案），已在下方演进对比中展示；请在输入框中针对对应语句进行修改，避免覆盖整行。", { tone: "watch", durationMs: 8000 });
+        return;
+      }
+
       current.revisionText = targetText;
       current.revisionStageActive = String(stage);
       current.revisionTarget = revisionTargetFor(current);

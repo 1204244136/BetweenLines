@@ -516,3 +516,56 @@ test("修改结果默认版本显示逻辑：无关筛选，默认显示最后�
   const s3SwitchedHtml = ui.run('renderNoteSummary(notes["3"], "3")');
   assert.match(s3SwitchedHtml, /class="stage-pill-btn is-gk is-active"/);
 });
+
+test("长段与含noteref行中局部修正提议绝不覆盖整段修改结果", () => {
+  const row525Text = "该怎么办？\\n\\n从这里开始还能有正确的选择吗？！\\n\\n就算是能回答任何问题的狐狗狸<a class=\"nodeco\" epub:type=\"noteref\" href=\"S6_22.06.10-Note.xhtml#note10\"><sup>㊟</sup></a>或者悟君<a class=\"nodeco\" epub:type=\"noteref\" href=\"S6_22.06.10-Note.xhtml#note11\"><sup>㊟</sup></a>，见到如此场景恐怕也会被吓到，还是决定先观望一下吧！！！！！！";
+  const ui = createWorkbench(undefined, {
+    rows: [
+      {
+        index: 525,
+        relation: "简台 细分 3:3 / 日文 1:1",
+        jp: "どうすれば良い？ ここから何か正解の選択肢とかあんのか!? 頼めば何でも答えてくれるこっくりさんとかさとるくんでもビビって様子見を決め込むんじゃないか、この状況ッッッ!!!!!!",
+        cn: row525Text.replace(/\\n/g, "\n"),
+        signature: "sig525",
+      },
+    ],
+  });
+
+  const noteRow525 = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：待人工确认",
+    "Gatekeeper初审：原文首句「どうすれば良い？」，当前译文「该怎么办？」，建议改为「该怎么办才好？」，后文保留原译。",
+    "初审改案：该怎么办？",
+    "Stylist复审[采纳]：认同初审意见。",
+    "Arbiter仲裁[复审方案]：采纳复审方案。",
+    "分析：模型给出的修改结果丢失了目标列的 EPUB noteref 注释标记（目标列 2 个、修改结果 0 个），已作废并转人工确认。",
+  ].join("\n");
+
+  const parsed = ui.run(`parseAutomatedNote(${JSON.stringify(noteRow525)}, ${JSON.stringify(row525Text.replace(/\\n/g, "\n"))})`);
+  assert.ok(parsed, "解析 note 成功");
+  assert.equal(parsed.stage1Revision, "该怎么办？", "保留初审的局部建议文本");
+  assert.equal(parsed.stage2Revision, "", "采纳局部提议时，复审改案绝不可被填充为 5 字短句");
+  assert.equal(parsed.stage3Revision, "", "裁决采纳复审时，仲裁定案绝不可被填充为 5 字短句");
+  assert.equal(parsed.revision, "", "整行的修改结果绝不可被 5 字短句覆盖");
+
+  ui.run(`
+    notes["525"] = {
+      note: ${JSON.stringify(noteRow525)},
+      manualDone: false,
+    };
+  `);
+
+  // revisionTextFor 绝不能返回 5 个字的碎片覆盖整段
+  const effectiveRev = ui.run('revisionTextFor(notes["525"])');
+  assert.equal(effectiveRev, "", "对于局部修正提议且全量修改已作废的行，revisionTextFor 不得返回短句覆盖整行");
+
+  // renderNoteSummary 生成的编辑框不能填入 5 个字短句
+  const summaryHtml = ui.run('renderNoteSummary(notes["525"], "525")');
+  assert.equal(summaryHtml.includes('<textarea class="revision-editor" data-revision="525">该怎么办？</textarea>'), false, "编辑框不得被填入 5 字短句");
+
+  // 点击「初审」切换版本时，由于该提议是局部短语，不能直接把整行变成 5 个字
+  ui.run('applyStageRevision("525", "1")');
+  const afterClickRev = ui.run('notes["525"].revisionText || ""');
+  assert.notEqual(afterClickRev, "该怎么办？", "applyStageRevision 不得直接将 5 字局部短语写为整行 revisionText");
+});

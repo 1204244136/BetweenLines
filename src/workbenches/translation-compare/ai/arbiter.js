@@ -220,7 +220,14 @@ function formatArbitrationNoteLines({
      (gkText.length <= 12 && gatekeeperDecision.summary.includes(gkText)))
   );
   const hasKana = /[\u3040-\u309F\u30A0-\u30FF]/.test(gkText);
-  if (gatekeeperDecision.needsEdit !== false && gkText && !isGkDeleteIntent && !hasKana) {
+  const isVoided = Boolean(
+    gatekeeperDecision.formatVoid ||
+    (gatekeeperDecision.summary && (
+      gatekeeperDecision.summary.includes("丢失了目标列的 EPUB noteref 注释标记") ||
+      gatekeeperDecision.summary.includes("段落结构与目标列不一致")
+    ))
+  );
+  if (gatekeeperDecision.needsEdit !== false && gkText && !isGkDeleteIntent && !hasKana && !isVoided) {
     lines.push(`初审改案：${gkText}`);
   }
 
