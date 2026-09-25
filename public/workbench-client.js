@@ -609,6 +609,12 @@
       return automatedNoteMarkers.find((marker) => text.startsWith(marker)) || "";
     }
 
+    function latestAiNotePart(value) {
+      const parts = String(value || "").split(/\n\n+/).map((part) => part.trim()).filter(Boolean);
+      const aiParts = parts.filter((part) => part.startsWith("[AI校对]"));
+      return aiParts.length ? aiParts[aiParts.length - 1] : String(value || "");
+    }
+
     function isAutomatedNoteText(value) {
       return Boolean(automatedNoteMarker(value));
     }
@@ -618,7 +624,7 @@
     }
 
     function isAiFailureNote(note) {
-      const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const lines = latestAiNotePart(note).split(/\n+/).map((line) => line.trim()).filter(Boolean);
       if (!lines[0]?.startsWith("[AI校对]")) return false;
       return lines.slice(1).some((line) =>
         line.startsWith("调用失败") ||
@@ -3964,7 +3970,7 @@
 
       for (const item of Object.values(sourceNotes || {})) {
         if (!item) continue;
-        const noteText = String(item.note || "").trim();
+        const noteText = latestAiNotePart(item.note || "").trim();
         if (!noteText) continue;
 
         if (isAiFailureNote(noteText)) {
