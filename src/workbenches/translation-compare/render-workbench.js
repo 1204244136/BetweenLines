@@ -1,7 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 const { activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
-const { providerDefaults, proofreadPromptFor, errorCircuitBreaker, listProfiles, normalizeGrade } = require("./ai/ai-proofread");
+const { providerDefaults, errorCircuitBreaker } = require("./ai/proofread-defaults");
+const { proofreadPromptFor, listProfiles } = require("./ai/proofread-contract");
+const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
