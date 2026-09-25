@@ -1,4 +1,10 @@
 const { providerDefaults, errorCircuitBreaker } = require("./proofread-defaults");
+const {
+  createStageController,
+  nextConcurrencyAfterLimit,
+  backoffDelayMs,
+  shouldRetryRow,
+} = require("./concurrency-controller");
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
 const fs = require("fs");
 const { diffWordsWithSpace, diffChars } = require("diff");
@@ -1310,29 +1316,15 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
   const maxRowRetries = 3;
 
-  function createStageCtrl(stageKey, label, conf, defaultConcurrency = 3, defaultMax = 10) {
-    const rawConc = conf?.concurrency != null ? Number(conf.concurrency) : defaultConcurrency;
-    const initialConcurrency = clampInteger(rawConc, 1, 12, defaultConcurrency);
-    const isSmart = conf?.smartConcurrency != null ? Boolean(conf.smartConcurrency) : Boolean(config.smartConcurrency);
-    const rawMax = conf?.concurrencyMax != null ? Number(conf.concurrencyMax) : (config.concurrencyMax || defaultMax);
-    const maxConcurrency = isSmart ? Math.max(initialConcurrency, clampInteger(rawMax, 1, 20, defaultMax)) : initialConcurrency;
-
-    return {
-      stageKey,
-      label,
-      isSmart,
-      currentConcurrency: initialConcurrency,
-      maxConcurrency,
-      initialConcurrency,
-      consecutiveSuccesses: 0,
-      consecutiveLimits: 0,
-      lastAdjustmentAt: Date.now(),
-      lastScaleDownAt: 0,
-      backoffUntil: 0,
-      backoffTimer: null,
-      rowRetryCounts: new Map(),
-    };
-  }
+  const createStageCtrl = (stageKey, label, conf, defaultConcurrency = 3, defaultMax = 10) => createStageController({
+    stageKey,
+    label,
+    config: conf,
+    fallbackConcurrency: defaultConcurrency,
+    fallbackMax: config.concurrencyMax || defaultMax,
+    clampInteger,
+    smartDefault: Boolean(config.smartConcurrency),
+  });
 
   const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency, config.concurrencyMax);
   const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency || 3, config.concurrencyMax || 10);
@@ -1401,9 +1393,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     const now = Date.now();
     if (now - ctrl.lastScaleDownAt > 800) {
       const prev = ctrl.currentConcurrency;
-      const next = prev > 3
-        ? Math.max(minConcurrency, Math.floor(prev * 0.7))
-        : Math.max(minConcurrency, prev - 1);
+      const next = nextConcurrencyAfterLimit(prev, minConcurrency);
       if (next < prev) {
         ctrl.currentConcurrency = next;
         if (ctrl.stageKey === "stage1") {
@@ -1419,16 +1409,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     const retries = (ctrl.rowRetryCounts.get(rowIndex) || 0) + 1;
     ctrl.rowRetryCounts.set(rowIndex, retries);
 
-    let delayMs = Math.min(10000, 1500 * Math.pow(1.5, Math.min(4, ctrl.consecutiveLimits - 1))) + Math.floor(Math.random() * 500);
-    if (error.retryAfter) {
-      const parsed = parseFloat(error.retryAfter);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        delayMs = Math.min(15000, parsed * 1000);
-      }
-    }
+    const delayMs = backoffDelayMs(ctrl.consecutiveLimits, error.retryAfter) + Math.floor(Math.random() * 500);
     ctrl.backoffUntil = Math.max(ctrl.backoffUntil, Date.now() + delayMs);
 
-    if (retries <= maxRowRetries && !status.stopRequested) {
+    if (shouldRetryRow(retries, maxRowRetries, status.stopRequested)) {
       const stageNamePart = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}`;
       pushLog(`[智能并发] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${ctrl.currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
       pendingQueue.unshift(itemToRetry);
