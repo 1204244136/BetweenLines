@@ -319,3 +319,67 @@ test("写回目标识别：解压 EPUB 目录之外的目录被拒绝", () => {
   assert.equal(described.ok, false);
   assert.match(described.message, /不是单本解压的 EPUB/);
 });
+
+test("写回：批量写回中靠后条目包含早期重复或短文本时，绝不误杀前面的条目", async () => {
+  // 原文在前面有小节序号「8」，中间有正文，后面又出现小节序号「8」
+  const dir = epubFixture({
+    first: ["开场。", "8", "第一段正文。", "第二段正文。", "8", "结尾。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "8", "第一段正文。", "第二段正文。", "8", "结尾。"];
+  // 批量写回：同时修改第 3 行（第一段正文）和第 5 行（第二处「8」）
+  const result = await applyTextReplacements(dir, [
+    { id: "3", searchText: "第一段正文。", replaceText: "第一段正文改后。" },
+    { id: "5", searchText: "8", replaceText: "8改后。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 2);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [
+    "开场。", "8", "第一段正文改后。", "第二段正文。", "8改后。", "结尾。",
+  ]);
+});
+
+test("写回：EPUB 目录中的 nav 导航文件不参与正文写回与定位干扰", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-nav-fixture-"));
+  fs.mkdirSync(path.join(dir, "META-INF"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "OEBPS", "Text"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "META-INF", "container.xml"),
+    '<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>\n',
+    "utf8",
+  );
+  // nav.xhtml 位于根目录（字母序优先于 OEBPS），带有 properties="nav" 且不在 spine 中
+  fs.writeFileSync(
+    path.join(dir, "nav.xhtml"),
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><nav><ol><li><a href="OEBPS/Text/chap.xhtml">8</a></li></ol></nav></html>',
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "OEBPS", "content.opf"),
+    '<?xml version="1.0" encoding="UTF-8"?>\n<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="id"><manifest><item id="nav" href="../nav.xhtml" properties="nav" media-type="application/xhtml+xml"/><item id="chap" href="Text/chap.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chap"/></spine></package>\n',
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "OEBPS", "Text", "chap.xhtml"),
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>小说正文第一段。</p><p>8</p></body></html>',
+    "utf8",
+  );
+
+  const rowTexts = ["小说正文第一段。", "8"];
+  const result = await applyTextReplacements(dir, [
+    { id: "1", searchText: "小说正文第一段。", replaceText: "小说正文第一段改后。" },
+    { id: "2", searchText: "8", replaceText: "8章节标题改后。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 2);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  // nav.xhtml 不被修改，chap.xhtml 正确修改
+  const navContent = fs.readFileSync(path.join(dir, "nav.xhtml"), "utf8");
+  assert.match(navContent, />8<\/a>/);
+  const chapContent = fs.readFileSync(path.join(dir, "OEBPS", "Text", "chap.xhtml"), "utf8");
+  assert.match(chapContent, /<p>小说正文第一段改后。<\/p>/);
+  assert.match(chapContent, /<p>8章节标题改后。<\/p>/);
+});

@@ -168,14 +168,22 @@ async function orderEpubDocuments(names, readText) {
             const joined = path.posix.join(base === "." ? "" : base, String(href).split("#")[0].replace(/\\/g, "/"));
             return byLower.get(joined.toLowerCase()) || "";
           };
+          const manifestItems = asArray(opf?.package?.manifest?.item);
           const byId = new Map(
-            asArray(opf?.package?.manifest?.item)
+            manifestItems
               .map((item) => [String(item?.id || ""), resolveOpfPath(item?.href)])
               .filter(([, documentPath]) => documentPath),
           );
+          // 纯导航文档（带 properties="nav"，或命名为 nav.xhtml / toc.xhtml）不作为正文写回文档
+          const navPaths = new Set(
+            manifestItems
+              .filter((item) => String(item?.properties || "").includes("nav"))
+              .map((item) => resolveOpfPath(item?.href))
+              .filter(Boolean),
+          );
           for (const ref of asArray(opf?.package?.spine?.itemref)) {
             const documentPath = byId.get(String(ref?.idref || ""));
-            if (documentPath && !used.has(documentPath)) {
+            if (documentPath && !used.has(documentPath) && htmlEntryPattern.test(documentPath) && !navPaths.has(documentPath)) {
               used.add(documentPath);
               ordered.push(documentPath);
             }
@@ -186,7 +194,10 @@ async function orderEpubDocuments(names, readText) {
   } catch {
     // OPF 解析失败时回退到字典序，不影响写回。
   }
-  const remaining = normalized.filter((name) => !used.has(name)).sort((a, b) => a.localeCompare(b));
+  // 剩余的非导航 HTML 文档按字典序附加在后
+  const remaining = normalized
+    .filter((name) => !used.has(name) && htmlEntryPattern.test(name) && !name.toLowerCase().endsWith("nav.xhtml") && !name.toLowerCase().endsWith("toc.xhtml"))
+    .sort((a, b) => a.localeCompare(b));
   return [...ordered, ...remaining];
 }
 
@@ -195,18 +206,16 @@ async function loadWritebackDocuments(target, kind) {
     return { documents: [{ key: target, html: fs.readFileSync(target, "utf8") }], zip: null };
   }
   if (kind === TARGET_EPUB_DIRECTORY) {
-    const names = directoryEntries(target)
-      .filter((entry) => htmlEntryPattern.test(entry.path))
-      .map((entry) => entry.path.replace(/\\/g, "/"));
-    const ordered = await orderEpubDocuments(names, (name) => fs.readFileSync(path.join(target, name), "utf8"));
+    const allNames = directoryEntries(target).map((entry) => entry.path.replace(/\\/g, "/"));
+    const ordered = await orderEpubDocuments(allNames, (name) => fs.readFileSync(path.join(target, name), "utf8"));
     return {
       documents: ordered.map((name) => ({ key: name, html: fs.readFileSync(path.join(target, name), "utf8") })),
       zip: null,
     };
   }
   const zip = await JSZip.loadAsync(fs.readFileSync(target));
-  const names = Object.keys(zip.files).filter((name) => !zip.files[name].dir && htmlEntryPattern.test(name));
-  const ordered = await orderEpubDocuments(names, (name) => zip.file(name).async("string"));
+  const allNames = Object.keys(zip.files).filter((name) => !zip.files[name].dir);
+  const ordered = await orderEpubDocuments(allNames, (name) => zip.file(name).async("string"));
   const documents = [];
   for (const name of ordered) {
     documents.push({ key: name, html: await zip.file(name).async("string") });
@@ -394,16 +403,37 @@ function firstBlockAtOrAfter(index, text, lastBlock) {
   return low < blocks.length ? blocks[low] : null;
 }
 
-// 未改动的行和先序写回条目都不能越过更靠后条目的首个可用锚点。
-// 同一块允许先序行先占用，后续条目会自然匹配下一处。
+// 未改动的行（seekRow）不能越过紧随其后的写回条目的可用锚点。
+// 1. 只看当前行之后的最近一个待写回条目（nextAnchor），不被全书更靠后的条目误限；
+// 2. 多候选短文本不作为硬上限，避免因常见短语在前面偶然出现而误伤前面的行。
 function futureEntryBlockLimit(state, futureAnchors, currentRow, blockIndex) {
-  let maxBlock = Infinity;
+  let nextAnchor = null;
   for (const anchor of futureAnchors) {
-    if (anchor.row <= currentRow || !anchor.text) continue;
-    const candidate = firstBlockAtOrAfter(blockIndex, anchor.text, state.lastBlock);
-    if (candidate != null && candidate < maxBlock) maxBlock = candidate;
+    if (anchor.row > currentRow && anchor.text) {
+      if (!nextAnchor || anchor.row < nextAnchor.row) {
+        nextAnchor = anchor;
+      }
+    }
   }
-  return maxBlock;
+  if (!nextAnchor) return Infinity;
+
+  const blocks = blockIndex.get(nextAnchor.text);
+  if (!blocks || !blocks.length) return Infinity;
+
+  const candidate = firstBlockAtOrAfter(blockIndex, nextAnchor.text, state.lastBlock);
+  if (candidate == null) return Infinity;
+
+  // 如果该文本在全书有多处候选，且这个候选距离当前 lastBlock 太近，
+  // 但 nextAnchor.row 却距离 currentRow 较远，说明该 candidate 是前面的同名短语，不是该条目真正的目标。
+  if (blocks.length > 1) {
+    const rowDiff = nextAnchor.row - currentRow;
+    const blockDiff = candidate - state.lastBlock;
+    if (rowDiff > 3 && blockDiff < rowDiff - 2) {
+      return Infinity;
+    }
+  }
+
+  return candidate;
 }
 
 // 一条写回条目落盘：逐段定位，任一段定位失败或命中不唯一就整行放弃（锚点与占用标记一起回滚）。
@@ -545,7 +575,7 @@ function planPlacements(documents, entries, options, strategy) {
       ambiguous.push(strategy.report(entry, strategy.blockedReason(previewText(blocked))));
       continue;
     }
-    commitEntry(entry, { maxBlock });
+    commitEntry(entry);
   }
   for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();
