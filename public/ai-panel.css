@@ -1273,11 +1273,39 @@ details[open] > summary .details-toggle::before {
   color: #92400e;
 }
 
+.stage-report-tag.is-unclear {
+  background: #fef3c7;
+  color: #b45309;
+}
+
 .stage-report-body {
   font-size: 12px;
   line-height: 1.4;
   color: var(--ai-text);
   word-break: break-word;
+}
+
+.stage-report-rev {
+  margin-top: 4px;
+  padding: 3px 6px;
+  background: color-mix(in srgb, var(--ai-focus, #3b82f6) 8%, transparent);
+  border-left: 2px solid var(--ai-focus, #3b82f6);
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--ai-text);
+  font-family: var(--font-mono, monospace);
+}
+
+.pipeline-step.is-pending-step {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px dashed #f59e0b;
+}
+
+.pipeline-step.is-final-check {
+  color: #b91c1c;
+  background: #fef2f2;
+  font-weight: 700;
 }
 
 /* ---- 多阶段演进与版本切换 ----------------------------------------------- */

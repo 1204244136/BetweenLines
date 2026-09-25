@@ -207,24 +207,25 @@ function formatArbitrationNoteLines({
 }) {
   const lines = [];
 
-  if (gatekeeperDecision.summary) {
-    lines.push(`Gatekeeper初审：${gatekeeperDecision.summary}`);
+  const gkSummary = gatekeeperDecision.stage1Summary || gatekeeperDecision.summary || "";
+  if (gkSummary) {
+    lines.push(`Gatekeeper初审：${gkSummary}`);
   }
   const gkText = String(gatekeeperDecision.stage1RevisedText || gatekeeperDecision.revisedText || "").trim();
   const isGkDeleteIntent = Boolean(
-    gatekeeperDecision.summary &&
-    /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(gatekeeperDecision.summary) &&
-    (gatekeeperDecision.summary.includes(`「${gkText}」`) ||
-     gatekeeperDecision.summary.includes(`“${gkText}”`) ||
-     gatekeeperDecision.summary.includes(`‘${gkText}’`) ||
-     (gkText.length <= 12 && gatekeeperDecision.summary.includes(gkText)))
+    gkSummary &&
+    /(?:删除|删去|删掉|去除|去掉|增译|无中生有|多余|不应有)/.test(gkSummary) &&
+    (gkSummary.includes(`「${gkText}」`) ||
+     gkSummary.includes(`“${gkText}”`) ||
+     gkSummary.includes(`‘${gkText}’`) ||
+     (gkText.length <= 12 && gkSummary.includes(gkText)))
   );
   const hasKana = /[\u3040-\u309F\u30A0-\u30FF]/.test(gkText);
   const isVoided = Boolean(
     gatekeeperDecision.formatVoid ||
-    (gatekeeperDecision.summary && (
-      gatekeeperDecision.summary.includes("丢失了目标列的 EPUB noteref 注释标记") ||
-      gatekeeperDecision.summary.includes("段落结构与目标列不一致")
+    (gkSummary && (
+      gkSummary.includes("丢失了目标列的 EPUB noteref 注释标记") ||
+      gkSummary.includes("段落结构与目标列不一致")
     ))
   );
   if (gatekeeperDecision.needsEdit !== false && gkText && !isGkDeleteIntent && !hasKana && !isVoided) {
@@ -232,17 +233,19 @@ function formatArbitrationNoteLines({
   }
 
   const critique = stylistReview.critique || {};
-  if (critique.rationale || stylistReview.summary) {
-    const attMap = { accept: "采纳", modify: "调整", reject: "驳回", escalate: "提交仲裁" };
-    const attLabel = attMap[critique.attitude] || critique.attitude || "复审";
-    lines.push(`Stylist复审[${attLabel}]：${critique.rationale || stylistReview.summary}`);
+  const stylistText = critique.rationale || stylistReview.summary || stylistReview.rationale || "";
+  if (stylistText || stylistReview.attitude || critique.attitude) {
+    const attMap = { accept: "采纳", modify: "调整", reject: "驳回", escalate: "提交仲裁", unclear: "存疑" };
+    const rawAtt = critique.attitude || stylistReview.attitude || "复审";
+    const attLabel = attMap[rawAtt] || rawAtt || "复审";
+    lines.push(`Stylist复审[${attLabel}]：${stylistText || "文学复审完成"}`);
   }
   const s2Text = String(gatekeeperDecision.stage2RevisedText || stylistReview.revisedText || "").trim();
   if (s2Text && s2Text !== gkText) {
     lines.push(`复审改案：${s2Text}`);
   }
 
-  if (arbitration.reason) {
+  if (arbitration && (arbitration.reason || arbitration.finalDecision || arbitration.winner)) {
     const winnerMap = {
       gatekeeper: "初审方案",
       stylist: "复审方案",
@@ -258,9 +261,13 @@ function formatArbitrationNoteLines({
       neither: "折中方案",
       compromise: "结合方案",
       "折中方案": "结合方案",
+      unclear: "存疑待定",
     };
-    const winLabel = winnerMap[arbitration.winner] || arbitration.winner || "裁决";
-    lines.push(`Arbiter仲裁[${winLabel}]：${arbitration.reason}`);
+    const winLabel = winnerMap[arbitration.winner] || (arbitration.finalDecision === "unclear" ? "存疑待定" : (arbitration.winner || "裁决"));
+    const defaultArbReason = arbitration.finalDecision === "unclear"
+      ? "终审法官全面权衡初审与复审意见，依据依然不足或存在深层分歧，建议转人工确认。"
+      : "终审裁决定案。";
+    lines.push(`Arbiter仲裁[${winLabel}]：${arbitration.reason || defaultArbReason}`);
     const s3Text = String(arbitration.revisedText || gatekeeperDecision.stage3RevisedText || "").trim();
     const isSynthesis = arbitration.winner === "synthesis" ||
       arbitration.winner === "combined" ||

@@ -3784,7 +3784,17 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
   const bilingual = proofreadMode === "bilingual";
   // 双语没有“另一份译文”可比较：counterpart 一律按“仍需修改”处理。
   const better = bilingual && decision.better === "counterpart" ? "neither" : decision.better;
-  const multiStageLines = (decision.stylistReview || decision.arbitration)
+  const hasStageTraces = Boolean(
+    decision.stylistReview ||
+    decision.arbitration ||
+    decision.stage === "gatekeeper" ||
+    decision.stage === "stylist" ||
+    decision.stage === "arbiter" ||
+    decision.stage1Summary ||
+    decision.stage1RevisedText ||
+    Boolean(decision.summary && (decision.needsContext || better === "unclear" || decision.needsEdit))
+  );
+  const multiStageLines = hasStageTraces
     ? formatArbitrationNoteLines({
         gatekeeperDecision: decision,
         stylistReview: decision.stylistReview,
