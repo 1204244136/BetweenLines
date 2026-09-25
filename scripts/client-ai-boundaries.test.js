@@ -39,4 +39,21 @@ test("并发控制器只负责策略状态，不依赖 AI 任务模块", () => {
   assert.equal(shouldRetryRow(3, 3, false), true);
   assert.equal(shouldRetryRow(4, 3, false), false);
   assert.equal(shouldRetryRow(1, 3, true), false);
+
+  // 并发上限放开到 32：20 必须原样保留，越界才截断到上限。
+  const wide = createStageController({
+    stageKey: "stage1",
+    label: "初审",
+    config: { concurrency: 20, smartConcurrency: true, concurrencyMax: 20 },
+    clampInteger: clamp,
+  });
+  assert.deepEqual({ current: wide.currentConcurrency, max: wide.maxConcurrency }, { current: 20, max: 20 });
+
+  const clamped = createStageController({
+    stageKey: "stage1",
+    label: "初审",
+    config: { concurrency: 99, smartConcurrency: true, concurrencyMax: 99 },
+    clampInteger: clamp,
+  });
+  assert.deepEqual({ current: clamped.currentConcurrency, max: clamped.maxConcurrency }, { current: 32, max: 32 });
 });

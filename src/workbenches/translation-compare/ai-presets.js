@@ -3,6 +3,21 @@ function createPresetTools() {
   const PRESETS_STORAGE_KEY = "translation-compare-ai-presets-v1";
   const VALID_PROVIDERS = ["local", "claude", "compatible"];
 
+  // 并发边界必须与 Node 侧 ai/concurrency-limits.js 保持一致。本函数会被 toString()
+  // 注入浏览器页面、不能引用模块作用域，因此自带一份同值字面量；两边的边界行为由
+  // scripts/ai-smart-concurrency.test.js 的断言锁死，改一边必须同步改另一边。
+  const CONCURRENCY_MIN = 1;
+  const CONCURRENCY_MAX = 32;
+  const DEFAULT_CONCURRENCY = 3;
+  const DEFAULT_CONCURRENCY_MAX = 10;
+
+  // 越界一律截断到边界，而不是回落到默认值：旧实现把 20 直接换成 3，
+  // 用户在预设里选了 20 却静默跑成 3，且没有任何提示。
+  function clampPresetConcurrency(value, fallback) {
+    if (!Number.isSafeInteger(value)) return fallback;
+    return Math.max(CONCURRENCY_MIN, Math.min(CONCURRENCY_MAX, value));
+  }
+
   function sanitizePreset(item) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const name = String(item.name || "").trim();
@@ -21,15 +36,11 @@ function createPresetTools() {
     const nonGptIntensity = typeof item.nonGptIntensity === "string" ? item.nonGptIntensity : "";
 
     const rawConcurrency = Number(item.concurrency);
-    const concurrency = Number.isSafeInteger(rawConcurrency) && rawConcurrency >= 1 && rawConcurrency <= 12
-      ? rawConcurrency
-      : 3;
+    const concurrency = clampPresetConcurrency(rawConcurrency, DEFAULT_CONCURRENCY);
 
     const smartConcurrency = Boolean(item.smartConcurrency);
     const rawConcurrencyMax = Number(item.concurrencyMax);
-    const concurrencyMax = Number.isSafeInteger(rawConcurrencyMax) && rawConcurrencyMax >= 1 && rawConcurrencyMax <= 20
-      ? rawConcurrencyMax
-      : 10;
+    const concurrencyMax = clampPresetConcurrency(rawConcurrencyMax, DEFAULT_CONCURRENCY_MAX);
 
     const breakerThreshold = typeof item.breakerThreshold === "string" && item.breakerThreshold.trim()
       ? item.breakerThreshold.trim()

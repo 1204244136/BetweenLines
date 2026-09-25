@@ -1,3 +1,5 @@
+const { AI_CONCURRENCY_LIMITS } = require("./concurrency-limits");
+
 function createStageController({
   stageKey,
   label,
@@ -8,10 +10,12 @@ function createStageController({
   smartDefault = false,
 } = {}) {
   const rawConcurrency = config?.concurrency != null ? Number(config.concurrency) : fallbackConcurrency;
-  const initialConcurrency = clampInteger(rawConcurrency, 1, 12, fallbackConcurrency);
+  const initialConcurrency = clampInteger(rawConcurrency, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.max, fallbackConcurrency);
   const isSmart = config?.smartConcurrency != null ? Boolean(config.smartConcurrency) : smartDefault;
   const rawMax = config?.concurrencyMax != null ? Number(config.concurrencyMax) : fallbackMax;
-  const maxConcurrency = isSmart ? Math.max(initialConcurrency, clampInteger(rawMax, 1, 20, fallbackMax)) : initialConcurrency;
+  const maxConcurrency = isSmart
+    ? Math.max(initialConcurrency, clampInteger(rawMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, fallbackMax))
+    : initialConcurrency;
   return {
     stageKey,
     label,

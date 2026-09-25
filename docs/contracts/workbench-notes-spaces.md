@@ -87,6 +87,7 @@
   - **动态上探**：连续 5 次请求成功且与上次调整间隔 ≥3s 自动上探（并发 +1，最高至 `concurrencyMax`，默认上限 10）。
   - **遇限下调**：遭遇频控或并发限制（HTTP 429、503、529 或包含 rate limit/TPM/RPM/quota/overload 等报错）自动下调（>3 时降至 70%，≤3 时减 1，保底 1），进入指数抖动退避窗口或遵循 `Retry-After`。
   - **重试保障**：单行支持最多 3 次自动重试，重试期间不计入熔断错误统计，达到重试上限才终局报错。
+  - **并发边界**：主并发（初始并发）与 `concurrencyMax` 共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
 - **项目级持久化与防冲刷保障**：
   - 智能并发状态、并发数与上限随项目独立持久化（存储键：`translation-compare-ai-project-config-v1:<projectKey>`），未独立配置的项目平滑继承全局配置基线（`translation-compare-ai-config-v1`），确保跨项目切换时并发状态互不污染。
   - 打开缺少 `#aiSmartConcurrency` 控件的历史快照页面时启用防冲刷保护，缺失 DOM 元素时保留已有配置，不将智能并发误写为 `false`。

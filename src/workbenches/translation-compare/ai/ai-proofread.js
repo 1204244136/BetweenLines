@@ -5,6 +5,7 @@ const {
   backoffDelayMs,
   shouldRetryRow,
 } = require("./concurrency-controller");
+const { AI_CONCURRENCY_LIMITS } = require("./concurrency-limits");
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
 const fs = require("fs");
 const { diffWordsWithSpace, diffChars } = require("diff");
@@ -409,10 +410,18 @@ function cleanConfig(input = {}) {
   const proofreadMode = input.proofreadMode === "trilingual" ? "trilingual" : "bilingual";
   const envSmart = process.env.TRANSCOMPARATOR_SMART_CONCURRENCY === "1";
   const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : envSmart;
-  const concurrency = clampInteger(input.concurrency, 1, 12, 3);
+  const concurrency = clampInteger(
+    input.concurrency,
+    AI_CONCURRENCY_LIMITS.min,
+    AI_CONCURRENCY_LIMITS.max,
+    AI_CONCURRENCY_LIMITS.defaultConcurrency,
+  );
   const envMax = process.env.TRANSCOMPARATOR_CONCURRENCY_MAX ? Number(process.env.TRANSCOMPARATOR_CONCURRENCY_MAX) : null;
-  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : (envMax ?? 10);
-  const concurrencyMax = Math.max(concurrency, clampInteger(rawConcurrencyMax, 1, 20, 10));
+  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : (envMax ?? AI_CONCURRENCY_LIMITS.defaultMax);
+  const concurrencyMax = Math.max(
+    concurrency,
+    clampInteger(rawConcurrencyMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, AI_CONCURRENCY_LIMITS.defaultMax),
+  );
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
   const circuitBreakerErrorRate = clampNumber(
     input.circuitBreakerErrorRate,
@@ -520,10 +529,18 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
     : normalizeNonGptIntensity(input.reasoningEffort);
 
   const rawConcurrency = input.concurrency != null ? Number(input.concurrency) : defaultConcurrency;
-  const concurrency = clampInteger(rawConcurrency, 1, 12, defaultConcurrency);
+  const concurrency = clampInteger(
+    rawConcurrency,
+    AI_CONCURRENCY_LIMITS.min,
+    AI_CONCURRENCY_LIMITS.max,
+    defaultConcurrency,
+  );
   const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : false;
-  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : 10;
-  const concurrencyMax = Math.max(concurrency, clampInteger(rawConcurrencyMax, 1, 20, 10));
+  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : AI_CONCURRENCY_LIMITS.defaultMax;
+  const concurrencyMax = Math.max(
+    concurrency,
+    clampInteger(rawConcurrencyMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, AI_CONCURRENCY_LIMITS.defaultMax),
+  );
 
   return {
     provider,

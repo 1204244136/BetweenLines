@@ -26,6 +26,7 @@ const {
   publishProject,
 } = require("./project-store");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
+const { makeHtml } = require("./build-compare");
 const { createWorkbench } = require("./workbench-fixture");
 
 test.after(() => {
@@ -133,14 +134,51 @@ test("智能并发：预设工具正确清洗并持久化 smartConcurrency 与 c
   assert.equal(cleanedCustom.concurrency, 5);
   assert.equal(cleanedCustom.concurrencyMax, 15);
 
-  // concurrencyMax 边界裁剪
+  // concurrencyMax 边界裁剪：越界截断到上限
   const cleanedClamped = tools.sanitizePreset({
     name: "超界预设",
     smartConcurrency: true,
     concurrency: 4,
-    concurrencyMax: 99, // 超出 1~20 回退为 10
+    concurrencyMax: 99,
   });
-  assert.equal(cleanedClamped.concurrencyMax, 10);
+  assert.equal(cleanedClamped.concurrencyMax, 32);
+});
+
+test("并发上限：预设与服务端一致放开到 32，20 不再被静默改写", () => {
+  const tools = createPresetTools();
+
+  // 用户这次的实际现象：预设里选 20，旧实现因 20 > 12 直接回落成 3。
+  const preset = tools.sanitizePreset({ name: "20 并发预设", concurrency: 20, concurrencyMax: 20 });
+  assert.equal(preset.concurrency, 20);
+  assert.equal(preset.concurrencyMax, 20);
+
+  // 预设侧边界：下界仍保底 1，上界截断到 32。
+  assert.equal(tools.sanitizePreset({ name: "下界", concurrency: 0 }).concurrency, 1);
+  assert.equal(tools.sanitizePreset({ name: "上界", concurrency: 33 }).concurrency, 32);
+  assert.equal(tools.sanitizePreset({ name: "上限越界", concurrencyMax: 33 }).concurrencyMax, 32);
+  // 非整数仍回落到默认值，不参与截断。
+  assert.equal(tools.sanitizePreset({ name: "非整数", concurrency: 2.5 }).concurrency, 3);
+
+  // 服务端侧必须与预设侧同档，否则预设保存 20、运行又被压回 12。
+  const mainConf = cleanConfig({ concurrency: 20, concurrencyMax: 20 });
+  assert.equal(mainConf.concurrency, 20);
+  assert.equal(mainConf.concurrencyMax, 20);
+  assert.equal(cleanConfig({ concurrency: 33 }).concurrency, 32);
+  assert.equal(cleanConfig({ concurrency: 0 }).concurrency, 1);
+
+  const subConf = cleanSubStageConfig({ model: "gpt-4o", concurrency: 20, concurrencyMax: 20 });
+  assert.equal(subConf.concurrency, 20);
+  assert.equal(subConf.concurrencyMax, 20);
+  assert.equal(cleanSubStageConfig({ model: "gpt-4o", concurrency: 33 }).concurrency, 32);
+
+  // 生成页面也必须把放开后的上界写进控件，否则数字箭头上不去、提示文案还停在旧口径。
+  const html = makeHtml(
+    [{ index: 1, jp: "原文一", cn: "译文一", relation: "1:1", score: 0.9, signature: "sig-1" }],
+    { comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" } },
+    { projectKey: "project", rowsSignature: "rows", notesStorage: { key: "rows" } },
+  );
+  assert.match(html, /id="aiConcurrency"[^>]*max="32"/);
+  assert.match(html, /id="aiConcurrencyMax"[^>]*max="32"/);
 });
 
 test("智能并发界面：渲染智能并发开关、控件与状态可见性联动", async () => {

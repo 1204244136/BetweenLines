@@ -587,7 +587,11 @@
         aiIds.concurrencyLabel.textContent = isSmart ? "初始并发" : "并发";
       }
       if (aiIds.concurrency) {
-        aiIds.concurrency.title = isSmart ? "初始并发数（默认 3，遇到频控可退避至 1）" : "并发数（1~12）";
+        // 上限跟着页面上的 max 属性走，避免文案与实际边界各写一份数字后漂移。
+        const cap = String(aiIds.concurrency.max || "").trim();
+        aiIds.concurrency.title = isSmart
+          ? "初始并发数（默认 3，遇到频控可退避至 1）"
+          : (cap ? `并发数（1~${cap}）` : "并发数");
       }
     }
 

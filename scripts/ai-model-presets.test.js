@@ -48,7 +48,7 @@ test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回�
   assert.equal(cleaned.apiKey, "sk-secret-key");
   assert.equal(cleaned.model, "deepseek-chat");
   assert.deepEqual(cleaned.modelOptions, ["deepseek-chat", "deepseek-reasoner", "123"]);
-  assert.equal(cleaned.concurrency, 3); // 99 超出 1~12 回退为 3
+  assert.equal(cleaned.concurrency, 32); // 99 超出 1~32 截断为上限，不再回落到 3
   assert.equal(cleaned.breakerThreshold, "40%");
   assert.equal(cleaned.breakerDisabled, true);
   assert.ok(cleaned.id.startsWith("preset_"));

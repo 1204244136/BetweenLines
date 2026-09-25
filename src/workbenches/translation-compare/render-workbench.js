@@ -7,6 +7,7 @@ const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
+const { AI_CONCURRENCY_LIMITS: concurrencyLimits } = require("./ai/concurrency-limits");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
 const { resolveModelOptions, normalizeApiBaseUrl, restorableModelOptions } = require("./model-options");
 const { alignLegacyNotes, alignNotesByIndex } = require("./notes-recovery");
@@ -206,10 +207,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                         <label class="ai-concurrency-smart" for="aiSmartConcurrency" title="开启智能并发：以初始并发启动，连续请求稳定后自动向上试探，遇到并发/频控限制（HTTP 429 等）自动降低并发并退避重试。"><input id="aiSmartConcurrency" type="checkbox">智能并发</label>
                       </div>
                       <div class="ai-concurrency-inputs">
-                        <input id="aiConcurrency" type="number" min="1" max="12" value="3" title="并发数（开启智能并发时为初始并发，默认 3）">
+                        <input id="aiConcurrency" type="number" min="1" max="${concurrencyLimits.max}" value="3" title="并发数（开启智能并发时为初始并发，默认 3，上限 ${concurrencyLimits.max}）">
                         <div id="aiConcurrencyMaxWrap" class="ai-concurrency-max-wrap" hidden>
                           <span class="ai-concurrency-sep">上限</span>
-                          <input id="aiConcurrencyMax" type="number" min="1" max="20" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10）">
+                          <input id="aiConcurrencyMax" type="number" min="1" max="${concurrencyLimits.maxSmart}" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10，上限 ${concurrencyLimits.maxSmart}）">
                         </div>
                       </div>
                     </div>
