@@ -462,16 +462,16 @@ test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按�
   await s1Start.dispatch("click");
   assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 1);
 
-  // 启动后全部开始禁用，全部停止可用
-  assert.equal(s1Start.disabled, true);
-  assert.equal(s1Stop.disabled, false);
-  assert.equal(s2Start.disabled, true);
-  assert.equal(s2Stop.disabled, false);
-  assert.equal(s3Start.disabled, true);
-  assert.equal(s3Stop.disabled, false);
+  // 启动后各阶段状态独立解耦：阶段一运行中（开始禁用，停止可用）；阶段二与阶段三待命中（开始可用，停止禁用）
+  assert.equal(s1Start.disabled, true, "阶段一运行中开始按钮应禁用");
+  assert.equal(s1Stop.disabled, false, "阶段一运行中停止按钮应激活");
+  assert.equal(s2Start.disabled, false, "阶段二未运行未排队，开始按钮应保持可用，不被强制绑定");
+  assert.equal(s2Stop.disabled, true, "阶段二未运行未排队，停止按钮应保持禁用");
+  assert.equal(s3Start.disabled, false, "阶段三未运行未排队，开始按钮应保持可用，不被强制绑定");
+  assert.equal(s3Stop.disabled, true, "阶段三未运行未排队，停止按钮应保持禁用");
 
-  // 点击阶段二「停止」
-  await s2Stop.dispatch("click");
+  // 点击阶段一「停止」
+  await s1Stop.dispatch("click");
   assert.equal(ui.fetches.filter((u) => u === "/api/ai-proofread/stop").length, 1);
 });
 
@@ -1014,4 +1014,84 @@ test("差异辅助：diffSummary 严格限制片段数量并对大范围差异�
   const heavyDiff = diffSummary(heavyFrom, heavyTo, labels);
   assert.match(heavyDiff, /差异较大（行文与句式各有特色）：仅供理解参考，严禁把参考列的风格差异当成错误/);
   assert.equal(heavyDiff.includes("- "), false, "大范围差异时收敛，不输出杂乱碎词列表");
+});
+
+test("多阶段控制：阶段一执行时阶段二与阶段三开始按钮状态完全解耦，不被强制绑定禁用", async () => {
+  const runningAiPayload = {
+    running: true,
+    runId: "run-staged-decouple",
+    stagePipelines: {
+      stage1: { inFlight: 10, pending: 25 },
+      stage2: { inFlight: 0, pending: 0 },
+      stage3: { inFlight: 0, pending: 0 },
+    },
+    results: [],
+  };
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: runningAiPayload },
+      "/api/ai-proofread/stop": { ok: true, ai: { running: false, stopRequested: true, runId: "run-staged-decouple", results: [] } },
+    },
+    statusQueue: [
+      { ok: true, ai: runningAiPayload },
+      { ok: true, ai: runningAiPayload },
+      { ok: true, ai: runningAiPayload },
+      { ok: true, ai: runningAiPayload },
+      { ok: true, ai: runningAiPayload },
+    ],
+  });
+
+  const s1Start = ui.element("stage1Start");
+  const s1Stop = ui.element("stage1Stop");
+  const s2Start = ui.element("stage2Start");
+  const s2Stop = ui.element("stage2Stop");
+  const s3Start = ui.element("stage3Start");
+  const s3Stop = ui.element("stage3Stop");
+
+  // 1. 启动阶段一
+  await s1Start.dispatch("click");
+  assert.equal(s1Start.disabled, true, "阶段一自身运行中，开始按钮禁用");
+  assert.equal(s1Stop.disabled, false, "阶段一自身运行中，停止按钮激活");
+
+  // 核心断言：阶段二与阶段三在阶段一执行期间绝不被强制绑定禁用
+  assert.equal(s2Start.disabled, false, "阶段二处于待命，开始按钮必须可点击");
+  assert.equal(s2Stop.disabled, true, "阶段二未在运行，停止按钮必须禁用");
+  assert.equal(s3Start.disabled, false, "阶段三处于待命，开始按钮必须可点击");
+  assert.equal(s3Stop.disabled, true, "阶段三未在运行，停止按钮必须禁用");
+
+  // 2. 模拟从后台接收带 stagePipelines 的状态更新（例如 S1 处理中，S2 空闲，S3 空闲）
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-staged-decouple",
+      stagePipelines: {
+        stage1: { inFlight: 10, pending: 25 },
+        stage2: { inFlight: 0, pending: 0 },
+        stage3: { inFlight: 0, pending: 0 },
+      },
+    });
+  `);
+
+  assert.equal(s1Start.disabled, true, "流水线指示阶段一处理中，开始按钮禁用");
+  assert.equal(s1Stop.disabled, false, "阶段一停止按钮激活");
+  assert.equal(s2Start.disabled, false, "状态更新后阶段二开始按钮依然保持可用");
+  assert.equal(s2Stop.disabled, true, "阶段二停止按钮依然保持禁用");
+  assert.equal(s3Start.disabled, false, "阶段三开始按钮依然保持可用");
+  assert.equal(s3Stop.disabled, true, "阶段三停止按钮依然保持禁用");
+
+  // 3. 配置阶段二预设，点击阶段二「开始」进行安全排队
+  ui.run('aiIds.stage2Preset.value = "preset-s2"');
+  await s2Start.dispatch("click");
+  assert.equal(ui.run("stage2WaitingForStage1"), true, "阶段二进入排队状态");
+  assert.equal(s2Start.disabled, true, "排队中的阶段二开始按钮被禁用");
+  assert.equal(s2Stop.disabled, false, "排队中的阶段二停止按钮激活，用于随时取消排队");
+  assert.equal(s3Start.disabled, false, "阶段三依然不受干扰，保持可点击");
+
+  // 4. 点击阶段二「停止」取消排队
+  await s2Stop.dispatch("click");
+  assert.equal(ui.run("stage2WaitingForStage1"), false, "已成功取消排队");
+  assert.equal(s2Start.disabled, false, "取消排队后阶段二开始按钮恢复可用");
+  assert.equal(s2Stop.disabled, true, "取消排队后阶段二停止按钮恢复禁用");
+  assert.equal(s1Stop.disabled, false, "阶段一仍然在运行，未被误停止");
 });

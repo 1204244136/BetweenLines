@@ -2071,6 +2071,12 @@
         else if (data.grade === "excellent") data.severity = "none";
       }
 
+      // 容错与向后兼容：如果未显式解析出 stage1，但存在 analysis 且判定为「待人工确认」（或明确有审核痕迹），
+      // 将其作为初审事实意见保留，确保在卡片中能完整回溯各阶段审查记录
+      if (!data.stage1 && data.analysis && (data.modify === "待人工确认" || data.modify === "人工确认" || data.stage2 || data.stage3)) {
+        data.stage1 = data.analysis;
+      }
+
       // 兼容历史数据：若无独立改案行，从 Stylist 分析与 Gatekeeper 评语中推断阶段改案
       if (data.stage2 && !data.stage1Revision) {
         if (data.stage2.text) {
@@ -2256,27 +2262,44 @@
       const revisionLabel = pageLabels[revisionTarget] || (revisionTarget === "tw" ? "非原文 C" : "非原文 B");
 
       let pipelineHtml = "";
-      if (note.stage2 || note.stage3) {
-        const s2Attitude = note.stage2?.attitude || "复审";
+      const hasStageTraces = Boolean(note.stage1 || note.stage2 || note.stage3);
+      if (hasStageTraces) {
+        const isNeedsCheck = note.modify === "待人工确认" || note.modify === "人工确认";
+        const s2Attitude = note.stage2?.attitude || (isNeedsCheck && !note.stage2 ? "待定" : "复审");
         let attCls = "is-stylist";
-        if (s2Attitude.includes("采纳")) attCls = "is-accept";
-        else if (s2Attitude.includes("调整")) attCls = "is-modify";
-        else if (s2Attitude.includes("驳回")) attCls = "is-reject";
+        if (s2Attitude.includes("采纳") || s2Attitude === "accept") attCls = "is-accept";
+        else if (s2Attitude.includes("调整") || s2Attitude === "modify") attCls = "is-modify";
+        else if (s2Attitude.includes("驳回") || s2Attitude === "reject") attCls = "is-reject";
+        else if (s2Attitude.includes("仲裁") || s2Attitude.includes("escalate")) attCls = "is-arbiter";
 
-        const rawWinner = note.stage3?.winner || "仲裁";
+        const rawWinner = note.stage3?.winner || (isNeedsCheck && note.stage3 ? "存疑待定" : "仲裁");
         const s3Winner = formatWinnerLabel(rawWinner);
 
+        // 核心体验契约：待判行是需要人工定夺的焦点，各阶段审查记录默认直接展开呈现！
+        const defaultOpen = isNeedsCheck;
+        const expandHintText = defaultOpen ? "审核轨迹 ▴" : "审核轨迹 ▾";
+
+        let stepsHtml = '<span class="pipeline-step is-gk">初审</span>';
+        if (note.stage2) {
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step ' + attCls + '">复审·' + escapeHtml(s2Attitude) + '</span>';
+        } else if (isNeedsCheck && !note.stage3) {
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-pending-step" title="初审存疑，等待文学复审接力">待复审</span>';
+        }
+        if (note.stage3) {
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-arbiter">仲裁·' + escapeHtml(s3Winner) + '</span>';
+        }
+        if (isNeedsCheck) {
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-final-check" title="经审查仍难以断定，终审定案为待人工确认">待人工确认</span>';
+        }
+
         pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" title="点击展开/收起多阶段审核轨迹">' +
-          '<span class="pipeline-step is-gk">初审</span>' +
-          '<span class="pipeline-arrow">➔</span>' +
-          '<span class="pipeline-step ' + attCls + '">复审·' + escapeHtml(s2Attitude) + '</span>' +
-          (note.stage3 ? '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-arbiter">仲裁·' + escapeHtml(s3Winner) + '</span>' : '') +
-          '<span class="pipeline-expand-hint">审核轨迹 ▾</span>' +
+          stepsHtml +
+          '<span class="pipeline-expand-hint">' + expandHintText + '</span>' +
         '</div>' +
-        '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '" hidden>' +
-          (note.stage1 ? '<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span></div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>' : '') +
-          (note.stage2 ? '<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>' : '') +
-          (note.stage3 ? '<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>' : '') +
+        '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '"' + (defaultOpen ? '' : ' hidden') + '>' +
+          (note.stage1 ? ('<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span>' + (note.stage1Revision ? '<span class="stage-report-tag is-modify">提改</span>' : (isNeedsCheck && !note.stage2 ? '<span class="stage-report-tag is-unclear">存疑</span>' : '')) + '</div><div class="stage-report-body">' + escapeHtml(note.stage1) + (note.stage1Revision ? ('<div class="stage-report-rev">初审建议：' + escapeHtml(note.stage1Revision) + '</div>') : '') + '</div></div>') : '') +
+          (note.stage2 ? ('<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + (note.stage2Revision ? ('<div class="stage-report-rev">复审建议：' + escapeHtml(note.stage2Revision) + '</div>') : '') + '</div></div>') : '') +
+          (note.stage3 ? ('<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + (note.stage3Revision ? ('<div class="stage-report-rev">仲裁定案：' + escapeHtml(note.stage3Revision) + '</div>') : '') + '</div></div>') : '') +
         '</div>';
       }
 
@@ -4180,7 +4203,11 @@
       return resultMetrics;
     }
 
-    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false) {
+    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = null, aiRunning = null) {
+      const isAiRunning = aiRunning != null ? Boolean(aiRunning) : currentAiRunning;
+      const pipelines = (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0)
+        ? stagePipelines
+        : (latestStagePipelines || {});
       const localMetrics = computeStageMetricsFromNotes(notes);
       let stageMetrics = localMetrics;
       const hasOverride = overrideMetrics && Object.values(overrideMetrics).some((v) => Number(v) > 0);
@@ -4224,7 +4251,10 @@
       if (aiIds.status) aiIds.status.dataset.stageMetrics = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
 
-      renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning);
+      renderStageMetricsDashboard(stageMetrics, pipelines, isAiRunning);
+      if (typeof setAllStageButtonsRunning === "function") {
+        setAllStageButtonsRunning(isAiRunning, pipelines);
+      }
       return stageMetrics;
     }
 
@@ -4302,9 +4332,7 @@
       }
       if (ai.termTableStatus) setTermTableHint(ai.termTableStatus);
       if (ai.speechHabitStatus) setSpeechHabitHint(ai.speechHabitStatus);
-      setAllStageButtonsRunning(Boolean(ai.running));
-      if (aiIds.start) aiIds.start.disabled = Boolean(ai.running);
-      if (aiIds.stop) aiIds.stop.disabled = !ai.running;
+      setAllStageButtonsRunning(Boolean(ai.running), ai.stagePipelines);
       prefilterIds.start.disabled = Boolean(ai.running);
       prefilterIds.stop.disabled = !ai.running;
       const aiTotal = Math.max(0, ai.queued || 0);
@@ -5120,12 +5148,56 @@
       return clearedCount;
     }
 
+    let latestStagePipelines = null;
     let runningAiStage = null;
     let stage2WaitingForStage1 = false;
     let stage3WaitingForStage2 = false;
 
-    function setAllStageButtonsRunning(running) {
-      const isRunning = Boolean(running);
+    function getStageActiveStates(running, stagePipelines = null) {
+      const isRunning = running != null ? Boolean(running) : currentAiRunning;
+      if (!isRunning) {
+        return { stage1: false, stage2: false, stage3: false };
+      }
+      const pipelines = (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0)
+        ? stagePipelines
+        : (latestStagePipelines || {});
+      const p1 = pipelines.stage1 || {};
+      const p2 = pipelines.stage2 || {};
+      const p3 = pipelines.stage3 || {};
+
+      const p1HasWork = Boolean((Number(p1.inFlight) || 0) > 0 || (Number(p1.pending) || 0) > 0);
+      const p2HasWork = Boolean((Number(p2.inFlight) || 0) > 0 || (Number(p2.pending) || 0) > 0);
+      const p3HasWork = Boolean((Number(p3.inFlight) || 0) > 0 || (Number(p3.pending) || 0) > 0);
+      const hasPipelineInfo = p1HasWork || p2HasWork || p3HasWork;
+
+      let s1Active = false;
+      let s2Active = false;
+      let s3Active = false;
+
+      if (runningAiStage === "stage1") {
+        s1Active = true;
+      } else if (runningAiStage === "stage2") {
+        s2Active = true;
+      } else if (runningAiStage === "stage3") {
+        s3Active = true;
+      } else if (runningAiStage === "all" || hasPipelineInfo) {
+        s1Active = p1HasWork;
+        s2Active = p2HasWork;
+        s3Active = p3HasWork;
+      } else {
+        s1Active = true;
+      }
+
+      return { stage1: s1Active, stage2: s2Active, stage3: s3Active };
+    }
+
+    function setAllStageButtonsRunning(running = null, stagePipelines = null) {
+      if (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0) {
+        latestStagePipelines = stagePipelines;
+      }
+      const isRunning = running != null ? Boolean(running) : currentAiRunning;
+      const active = getStageActiveStates(isRunning, stagePipelines || latestStagePipelines);
+
       const s1Start = document.getElementById("stage1Start") || aiIds.start;
       const s1Stop = document.getElementById("stage1Stop") || aiIds.stop;
       const s2Start = document.getElementById("stage2Start");
@@ -5133,14 +5205,14 @@
       const s3Start = document.getElementById("stage3Start");
       const s3Stop = document.getElementById("stage3Stop");
 
-      if (s1Start) s1Start.disabled = isRunning;
-      if (s1Stop) s1Stop.disabled = !isRunning;
+      if (s1Start) s1Start.disabled = active.stage1;
+      if (s1Stop) s1Stop.disabled = !active.stage1;
 
-      if (s2Start) s2Start.disabled = isRunning || stage2WaitingForStage1;
-      if (s2Stop) s2Stop.disabled = !isRunning && !stage2WaitingForStage1;
+      if (s2Start) s2Start.disabled = active.stage2 || stage2WaitingForStage1;
+      if (s2Stop) s2Stop.disabled = !active.stage2 && !stage2WaitingForStage1;
 
-      if (s3Start) s3Start.disabled = isRunning || stage3WaitingForStage2;
-      if (s3Stop) s3Stop.disabled = !isRunning && !stage3WaitingForStage2;
+      if (s3Start) s3Start.disabled = active.stage3 || stage3WaitingForStage2;
+      if (s3Stop) s3Stop.disabled = !active.stage3 && !stage3WaitingForStage2;
     }
     setAllStageButtonsRunning(false);
 
