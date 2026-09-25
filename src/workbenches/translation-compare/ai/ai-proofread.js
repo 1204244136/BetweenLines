@@ -697,6 +697,8 @@ function addResult(result, { prefilterKind = "" } = {}) {
     stageResult: result.stageResult || reviewStageResultFromLegacy(result, status.model),
     resultRevision: status.resultRevision,
   };
+  const previousResult = status.results.get(result.index);
+  if (previousResult) removeStageMetricsForResult(previousResult);
   status.results.set(result.index, storedResult);
   status.resultChanges.push(storedResult);
   status.processed += 1;
@@ -802,6 +804,49 @@ function addResult(result, { prefilterKind = "" } = {}) {
   }
   status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0) + (status.stageMetrics.stage1Unclear || 0);
   status.stageMetrics.totalAudited = status.processed;
+}
+
+// A row may be revisited by a later stage or by a retry/redo run. Metrics are
+// snapshots of the current result per row, so replace the previous contribution
+// instead of counting the same row again.
+function removeStageMetricsForResult(result = {}) {
+  const metrics = status.stageMetrics;
+  const dec = (key, amount = 1) => {
+    metrics[key] = Math.max(0, (Number(metrics[key]) || 0) - amount);
+  };
+  if (result.done) dec("finalUnchanged");
+  const noteText = String(result.note || "");
+  const needsCheck = noteText.includes("是否需要修改：待人工确认") || result.stageResult?.decision === "unclear" || result.stageResult?.needsContext === true;
+  const needsEdit = (noteText.includes("是否需要修改：是") || (result.stageResult?.needsEdit && result.stageResult?.revisedText)) && !needsCheck;
+  if (!result.done && needsCheck) dec("finalNeedsCheck");
+  else if (!result.done && result.status === "suggestion" && needsEdit) dec("finalNeedsEdit");
+  if (result.status === "error") {
+    const stage = result.stage || result.stageResult?.stage;
+    dec(stage === "arbiter" || stage === "stage3" ? "stage3Errors" : stage === "stylist" || stage === "stage2" ? "stage2Errors" : "stage1Errors");
+  }
+  const stage1NeedsEdit = needsEdit || Boolean(result.stageResult?.needsEdit && !needsCheck) || result.stylistReview || result.arbitration;
+  if (stage1NeedsEdit) dec("stage1NeedsEdit");
+  else if (needsCheck) dec("stage1Unclear");
+  else if (result.done || result.status === "rule-prefilter" || result.status === "similarity-prefilter" || result.status === "term-prefilter") dec("stage1Passed");
+  if (result.fastPass === true) dec("fastPassHits");
+  if (result.stageSignals?.lowScore) dec("lowScoreHits");
+  if (result.stageSignals?.webLookup) dec("webLookupHits");
+  const hasStage2 = Boolean(result.stylistReview || result.stageResult?.stage === "stylist" || result.stageResult?.stage === "arbiter");
+  if (hasStage2) {
+    dec("stage2Reviewed");
+    const attitude = result.critique?.attitude;
+    if (attitude === "accept") dec("critiqueAccept");
+    if (attitude === "reject") dec("critiqueReject");
+    if (attitude === "modify") dec("critiqueModify");
+    if (attitude === "escalate") dec("critiqueEscalate");
+  }
+  if (result.arbitration || result.stageResult?.stage === "arbiter") {
+    dec("stage3Arbitrated");
+    dec("stage3Settled");
+    dec("stage2Diverged");
+  }
+  metrics.stage1Total = (metrics.stage1Passed || 0) + (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0);
+  metrics.totalAudited = Math.max(0, (metrics.totalAudited || 0) - 1);
 }
 
 async function startPrefilter(input) {

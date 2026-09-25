@@ -5311,7 +5311,7 @@
           if (stage === "stage1") {
             if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
           } else if (stage === "stage2") {
-            const hasS2 = Boolean(p?.stage2 || noteText.includes("Stylist复审"));
+            const hasS2 = hasCompletedStage2Note(p, noteText);
             const hasS1 = Boolean(p?.modify === "是" || p?.stage1Revision || (p?.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
             if (hasS2 || !hasS1) {
               completedSet.add(num);
@@ -5341,6 +5341,15 @@
         runningAiStage = null;
         setAllStageButtonsRunning(false);
       }
+    }
+
+    function hasCompletedStage2Note(parsed, noteText = "") {
+      if (!parsed?.stage2 && !String(noteText).includes("Stylist复审")) return false;
+      if (isAiFailureNote(noteText)) return false;
+      const text = String(noteText);
+      // A review marker without a conclusion is an interrupted/incomplete run.
+      return Boolean(parsed?.stage2 && (parsed.stage2Revision || parsed.revision || parsed.stage3)) ||
+        /Stylist复审\[(?:采纳|调整|驳回|提交仲裁|升级仲裁|保留原译|复审方案)\]/.test(text);
     }
 
     async function stopAiProofread(targetBtnStage = "") {
