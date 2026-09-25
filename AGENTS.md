@@ -156,6 +156,15 @@ index-X 结构与命名规范契约：
 - `docs/contracts/`：面向代理与维护者的详细领域契约、算法规格与故障排查手册。
 - 新增通用格式转换优先扩展 `pandoc-utils.js`；新增特定格式的业务准入与提取逻辑在 `src/ingest/` 中独立实现。
 
+## 翻译构建模块边界
+
+- src/workbenches/translation-compare/build-compare.js 是 CLI、构建流程与快照重渲染入口，保留原有导出供兼容调用。
+- row-alignment.js 负责比较行组装与非原文对齐；alignment-artifact.js 负责读取已有对齐产物、兼容旧区间字段和校验单原文段落。算法与阈值保持原口径。
+- row-output.js 统一模式字段裁剪、CSV、导出行及客户端行，必须保持原有签名。
+- render-workbench.js 负责 HTML 与实时读取静态资源；model-options.js、notes-recovery.js 是不依赖 DOM、文件系统和任务状态的纯函数模块。序列化到浏览器的函数不得捕获模块私有依赖。
+- 这些模块不得反向依赖 build-compare.js。新增领域调用优先直接引用职责模块，兼容入口只服务现有调用方。
+- 修改边界需运行 npm test，覆盖模式裁剪、备注恢复、快照重渲染与布局缓存回归。纯结构移动不要求重新运行语义对齐。
+
 ## 控制台模块边界
 
 - src/runtime/input-server.js 只组装依赖、执行统一鉴权、分派请求和管理监听生命周期。
