@@ -1035,14 +1035,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
                   <div class="ai-stage-card-main">
                     <div class="ai-stage-card-value" title="初审直接合格放行行数"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
-                    <div class="ai-stage-card-flow" title="初审发现硬伤并提议修改，流入阶段二文学复审">
+                    <div class="ai-stage-card-flow" title="初审发现硬伤或存疑待定，流入阶段二文学复审">
                       <span class="ai-stage-flow-arrow" aria-hidden="true">➔</span>
-                      <span class="ai-stage-flow-pill"><strong id="metricStage1NeedsEdit">0</strong><span class="ai-stage-unit">提改</span></span>
+                      <span class="ai-stage-flow-pill" title="初审建议修改行数（流入复审）"><strong id="metricStage1NeedsEdit">0</strong><span class="ai-stage-unit">提改</span></span>
+                      <span class="ai-stage-flow-pill is-unclear" id="stage1UnclearPill" title="初审存疑待定行数（流入复审）" hidden><strong id="metricStage1Unclear">0</strong><span class="ai-stage-unit">存疑</span></span>
                     </div>
                     <div class="ai-stage-card-sub">
                       <span class="ai-stage-sub-item" title="规则/术语/高置信无需调用模型直接放行">快速直通: <span id="metricFastPassHits">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
-                      <span class="ai-stage-sub-item" title="初审总检验行数（通过 + 提改）">总检: <span id="metricStage1Total">0</span></span>
+                      <span class="ai-stage-sub-item" title="初审总检验行数（通过 + 提改 + 存疑）">总检: <span id="metricStage1Total">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage1ErrorItem" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></span>
                     </div>

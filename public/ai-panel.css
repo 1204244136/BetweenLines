@@ -1026,6 +1026,15 @@ details[open] > summary .details-toggle::before {
   color: #059669;
 }
 
+.ai-stage-flow-pill.is-unclear {
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  color: #d97706;
+}
+
+.ai-stage-flow-pill.is-unclear strong {
+  color: #d97706;
+}
+
 .ai-stage-card-sub {
   font-size: 11px;
   color: var(--ai-muted);

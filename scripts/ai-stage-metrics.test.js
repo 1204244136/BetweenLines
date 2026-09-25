@@ -845,7 +845,7 @@ test("顶部审核结论指标筛选：点击建议修改/无需修改筛选对�
   assert.equal(ui.run("filteredRows.length"), 4);
 });
 
-test("三语语境校对：认知审核阶段指标严格闭环且待确认行不误入复审排队", async () => {
+test("三语语境校对：认知审核阶段指标严格闭环且初审存疑行顺利流入复审排队", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -882,18 +882,26 @@ test("三语语境校对：认知审核阶段指标严格闭环且待确认行�
   assert.equal(ui.element("metricFinalUnchanged").textContent, 1, "行1无需修改");
   assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "行2存疑待人工确认");
 
-  // 2. 阶段一初审指标：待人工确认行绝不计入初审提改
+  // 2. 阶段一初审指标：存疑独立统计，总检严格闭环
   assert.equal(ui.element("metricStage1Passed").textContent, 1, "行1初审直接通过");
   assert.equal(ui.element("metricFastPassHits").textContent, 1, "行1快速直通");
-  assert.equal(ui.element("metricStage1NeedsEdit").textContent, 2, "只有行3和行4初审建议修改，行2绝不计入提改！");
+  assert.equal(ui.element("metricStage1NeedsEdit").textContent, 2, "行3与行4初审建议修改");
+  assert.equal(ui.element("metricStage1Unclear").textContent, 1, "行2初审存疑待定");
+  assert.equal(ui.element("metricStage1Total").textContent, 4, "初审总检 = 通过1 + 提改2 + 存疑1 = 4");
 
-  // 3. 阶段二文学复审指标：排队复审数精准等于提改数 - 已复审数
+  // 3. 阶段二文学复审指标：初审存疑行流入待复审排队（提改2 + 存疑1 - 已复审2 = 待复审1）
   assert.equal(ui.element("metricStage2Reviewed").textContent, 2, "行3与行4经历了复审");
   assert.equal(ui.element("metricCritiqueAccept").textContent, 1, "行3采纳");
   assert.equal(ui.element("metricCritiqueModify").textContent, 1, "行4调整");
-  // 关键断言：2提改 - 2复审 = 0排队，行2绝不能伪造出排队复审！
-  assert.equal(ui.element("metricStage2Pending").textContent, 0, "待文学复审排队数必须为 0");
-  assert.equal(ui.element("stage2PendingItem").hidden, true, "待复审徽标在无排队时必须正确隐藏");
+  assert.equal(ui.element("metricStage2Pending").textContent, 1, "初审存疑行2顺利进入复审排队（待复审1）");
+  assert.equal(ui.element("stage2PendingItem").hidden, false, "待复审徽标在有排队时展示");
+
+  // 点击待复审徽标，准确筛选出待复审的行2
+  await ui.element("stage2PendingItem").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "stage2Pending");
+  assert.equal(ui.run("filteredRows.length"), 1, "准确筛选出待复审行");
+  assert.equal(ui.run("filteredRows[0].index"), 2);
+  await ui.element("stage2PendingItem").dispatch("click");
 
   // 4. 阶段三终审仲裁指标
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1, "行4仲裁");
@@ -906,6 +914,32 @@ test("三语语境校对：认知审核阶段指标严格闭环且待确认行�
   assert.equal(ui.run("activeSummaryFilter"), "needsCheck");
   assert.equal(ui.run("filteredRows.length"), 1, "准确筛选出 1 行待人工确认");
   assert.equal(ui.run("filteredRows[0].index"), 2);
+});
+
+test("三语语境校对：初审存疑经由复审与终审仲裁后，若终审难以定夺才落定为终审待判", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      2: {
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\nGatekeeper初审：存疑待定\nStylist复审[提交仲裁]：两版本均生硬，语境不足需终审法官裁定\nArbiter仲裁[裁决]：经终审研判依据依然不足，建议转人工确认\n分析：两份非原文材料各有证据，上下文不足以定论。",
+        aiDone: false,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 2, jp: "JP2", cn: "CN2", tw: "TW2", relation: "1:1", score: 0.85, signature: "sig-2" },
+    ],
+  });
+
+  // 全流水线流转完毕：
+  assert.equal(ui.element("metricStage1Unclear").textContent, 1, "初审存疑");
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 1, "复审已处理该存疑行");
+  assert.equal(ui.element("metricCritiqueEscalate").textContent, 1, "复审升级仲裁");
+  assert.equal(ui.element("metricStage2Pending").textContent, 0, "复审排队已清零");
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 1, "终审已仲裁");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "终审难以定夺，最终沉淀为待人工确认");
 });
 
 test("三语语境校对：Stylist 与 Arbiter 正确接收非原文目标列与带隔离防线的对照列语境", () => {

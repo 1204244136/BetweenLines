@@ -803,8 +803,10 @@ function addResult(result, { prefilterKind = "" } = {}) {
   );
   if (s1NeedsEdit) {
     status.stageMetrics.stage1NeedsEdit = (status.stageMetrics.stage1NeedsEdit || 0) + 1;
+  } else if (isExplicitNeedsCheck) {
+    status.stageMetrics.stage1Unclear = (status.stageMetrics.stage1Unclear || 0) + 1;
   }
-  status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0);
+  status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0) + (status.stageMetrics.stage1Unclear || 0);
   status.stageMetrics.totalAudited = status.processed;
 }
 
@@ -929,16 +931,21 @@ async function startProofread(input) {
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       const memoryResult = status.results.get(idx);
+      const isUnclear = Boolean(
+        (memoryResult && (memoryResult.stageResult?.decision === "unclear" || memoryResult.stageResult?.better === "unclear" || memoryResult.stageResult?.needsContext)) ||
+        (noteText && (noteText.includes("是否需要修改：待人工确认") || noteText.includes("存疑转人工") || noteText.includes("初审存疑")))
+      );
       const hasSuggestion = Boolean(
         (memoryResult && memoryResult.stageResult?.needsEdit) ||
-        (noteText && (noteText.includes("是否需要修改：是") || noteText.includes("初审改案") || noteText.includes("Gatekeeper初审：建议修改")))
+        (noteText && (noteText.includes("是否需要修改：是") || noteText.includes("初审改案") || noteText.includes("Gatekeeper初审：建议修改"))) ||
+        isUnclear
       );
       if (hasSuggestion) {
         if (config.continueOnly && (noteText.includes("Stylist复审") || memoryResult?.stylistReview)) {
           status.skippedDone += 1;
           continue;
         }
-        const s1Item = (memoryResult && memoryResult.stageResult && memoryResult.stageResult.needsEdit)
+        const s1Item = (memoryResult && memoryResult.stageResult && (memoryResult.stageResult.needsEdit || isUnclear))
           ? {
               row,
               decision: memoryResult.decision || memoryResult.stageResult,
@@ -958,9 +965,9 @@ async function startProofread(input) {
     }
     stageItems.stage2 = items;
     status.queued = items.length;
-    pushLog(`阶段二 文学复审：共 ${items.length} 行初审修改建议进入复审队列。`);
+    pushLog(`阶段二 文学复审：共 ${items.length} 行初审修改建议与存疑行进入复审队列。`);
     if (items.length === 0) {
-      pushLog("阶段二 文学复审：当前没有需要复审的初审修改建议行。");
+      pushLog("阶段二 文学复审：当前没有需要复审的初审修改建议或存疑行。");
       finish();
       return clientStatus({ includeResults: false });
     }
@@ -1567,18 +1574,23 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
         const isUnclearOrNeedsContext = s1.decision?.needsContext === true || s1.decision?.better === "unclear" || s1.decision?.decision === "unclear";
-        const canCascadeToStage2 = shouldCascade && isNeedsEdit && !isUnclearOrNeedsContext;
+        // 认知审核新契约：无需修改且非存疑行 Fast Pass 放行直接完成；提改行与存疑待判行在级联模式下均流入 Stage 2！
+        const canCascadeToStage2 = shouldCascade && (isNeedsEdit || isUnclearOrNeedsContext);
 
         if (!canCascadeToStage2) {
-          // 命中无需修改、待人工确认或独立执行模式（stage1 模式）：无需 Stage 2，直接完成输出
+          // 命中无需修改直通放行，或处于独立 stage1 执行模式：无需 Stage 2，直接完成输出
           const result = finalizeRowResult(s1, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
-          // 仅在 all 级联流水线模式下且确实提出具体修改建议时推入 Stage 2 队列！
+          // 提改行与存疑待判行均推入 Stage 2 文学复审队列！
           stage2Pending.push(s1);
           syncStagePipelineQueues();
-          pushLog(`第 ${row.index} 行：事实初审提出修改，移交 Stage 2 (Stylist 文学复审队列)。`);
+          if (isUnclearOrNeedsContext) {
+            pushLog(`第 ${row.index} 行：事实初审判定存疑待定，移交 Stage 2 (Stylist 文学复审队列进一步审查)。`);
+          } else {
+            pushLog(`第 ${row.index} 行：事实初审提出修改，移交 Stage 2 (Stylist 文学复审队列)。`);
+          }
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
@@ -2109,7 +2121,8 @@ function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
     if (parsed.stage2 || noteText.includes("Stylist复审")) {
       const att = String(parsed.stage2?.attitude || "");
       if (att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
-          att === "modify" || att === "reject" || att === "escalate") {
+          att === "modify" || att === "reject" || att === "escalate" ||
+          noteText.includes("待人工确认") || noteText.includes("存疑")) {
         return true;
       }
       if (parsed.stage1Revision && parsed.stage2Revision && parsed.stage1Revision !== parsed.stage2Revision) {
@@ -2136,18 +2149,20 @@ function reconstructStage1Result(row, noteText, config, labels) {
   const counterpartText = textForKey(row, counterpartKey);
 
   const revisedText = parsed.stage1Revision || parsed.revision || "";
+  const isNeedsCheck = parsed.modify === "待人工确认" || parsed.modify === "人工确认" || noteText.includes("待人工确认") || noteText.includes("存疑");
   const better = bilingual
-    ? (parsed.modify === "是" ? "neither" : "keep")
+    ? (parsed.modify === "是" ? "neither" : (isNeedsCheck ? "unclear" : "keep"))
     : (parsed.modify === "是"
         ? (noteText.includes("参考") || noteText.includes("对照") ? "counterpart" : "neither")
         : (parsed.modify === "否" ? "target" : "unclear"));
   const decision = {
     needsEdit: parsed.modify === "是" || Boolean(revisedText),
+    needsContext: isNeedsCheck,
     semanticSame: parsed.semantic !== "不同",
     better,
-    summary: parsed.analysis || parsed.stage1 || (parsed.modify === "是" ? "初审建议修改" : "无需修改"),
+    summary: parsed.analysis || parsed.stage1 || (parsed.modify === "是" ? "初审建议修改" : (isNeedsCheck ? "初审存疑待人工确认" : "无需修改")),
     revisedText,
-    score: parsed.score || 80,
+    score: parsed.score || (isNeedsCheck ? null : 80),
     stage1RevisedText: revisedText,
   };
 
@@ -2252,9 +2267,19 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
     if (!arbCheck.triggered || config.arbiterEnabled === false) {
       if (stylistReview.critique.attitude === "modify" && stylistReview.revisedText) {
         decision.revisedText = stylistReview.revisedText;
+        decision.needsEdit = true;
+        decision.needsContext = false;
+        decision.better = config.proofreadMode === "bilingual" ? "neither" : "counterpart";
       } else if (stylistReview.critique.attitude === "reject") {
         decision.needsEdit = false;
         decision.revisedText = "";
+        decision.needsContext = false;
+        if (decision.better === "unclear") {
+          decision.better = config.proofreadMode === "bilingual" ? "keep" : "target";
+        }
+      } else if (stylistReview.critique.attitude === "accept" && decision.stage1RevisedText) {
+        decision.needsEdit = true;
+        decision.needsContext = false;
       }
       decision.stage = "stylist";
     }
@@ -2329,6 +2354,20 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
       decision.stage3RevisedText = applied.revisedText;
     }
     decision.needsEdit = applied.needsEdit;
+    if (applied.isUnclear) {
+      decision.better = "unclear";
+      decision.needsContext = true;
+    } else {
+      decision.needsContext = false;
+      if (applied.finalDecision === "keep") {
+        decision.needsEdit = false;
+        decision.revisedText = "";
+        decision.better = config.proofreadMode === "bilingual" ? "keep" : "target";
+      } else if (applied.finalDecision === "replace") {
+        decision.needsEdit = true;
+        decision.better = config.proofreadMode === "bilingual" ? "neither" : "counterpart";
+      }
+    }
     decision.stage = "arbiter";
     pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
   } catch (arbiterErr) {

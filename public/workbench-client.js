@@ -2711,8 +2711,19 @@
         const p = parseAutomatedNote(text);
         if (!p) return false;
         const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-        const isS1Edit = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
-        return isS1Edit && !hasS2;
+        const isS1Edit = p.modify === "是" || Boolean(p.stage1Revision || (p.stage1 && !p.stage1.includes("无需修改") && (p.stage1.includes("修改") || p.stage1.includes("建议"))));
+        const isS1Unclear = p.stage1?.includes("存疑") || (!hasS2 && (p.modify === "待人工确认" || p.modify === "人工确认")) || text.includes("存疑转人工") || text.includes("初审存疑");
+        return (isS1Edit || isS1Unclear) && !hasS2;
+      };
+      const isStage1UnclearRow = (r) => {
+        const rowId = String(r.index);
+        const text = String(notes[rowId]?.note || "");
+        if (!text) return false;
+        const p = parseAutomatedNote(text);
+        if (!p) return false;
+        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
+        const isGkUnclear = p.stage1?.includes("存疑") || (!hasS2 && (p.modify === "待人工确认" || p.modify === "人工确认")) || text.includes("存疑转人工") || text.includes("初审存疑");
+        return Boolean(isGkUnclear);
       };
       const isStage3PendingRow = (r) => {
         const rowId = String(r.index);
@@ -2722,6 +2733,7 @@
         (activeSummaryFilter === "needsEdit" && aiResultState(row) === "modify") ||
         (activeSummaryFilter === "unchanged" && aiResultState(row) === "same") ||
         (activeSummaryFilter === "needsCheck" && aiResultState(row) === "unclear") ||
+        (activeSummaryFilter === "stage1Unclear" && isStage1UnclearRow(row)) ||
         (activeSummaryFilter === "stage2Pending" && isStage2PendingRow(row)) ||
         (activeSummaryFilter === "stage3Pending" && isStage3PendingRow(row));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
@@ -2972,6 +2984,7 @@
         { id: "aiStageSummaryNeedsEdit", filter: "needsEdit", name: "最终建议修改" },
         { id: "aiStageSummaryUnchanged", filter: "unchanged", name: "无需修改" },
         { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "待人工确认" },
+        { id: "stage1UnclearPill", filter: "stage1Unclear", name: "初审存疑" },
         { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审" },
         { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁" },
       ];
@@ -3169,7 +3182,7 @@
       }
       if (activeSummaryFilter) {
         activeSummaryFilter = null;
-        ["aiStageSummaryNeedsEdit", "aiStageSummaryUnchanged", "aiStageSummaryNeedsCheck", "stage2PendingItem", "stage3PendingItem"].forEach((id) => {
+        ["aiStageSummaryNeedsEdit", "aiStageSummaryUnchanged", "aiStageSummaryNeedsCheck", "stage1UnclearPill", "stage2PendingItem", "stage3PendingItem"].forEach((id) => {
           document.getElementById(id)?.classList.remove("is-active");
         });
       }
@@ -3603,7 +3616,8 @@
     function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
       const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
-      const s1Total = Math.max(s1Passed + s1NeedsEdit, Number(stageMetrics.stage1Total) || 0);
+      const s1Unclear = Math.max(0, Number(stageMetrics.stage1Unclear) || 0);
+      const s1Total = Math.max(s1Passed + s1NeedsEdit + s1Unclear, Number(stageMetrics.stage1Total) || 0);
       const s1Errors = Math.max(0, Number(stageMetrics.stage1Errors) || 0);
       const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
       const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
@@ -3640,6 +3654,13 @@
       if (elS1) elS1.textContent = s1Passed;
       const elS1NeedsEdit = document.getElementById("metricStage1NeedsEdit");
       if (elS1NeedsEdit) elS1NeedsEdit.textContent = s1NeedsEdit;
+      const elS1Unclear = document.getElementById("metricStage1Unclear");
+      if (elS1Unclear) elS1Unclear.textContent = s1Unclear;
+      const pillS1Unclear = document.getElementById("stage1UnclearPill");
+      if (pillS1Unclear) {
+        pillS1Unclear.hidden = s1Unclear === 0;
+        pillS1Unclear.title = "初审存疑待定 " + s1Unclear + " 行，流入阶段二文学复审（点击可筛选）";
+      }
       const elS1Total = document.getElementById("metricStage1Total");
       if (elS1Total) elS1Total.textContent = s1Total;
       const elS1Err = document.getElementById("metricStage1Errors");
@@ -3662,14 +3683,15 @@
         const item = document.getElementById("stage2ErrorItem");
         if (item) item.classList.toggle("has-errors", s2Errors > 0);
       }
-      const s2Pending = Math.max(0, s1NeedsEdit - s2Reviewed);
+      const s1PendingTotal = s1NeedsEdit + s1Unclear;
+      const s2Pending = Math.max(0, s1PendingTotal - s2Reviewed);
       const elS2Pending = document.getElementById("metricStage2Pending");
       const itemS2Pending = document.getElementById("stage2PendingItem");
       const sepS2Pending = document.getElementById("stage2PendingSep");
       if (elS2Pending) elS2Pending.textContent = s2Pending;
       if (itemS2Pending) {
         itemS2Pending.hidden = s2Pending === 0;
-        itemS2Pending.title = "初审已提改 " + s1NeedsEdit + " 行，已复审 " + s2Reviewed + " 行，" + s2Pending + " 行尚未执行文学复审（点击可筛选）";
+        itemS2Pending.title = "初审提改与存疑共 " + s1PendingTotal + " 行（提改 " + s1NeedsEdit + " + 存疑 " + s1Unclear + "），已复审 " + s2Reviewed + " 行，" + s2Pending + " 行尚未执行文学复审（点击可筛选）";
       }
       if (sepS2Pending) sepS2Pending.hidden = s2Pending === 0;
 
@@ -3845,6 +3867,7 @@
 
       let stage1Passed = 0;
       let stage1NeedsEdit = 0;
+      let stage1Unclear = 0;
       let stage1Errors = 0;
       let fastPassHits = 0;
       let stage2Reviewed = 0;
@@ -3901,19 +3924,43 @@
 
         const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
         const hasStage3 = Boolean(parsed.stage3 || noteText.includes("Arbiter仲裁"));
-        const hasStage1Revision = Boolean(parsed.stage1Revision || (parsed.stage1 && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
+        const hasStage1Revision = Boolean(parsed.stage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
 
         // 阶段一事实初审指标：
-        // 无需修改通过（未进入阶段二，或阶段一确认无需修改且未提出修改方案）
-        if (!hasStage2 && parsed.modify === "否") {
-          stage1Passed += 1;
-          fastPassHits += 1;
-        } else if (parsed.modify === "否" && !hasStage1Revision) {
-          stage1Passed += 1;
-        } else if (parsed.modify === "待人工确认" || parsed.modify === "人工确认") {
-          // 待人工确认不属于初审提改，也不流入阶段二排队
+        let isS1Passed = false;
+        let isS1NeedsEdit = false;
+        let isS1Unclear = false;
+
+        const isGkUnclear = Boolean(parsed.stage1?.includes("存疑") || noteText.includes("存疑转人工") || noteText.includes("初审存疑") || noteText.includes("待定"));
+        const isGkEdit = Boolean(hasStage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
+
+        if (!hasStage2) {
+          // 未进入阶段二：按初审结论划分产出
+          if (parsed.modify === "否") {
+            isS1Passed = true;
+            fastPassHits += 1;
+          } else if (parsed.modify === "是") {
+            isS1NeedsEdit = true;
+          } else {
+            isS1Unclear = true;
+          }
         } else {
+          // 已进入后续阶段（文学复审 / 终审仲裁）：依据初审痕迹还原初审性质
+          if (isGkUnclear) {
+            isS1Unclear = true;
+          } else if (isGkEdit) {
+            isS1NeedsEdit = true;
+          } else {
+            isS1Passed = true;
+          }
+        }
+
+        if (isS1Passed) {
+          stage1Passed += 1;
+        } else if (isS1NeedsEdit) {
           stage1NeedsEdit += 1;
+        } else if (isS1Unclear) {
+          stage1Unclear += 1;
         }
 
         // 阶段二文学复审指标
@@ -3956,13 +4003,14 @@
       }
 
       stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
-      const stage1Total = stage1Passed + stage1NeedsEdit;
-      const stage2Pending = Math.max(0, stage1NeedsEdit - stage2Reviewed);
+      const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
+      const stage2Pending = Math.max(0, (stage1NeedsEdit + stage1Unclear) - stage2Reviewed);
       const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
 
       const resultMetrics = {
         stage1Passed,
         stage1NeedsEdit,
+        stage1Unclear,
         stage1Total,
         stage1Errors,
         fastPassHits,
@@ -4024,6 +4072,7 @@
         ["finalUnchanged", "无需修改"],
         ["stage1Passed", "初审通过"],
         ["stage1NeedsEdit", "初审提改"],
+        ["stage1Unclear", "初审存疑"],
         ["stage1Total", "初审总检"],
         ["stage1Errors", "初审异常"],
         ["stage2Reviewed", "文学复审"],

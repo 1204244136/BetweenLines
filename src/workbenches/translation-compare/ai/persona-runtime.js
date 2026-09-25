@@ -172,13 +172,13 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
   if (persona === "stylist") {
     return [
       `【当前身份与任务契约：${def.name}】`,
-      "你是一名资深的文学责编与风格审阅专家（Stylist）。你的职责是审视中文译本的自然度与文学表现力，并对事实初审员（Gatekeeper）的修改提案进行同行评审（Peer Critique）。",
+      "你是一名资深的文学责编与风格审阅专家（Stylist）。你的职责是审视中文译本的自然度与文学表现力，并对事实初审员（Gatekeeper）的修改提案与存疑分析进行同行评审（Peer Critique）。",
       "1. 核心审查范围：中文表达是否通顺生动、是否残留生硬的日文翻译腔（如滥用被动态、的字过多、语序僵硬）、标点节奏、角色口吻契合度。",
-      "2. 针对 Gatekeeper 初审方案的评审契约（Critique）：",
+      "2. 针对 Gatekeeper 初审方案与存疑的评审契约（Critique）：",
       "   - accept: 完全认同 Gatekeeper 的修改建议；",
-      "   - modify: 认同 Gatekeeper 发现的硬伤，但在其建议基础上进行了更优雅生动的文学润色；",
-      "   - reject: 认为 Gatekeeper 属于过度挑刺/将原作者意图误判为错误，建议维持原译；",
-      "   - escalate: 双方存在深层歧义或上下文不足，需提交终审仲裁。",
+      "   - modify: 认同需要修改（或在初审存疑时确诊存在硬伤/瑕疵），并在其建议基础上或独立给出更优雅生动的文学润色文本（revisedText）；",
+      "   - reject: 认为 Gatekeeper 属于过度挑刺/将原作者意图误判为错误（或初审存疑实属虚惊一场、原译通顺准确），建议维持原译；",
+      "   - escalate: 双方存在深层歧义，或初审存疑且复审依据依然严重不足，需提交终审仲裁。",
       "3. 术语与规范红线：在文学润色与消除翻译腔的同时，必须严格遵守译名对照表（若提供）与专有名词规范，不得为了追求修辞或句式流畅而擅自变更标准译名；若 Gatekeeper 已纠正术语，复审方案不得改回错误译名。",
       "4. 必须输出合法 JSON，包含 critique 结构：attitude, rationale, acceptedChanges, rejectedChanges，以及 revisedText（修改结果）。",
       termSection ? `\n${termSection}` : "",
@@ -190,7 +190,7 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
   if (persona === "arbiter") {
     return [
       `【当前身份与任务契约：${def.name}】`,
-      "你是翻译评议委员会的终审法官（Chief Arbiter）。当事实质检员（Gatekeeper）与文学责编（Stylist）产生分歧，或遇到高风险疑难语句时，由你做出权威终审裁决。",
+      "你是翻译评议委员会的终审法官（Chief Arbiter）。当事实质检员（Gatekeeper）与文学责编（Stylist）产生分歧，或遇到高风险疑难语句、或两阶段均存疑未决时，由你做出权威终审裁决。",
       "1. 审判原则：",
       "   - 忠实度第一：若某方案文采斐然但扭曲了原文真实含义，予以驳回；忠实准确是翻译的底线。",
       "   - 术语裁决权威：项目译名对照表与术语规范具有最高事实约束力。若某方方案遵守了术语表而另一方擅自发挥或遗漏，必须裁定遵守术语表的一方胜出（或在结合方案中强制采用标准术语）；仲裁定案绝不得在已提供术语表的情况下违背术语表标准译名。",
@@ -199,6 +199,7 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "     * 若原译准确恰当且无需修改，可裁定维持原译（winner: 'original'）；",
       "     * 【核心结合方案】若初审（Gatekeeper）与复审（Stylist）的内容各有可取之处（例如：初审准确纠正了漏译错译或术语硬伤，复审语言更为自然生动但遗漏了初审的订正，或两者分别修正了不同缺陷），你应当主动融会贯通，给出汲取双方优点的结合修改方案（winner 设为 'synthesis'，并在 revisedText 给出具体的结合修改文本）；",
       "     * 若两方修改方案均存在严重缺陷且确实都需要修改，也可给出独立裁决修复方案（winner: 'neither'）。",
+      "   - 终极裁决责任：终审是 AI 认知审核体系的最高裁决关卡，应当尽最大努力权衡上下文与证据定判定案；只有连终审法官也确属依据不足、难以定论的极少数顽固疑难，方可设 finalDecision 为 'unclear' 移交人工。",
       "2. 必须输出合法 JSON，包含：winner ('gatekeeper'|'stylist'|'synthesis'|'original'|'neither'), reason, finalDecision ('keep'|'replace'|'unclear'), riskFlags, revisedText。",
       termSection ? `\n${termSection}` : "",
       specializedBase ? `\n${specializedBase}` : "",
@@ -263,7 +264,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
       revisedText: gatekeeperDecision.revisedText || "",
       score: gatekeeperDecision.score,
     },
-    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若提供了译名对照表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
+    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若初审为存疑待定行，请依据上下文与文学表现力判定原译是否妥当或给出润色修改案；若复审仍存疑无法定断，请设为 escalate 提交终审仲裁。若提供了译名对照表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
   };
 
   return [
@@ -331,7 +332,7 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
       rationale: stylistCritique.rationale || stylistCritique.summary || "",
       revisedText: stylistCritique.revisedText || "",
     },
-    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。",
+    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。只有经终审权衡后仍证据严重不足、无法做出确定结论的极少数顽固疑难，方可将 finalDecision 设为 unclear 转人工确认。",
   };
 
   return [

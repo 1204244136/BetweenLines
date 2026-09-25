@@ -88,6 +88,19 @@ function shouldTriggerArbitration({
     };
   }
 
+  // 5. Gatekeeper unclear / pending escalation
+  const isGkUnclear = Boolean(
+    gatekeeperDecision.needsContext === true ||
+    gatekeeperDecision.better === "unclear" ||
+    gatekeeperDecision.decision === "unclear"
+  );
+  if (isGkUnclear && (attitude === "escalate" || (attitude === "modify" && !styText))) {
+    return {
+      triggered: true,
+      reason: "事实初审存疑且复审无法直接定论，升级至终审仲裁（escalate）。",
+    };
+  }
+
   return {
     triggered: false,
     reason: "",
@@ -153,10 +166,11 @@ function applyArbitrationDecision({
   const winner = normArb.winner;
   const isOriginal = winner === "original" || winner === "target";
   const isSynthesis = winner === "synthesis" || winner === "combined" || winner === "compromise" || winner === "结合方案" || winner === "综合方案";
-  const finalDecision = normArb.finalDecision || (isOriginal ? "keep" : "replace");
+  const isUnclear = normArb.finalDecision === "unclear" || winner === "unclear";
+  const finalDecision = isUnclear ? "unclear" : (normArb.finalDecision || (isOriginal ? "keep" : "replace"));
 
   let finalRevisedText = adjudicatedRevisedText;
-  if (!finalRevisedText) {
+  if (!finalRevisedText && !isUnclear) {
     if (winner === "stylist") {
       finalRevisedText = stylistReview.revisedText || gatekeeperDecision.revisedText || "";
     } else if (winner === "gatekeeper") {
@@ -178,6 +192,7 @@ function applyArbitrationDecision({
     finalDecision,
     winner,
     needsEdit,
+    isUnclear,
     revisedText: finalRevisedText,
   };
 }
