@@ -1,4 +1,5 @@
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const JSZip = require("jszip");
 const { XMLParser } = require("fast-xml-parser");
@@ -707,17 +708,34 @@ function atomicWrite(file, content) {
   writeFileAtomic(file, content);
 }
 
-async function saveWritebackDocuments(target, kind, documents, zip, touched) {
-  if (kind === TARGET_TEXT || kind === TARGET_HTML) {
-    for (const index of touched) atomicWrite(documents[index].key, documents[index].html);
-    return;
+// 首次保留 .bak；后续使用独立版本，绝不覆盖既有备份。
+function backupWritebackFile(file) {
+  let backup = file + ".bak";
+  for (;;) {
+    try {
+      fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+      return backup;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      backup = file + "." + Date.now() + "-" + crypto.randomBytes(6).toString("hex") + ".bak";
+    }
   }
-  if (kind === TARGET_EPUB_DIRECTORY) {
-    for (const index of touched) atomicWrite(path.join(target, documents[index].key), documents[index].html);
+}
+
+async function saveWritebackDocuments(target, kind, documents, zip, touched) {
+  if (kind === TARGET_TEXT || kind === TARGET_HTML || kind === TARGET_EPUB_DIRECTORY) {
+    const writes = [...touched].map(index => ({
+      file: kind === TARGET_EPUB_DIRECTORY ? path.join(target, documents[index].key) : documents[index].key,
+      content: documents[index].html,
+    }));
+    // 多文档写回先完成全部备份；任一备份失败都不开始改动正文。
+    for (const { file } of writes) backupWritebackFile(file);
+    for (const { file, content } of writes) atomicWrite(file, content);
     return;
   }
   for (const index of touched) zip.file(documents[index].key, documents[index].html);
   const buffer = await repackEpubZip(zip);
+  backupWritebackFile(target);
   atomicWrite(target, buffer);
 }
 

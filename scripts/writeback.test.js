@@ -466,3 +466,53 @@ test("TXT 重复段落与缺失段落拒绝猜写，字面标签不被剥离", a
     assert.equal(fs.readFileSync(target, "utf8"), before);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test("写回保留每次原始字节备份，重复写入不覆盖历史", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "writeback-backup-"));
+  try {
+    for (const ext of ["txt", "html", "epub"]) {
+      const file = path.join(dir, "sample." + ext);
+      let original = Buffer.from(ext === "txt" ? "原段。" : "<p>原段。</p>");
+      if (ext === "epub") {
+        const zip = new (require("jszip"))();
+        zip.file("chapter.xhtml", original);
+        original = await zip.generateAsync({ type: "nodebuffer" });
+      }
+      fs.writeFileSync(file, original);
+      assert.equal((await applyTextReplacements(file, [{ searchText: "不存在。", replaceText: "不写。" }])).updated, 0);
+      assert.equal(fs.existsSync(file + ".bak"), false);
+      await applyTextReplacements(file, [{ searchText: "原段。", replaceText: "改段。" }]);
+      assert.deepEqual(fs.readFileSync(file + ".bak"), original);
+      const intermediate = fs.readFileSync(file);
+      await applyTextReplacements(file, [{ searchText: "改段。", replaceText: "再改。" }]);
+      const backups = fs.readdirSync(dir).filter(name => name.startsWith("sample." + ext + ".") && name.endsWith(".bak"));
+      assert.equal(backups.length, 2);
+      assert.deepEqual(fs.readFileSync(file + ".bak"), original);
+      assert.deepEqual(fs.readFileSync(path.join(dir, backups.find(name => name !== "sample." + ext + ".bak"))), intermediate);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("解压 EPUB 备份失败时不修改任何正文，恢复后仍可写入", async (t) => {
+  const dir = epubFixture({ first: ["甲段。"], second: ["乙段。"] });
+  const first = path.join(dir, "OEBPS", "Text", "a.xhtml");
+  const second = path.join(dir, "OEBPS", "Text", "b.xhtml");
+  const before = [fs.readFileSync(first), fs.readFileSync(second)];
+  const copyFile = fs.copyFileSync;
+  const mocked = t.mock.method(fs, "copyFileSync", (source, ...args) => {
+    if (source === second) throw Object.assign(new Error("备份磁盘写入失败"), { code: "EIO" });
+    return copyFile(source, ...args);
+  });
+  try {
+    await assert.rejects(applyTextReplacements(dir, [
+      { id: 1, searchText: "甲段。", replaceText: "甲改。" },
+      { id: 2, searchText: "乙段。", replaceText: "乙改。" },
+    ]), /备份磁盘写入失败/);
+    assert.deepEqual(fs.readFileSync(first), before[0]);
+    assert.deepEqual(fs.readFileSync(second), before[1]);
+    mocked.mock.restore();
+    await applySpeakerAnnotations(dir, [{ index: 2, text: "乙段。", speaker: "甲" }]);
+    assert.deepEqual(fs.readFileSync(second + ".bak"), before[1]);
+  } finally { mocked.mock.restore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
