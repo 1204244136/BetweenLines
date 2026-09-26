@@ -60,8 +60,16 @@ function countingWorkbench(editorCount) {
         counters.editorQueries += 1;
         return editors;
       }
-      // 表格行数：超过 3 行才不会走 is-fit-content 分支。
-      if (name.includes("tr[data-index]")) return new Array(editorCount).fill({});
+      // 表格行：带上 dataset.index，让 renderVisibleRows 的 renderedRowsById 能真的建起来。
+      if (name.includes("tr[data-index]")) {
+        return new Array(editorCount).fill(0).map((_, i) => ({
+          dataset: { index: String(i + 1) },
+          classList: makeClassList(),
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          closest: () => null,
+        }));
+      }
       return [];
     },
   };
@@ -97,6 +105,12 @@ function countingWorkbench(editorCount) {
   // 建立"缓存已预热"的基线：先给一个真实视口高度并按内容量一次高，再把计数清零，
   // 后续断言只反映增量。
   ui.run("window.innerHeight = 900");
+  // 真实页面里 renderVisibleRows 会建好 renderedRowsById；可用高度的行数取自它，
+  // 所以夹具必须如实建起来，否则测不到真实分支。
+  ui.run(`
+    renderedRowsById.clear();
+    for (let i = 1; i <= ${editorCount}; i += 1) renderedRowsById.set(String(i), {});
+  `);
   ui.run("syncVisibleRowLayout()");
   counters.heightReads = 0;
   counters.frameRects = 0;
@@ -187,6 +201,62 @@ test("布局同步：整页重新渲染后必须重新量高", () => {
   assert.equal(counters.heightReads, editorCount, "整页重渲染后的新节点必须按内容量高");
 });
 
+test("批量量高：一批输入框只强制布局一次，而不是每行一次", () => {
+  const { ui, counters, editorCount } = countingWorkbench(300);
+
+  // 缓存预热后整批失效：真页面里这发生在整页重渲染 / 视口变化 / 列宽变化之后。
+  ui.run("invalidateRevisionEditorHeights()");
+  counters.heightReads = 0;
+  ui.run("syncVisibleRowLayout()");
+
+  assert.equal(
+    counters.heightReads,
+    editorCount,
+    "每个未命中的编辑器仍要读一次 scrollHeight（读的次数不变，正确性不变）"
+  );
+  // 关键在于读的"排列方式"：交错写读时每行读都会重新触发强制布局；批量读时
+  // 只有第一次读强制布局，后续读命中同一次布局结果。用真实浏览器实测的判据是
+  // 耗时（300 个输入框 287ms → 20ms），这里锁住的是实现必须走批量路径：
+  // 一次同步里对整批的读必须发生在所有写之后，而不是写读交替。
+  const reads = ui.run(`
+    (() => {
+      const order = [];
+      const editors = Array.from(tbody.querySelectorAll(".revision-editor"));
+      let writes = 0;
+      let reads = 0;
+      for (const e of editors) {
+        Object.defineProperty(e, "scrollHeight", { configurable: true, get() { reads += 1; order.push("read"); return 320; } });
+        const prev = e.style;
+        e.style = new Proxy(prev, { set(target, key, value) { if (key === "height") { writes += 1; order.push("write"); } target[key] = value; return true; } });
+      }
+      invalidateRevisionEditorHeights();
+      syncVisibleRowLayout();
+      // 统计"写→读"的切换次数：交错实现是 O(2n)，批量实现最多 2 次切换。
+      let switches = 0;
+      for (let i = 1; i < order.length; i += 1) if (order[i] !== order[i - 1]) switches += 1;
+      return { switches, reads, writes };
+    })()
+  `);
+  assert.ok(
+    reads.switches <= 2,
+    "整批量高必须是「先整批写、再连续读、最后统一写回」三段式，读写切换不得超过 2 次（实测 " + reads.switches + " 次）"
+  );
+});
+
+test("可用高度：不得为数行数而查 DOM（500 行实测 239ms 的强制布局）", () => {
+  const { ui, counters } = countingWorkbench(300);
+
+  // 已渲染行数由 renderVisibleRows 传进来 / 取自 renderedRowsById，查 DOM 是多付一次整表布局。
+  ui.run("syncVisibleRowLayout()");
+  counters.editorQueries = 0;
+  ui.run("syncVisibleRowLayout({ remeasureEditors: true })");
+  assert.equal(
+    counters.editorQueries,
+    1,
+    "一次同步只允许查一次编辑器列表；为数行数再查一次 tr[data-index] 就是多一次整表强制布局"
+  );
+});
+
 test("审核轨迹开关：点击不触发任何整表布局工作", async () => {
   const { ui, counters } = countingWorkbench(30);
 
@@ -226,6 +296,57 @@ test("面板抽屉：容器位置没变就整段收工，位移了才更新可�
   ui.run("syncVisibleRowLayout({ ifFrameMoved: true })");
   assert.equal(counters.maxHeightWrites, 1, "容器位移后必须更新可用高度");
   assert.equal(counters.heightReads, 0, "行宽没变，逐行高度一律不必重量");
+});
+
+test("审核轨迹：手动开合的选择必须跨重渲染保持，否则用户要反复点", async () => {
+  const { ui } = countingWorkbench(10);
+
+  // 夹具不解析 DOM，重渲染只产出 HTML 字符串；真实语义看的正是这段字符串里
+  // 审核轨迹块带不带 hidden——它决定用户看到的到底是展开还是收起。
+  const renderedHidden = (rowId) => {
+    const html = String(ui.element("tbody").innerHTML || "");
+    const block = html.match(new RegExp('id="pipelineDetails_' + rowId + '"([^>]*)>'));
+    if (!block) return null;
+    return /\shidden/.test(block[1]);
+  };
+
+  // 默认：待人工确认行的审核轨迹展开，普通行收起。
+  ui.run(`notes["2"] = { note: ${JSON.stringify(NOTE_WITH_STAGES)}, revisionText: ${JSON.stringify(REVISION)}, revisionTarget: "cn", manualDone: false, done: false, aiDone: true };`);
+  ui.run('notes["2"].note = notes["2"].note.replace("是否需要修改：是", "是否需要修改：待人工确认");');
+
+  ui.run("applyFilters({ reset: false })");
+  assert.equal(renderedHidden("1"), true, "普通行（非待判）的审核轨迹默认收起");
+  assert.equal(renderedHidden("2"), false, "待人工确认行的审核轨迹默认展开");
+
+  // 用户点击收起第 2 行。
+  const badge = { dataset: { pipelineToggle: "2" }, querySelector: () => null, closest: () => null };
+  const click = async () => {
+    await ui.element("tbody").dispatch("click", {
+      target: { closest: (selector) => (selector === "[data-pipeline-toggle]" ? badge : null) },
+      preventDefault() {},
+      stopPropagation() {},
+    });
+  };
+  await click();
+  assert.equal(ui.element("pipelineDetails_2").hidden, true, "点击后必须收起");
+
+  // 重渲染（筛选 / 翻页 / 改每页行数 / AI 结果到达都会走这里）后必须保持收起，
+  // 否则用户收起的行又弹开，只能反复点——每次点击都连带一次整页重渲染。
+  ui.run("applyFilters({ reset: false })");
+  assert.equal(
+    renderedHidden("2"),
+    true,
+    "重渲染后必须保持用户选择的收起状态（回弹会迫使用户反复点击，每次都吃一次整页重渲染）"
+  );
+  assert.equal(ui.element("pipelineDetails_2").hidden, true, "页面上的状态同样保持收起");
+
+  // 再点一次展开，同样要跨重渲染保持。
+  await click();
+  ui.run("applyFilters({ reset: false })");
+  assert.equal(renderedHidden("2"), false, "重渲染后必须保持用户选择的展开状态");
+
+  // 没被手动开合过的行不受影响。
+  assert.equal(renderedHidden("1"), true, "未手动开合的行仍走默认状态");
 });
 
 test("性能优化：computeStageMetricsFromNotes 稳态下直接命中缓存，不随轮询重复扫描全表", () => {

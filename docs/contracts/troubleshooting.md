@@ -119,3 +119,21 @@
 - **排查**：
   - 控制台页面必须由服务端在 `server.listen` 回调里打开（由 `start-setup.bat` 设 `TRANSCOMPARATOR_OPEN_BROWSER=1` 驱动）。
   - 启动脚本不得使用固定 `timeout` 猜测启动耗时；端口应使用 `server.address().port` 动态获取。若端口被占用，服务端会报 `EADDRINUSE` 退出。
+
+## 页面交互卡顿（鼠标变慢 / 输入延迟 / 开关卡顿）
+
+### 1. 开关审核轨迹、抽屉、拖窗口之后鼠标移动变慢、输入有延迟
+- **根因**：主线程被强制同步布局占满，不是渲染（paint）卡顿。凡是「写样式后立即读几何属性」的地方，浏览器都必须先把待处理的样式与布局算完；在 500 行的表格上，一次就是一次整表重排。
+- **排查顺序**（按实测代价从大到小）：
+  1. **为取可见行数而查 DOM**：`updateResultsMaxHeight` 里若有 `tbody.querySelectorAll("tr[data-index]").length`，重渲染后就是一次整表强制布局（实测 500 行 **233ms**）。行数必须由 `renderVisibleRows` 传入切片长度，或取自 `renderedRowsById.size`。
+  2. **整批量高的读写没分离**：逐行「写 `height:auto` → 读 `scrollHeight` → 写回」交错，每行一次整表重排（实测 500 个输入框 **296ms**）。必须走 `measureRevisionEditors` 的三段式（整批写 → 连续读 → 统一写回），实测 **15.8ms**。
+  3. **事件处理器逐行量高**：新增处理器时写了 `for (const editor of ...) syncRevisionEditorHeight(editor)`，或 `resize` 每个事件都做一次全量同步（应合并到一帧，并在尺寸稳定后才重量一次）。
+  4. **整段同步里重复查 DOM**：`querySelectorAll(".revision-editor")` 一次同步只允许查一次，整批失效与量高共用同一份列表。
+- **判定有没有真的修好**：不要用「感觉快了」。用 CDP `Performance.getMetrics` 看 `LayoutCount` / `LayoutDuration`，或开 `Tracing`（`devtools.timeline`）数 `Layout` 事件次数。修好的判据是 **Layout 次数为 1**，而不是耗时减半——一次 173ms 的 Layout 是新建 500 行 DOM 的固有成本，优化不掉。
+- **回归**：`scripts/workbench-layout-sync.test.js`（14 项）用计数假 DOM 把强制布局次数变成可断言的事实，锁住上述四条边界。
+
+### 2. 审核轨迹的展开/收起在筛选、翻页、改每页行数后回弹
+- **现象**：用户手动收起某一行的审核轨迹，一旦触发重渲染（筛选、翻页、改每页行数、AI 结果到达），它又弹回默认展开态，只能反复点。
+- **根因**：重渲染会重建全部行节点，`renderNoteSummary` 每次按 `isNeedsCheck` 重新算默认值，DOM 上的 `hidden` 被整体冲掉。展开状态不是备注数据，不能落盘，但在会话内必须记住。
+- **修复**：用户开合选择记在 `pipelineOpenOverrides`（`setPipelineOpen` 写入，`pipelineDefaultOpen` 读取）；没被手动开合过的行仍走默认（待判行展开，普通行收起）。
+- **注意**：这类回弹不只是体验问题——用户每重开一次就要再点一次，而每次点击都可能连带一次重渲染，这正是「越点越卡」的放大器。
