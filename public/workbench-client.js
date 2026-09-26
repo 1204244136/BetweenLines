@@ -2195,6 +2195,8 @@
         const s3Winner = formatWinnerLabel(rawWinner);
 
         // 核心体验契约：待判行是需要人工定夺的焦点，各阶段审查记录默认直接展开呈现！
+        // 去重契约：阶段卡片只承载「审查意见」，各阶段改案全文只在左侧差异辅助（修改结果对比 +
+        // 分步演进明细）与「修改结果」区呈现一次；卡片里再打印一遍是纯粹的重复噪音。
         const defaultOpen = isNeedsCheck;
         const expandHintText = defaultOpen ? "审核轨迹 ▴" : "审核轨迹 ▾";
 
@@ -2216,9 +2218,9 @@
           '<span class="pipeline-expand-hint">' + expandHintText + '</span>' +
         '</div>' +
         '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '"' + (defaultOpen ? '' : ' hidden') + '>' +
-          (note.stage1 ? ('<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span>' + (note.stage1Revision ? '<span class="stage-report-tag is-modify">提改</span>' : (isNeedsCheck && !note.stage2 ? '<span class="stage-report-tag is-unclear">存疑</span>' : '')) + '</div><div class="stage-report-body">' + escapeHtml(note.stage1) + (note.stage1Revision ? ('<div class="stage-report-rev">初审建议：' + escapeHtml(note.stage1Revision) + '</div>') : '') + '</div></div>') : '') +
-          (note.stage2 ? ('<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + (note.stage2Revision ? ('<div class="stage-report-rev">复审建议：' + escapeHtml(note.stage2Revision) + '</div>') : '') + '</div></div>') : '') +
-          (note.stage3 ? ('<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + (note.stage3Revision ? ('<div class="stage-report-rev">仲裁定案：' + escapeHtml(note.stage3Revision) + '</div>') : '') + '</div></div>') : '') +
+          (note.stage1 ? ('<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span>' + (note.stage1Revision ? '<span class="stage-report-tag is-modify">提改</span>' : (isNeedsCheck && !note.stage2 ? '<span class="stage-report-tag is-unclear">存疑</span>' : '')) + '</div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>') : '') +
+          (note.stage2 ? ('<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>') : '') +
+          (note.stage3 ? ('<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>') : '') +
         '</div>';
       }
 

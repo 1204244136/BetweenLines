@@ -244,7 +244,13 @@ test("改动演进可视化：renderNoteSummary 与 renderDiffBlock 渲染分步
   // 2. 检查审核轨迹卡片与版本切换器（renderNoteSummary）：精简轻量，消除重复分析栏与冗余改案重复
   const summaryHtml = ui.run(`renderNoteSummary(notes["2"], "2")`);
   assert.match(summaryHtml, /指出语病重复与增补/);
+  assert.match(summaryHtml, /增强隐喻色彩并调谐用字/);
   assert.doesNotMatch(summaryHtml, /初审改案:/, "右侧审核卡片不再机械重复打印初审改案全文");
+  // 阶段卡片只保留审查意见；各阶段改案全文只在左侧「差异辅助（修改结果对比 + 分步演进明细）」
+  // 与「修改结果」编辑框中呈现一次，绝不在右侧卡片里重复打印。
+  assert.equal(summaryHtml.includes("stage-report-rev"), false, "阶段卡片不得再挂出改案全文块");
+  assert.equal(summaryHtml.includes("初审建议："), false, "初审改案全文不得在右侧阶段卡片重复出现");
+  assert.equal(summaryHtml.includes("复审建议："), false, "复审改案全文不得在右侧阶段卡片重复出现");
   assert.match(summaryHtml, /revision-stage-pills/);
   assert.match(summaryHtml, /data-apply-stage="1"/);
   assert.match(summaryHtml, /data-apply-stage="2"/);
@@ -461,6 +467,7 @@ test("阶段三仲裁显示：胜出方案标签强制纯中文化，杜绝 Styl
   assert.match(synthesisSummaryHtml, /<span class="pipeline-step is-arbiter">仲裁·结合方案<\/span>/);
   assert.match(synthesisSummaryHtml, /<span class="stage-report-tag is-arbiter">结合方案<\/span>/);
   assert.match(synthesisSummaryHtml, /class="stage-pill-btn is-arbiter is-active"/);
+  assert.equal(synthesisSummaryHtml.includes("仲裁定案："), false, "仲裁定案全文不得在右侧阶段卡片重复出现");
 });
 
 test("修改结果默认版本显示逻辑：无关筛选，默认显示最后的版本（仲裁 ＞ 复审 ＞ 初审）", () => {

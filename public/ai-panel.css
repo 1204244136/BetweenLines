@@ -1285,17 +1285,6 @@ details[open] > summary .details-toggle::before {
   word-break: break-word;
 }
 
-.stage-report-rev {
-  margin-top: 4px;
-  padding: 3px 6px;
-  background: color-mix(in srgb, var(--ai-focus, #3b82f6) 8%, transparent);
-  border-left: 2px solid var(--ai-focus, #3b82f6);
-  border-radius: 2px;
-  font-size: 11px;
-  color: var(--ai-text);
-  font-family: var(--font-mono, monospace);
-}
-
 .pipeline-step.is-pending-step {
   color: #b45309;
   background: #fffbeb;
