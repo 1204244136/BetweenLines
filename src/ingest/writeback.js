@@ -722,20 +722,25 @@ function backupWritebackFile(file) {
   }
 }
 
-async function saveWritebackDocuments(target, kind, documents, zip, touched) {
+async function saveWritebackDocuments(target, kind, documents, zip, touched, options = {}) {
+  const shouldBackup = Boolean(options.backup);
   if (kind === TARGET_TEXT || kind === TARGET_HTML || kind === TARGET_EPUB_DIRECTORY) {
     const writes = [...touched].map(index => ({
       file: kind === TARGET_EPUB_DIRECTORY ? path.join(target, documents[index].key) : documents[index].key,
       content: documents[index].html,
     }));
     // 多文档写回先完成全部备份；任一备份失败都不开始改动正文。
-    for (const { file } of writes) backupWritebackFile(file);
+    if (shouldBackup) {
+      for (const { file } of writes) backupWritebackFile(file);
+    }
     for (const { file, content } of writes) atomicWrite(file, content);
     return;
   }
   for (const index of touched) zip.file(documents[index].key, documents[index].html);
   const buffer = await repackEpubZip(zip);
-  backupWritebackFile(target);
+  if (shouldBackup) {
+    backupWritebackFile(target);
+  }
   atomicWrite(target, buffer);
 }
 
@@ -768,7 +773,7 @@ async function applyTextReplacements(target, entries, options = {}) {
     const plan = planReplacements(documents, entries, options);
     if (plan.planned.length) {
       applyPlacements(plan.planned, documents);
-      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
+      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched, options);
     }
     return { updated: plan.updated, missed: plan.missed, ambiguous: plan.ambiguous };
   });
@@ -787,7 +792,7 @@ async function applySpeakerAnnotations(target, entries, options = {}) {
     const plan = planSpeakerAnnotations(documents, entries, options);
     if (plan.planned.length) {
       applyPlacements(plan.planned, documents);
-      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched);
+      await saveWritebackDocuments(target, described.kind, documents, zip, plan.touched, options);
     }
     return { updated: plan.updated, skipped: plan.skipped, missed: plan.missed, ambiguous: plan.ambiguous };
   });

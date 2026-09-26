@@ -962,6 +962,19 @@
           </div>
         </div>
       </div>
+
+      <div class="panel stack" id="translationWritebackPanel">
+        <h2>写回选项</h2>
+        <div class="check-grid">
+          <div class="check-item">
+            <input id="writebackBackup" type="checkbox">
+            <label for="writebackBackup">
+              写回自动备份
+              <small>写回修改时先为原文件生成 .bak 备份副本；与项目绑定，默认关闭</small>
+            </label>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="stack">
@@ -1134,6 +1147,7 @@
       preserveRuby: document.getElementById("preserveRuby"),
       preserveBold: document.getElementById("preserveBold"),
       preserveNoteref: document.getElementById("preserveNoteref"),
+      writebackBackup: document.getElementById("writebackBackup"),
     };
     for (const role of ["jp", "cn", "tw"]) {
       for (const suffix of ["PickMenu", "LocalButton", "LocalRow", "LocalPath", "LocalApply", "NativeFileButton", "NativeFolderButton", "ImportStatus"]) {
@@ -1629,6 +1643,7 @@
             bold: ids.preserveBold.checked,
             noteref: ids.preserveNoteref.checked,
           },
+          writebackBackup: ids.writebackBackup ? ids.writebackBackup.checked : false,
         }),
       });
       const data = await response.json();
@@ -1704,6 +1719,7 @@
       ids.preserveRuby.checked = saved.inlineMarkup?.ruby !== false;
       ids.preserveBold.checked = saved.inlineMarkup?.bold !== false;
       ids.preserveNoteref.checked = saved.inlineMarkup?.noteref !== false;
+      if (ids.writebackBackup) ids.writebackBackup.checked = Boolean(saved.writebackBackup);
       state.saved = validateUnique();
       state.savedSettingsLoaded = true;
     }
@@ -2047,6 +2063,22 @@
         state.saved = false;
         validateUnique();
         setRunStatus("EPUB 标记保留设置已变更，请重新生成。", "warn");
+      });
+    }
+    if (ids.writebackBackup) {
+      ids.writebackBackup.addEventListener("change", async () => {
+        const activeProjectKey = state.activeProjectKey || state.projects.find((p) => p.active)?.id;
+        if (activeProjectKey) {
+          try {
+            await apiFetch(`/api/projects/${encodeURIComponent(activeProjectKey)}/settings`, {
+              method: "POST",
+              body: JSON.stringify({ writebackBackup: ids.writebackBackup.checked }),
+            });
+          } catch {}
+        }
+        if (state.inputsReady) {
+          saveInputSelection().catch(() => {});
+        }
       });
     }
     renderComparisonMode();

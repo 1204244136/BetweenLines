@@ -13,6 +13,14 @@
   const pageSize = document.getElementById("speakerPageSize");
   const exportButton = document.getElementById("speakerExport");
   const storageKey = String(window.speakerStorageKey || "between-lines:speaker-attribution");
+  const speakerBackupStorageKey = "between-lines:speaker-writeback-backup-v1";
+  function getSpeakerWritebackBackup() {
+    try {
+      const stored = localStorage.getItem(speakerBackupStorageKey);
+      if (stored !== null) return stored === "true";
+    } catch {}
+    return false;
+  }
   const pageMeta = window.speakerPageMeta || {};
   const statusLabels = {
     "needs-review": "待确认",
@@ -482,7 +490,7 @@
       const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows, rowTexts }),
+        body: JSON.stringify({ rows, rowTexts, writebackBackup: getSpeakerWritebackBackup() }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "批量写回失败");
@@ -580,6 +588,13 @@
   if (batchAdoptBtn) {
     batchAdoptBtn.addEventListener("click", () => batchWriteback(0.8));
   }
+  const speakerBackupToggle = document.getElementById("speakerWritebackBackup");
+  if (speakerBackupToggle) {
+    speakerBackupToggle.checked = getSpeakerWritebackBackup();
+    speakerBackupToggle.addEventListener("change", () => {
+      try { localStorage.setItem(speakerBackupStorageKey, String(speakerBackupToggle.checked)); } catch {}
+    });
+  }
   pageSize.addEventListener("change", () => renderVisibleRows(true));
   pageInput.addEventListener("change", () => {
     currentPage = Number(pageInput.value || 1);
@@ -630,6 +645,7 @@
             evidence: record.evidence,
           },
           rowTexts: speakerRowTexts(Number(row.index) || 0),
+          writebackBackup: getSpeakerWritebackBackup(),
         }),
       });
       const result = await response.json();

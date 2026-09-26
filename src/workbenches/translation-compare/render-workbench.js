@@ -75,6 +75,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     rowsSignature,
     projectKey: projectContext.projectKey,
     glossaryFile: selection.glossaryFile || "",
+    writebackBackup: Boolean(selection.writebackBackup),
     // 说话习惯层的构建期结果：页面用它显示“本卷命中概览”并标出疑似说话特色流失的行。
     speechHabits,
     // 对照表的构建期判定：页面用它标出“纯术语（跳过模型）/术语注入/术语冲突”的行，并给出预筛数字。
@@ -435,6 +436,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               <span class="action-group__label">修改结果</span>
               <button id="acceptAiSame" class="btn btn--success" type="button" title="将全部 AI 判断不改的行标记为人工确认（无视当前筛选）">确认自动不改</button>
               <button id="exportNotes" class="btn" type="button" title="批量写回当前筛选结果中的全部修改结果">批量写回</button>
+              <label class="toggle-inline" title="写回原文件前自动生成 .bak 备份副本；开关与当前项目绑定，默认关闭"><input id="writebackBackupToggle" type="checkbox">写回自动备份</label>
               <button id="confirmRevisions" class="btn" type="button" title="将当前筛选结果中的修改结果标记为人工确认">批量确认</button>
             </div>
           </div>

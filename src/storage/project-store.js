@@ -295,6 +295,21 @@ function readProjectSelection(projectKey, options = {}) {
   return readJson(resolveProjectArtifact(projectKey, "input-selection.json", options));
 }
 
+function updateProjectSelection(projectKey, mutator, options = {}) {
+  const file = resolveProjectArtifact(projectKey, "input-selection.json", options);
+  const current = readJson(file);
+  const updated = typeof mutator === "function" ? mutator(current) : { ...current, ...mutator };
+  writeJsonAtomic(file, updated);
+  const layout = storageLayout(options.dataDir);
+  const activePointer = readActivePointer(layout);
+  if (activePointer?.projectKey === safeProjectKey(projectKey) && fs.existsSync(layout.runtimeSelectionFile)) {
+    try {
+      writeJsonAtomic(layout.runtimeSelectionFile, updated);
+    } catch {}
+  }
+  return updated;
+}
+
 function discardStaging(stagingDir, options = {}) {
   if (!stagingDir) return;
   const layout = storageLayout(options.dataDir);
@@ -388,5 +403,6 @@ module.exports = {
   rebuildProjectHtml,
   resolveProjectArtifact,
   safeProjectKey,
+  updateProjectSelection,
   writeJsonAtomic,
 };

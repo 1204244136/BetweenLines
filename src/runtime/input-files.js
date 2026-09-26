@@ -130,6 +130,7 @@ function saveInputSelection(payload) {
       ...defaultInlineMarkup,
       ...(payload.inlineMarkup || {}),
     },
+    writebackBackup: Boolean(payload.writebackBackup),
   });
   saveSelection(selection);
   return { selection, selectionFile };

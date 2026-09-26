@@ -101,6 +101,7 @@ function validateSelection(selection) {
     ])),
     startMarkers,
     inlineMarkup: normalizeInlineMarkup(selection.inlineMarkup),
+    writebackBackup: Boolean(selection.writebackBackup),
     glossaryFile: selection.glossaryFile ? path.resolve(selection.glossaryFile) : (process.env.TRANSCOMPARATOR_GLOSSARY_FILE ? normalizePath(process.env.TRANSCOMPARATOR_GLOSSARY_FILE) : ""),
   };
 }

@@ -3,6 +3,28 @@
     const aiConfigStorageKey = "translation-compare-ai-config-v1";
     const projectAiConfigStorageKey = "translation-compare-ai-project-config-v1:" + (pageMeta.projectKey || "unscoped");
     const aiPromptStorageKey = "translation-compare-ai-prompt-v1:" + (pageMeta.projectKey || "unscoped");
+    const writebackBackupStorageKey = "translation-compare-writeback-backup-v1:" + (pageMeta.projectKey || "unscoped");
+
+    function getWritebackBackupSetting() {
+      try {
+        const stored = localStorage.getItem(writebackBackupStorageKey);
+        if (stored !== null) return stored === "true";
+      } catch {}
+      return Boolean(pageMeta.writebackBackup);
+    }
+
+    function setWritebackBackupSetting(enabled) {
+      try {
+        localStorage.setItem(writebackBackupStorageKey, String(enabled));
+      } catch {}
+      if (pageMeta.projectKey) {
+        apiFetch("/api/projects/" + encodeURIComponent(pageMeta.projectKey) + "/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ writebackBackup: enabled }),
+        }).catch(() => {});
+      }
+    }
 
     const gptReasoningOptions = [
       ["", "模型默认"],
@@ -3156,6 +3178,13 @@
       document.documentElement.classList.toggle("hide-revision-diff", !showRevisionDiff.checked);
       scheduleVisibleRowLayoutSync({ remeasureEditors: true });
     });
+    const writebackBackupToggle = document.getElementById("writebackBackupToggle");
+    if (writebackBackupToggle) {
+      writebackBackupToggle.checked = getWritebackBackupSetting();
+      writebackBackupToggle.addEventListener("change", () => {
+        setWritebackBackupSetting(writebackBackupToggle.checked);
+      });
+    }
     if (aiIds.promptVisible) {
       aiIds.promptVisible.addEventListener("change", () => {
         aiIds.promptSection.hidden = !aiIds.promptVisible.checked;
@@ -3469,12 +3498,19 @@
       }
       button.disabled = true;
       button.textContent = "写回中...";
+      const backup = getWritebackBackupSetting();
       try {
         const entries = [{ id: String(id), targetKey, searchText, replaceText: revision }];
         const response = await apiFetch("/api/translation-export", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projectKey: pageMeta.projectKey, rowsSignature: pageMeta.rowsSignature, entries, rowTexts: writebackRowTexts(entries) }),
+          body: JSON.stringify({
+            projectKey: pageMeta.projectKey,
+            rowsSignature: pageMeta.rowsSignature,
+            entries,
+            rowTexts: writebackRowTexts(entries),
+            writebackBackup: backup,
+          }),
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
@@ -3490,7 +3526,8 @@
         saveNotes();
         applyFilters({ reset: false });
         const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
-        showToast("已写回第 " + id + " 行修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + "，并标记为人工确认。" + importedCopyHint(result), { tone: result.importedCopy ? "watch" : "success", durationMs: 12000 });
+        const backupNote = result.backup ? "（已生成 .bak 备份）" : "";
+        showToast("已写回第 " + id + " 行修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + backupNote + "，并标记为人工确认。" + importedCopyHint(result), { tone: result.importedCopy ? "watch" : "success", durationMs: 12000 });
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
         button.disabled = false;
@@ -3528,9 +3565,21 @@
         return;
       }
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
-      if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote)) return;
+      const backup = getWritebackBackupSetting();
+      const backupTip = backup ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
+      if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote + "\n" + backupTip)) return;
       try {
-        const response = await apiFetch("/api/translation-export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: pageMeta.projectKey, rowsSignature: pageMeta.rowsSignature, entries, rowTexts: writebackRowTexts(entries) }) });
+        const response = await apiFetch("/api/translation-export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectKey: pageMeta.projectKey,
+            rowsSignature: pageMeta.rowsSignature,
+            entries,
+            rowTexts: writebackRowTexts(entries),
+            writebackBackup: backup,
+          }),
+        });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
         // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，
@@ -3548,9 +3597,10 @@
           ambiguousCount ? ambiguousCount + " 处在原文件中有多处同段、未写入" : "",
         ].filter(Boolean).join("；");
         const tone = (unwrittenNote || result.importedCopy) ? "watch" : "success";
+        const backupNote = result.backup ? " 已生成 .bak 备份。" : "";
         showToast((unwrittenNote
           ? "已写回 " + result.updated + " 处修改；" + unwrittenNote + "，这些行未标记为已确认。"
-          : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + importedCopyHint(result), { tone, durationMs: 15000 });
+          : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + backupNote + importedCopyHint(result), { tone, durationMs: 15000 });
       } catch (error) { showToast(error.message, { tone: "error", durationMs: 12000 }); }
     });
 

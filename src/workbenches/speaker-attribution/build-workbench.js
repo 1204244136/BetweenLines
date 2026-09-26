@@ -427,6 +427,7 @@ function renderHtml(model) {
           <button id="speakerAiStart" class="speaker-primary" type="button">开始 AI 推断</button>
           <button id="speakerAiStop" type="button" disabled>停止</button>
           <button id="speakerBatchAdopt" type="button" class="speaker-btn-secondary" title="将置信度 ≥ 80% 的发话批量写回原文件">批量写回 (≥80%)</button>
+          <label class="toggle-inline" style="font-size:12px;color:var(--speaker-muted,#666);display:inline-flex;align-items:center;gap:4px;cursor:pointer;" title="写回原文件前自动生成 .bak 备份副本；默认关闭"><input id="speakerWritebackBackup" type="checkbox">写回备份</label>
           <button id="speakerAiClearCache" type="button">清除推断记录</button>
         </div>
       </div>

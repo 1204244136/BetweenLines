@@ -1,4 +1,4 @@
-const { sendJson } = require("../http-json");
+const { sendJson, readJson } = require("../http-json");
 const { saveSelection } = require("../../ingest/input-selection");
 const { activateProject, deleteProject, listProjects, readProjectSelection } = require("../../storage/project-store");
 const { clearProofreadCache, clientStatus: aiProofreadStatus } = require("../../workbenches/translation-compare/ai/ai-proofread");
@@ -106,6 +106,26 @@ function createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }
         });
       } catch (error) {
         sendJson(res, 500, { ok: false, error: error.message || "更新页面布局失败。" });
+      }
+      return true;
+    }
+
+    if (req.method === "POST" && /^\/api\/projects\/[^/]+\/settings$/.test(pathname)) {
+      const projectKey = decodeURIComponent(pathname.split("/")[3]);
+      try {
+        const payload = await readJson(req);
+        const { updateProjectSelection } = require("../../storage/project-store");
+        const updated = updateProjectSelection(projectKey, (current) => ({
+          ...current,
+          ...(typeof payload.writebackBackup === "boolean" ? { writebackBackup: payload.writebackBackup } : {}),
+        }));
+        sendJson(res, 200, {
+          ok: true,
+          projectKey,
+          writebackBackup: Boolean(updated.writebackBackup),
+        });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error.message || "更新项目设置失败。" });
       }
       return true;
     }
