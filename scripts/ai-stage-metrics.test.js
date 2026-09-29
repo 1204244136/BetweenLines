@@ -183,7 +183,7 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
         aiDone: true,
       },
       2: {
-        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无需修改\n分析：原译准确。",
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\n快速直通：是\nGatekeeper初审：无需修改\n分析：原译准确。",
         aiDone: true,
       },
       3: {
@@ -348,7 +348,7 @@ test("从历史空间找回备注时同步恢复并更新阶段指标看板", as
     [currentKey]: JSON.stringify({}),
     [historicalKey]: JSON.stringify({
       1: {
-        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无误",
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\n快速直通：是\nGatekeeper初审：无误",
         rowSig: "sig-1",
         manualDone: false,
         aiDone: true,
@@ -424,7 +424,7 @@ test("阶段一初审通过（无需修改）的内容不计入阶段二文学�
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
       1: {
-        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：原译准确无需修改",
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\n快速直通：是\nGatekeeper初审：原译准确无需修改",
         aiDone: true,
       },
       2: {
@@ -446,9 +446,9 @@ test("阶段一初审通过（无需修改）的内容不计入阶段二文学�
     ],
   });
 
-  // 阶段一初审通过 2 行，直通 2 行
+  // 阶段一初审通过 2 行，只有显式标记的 1 行算快速直通
   assert.equal(ui.element("metricStage1Passed").textContent, 2);
-  assert.equal(ui.element("metricFastPassHits").textContent, 2);
+  assert.equal(ui.element("metricFastPassHits").textContent, 1);
   // 阶段二文学复审只有第 3 行进入复审（调整: 1），驳回必须为 0，严禁将阶段一通过误算为驳回！
   assert.equal(ui.element("metricStage2Reviewed").textContent, 1);
   assert.equal(ui.element("metricCritiqueModify").textContent, 1);
@@ -1214,7 +1214,7 @@ test("三语语境校对：认知审核阶段指标严格闭环且初审存疑�
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
       1: {
-        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：原译准确无需修改\n分析：目标列与原文贴合。",
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\n快速直通：是\nGatekeeper初审：原译准确无需修改\n分析：目标列与原文贴合。",
         aiDone: true,
       },
       2: {

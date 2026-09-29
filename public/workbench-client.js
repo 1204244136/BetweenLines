@@ -1925,6 +1925,9 @@
         } else if (line.startsWith("是否需要修改：")) {
           data.modify = line.slice("是否需要修改：".length).trim();
           currentField = "";
+        } else if (line === "快速直通：是") {
+          data.fastPass = true;
+          currentField = "";
         } else if (line.startsWith("Gatekeeper初审：")) {
           data.stage1 = line.slice("Gatekeeper初审：".length).trim();
           currentField = "";
@@ -3822,7 +3825,10 @@
       const s2Reviewed = Math.max(Math.max(0, Number(stageMetrics.stage2Reviewed) || 0), liveReviewed);
       // 已经产生分歧、正卡在仲裁队列里的行也算分歧：它们的分歧已经成立，只是还没定案。
       const arbiterBacklog = Math.max(0, Number(p3Live?.pending) || 0) + Math.max(0, Number(p3Live?.inFlight) || 0);
-      const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0) + arbiterBacklog;
+      // 备注里已落了复审结论的待仲裁行（上一轮遗留）已含在 stage2Diverged 中，再叠加队列会算两次：
+      // 取「备注口径」与「已仲裁 + 队列积压」的较大者，而不是相加。
+      const s2DivergedBase = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0);
+      const s2Diverged = Math.max(s2DivergedBase, Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0) + arbiterBacklog);
       const s2Errors = Math.max(0, Number(stageMetrics.stage2Errors) || 0);
       const cAccept = Math.max(Math.max(0, Number(stageMetrics.critiqueAccept) || 0), Math.max(0, Number(liveAttitudes.accept) || 0));
       const cModify = Math.max(Math.max(0, Number(stageMetrics.critiqueModify) || 0), Math.max(0, Number(liveAttitudes.modify) || 0));
@@ -4109,9 +4115,12 @@
 
         if (isAiFailureNote(noteText)) {
           totalAudited += 1;
-          if (noteText.includes("Arbiter") || noteText.includes("终审仲裁")) {
+          // 只认失败行「以阶段名开头」（如「Stylist复审调用异常」）；错误正文里恰好带 Arbiter 等词不算，
+          // 否则「调用失败：Arbiter endpoint 404」这类初审报错会被归到别的阶段。
+          const failureLine = noteText.split(/\n+/).map((line) => line.trim()).filter(Boolean)[1] || "";
+          if (/^(Arbiter|终审仲裁)/.test(failureLine)) {
             stage3Errors += 1;
-          } else if (noteText.includes("Stylist") || noteText.includes("文学复审")) {
+          } else if (/^(Stylist|文学复审)/.test(failureLine)) {
             stage2Errors += 1;
           } else {
             stage1Errors += 1;
@@ -4149,7 +4158,8 @@
           // 未进入阶段二：按初审结论划分产出
           if (parsed.modify === "否") {
             isS1Passed = true;
-            fastPassHits += 1;
+            // 与服务端同口径：预筛放行，或模型显式回报快速直通，才算直通。
+            if (parsed.fastPass || automatedNoteMarker(noteText) !== "[AI校对]") fastPassHits += 1;
           } else if (parsed.modify === "是") {
             isS1NeedsEdit = true;
           } else {

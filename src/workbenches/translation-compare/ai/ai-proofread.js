@@ -3872,6 +3872,8 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         "[AI校对]",
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：否",
+        // 快速直通必须落进备注：前端按备注复算指标，不写就只能把「未进复审的放行行」全当直通，直通率恒为 100%。
+        isFastPassDecision(decision) ? "快速直通：是" : "",
         speakerLine(decision),
         ...multiStageLines,
         ...analysisLines(decision),

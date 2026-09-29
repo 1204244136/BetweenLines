@@ -108,3 +108,34 @@ test("前端：仲裁胜方为混合文案时归入结合方案", () => {
   assert.equal(ui.element("metricArbGatekeeper").textContent, 0);
   assert.equal(ui.element("metricArbStylist").textContent, 0);
 });
+
+test("前端：快速直通只认备注里的显式标记，不再把所有放行行都算直通", () => {
+  const key = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [key]: JSON.stringify({
+      1: { note: "[AI校对]\n是否需要修改：否\n快速直通：是", aiDone: true },
+      2: { note: "[AI校对]\n是否需要修改：否", aiDone: true },
+    }),
+  });
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A", cn: "B", relation: "1:1", score: 0.9, signature: "s1" },
+      { index: 2, jp: "C", cn: "D", relation: "1:1", score: 0.9, signature: "s2" },
+    ],
+  });
+  assert.equal(ui.element("metricFastPassHits").textContent, 1);
+});
+
+test("前端：失败备注文案带阶段关键字也一律记为阶段一异常", () => {
+  const key = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [key]: JSON.stringify({
+      1: { note: "[AI校对]\n调用失败：Arbiter endpoint 404", aiDone: false },
+    }),
+  });
+  const ui = createWorkbench(storage, {
+    rows: [{ index: 1, jp: "A", cn: "B", relation: "1:1", score: 0.9, signature: "s1" }],
+  });
+  assert.equal(ui.run("cachedStageMetrics.stage1Errors"), 1);
+  assert.equal(ui.run("cachedStageMetrics.stage3Errors"), 0);
+});
