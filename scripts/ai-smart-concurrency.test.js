@@ -942,6 +942,64 @@ test("级联续跑：已有初审结论、只差复审的行直接进复审队�
   }
 });
 
+test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并回退复审方案", async () => {
+  clearProofreadCache();
+  const totalRows = 2;
+  const { project } = setupMockProject(totalRows, "arbfail");
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      if (isArbiter) {
+        // 仲裁接口持续报错。修之前这一行既不算定案也不算异常——在指标上凭空消失，
+        // 用户看到的就是「阶段三处理了很多行，定案数却一直不动」。
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "arbiter down" } }));
+        return;
+      }
+      const content = isStylist
+        ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      // 仲裁两行必然失败：关掉熔断，避免任务被提前终止而看不到计数。
+      circuitBreakerEnabled: false,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stageMetrics.stage3Arbitrated, 0, "仲裁全失败，不该有任何定案");
+    assert.equal(finished.stageMetrics.stage3Errors, totalRows, "仲裁失败的每一行都必须计入仲裁异常，不能凭空消失");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
   const tools = createPresetTools();
   const storage = {

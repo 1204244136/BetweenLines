@@ -617,6 +617,58 @@ test("阶段流水线契约：保留复审实时计数与立场分布，缺省�
   assert.equal(dirty.stage2.attitudes.modify, 0);
 });
 
+test("旧版常驻服务：没有回报 stageCascade 时明确提示重启，并让阶段三显示「未接入」", () => {
+  const ui = createWorkbench();
+
+  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-legacy",
+      queued: 10,
+      modelProcessed: 1,
+      total: 10,
+      stageMode: "stage1",
+      stagePipelines: {
+        stage1: { inFlight: 2, pending: 8 },
+        stage2: { inFlight: 0, pending: 0 },
+        stage3: { inFlight: 0, pending: 0 },
+      },
+      results: [],
+    });
+  `);
+
+  // 旧版服务不回报 stageCascade：级联范围无从得知，必须明说，别让用户对着
+  // 「配了阶段三却从来不仲裁」猜原因。
+  assert.match(toastMessages(ui).join("|"), /控制台服务未更新/, "缺 stageCascade 时必须提示重启服务");
+  assert.equal(ui.element("stage3StatusPill").textContent, "未接入", "配了阶段三却没接入本次流水线时要显式标出");
+  assert.match(ui.element("stage3StatusPill").title, /没有接入终审仲裁/);
+});
+
+test("旧版常驻服务：提示一轮只发一次，不刷屏", () => {
+  const ui = createWorkbench();
+  const status = `
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-legacy-once",
+      queued: 10,
+      modelProcessed: 1,
+      total: 10,
+      stageMode: "stage1",
+      stagePipelines: { stage1: { inFlight: 2, pending: 8 } },
+      results: [],
+    });
+  `;
+  ui.run(status);
+  ui.run(status);
+  ui.run(status);
+
+  const hits = toastMessages(ui).filter((text) => /控制台服务未更新/.test(text));
+  assert.equal(hits.length, 1, "同一轮里只提示一次");
+});
+
 // 级联回归用的工作台：下游配没配模型由预设决定——只把下拉框 value 设成一个不存在的 id
 // 不算「配了阶段二」，取不到预设就等于那一段没启用。
 function createCascadeWorkbench(options = {}) {

@@ -1778,6 +1778,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
+        // 复审内部已经把异常回退成「采纳初审方案」，但这一行仍必须走统一错误处理：
+        // 频控时重试、其余计入复审异常；静默吞掉的话它在指标上会凭空消失。
+        if (s2.stageError) throw s2.stageError;
         if (!status.stopRequested) {
           onStageSuccess(s2Ctrl);
         }
@@ -1837,6 +1840,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels, allRows);
+        // 同理：仲裁失败的行走统一错误处理（频控重试 / 计入仲裁异常 / 回退复审方案），
+        // 别让「处理了却不定案」变成静默。
+        if (s3.stageError) throw s3.stageError;
         if (!status.stopRequested) {
           onStageSuccess(s3Ctrl);
         }
@@ -2403,6 +2409,7 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
   });
 
   let arbCheck = { triggered: false };
+  let stageError = null;
   try {
     const stylistRaw = await callModel(stylistMessages, sConf);
     const stylistReview = parseStylistResponse(stylistRaw);
@@ -2443,13 +2450,16 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
       decision.stage = "stylist";
     }
   } catch (stylistErr) {
-    pushLog(`第 ${row.index} 行：Stylist 审阅过程中异常（${stylistErr.message}），回退至 Gatekeeper 初审方案。`);
+    // 同样不在这里吞掉：交给 runQueue 走「频控重试 → 计入复审异常 → 回退初审方案」，
+    // 否则失败的行既不算复审、也不算异常，在指标上凭空消失。
+    stageError = stylistErr;
   }
 
   return {
     ...stage1Result,
     decision,
     arbCheck,
+    stageError,
   };
 }
 
@@ -2494,6 +2504,7 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
     context: arbiterContext,
   });
 
+  let stageError = null;
   try {
     const arbiterRaw = await callModel(arbiterMessages, aConf);
     const arbiterParsed = parseArbiterResponse(arbiterRaw);
@@ -2530,12 +2541,15 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
     decision.stage = "arbiter";
     pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
   } catch (arbiterErr) {
-    pushLog(`第 ${row.index} 行：Arbiter 仲裁过程中异常（${arbiterErr.message}），回退至复审方案。`);
+    // 不在这里吞掉：把异常带回 runQueue，让它走统一的「频控重试 → 计入仲裁异常 → 回退复审方案」。
+    // 吞掉的话这一行在指标上会凭空消失——既不算仲裁定案，也不算异常，用户只看到「处理了却不定案」。
+    stageError = arbiterErr;
   }
 
   return {
     ...stage2Result,
     decision,
+    stageError,
   };
 }
 

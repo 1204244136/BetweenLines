@@ -174,6 +174,8 @@ index-X 结构与命名规范契约：
 - 客户端三个「开始」按钮**只报起点**，级联范围由服务端算并在 `clientStatus().stageCascade` 里如实回报（`stageMode` 报起点）。刷新页面后本地状态会丢，按钮态一律以这两个字段为准；级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
 - 服务端同一时刻只允许一个 AI 任务（`startProofread` 遇到 `status.running` 直接报 `RUNNING`），所以「阶段二不等阶段一」只能靠同一个任务内的队列级联实现，不能在中途追加阶段。客户端不得恢复成「排队等前一阶段整体结束再起第二个任务」的默认路径。
 - 从阶段一起步且配了复审时，`collectResumedStage2` 会把「已有初审结论、只差复审」的行**直接放进** `stage2Pending`（并从初审队列里摘掉），只在 `continueOnly`（「继续剩下的」）时启用。缺了这一步，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来。
+- `runStage2Stylist` / `runStage3Arbiter` **不得在自己内部吞掉异常**：错误必须挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 throw 后再走「频控重试 → 计入 stageNErrors → 回退上一阶段方案」。内部 catch 后只 pushLog 会让那一行在指标上凭空消失（既不算定案也不算异常）。
+- 客户端在「任务在跑 + 服务端回报了 `stagePipelines` + 没有 `stageCascade`」时判定常驻服务是旧版，提示一次重启并让阶段三卡片显示「未接入」；判据必须同时要求 `stagePipelines`，否则会把精简的状态桩误判成旧服务。
 - 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
 - 调整客户端资源后，执行 `npm run layout` 或控制台「应用新布局」，再 F5；不需要重新对齐。调整纯 AI 服务或调度后需重启控制台服务。
 - 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。

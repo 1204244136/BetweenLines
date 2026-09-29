@@ -4027,6 +4027,12 @@
         } else if (stage3WaitingForStage2) {
           pill3.dataset.state = "queued";
           pill3.textContent = "等待阶段二";
+        } else if (aiRunning && !currentStageCascade.toArbiter) {
+          // 配了阶段三、本次流水线却没有接入仲裁：任务启动时阶段三预设还没配、或那个预设已失效。
+          // 明确说出来，否则用户只会看到「处理了很多行却一直只有 1 定案」。
+          pill3.dataset.state = "queued";
+          pill3.textContent = "未接入";
+          pill3.title = "本次任务启动时没有接入终审仲裁（启动时阶段三预设未配置，或该预设已失效）。本次不会执行仲裁；要让它生效，请停掉任务、确认阶段三预设后重新启动。";
         } else if (aiRunning) {
           if (p3.inFlight > 0) {
             pill3.dataset.state = "running";
@@ -4370,8 +4376,16 @@
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
         lastAiResultRevision = 0;
+        warnedLegacyService = false;
       }
       if (aiRunId) lastAiRunId = aiRunId;
+      // 常驻服务是旧版时不会回报 stageCascade：级联范围无从得知，级联推进也不会发生。
+      // 明确提示一次，别让用户对着「配了阶段三却从来不仲裁」「阶段二一直待命」猜原因。
+      // 判据要同时看到 stagePipelines（旧版一直有）才成立，避免把精简的状态桩误判成旧服务。
+      if (isRunning && ai.stagePipelines && !ai.stageCascade && !warnedLegacyService) {
+        warnedLegacyService = true;
+        showToast("控制台服务未更新（没有回报阶段编排信息），本次不会级联推进后续阶段。请重启控制台服务（start-setup.bat）后重新启动任务。", { tone: "watch", durationMs: 20000 });
+      }
       const sameAiScope = Boolean(
         ai.projectKey &&
         ai.rowsSignature &&
@@ -5224,6 +5238,8 @@
     // 当前这条流水线会不会往下游走：由服务端如实回报（起点 + 下游配没配模型），客户端不自己猜。
     // 三个「开始」按钮只表示起点，行为统一是「从起点一路推进到已启用的尽头」。
     let currentStageCascade = { toStylist: false, toArbiter: false };
+    // 旧版常驻服务不回报 stageCascade：级联范围无从得知，只提示一次，别刷屏。
+    let warnedLegacyService = false;
 
     // 启动前自己算一份同样的判定，用来把「这次会跑到哪」告诉用户——它不参与调度决策。
     // 预设被删掉时下拉框里可能还残留旧 id，取不到预设就等于那一段没启用。
@@ -5462,6 +5478,11 @@
           ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
           : "";
         const cascadeNote = tailText ? `\n\n本次会一路推进：${tailText}。` : "";
+        // 配了阶段三预设却取不到（预设被删、下拉残留旧 id）时明确说一声：
+        // 否则用户只会看到「配了仲裁却从来不仲裁」，而且阶段三卡片会一直停在很小的定案数上。
+        if (plan.toStylist && aiIds.stage3Preset?.value && !plan.toArbiter) {
+          showToast("阶段三预设已失效（本地找不到该预设），本次不会走到终审仲裁；请重新选择阶段三预设。", { tone: "watch", durationMs: 15000 });
+        }
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
