@@ -86,6 +86,8 @@ const {
   normalizeReviewStageResult,
   reviewStageResultFromLegacy,
   isFastPassDecision,
+  computeResultMetricsDelta,
+  applyMetricsDelta,
 } = require("./stage-results");
 const {
   buildStylistMessages,
@@ -258,6 +260,8 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
 }
 
 let controllers = new Set();
+// 每行当前结果对 stageMetrics 的贡献快照；行被重写/重跑时按同一份快照整体撤销，保证添加与撤销对称。
+let resultMetricDeltas = new Map();
 // 熔断窗口按阶段隔离：三个阶段各维护自己的成功/失败序列（见 recordModelOutcome）。
 // 共用一个窗口时，「初审成功 + 复审成功 + 仲裁全失败」的单阶段塌方会被前两个阶段的成功稀释，
 // 错误率永远够不到阈值，该阶段就会一行行刷到队列尽头。
@@ -686,6 +690,7 @@ function resetStatus(config, rowsLength) {
   };
   status.logs = [];
   status.results = new Map();
+  resultMetricDeltas = new Map();
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();
@@ -727,8 +732,10 @@ function addResult(result, { prefilterKind = "" } = {}) {
     stageResult: result.stageResult || reviewStageResultFromLegacy(result, status.model),
     resultRevision: status.resultRevision,
   };
-  const previousResult = status.results.get(result.index);
-  if (previousResult) removeStageMetricsForResult(previousResult);
+  // 一行可能被后续阶段或重跑再次写入：指标是「每行当前结果」的快照，
+  // 先按上次记下的贡献整体撤销，再按新结果累加。
+  const previousDelta = resultMetricDeltas.get(result.index);
+  if (previousDelta) applyMetricsDelta(status.stageMetrics, previousDelta, -1);
   status.results.set(result.index, storedResult);
   status.resultChanges.push(storedResult);
   status.processed += 1;
@@ -739,153 +746,17 @@ function addResult(result, { prefilterKind = "" } = {}) {
     if (prefilterKind === "similarity") status.similarityPrefiltered += 1;
     if (prefilterKind === "structured-conflict") status.structuredConflicts += 1;
     if (prefilterKind === "term") status.termPrefiltered += 1;
-    // Deterministic prefilter results are the first Fast Pass implementation:
-    // they complete without spending a model request.
-    if (result.done) {
-      status.stageMetrics.fastPassHits += 1;
-      status.stageMetrics.stage1Passed += 1;
-    }
   } else {
     status.modelProcessed += 1;
     if (result.done) status.modelHandled += 1;
-    // A model result that closes without a suggestion is the Gatekeeper's
-    // positive path. Suggestions are the first observable Stylist review
-    // boundary; keeping these counters here preserves one execution loop.
-    if (result.done) status.stageMetrics.stage1Passed += 1;
-    if (result.fastPass === true) status.stageMetrics.fastPassHits += 1;
-    if (result.stageSignals?.lowScore) status.stageMetrics.lowScoreHits += 1;
-    if (result.stageSignals?.webLookup) status.stageMetrics.webLookupHits += 1;
-
-    // 只有真正经历了 Stage 2 复审（有 stylistReview 或 stage 为 stylist/arbiter）时，
-    // 才计入 Stage 2 相关指标；阶段一直接通过（无需修改）的内容绝不能被统计为复审驳回！
-    const hasStage2Review = Boolean(
-      result.stylistReview ||
-      result.stageResult?.stage === "stylist" ||
-      result.stageResult?.stage === "arbiter" ||
-      (result.critique && result.critique.attitude && !result.fastPass && result.stageResult?.stage !== "gatekeeper")
-    );
-    if (hasStage2Review && result.critique?.attitude) {
-      status.stageMetrics.stage2Reviewed += 1;
-      const attitude = result.critique.attitude;
-      if (attitude === "accept") status.stageMetrics.critiqueAccept += 1;
-      if (attitude === "reject") status.stageMetrics.critiqueReject += 1;
-      if (attitude === "modify") status.stageMetrics.critiqueModify += 1;
-      if (attitude === "escalate") status.stageMetrics.critiqueEscalate += 1;
-      // 「复审分歧」是复审与初审产生立场或方案分歧的行数（含已仲裁与待仲裁），
-      // 不是「已仲裁数」：只在仲裁结束后才 +1，任务跑完时分歧会塌回仲裁数，
-      // 与「启动 AI 校对」弹窗按备注统计出的待仲裁行数对不上。
-      if (attitude === "modify" || attitude === "reject" || attitude === "escalate") {
-        status.stageMetrics.stage2Diverged = (status.stageMetrics.stage2Diverged || 0) + 1;
-      }
-    } else if (result.status === "suggestion" && result.stageResult?.stage === "stylist") {
-      status.stageMetrics.stage2Reviewed += 1;
-    }
-
-    if (result.arbitration || result.stageResult?.stage === "arbiter") {
-      status.stageMetrics.stage3Arbitrated += 1;
-      // 兜底：仲裁过的行必然是分歧行（复审记录缺失时上面那次按态度计数拿不到）。
-      status.stageMetrics.stage2Diverged = Math.max(status.stageMetrics.stage3Arbitrated, status.stageMetrics.stage2Diverged || 0);
-      const winner = String(result.arbitration?.winner || result.stageResult?.winner || "");
-      if (winner === "gatekeeper" || winner.includes("初审")) {
-        status.stageMetrics.arbitrationGatekeeper = (status.stageMetrics.arbitrationGatekeeper || 0) + 1;
-      } else if (winner === "stylist" || winner.includes("复审")) {
-        status.stageMetrics.arbitrationStylist = (status.stageMetrics.arbitrationStylist || 0) + 1;
-      } else if (winner === "synthesis" || winner === "combined" || winner === "compromise" || winner.includes("结合") || winner.includes("综合") || winner.includes("折中")) {
-        status.stageMetrics.arbitrationSynthesis = (status.stageMetrics.arbitrationSynthesis || 0) + 1;
-      } else if (winner === "original" || winner === "target" || winner.includes("维持") || winner.includes("原译")) {
-        status.stageMetrics.arbitrationOriginal = (status.stageMetrics.arbitrationOriginal || 0) + 1;
-      }
-      status.stageMetrics.stage3Settled = (status.stageMetrics.stage3Settled || 0) + 1;
-    }
   }
   if (result.status === "suggestion") status.suggested += 1;
-  if (result.status === "error") {
-    status.errors += 1;
-    const stage = result.stage || result.stageResult?.stage;
-    if (stage === "arbiter" || stage === "stage3") {
-      status.stageMetrics.stage3Errors += 1;
-    } else if (stage === "stylist" || stage === "stage2") {
-      status.stageMetrics.stage2Errors += 1;
-    } else {
-      status.stageMetrics.stage1Errors += 1;
-    }
-  }
+  if (result.status === "error") status.errors += 1;
 
-  const noteText = String(result.note || "");
-  const isExplicitNeedsCheck = noteText.includes("是否需要修改：待人工确认") ||
-    result.stageResult?.decision === "unclear" ||
-    result.stageResult?.needsContext === true;
-  const isExplicitNeedsEdit = (noteText.includes("是否需要修改：是") || Boolean(result.stageResult?.needsEdit && result.stageResult?.revisedText)) && !isExplicitNeedsCheck;
-
-  // 最终审核结论与阶段流转指标
-  if (result.done === true) {
-    status.stageMetrics.finalUnchanged = (status.stageMetrics.finalUnchanged || 0) + 1;
-  } else if (isExplicitNeedsCheck) {
-    status.stageMetrics.finalNeedsCheck = (status.stageMetrics.finalNeedsCheck || 0) + 1;
-  } else if (result.status === "suggestion" && isExplicitNeedsEdit) {
-    status.stageMetrics.finalNeedsEdit = (status.stageMetrics.finalNeedsEdit || 0) + 1;
-  } else if (result.status !== "error") {
-    status.stageMetrics.finalNeedsCheck = (status.stageMetrics.finalNeedsCheck || 0) + 1;
-  }
-
-  const s1NeedsEdit = Boolean(
-    isExplicitNeedsEdit ||
-    (result.stageResult?.needsEdit && !isExplicitNeedsCheck) ||
-    result.stylistReview ||
-    result.arbitration
-  );
-  if (s1NeedsEdit) {
-    status.stageMetrics.stage1NeedsEdit = (status.stageMetrics.stage1NeedsEdit || 0) + 1;
-  } else if (isExplicitNeedsCheck) {
-    status.stageMetrics.stage1Unclear = (status.stageMetrics.stage1Unclear || 0) + 1;
-  }
-  status.stageMetrics.stage1Total = (status.stageMetrics.stage1Passed || 0) + (status.stageMetrics.stage1NeedsEdit || 0) + (status.stageMetrics.stage1Unclear || 0);
-  status.stageMetrics.totalAudited = status.processed;
-}
-
-// A row may be revisited by a later stage or by a retry/redo run. Metrics are
-// snapshots of the current result per row, so replace the previous contribution
-// instead of counting the same row again.
-function removeStageMetricsForResult(result = {}) {
-  const metrics = status.stageMetrics;
-  const dec = (key, amount = 1) => {
-    metrics[key] = Math.max(0, (Number(metrics[key]) || 0) - amount);
-  };
-  if (result.done) dec("finalUnchanged");
-  const noteText = String(result.note || "");
-  const needsCheck = noteText.includes("是否需要修改：待人工确认") || result.stageResult?.decision === "unclear" || result.stageResult?.needsContext === true;
-  const needsEdit = (noteText.includes("是否需要修改：是") || (result.stageResult?.needsEdit && result.stageResult?.revisedText)) && !needsCheck;
-  if (!result.done && needsCheck) dec("finalNeedsCheck");
-  else if (!result.done && result.status === "suggestion" && needsEdit) dec("finalNeedsEdit");
-  if (result.status === "error") {
-    const stage = result.stage || result.stageResult?.stage;
-    dec(stage === "arbiter" || stage === "stage3" ? "stage3Errors" : stage === "stylist" || stage === "stage2" ? "stage2Errors" : "stage1Errors");
-  }
-  const stage1NeedsEdit = needsEdit || Boolean(result.stageResult?.needsEdit && !needsCheck) || result.stylistReview || result.arbitration;
-  if (stage1NeedsEdit) dec("stage1NeedsEdit");
-  else if (needsCheck) dec("stage1Unclear");
-  else if (result.done || result.status === "rule-prefilter" || result.status === "similarity-prefilter" || result.status === "term-prefilter") dec("stage1Passed");
-  if (result.fastPass === true) dec("fastPassHits");
-  if (result.stageSignals?.lowScore) dec("lowScoreHits");
-  if (result.stageSignals?.webLookup) dec("webLookupHits");
-  const hasStage2 = Boolean(result.stylistReview || result.stageResult?.stage === "stylist" || result.stageResult?.stage === "arbiter");
-  if (hasStage2) {
-    dec("stage2Reviewed");
-    const attitude = result.critique?.attitude;
-    if (attitude === "accept") dec("critiqueAccept");
-    if (attitude === "reject") dec("critiqueReject");
-    if (attitude === "modify") dec("critiqueModify");
-    if (attitude === "escalate") dec("critiqueEscalate");
-    // 与上面的计数严格对称：分歧按复审态度计入，撤销也必须按同一条态度撤销，
-    // 否则重跑/复审过的行会把自己的分歧贡献留两份。
-    if (attitude === "modify" || attitude === "reject" || attitude === "escalate") dec("stage2Diverged");
-  }
-  if (result.arbitration || result.stageResult?.stage === "arbiter") {
-    dec("stage3Arbitrated");
-    dec("stage3Settled");
-  }
-  metrics.stage1Total = (metrics.stage1Passed || 0) + (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0);
-  metrics.totalAudited = Math.max(0, (metrics.totalAudited || 0) - 1);
+  // 所有阶段指标由同一个纯函数得出，添加与撤销共用，不再各写一套判据。
+  const delta = computeResultMetricsDelta(storedResult, { prefilterKind });
+  resultMetricDeltas.set(result.index, delta);
+  applyMetricsDelta(status.stageMetrics, delta, 1);
 }
 
 async function startPrefilter(input) {
@@ -1367,6 +1238,7 @@ function clearProofreadCache() {
   status.stagePipelines = createStagePipelines();
   status.logs = [];
   status.results = new Map();
+  resultMetricDeltas = new Map();
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();

@@ -58,11 +58,12 @@ function normalizeCritiqueResult(value = {}) {
 function createStageMetrics(value = {}) {
   const stage1Passed = Math.max(0, Number(value.stage1Passed) || 0);
   const stage1NeedsEdit = Math.max(0, Number(value.stage1NeedsEdit) || 0);
-  const stage1Total = Math.max(stage1Passed + stage1NeedsEdit, Number(value.stage1Total) || 0);
+  const stage1Unclear = Math.max(0, Number(value.stage1Unclear) || 0);
+  const stage1Total = Math.max(stage1Passed + stage1NeedsEdit + stage1Unclear, Number(value.stage1Total) || 0);
   const stage2Reviewed = Math.max(0, Number(value.stage2Reviewed) || 0);
   const stage3Arbitrated = Math.max(0, Number(value.stage3Arbitrated) || 0);
   const stage2Diverged = Math.max(0, Number(value.stage2Diverged) || stage3Arbitrated);
-  const stage2Pending = Math.max(0, Number(value.stage2Pending) || (stage1NeedsEdit - stage2Reviewed));
+  const stage2Pending = Math.max(0, Number(value.stage2Pending) || (stage1NeedsEdit + stage1Unclear - stage2Reviewed));
   const stage3Pending = Math.max(0, Number(value.stage3Pending) || (stage2Diverged - stage3Arbitrated));
   const arbitrationGatekeeper = Math.max(0, Number(value.arbitrationGatekeeper) || 0);
   const arbitrationStylist = Math.max(0, Number(value.arbitrationStylist) || 0);
@@ -77,6 +78,7 @@ function createStageMetrics(value = {}) {
   return {
     stage1Passed,
     stage1NeedsEdit,
+    stage1Unclear,
     stage1Total,
     stage1Errors: Math.max(0, Number(value.stage1Errors) || 0),
     stage2Reviewed,
@@ -141,6 +143,133 @@ function incrementStageMetric(metrics, key, amount = 1) {
   return metrics;
 }
 
+// 仲裁胜方归类：服务端与前端（public/workbench-client.js 内的同名逻辑）必须保持同一优先级。
+// 「结合」类必须先于「初审/复审」判断，否则「融合初审与复审优点」会被误记为初审胜。
+function classifyArbitrationWinner(winner = "") {
+  const text = String(winner || "").trim().toLowerCase();
+  if (!text) return "other";
+  if (/结合|综合|折中|融合|synthesis|combined|compromise/.test(text)) return "synthesis";
+  if (/维持|原译|original|target/.test(text)) return "original";
+  if (/初审|gatekeeper|\bgk\b/.test(text)) return "gatekeeper";
+  if (/复审|stylist/.test(text)) return "stylist";
+  return "other";
+}
+
+const ARBITRATION_WINNER_METRIC = {
+  gatekeeper: "arbitrationGatekeeper",
+  stylist: "arbitrationStylist",
+  synthesis: "arbitrationSynthesis",
+  original: "arbitrationOriginal",
+};
+
+function isExplicitNeedsCheckResult(result = {}) {
+  return String(result.note || "").includes("是否需要修改：待人工确认")
+    || result.stageResult?.decision === "unclear"
+    || result.stageResult?.needsContext === true;
+}
+
+/**
+ * 单行结果对各阶段指标的「贡献」，是纯函数。
+ * addResult 把这份贡献记下并累加；行被重写/重跑时按记下的同一份贡献整体撤销，
+ * 这样添加与撤销天然对称，不再需要两套手写的判据。
+ * 不含 stage1Total / totalAudited 之外的派生量，派生量由 recomputeDerivedMetrics 统一算。
+ */
+function computeResultMetricsDelta(result = {}, { prefilterKind = "" } = {}) {
+  const delta = {};
+  const add = (key, amount = 1) => { delta[key] = (delta[key] || 0) + amount; };
+  const noteText = String(result.note || "");
+  const needsCheck = isExplicitNeedsCheckResult(result);
+  const needsEdit = (noteText.includes("是否需要修改：是")
+    || Boolean(result.stageResult?.needsEdit && result.stageResult?.revisedText)) && !needsCheck;
+  const stage = result.stage || result.stageResult?.stage;
+  const arbitrated = Boolean(result.arbitration || result.stageResult?.stage === "arbiter");
+  const attitude = result.critique?.attitude;
+
+  add("totalAudited");
+
+  if (prefilterKind) {
+    if (result.done) {
+      add("fastPassHits");
+    }
+  } else {
+    if (result.fastPass === true) add("fastPassHits");
+    if (result.stageSignals?.lowScore) add("lowScoreHits");
+    if (result.stageSignals?.webLookup) add("webLookupHits");
+
+    // 只有真正经历过 Stage 2 复审的行才计入复审指标；阶段一直接通过的行绝不能记成复审驳回。
+    const hasStage2Review = Boolean(
+      result.stylistReview
+      || result.stageResult?.stage === "stylist"
+      || result.stageResult?.stage === "arbiter"
+      || (attitude && !result.fastPass && result.stageResult?.stage !== "gatekeeper")
+    );
+    if (hasStage2Review && attitude) {
+      add("stage2Reviewed");
+      if (attitude === "accept") add("critiqueAccept");
+      if (attitude === "reject") add("critiqueReject");
+      if (attitude === "modify") add("critiqueModify");
+      if (attitude === "escalate") add("critiqueEscalate");
+    } else if (result.status === "suggestion" && result.stageResult?.stage === "stylist") {
+      add("stage2Reviewed");
+    }
+    // 复审分歧：复审态度为调整/驳回/升级，或该行已被仲裁（仲裁过的行必然是分歧行）。
+    // 一行最多贡献 1，且不再依赖非加性的 max 兜底，撤销时才能精确还原。
+    const diverged = (hasStage2Review && (attitude === "modify" || attitude === "reject" || attitude === "escalate"))
+      || arbitrated;
+    if (diverged) add("stage2Diverged");
+
+    if (arbitrated) {
+      add("stage3Arbitrated");
+      add("stage3Settled");
+      const bucket = ARBITRATION_WINNER_METRIC[
+        classifyArbitrationWinner(result.arbitration?.winner || result.stageResult?.winner)
+      ];
+      if (bucket) add(bucket);
+    }
+  }
+
+  if (result.status === "error") {
+    if (stage === "arbiter" || stage === "stage3") add("stage3Errors");
+    else if (stage === "stylist" || stage === "stage2") add("stage2Errors");
+    else add("stage1Errors");
+  }
+
+  // 最终结论
+  if (result.done === true) add("finalUnchanged");
+  else if (needsCheck) add("finalNeedsCheck");
+  else if (result.status === "suggestion" && needsEdit) add("finalNeedsEdit");
+  else if (result.status !== "error") add("finalNeedsCheck");
+
+  // 阶段一归类：一行只进「通过 / 提改 / 存疑」其中一个桶，通过 + 提改 + 存疑 = 总检。
+  // 进入过复审或仲裁的行，其初审必然是提改（done 但被复审驳回也是如此），不能再记成通过。
+  const s1NeedsEdit = Boolean(
+    needsEdit
+    || (result.stageResult?.needsEdit && !needsCheck)
+    || result.stylistReview
+    || arbitrated
+  );
+  if (s1NeedsEdit) add("stage1NeedsEdit");
+  else if (needsCheck) add("stage1Unclear");
+  else if (result.done) add("stage1Passed");
+
+  return delta;
+}
+
+function applyMetricsDelta(metrics, delta = {}, sign = 1) {
+  for (const [key, amount] of Object.entries(delta)) {
+    metrics[key] = Math.max(0, (Number(metrics[key]) || 0) + sign * amount);
+  }
+  recomputeDerivedMetrics(metrics);
+  return metrics;
+}
+
+function recomputeDerivedMetrics(metrics) {
+  metrics.stage1Total = (metrics.stage1Passed || 0) + (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0);
+  metrics.stage2Pending = Math.max(0, (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0) - (metrics.stage2Reviewed || 0));
+  metrics.stage3Pending = Math.max(0, (metrics.stage2Diverged || 0) - (metrics.stage3Arbitrated || 0));
+  return metrics;
+}
+
 // Fast Pass is intentionally strict: only a model decision that needs no edit,
 // no context expansion, and no unresolved conclusion may close the AI path.
 function isFastPassDecision(decision = {}) {
@@ -163,4 +292,8 @@ module.exports = {
   normalizeAttitudes,
   incrementStageMetric,
   isFastPassDecision,
+  classifyArbitrationWinner,
+  computeResultMetricsDelta,
+  applyMetricsDelta,
+  recomputeDerivedMetrics,
 };

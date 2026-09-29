@@ -3885,7 +3885,10 @@
         if (item) item.classList.toggle("has-errors", s2Errors > 0);
       }
       const s1PendingTotal = s1NeedsEdit + s1Unclear;
-      const s2Pending = Math.max(0, s1PendingTotal - s2Reviewed);
+      // 优先使用与筛选器同源的逐行谓词结果（stage2Pending），聚合相减只作缺省兜底。
+      const s2Pending = Number.isFinite(Number(stageMetrics.stage2Pending)) && stageMetrics.stage2Pending !== undefined
+        ? Math.max(0, Number(stageMetrics.stage2Pending))
+        : Math.max(0, s1PendingTotal - s2Reviewed);
       const elS2Pending = document.getElementById("metricStage2Pending");
       const itemS2Pending = document.getElementById("stage2PendingItem");
       const sepS2Pending = document.getElementById("stage2PendingSep");
@@ -3911,6 +3914,7 @@
       const elS3Settled = document.getElementById("metricStage3Settled");
       if (elS3Settled) elS3Settled.textContent = s3Settled;
       const s3Pending = Math.max(0, s2Diverged - s3Arbitrated);
+      // 显示用 s2Diverged 已含运行中的仲裁积压；stageMetrics.stage3Pending 只在静态时可信。
       const elS3Pending = document.getElementById("metricStage3Pending");
       const itemS3Pending = document.getElementById("stage3PendingItem");
       const sepS3Pending = document.getElementById("stage3PendingSep");
@@ -4158,7 +4162,9 @@
           } else if (isGkEdit) {
             isS1NeedsEdit = true;
           } else {
-            isS1Passed = true;
+            // 只有提改或存疑的行才会流入复审；初审痕迹缺失（旧格式）时按提改归类，
+            // 不能落到「通过」，否则「通过 + 提改 + 存疑 = 总检」的流向会被破坏。
+            isS1NeedsEdit = true;
           }
         }
 
@@ -4198,14 +4204,14 @@
         if (hasStage3) {
           stage3Arbitrated += 1;
           const winner = String(parsed.stage3?.winner || "").toLowerCase();
-          if (winner.includes("初审") || winner.includes("gatekeeper") || winner.includes("gk")) {
-            arbitrationGatekeeper += 1;
-          } else if (winner.includes("复审") || winner.includes("stylist")) {
-            arbitrationStylist += 1;
-          } else if (winner.includes("结合") || winner.includes("综合") || winner.includes("折中") || winner.includes("synthesis") || winner.includes("combined") || winner.includes("compromise")) {
+          if (winner.includes("结合") || winner.includes("综合") || winner.includes("折中") || winner.includes("融合") || winner.includes("synthesis") || winner.includes("combined") || winner.includes("compromise")) {
             arbitrationSynthesis += 1;
           } else if (winner.includes("维持") || winner.includes("原译") || winner.includes("original") || winner.includes("target")) {
             arbitrationOriginal += 1;
+          } else if (winner.includes("初审") || winner.includes("gatekeeper") || /\bgk\b/.test(winner)) {
+            arbitrationGatekeeper += 1;
+          } else if (winner.includes("复审") || winner.includes("stylist")) {
+            arbitrationStylist += 1;
           }
         }
 
@@ -4283,7 +4289,8 @@
       if (hasLocal) {
         // 当前工作台 notes 中存在审核指标：以当前工作台已加载/找回的 notes 为真理源，
         // 增量运行期间（例如只复审待处理行），绝不让单次任务从 0 开始的指标冲掉本地累积数据！
-        stageMetrics = localMetrics;
+        // 必须浅拷贝：localMetrics 与 cachedStageMetrics 是同一个对象，直接改会污染缓存。
+        stageMetrics = { ...localMetrics };
         if (overrideMetrics) {
           if (overrideMetrics.stage1Errors > stageMetrics.stage1Errors) stageMetrics.stage1Errors = overrideMetrics.stage1Errors;
           if (overrideMetrics.stage2Errors > stageMetrics.stage2Errors) stageMetrics.stage2Errors = overrideMetrics.stage2Errors;
