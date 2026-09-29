@@ -4842,6 +4842,9 @@
 
         const saved = presetTools.savePreset(localStorage, presetData);
         if (saved) {
+          // 覆盖保存后必须重渲染下拉：阶段卡片的选项 title 里带着模型名与并发提示，
+          // 不重建就会一直显示旧值，与 localStorage 里已生效的新预设不一致。
+          renderPresetOptions(saved.id);
           showToast("已更新模型预设「" + saved.name + "」", { tone: "success", durationMs: 5000 });
         } else {
           showToast("更新模型预设失败", { tone: "error", durationMs: 5000 });
