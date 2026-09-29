@@ -322,7 +322,7 @@ test("近期错误率达到熔断阈值时 AI 队列触发熔断", async () => {
     assert.equal(finished.running, false);
     assert.equal(finished.stopRequested, true);
     assert.equal(finished.errors, 5);
-    assert.match(finished.error, /错误率熔断：最近 10 次处理中有 5 次失败（50%，阈值 50%）/);
+    assert.match(finished.error, /错误率熔断（初审）：最近 10 次处理中有 5 次失败（50%，阈值 50%）/);
     assert.equal(requestCount <= 12, true);
     assert.equal(finished.processed < rows.length, true);
   } finally {

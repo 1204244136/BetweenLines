@@ -258,7 +258,11 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
 }
 
 let controllers = new Set();
-let recentModelOutcomes = [];
+// 熔断窗口按阶段隔离：三个阶段各维护自己的成功/失败序列（见 recordModelOutcome）。
+// 共用一个窗口时，「初审成功 + 复审成功 + 仲裁全失败」的单阶段塌方会被前两个阶段的成功稀释，
+// 错误率永远够不到阈值，该阶段就会一行行刷到队列尽头。
+let recentModelOutcomesByStage = new Map();
+const STAGE_OUTCOME_LABELS = { stage1: "初审", stage2: "文学复审", stage3: "终审仲裁" };
 
 function pushLog(line) {
   const text = String(line || "").replace(/\r\n?/g, "\n");
@@ -685,7 +689,7 @@ function resetStatus(config, rowsLength) {
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();
-  recentModelOutcomes = [];
+  recentModelOutcomesByStage = new Map();
 }
 
 function makePrefilterResult(row, labels, classification, comparisonMode = "trilingual") {
@@ -1366,7 +1370,7 @@ function clearProofreadCache() {
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();
-  recentModelOutcomes = [];
+  recentModelOutcomesByStage = new Map();
   return clientStatus();
 }
 
@@ -1458,7 +1462,11 @@ function stagePlan(config = {}) {
     // 从阶段一起步时初审产出的行继续往下走；从阶段二起步时复审产生的分歧继续往下走。
     // 仲裁只能接在复审后面，所以从阶段一起步时必须先有复审才谈得上仲裁。
     cascadeToStylist: startsAt === "stage1" && hasStylist,
-    cascadeToArbiter: (startsAt === "stage1" ? hasStylist : startsAt === "stage2") && hasArbiter,
+    // 语义是「本次流水线覆盖到仲裁」，不是「有没有下游可级联」：从阶段三起步时本次跑的就是仲裁，
+    // 报 false 会让客户端把阶段三卡片误显示成「未接入」，而仲裁其实正在一行行跑。
+    cascadeToArbiter: startsAt === "stage3"
+      ? hasArbiter
+      : ((startsAt === "stage1" ? hasStylist : startsAt === "stage2") && hasArbiter),
   };
 }
 
@@ -1705,7 +1713,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
-          recordModelOutcome(false, config);
+          recordModelOutcome(false, config, "stage1");
           onStageSuccess(s1Ctrl);
         }
 
@@ -1753,7 +1761,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
               done: false,
               note: `[AI校对]\n调用失败（频控限制已达重试上限）：${error.message || String(error)}`,
             });
-            recordModelOutcome(true, config);
+            recordModelOutcome(true, config, "stage1");
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
@@ -1769,7 +1777,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
-            recordModelOutcome(true, config);
+            recordModelOutcome(true, config, "stage1");
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         }
@@ -1791,6 +1799,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 频控时重试、其余计入复审异常；静默吞掉的话它在指标上会凭空消失。
         if (s2.stageError) throw s2.stageError;
         if (!status.stopRequested) {
+          // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
+          recordModelOutcome(false, config, "stage2");
           onStageSuccess(s2Ctrl);
         }
         // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
@@ -1817,6 +1827,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = s2Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
+        // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
         if (isRateLimit && onStageRateLimit(s2Ctrl, s1Item.row.index, error, stage2Pending, s1Item)) {
           // 成功推回 stage2Pending 重试
         } else {
@@ -1829,6 +1842,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const result = finalizeRowResult(s1Item, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
+          if (fatalRequestError) stopForFatalRequestError(error);
+          else if (!status.stopRequested) recordModelOutcome(true, config, "stage2");
         }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
@@ -1853,6 +1868,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 别让「处理了却不定案」变成静默。
         if (s3.stageError) throw s3.stageError;
         if (!status.stopRequested) {
+          // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
+          recordModelOutcome(false, config, "stage3");
           onStageSuccess(s3Ctrl);
         }
         const result = finalizeRowResult(s3, config);
@@ -1861,6 +1878,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = s3Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
+        // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
+        // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
         if (isRateLimit && onStageRateLimit(s3Ctrl, s2Item.row.index, error, stage3Pending, s2Item)) {
           // 成功推回 stage3Pending 重试
         } else {
@@ -1873,6 +1894,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const result = finalizeRowResult(s2Item, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+          if (fatalRequestError) stopForFatalRequestError(error);
+          else if (!status.stopRequested) recordModelOutcome(true, config, "stage3");
         }
       } finally {
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
@@ -2020,21 +2043,29 @@ function stopForFatalRequestError(error) {
   for (const controller of controllers) controller.abort();
 }
 
-function recordModelOutcome(failed, config = {}) {
+function recordModelOutcome(failed, config = {}, stageKey = "stage1") {
   if (config.circuitBreakerEnabled === false) return;
   const threshold = clampNumber(config.circuitBreakerErrorRate, errorCircuitBreaker.minErrorRate, 1, errorCircuitBreaker.errorRate);
-  recentModelOutcomes.push(Boolean(failed));
-  if (recentModelOutcomes.length > errorCircuitBreaker.windowSize) {
-    recentModelOutcomes.splice(0, recentModelOutcomes.length - errorCircuitBreaker.windowSize);
+  // 窗口按阶段隔离：某个阶段连续塌方时，别的阶段的成功不该把它稀释掉，
+  // 否则「仲裁全失败」这种单阶段事故永远不会熔断，只会一行行刷到队列尽头。
+  let recent = recentModelOutcomesByStage.get(stageKey);
+  if (!recent) {
+    recent = [];
+    recentModelOutcomesByStage.set(stageKey, recent);
   }
-  if (recentModelOutcomes.length < errorCircuitBreaker.minimumSamples) return;
+  recent.push(Boolean(failed));
+  if (recent.length > errorCircuitBreaker.windowSize) {
+    recent.splice(0, recent.length - errorCircuitBreaker.windowSize);
+  }
+  if (recent.length < errorCircuitBreaker.minimumSamples) return;
 
-  const errorCount = recentModelOutcomes.filter(Boolean).length;
-  const errorRate = errorCount / recentModelOutcomes.length;
+  const errorCount = recent.filter(Boolean).length;
+  const errorRate = errorCount / recent.length;
   if (errorRate < threshold) return;
 
+  const stageLabel = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
   status.stopRequested = true;
-  status.error = `AI 请求错误率熔断：最近 ${recentModelOutcomes.length} 次处理中有 ${errorCount} 次失败（${Math.round(errorRate * 100)}%，阈值 ${Math.round(threshold * 100)}%），任务已自动终止。`;
+  status.error = `AI 请求错误率熔断（${stageLabel}）：最近 ${recent.length} 次处理中有 ${errorCount} 次失败（${Math.round(errorRate * 100)}%，阈值 ${Math.round(threshold * 100)}%），任务已自动终止。`;
   pushLog(status.error);
   for (const controller of controllers) controller.abort();
 }

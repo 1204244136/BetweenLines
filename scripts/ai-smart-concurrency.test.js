@@ -616,10 +616,18 @@ test("起点语义：三个「开始」只表示起点，往下走到哪一段�
   const stage2NoArbiter = stagePlan(cleanConfig({ stage: "stage2", stylistConfig: stylist }));
   assert.equal(stage2NoArbiter.cascadeToArbiter, false, "没配仲裁就停在复审");
 
-  // 阶段三是尽头，没有下游。
+  // 从阶段三起步：本次流水线本身就是仲裁，没有「下游」可言。
+  // cascadeToArbiter 的语义是「本次覆盖到仲裁」，客户端据此决定阶段三卡片显示「处理中」还是「未接入」；
+  // 这里报 false 会让卡片显示「未接入（本次不会执行仲裁）」，而仲裁其实正在一行行跑。
   const stage3 = stagePlan(cleanConfig({ stage: "stage3", arbiterConfig: arbiter }));
   assert.equal(stage3.cascadeToStylist, false);
-  assert.equal(stage3.cascadeToArbiter, false);
+  assert.equal(stage3.cascadeToArbiter, true, "从阶段三起步时本次跑的就是仲裁，不能报成「未接入」");
+
+  const stage3NoArbiter = stagePlan(cleanConfig({ stage: "stage3" }));
+  assert.equal(stage3NoArbiter.cascadeToArbiter, false, "没配仲裁预设时不算接入仲裁");
+
+  const stage3ArbiterOff = stagePlan(cleanConfig({ stage: "stage3", arbiterConfig: arbiter, arbiterEnabled: false }));
+  assert.equal(stage3ArbiterOff.cascadeToArbiter, false, "显式关闸时不算接入仲裁");
 
   // 旧客户端的 all 语义等同「从阶段一起步」。
   const legacyAll = stagePlan(cleanConfig({ stage: "all", stylistConfig: stylist, arbiterConfig: arbiter }));
@@ -995,6 +1003,126 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
     assert.equal(finished.running, false);
     assert.equal(finished.stageMetrics.stage3Arbitrated, 0, "仲裁全失败，不该有任何定案");
     assert.equal(finished.stageMetrics.stage3Errors, totalRows, "仲裁失败的每一行都必须计入仲裁异常，不能凭空消失");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整个队列", async () => {
+  clearProofreadCache();
+  const totalRows = 12;
+  const { project } = setupMockProject(totalRows, "arbbreaker");
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      if (isArbiter) {
+        // 仲裁接口持续 5xx：既不是频控、也不是配置类致命错误，只能靠错误率熔断拦住。
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "arbiter down" } }));
+        return;
+      }
+      const content = isStylist
+        ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      // 熔断保持开启（默认阈值 50%、最少 10 个样本）：仲裁全失败必须被拦下。
+      circuitBreakerErrorRate: 0.5,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.match(finished.error, /错误率熔断/, "仲裁持续失败必须触发熔断，而不是一路刷到队列尽头");
+    assert.ok(
+      finished.stageMetrics.stage3Errors < totalRows,
+      `熔断必须在刷满 ${totalRows} 行之前生效，实际异常 ${finished.stageMetrics.stage3Errors} 行`,
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷到队列尽头", async () => {
+  clearProofreadCache();
+  const totalRows = 12;
+  const { project } = setupMockProject(totalRows, "arbfatal");
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      if (isArbiter) {
+        // 400 属于配置类致命错误（模型名/参数不被接口接受），必须当场终止整条流水线。
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "invalid model" } }));
+        return;
+      }
+      const content = isStylist
+        ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      // 关掉熔断，确保终止来自致命错误闸门而不是熔断。
+      circuitBreakerEnabled: false,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.match(finished.error, /AI 接口配置或响应异常/, "400 是配置类致命错误，必须终止任务");
+    assert.ok(
+      finished.stageMetrics.stage3Errors < totalRows,
+      `致命错误必须在刷满 ${totalRows} 行之前终止，实际异常 ${finished.stageMetrics.stage3Errors} 行`,
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
