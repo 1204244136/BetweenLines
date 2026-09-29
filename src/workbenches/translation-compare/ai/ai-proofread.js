@@ -1387,6 +1387,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   let stage2InFlight = 0;
   let stage3InFlight = 0;
 
+  // 复审完成的实时计数（复审一结束就 +1，不等它仲裁定案）：只服务运行中的实时显示，
+  // 任务结束时 status.stagePipelines 会被 finish() 重置，最终统计仍以 stageMetrics 为准。
+  let stage2ReviewedLive = 0;
+  const stage2AttitudesLive = { accept: 0, modify: 0, reject: 0, escalate: 0 };
+
   const minConcurrency = 1;
   const scaleUpThreshold = 5;
   const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
@@ -1428,6 +1433,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
     status.stagePipelines.stage2.pending = stage2Pending.length;
     status.stagePipelines.stage2.inFlight = stage2InFlight;
+    status.stagePipelines.stage2.reviewed = stage2ReviewedLive;
+    status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
     status.stagePipelines.stage2.concurrency = s2Ctrl.currentConcurrency;
     status.stagePipelines.stage2.concurrencyMax = s2Ctrl.maxConcurrency;
     status.stagePipelines.stage2.smartConcurrency = s2Ctrl.isSmart;
@@ -1688,6 +1695,16 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
         if (!status.stopRequested) {
           onStageSuccess(s2Ctrl);
+        }
+        // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
+        // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，看起来像「阶段二没干活」。
+        const stylistReview = s2.decision?.stylistReview;
+        if (stylistReview) {
+          stage2ReviewedLive += 1;
+          const liveAttitude = String(stylistReview.critique?.attitude || "");
+          if (Object.prototype.hasOwnProperty.call(stage2AttitudesLive, liveAttitude)) {
+            stage2AttitudesLive[liveAttitude] += 1;
+          }
         }
         if (s2.arbCheck?.triggered && shouldCascade && config.arbiterEnabled !== false) {
           // 产生分歧，仅在 all 级联流水线模式下推入 Stage 3 队列！

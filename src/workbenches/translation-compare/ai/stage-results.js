@@ -105,10 +105,24 @@ function createStageMetrics(value = {}) {
   };
 }
 
+function normalizeAttitudes(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  const result = {};
+  for (const attitude of CRITIQUE_ATTITUDES) {
+    result[attitude] = Math.max(0, Number(source[attitude]) || 0);
+  }
+  return result;
+}
+
 function createStagePipelines(value = {}) {
   const normalizeStageState = (stage = {}) => ({
     inFlight: Math.max(0, Number(stage.inFlight) || 0),
     pending: Math.max(0, Number(stage.pending) || 0),
+    // 复审完成的实时计数：复审完但触发仲裁的行要等仲裁结束才 finalize，
+    // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，
+    // 看起来就像「阶段二没干活、阶段三抢跑」。这份计数只服务运行中的实时显示。
+    reviewed: Math.max(0, Number(stage.reviewed) || 0),
+    attitudes: normalizeAttitudes(stage.attitudes),
     concurrency: stage.concurrency != null ? Math.max(1, Number(stage.concurrency) || 1) : null,
     concurrencyMax: stage.concurrencyMax != null ? Math.max(1, Number(stage.concurrencyMax) || 1) : null,
     smartConcurrency: stage.smartConcurrency != null ? Boolean(stage.smartConcurrency) : null,
@@ -146,6 +160,7 @@ module.exports = {
   normalizeCritiqueResult,
   createStageMetrics,
   createStagePipelines,
+  normalizeAttitudes,
   incrementStageMetric,
   isFastPassDecision,
 };

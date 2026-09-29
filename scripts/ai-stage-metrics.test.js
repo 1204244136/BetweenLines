@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { makeHtml } = require("./build-compare");
 const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
-const { createStageMetrics } = require("../src/workbenches/translation-compare/ai/stage-results");
+const { createStageMetrics, createStagePipelines } = require("../src/workbenches/translation-compare/ai/stage-results");
 
 test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
@@ -523,6 +523,98 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
   await ui.element("stage3Start").dispatch("click");
   lastStartPost = ui.posts.at(-1);
   assert.equal(lastStartPost.body.stage, "stage3", "阶段三启动必须指定 stage=stage3，专门仲裁分歧行");
+});
+
+test("阶段二实时计数：复审完但还在仲裁队列里的行必须计入复审与分歧，不能显示成「阶段三抢跑」", () => {
+  const ui = createWorkbench();
+
+  // 服务端此刻：阶段二已复审完 5 行（1 行定案 + 4 行移交仲裁），4 行正在仲裁。
+  // stageMetrics 只有定案的那 1 行（仲裁中的行要等仲裁结束才 finalize）。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-live",
+      queued: 100,
+      modelProcessed: 20,
+      total: 100,
+      stageMetrics: {
+        stage1NeedsEdit: 30,
+        stage1Total: 100,
+        stage2Reviewed: 1,
+        critiqueModify: 1,
+      },
+      stagePipelines: {
+        stage1: { inFlight: 10, pending: 50 },
+        stage2: { inFlight: 3, pending: 0, reviewed: 5, attitudes: { accept: 0, modify: 5, reject: 0, escalate: 0 } },
+        stage3: { inFlight: 4, pending: 0 },
+      },
+      results: [],
+    });
+  `);
+
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 5, "复审数取流水线实时计数，不等仲裁定案");
+  assert.equal(ui.element("metricCritiqueModify").textContent, 5, "复审立场同样实时");
+  assert.equal(ui.element("metricStage2Diverged").textContent, 4, "正在仲裁的 4 行分歧已经成立，必须计入分歧");
+  assert.equal(ui.element("metricStage2Pending").textContent, 25, "待复审 = 提改 30 − 已复审 5");
+});
+
+test("阶段二实时计数：实时计数未起步时不得把 stageMetrics 已有值拉低，任务结束后回落最终值", () => {
+  const ui = createWorkbench();
+
+  // 实时计数还是 0（例如刚启动、或这一轮没走复审），不能把已有的复审数冲成 0。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-live-zero",
+      queued: 100,
+      modelProcessed: 20,
+      total: 100,
+      stageMetrics: { stage2Reviewed: 8, critiqueAccept: 8 },
+      stagePipelines: { stage2: { inFlight: 0, pending: 0, reviewed: 0 } },
+      results: [],
+    });
+  `);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 8);
+  assert.equal(ui.element("metricCritiqueAccept").textContent, 8);
+
+  // 任务结束后流水线已重置：必须回落到 stageMetrics 的最终值，不被残留污染。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: false,
+      runId: "run-live-zero",
+      queued: 100,
+      modelProcessed: 100,
+      total: 100,
+      stageMetrics: { stage1NeedsEdit: 30, stage1Total: 100, stage2Reviewed: 30, stage2Diverged: 4, stage3Arbitrated: 4 },
+      stagePipelines: { stage2: { inFlight: 0, pending: 0 }, stage3: { inFlight: 0, pending: 0 } },
+      results: [],
+    });
+  `);
+  assert.equal(ui.element("metricStage2Reviewed").textContent, 30);
+  assert.equal(ui.element("metricStage2Diverged").textContent, 4);
+});
+
+test("阶段流水线契约：保留复审实时计数与立场分布，缺省归零而不是 undefined", () => {
+  const pipelines = createStagePipelines({
+    stage2: { inFlight: 3, pending: 1, reviewed: 5, attitudes: { accept: 1, modify: 4 } },
+  });
+  assert.equal(pipelines.stage2.reviewed, 5);
+  assert.equal(pipelines.stage2.attitudes.accept, 1);
+  assert.equal(pipelines.stage2.attitudes.modify, 4);
+  assert.equal(pipelines.stage2.attitudes.reject, 0);
+  assert.equal(pipelines.stage2.attitudes.escalate, 0);
+
+  const empty = createStagePipelines();
+  assert.equal(empty.stage2.reviewed, 0);
+  assert.deepEqual(empty.stage2.attitudes, { accept: 0, modify: 0, reject: 0, escalate: 0 });
+  // 非数字与负数一律归一成 0，客户端不用再防一遍。
+  const dirty = createStagePipelines({ stage2: { reviewed: -3, attitudes: { accept: "x", modify: -1 } } });
+  assert.equal(dirty.stage2.reviewed, 0);
+  assert.equal(dirty.stage2.attitudes.accept, 0);
+  assert.equal(dirty.stage2.attitudes.modify, 0);
 });
 
 // 级联回归用的工作台：级联要求阶段二预设真的能从本地存储解析出来——

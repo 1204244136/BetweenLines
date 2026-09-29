@@ -660,14 +660,19 @@ test("级联流水线：all 模式下初审提改行立即移交复审，不等�
     });
 
     const deadline = Date.now() + 10000;
+    let peakLiveReviewed = 0;
     while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // 运行中要能读到复审的实时计数：否则阶段二卡片会一直停在很小数字上，
+      // 而阶段三已经在仲裁，看起来就像「阶段二没干活、阶段三抢跑」。
+      peakLiveReviewed = Math.max(peakLiveReviewed, clientStatus({ includeResults: false }).stagePipelines?.stage2?.reviewed || 0);
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
     const finished = clientStatus();
     assert.equal(finished.running, false);
     assert.equal(finished.stageMode, "all", "状态接口应回报本次是 all 级联任务");
     assert.equal(finished.errors, 0);
+    assert.equal(peakLiveReviewed > 0, true, "运行中必须能看到复审的实时计数");
     assert.equal(stylistRequests, totalRows, "每一行初审提改都要进入复审");
     assert.ok(stylistFirstSeenAtStage1Completed !== null, "复审请求必须真的发生");
     assert.ok(

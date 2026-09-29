@@ -3819,13 +3819,21 @@
       const s1Total = Math.max(s1Passed + s1NeedsEdit + s1Unclear, Number(stageMetrics.stage1Total) || 0);
       const s1Errors = Math.max(0, Number(stageMetrics.stage1Errors) || 0);
       const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
-      const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
-      const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0);
+      // 复审完成的行如果触发仲裁，要等仲裁结束才 finalize，stageMetrics 到那一刻才 +1。
+      // 运行中改用流水线回报的实时复审计数，否则会出现「阶段二只复审 1 行、阶段三却在仲裁 4 行」的假象。
+      const p2Live = aiRunning ? (stagePipelines?.stage2 || null) : null;
+      const p3Live = aiRunning ? (stagePipelines?.stage3 || null) : null;
+      const liveAttitudes = p2Live?.attitudes || {};
+      const liveReviewed = Math.max(0, Number(p2Live?.reviewed) || 0);
+      const s2Reviewed = Math.max(Math.max(0, Number(stageMetrics.stage2Reviewed) || 0), liveReviewed);
+      // 已经产生分歧、正卡在仲裁队列里的行也算分歧：它们的分歧已经成立，只是还没定案。
+      const arbiterBacklog = Math.max(0, Number(p3Live?.pending) || 0) + Math.max(0, Number(p3Live?.inFlight) || 0);
+      const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0) + arbiterBacklog;
       const s2Errors = Math.max(0, Number(stageMetrics.stage2Errors) || 0);
-      const cAccept = Math.max(0, Number(stageMetrics.critiqueAccept) || 0);
-      const cModify = Math.max(0, Number(stageMetrics.critiqueModify) || 0);
-      const cReject = Math.max(0, Number(stageMetrics.critiqueReject) || 0);
-      const cEscalate = Math.max(0, Number(stageMetrics.critiqueEscalate) || 0);
+      const cAccept = Math.max(Math.max(0, Number(stageMetrics.critiqueAccept) || 0), Math.max(0, Number(liveAttitudes.accept) || 0));
+      const cModify = Math.max(Math.max(0, Number(stageMetrics.critiqueModify) || 0), Math.max(0, Number(liveAttitudes.modify) || 0));
+      const cReject = Math.max(Math.max(0, Number(stageMetrics.critiqueReject) || 0), Math.max(0, Number(liveAttitudes.reject) || 0));
+      const cEscalate = Math.max(Math.max(0, Number(stageMetrics.critiqueEscalate) || 0), Math.max(0, Number(liveAttitudes.escalate) || 0));
       const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
       const arbGK = Math.max(0, Number(stageMetrics.arbitrationGatekeeper) || 0);
       const arbStylist = Math.max(0, Number(stageMetrics.arbitrationStylist) || 0);
@@ -3915,7 +3923,7 @@
       if (elS3Pending) elS3Pending.textContent = s3Pending;
       if (itemS3Pending) {
         itemS3Pending.hidden = s3Pending === 0;
-        itemS3Pending.title = "复审产生分歧 " + s2Diverged + " 行，已仲裁 " + s3Arbitrated + " 行，" + s3Pending + " 行尚未执行终审仲裁（点击可筛选）";
+        itemS3Pending.title = "复审产生分歧 " + s2Diverged + " 行，已仲裁定案 " + s3Arbitrated + " 行，" + s3Pending + " 行尚未仲裁定案（含正在仲裁的行，点击可筛选）";
       }
       if (sepS3Pending) sepS3Pending.hidden = s3Pending === 0;
       const elArbGK = document.getElementById("metricArbGatekeeper");
