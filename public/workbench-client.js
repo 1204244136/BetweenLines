@@ -5483,6 +5483,10 @@
         if (plan.toStylist && aiIds.stage3Preset?.value && !plan.toArbiter) {
           showToast("阶段三预设已失效（本地找不到该预设），本次不会走到终审仲裁；请重新选择阶段三预设。", { tone: "watch", durationMs: 15000 });
         }
+        // 阶段二同理：取不到预设就等于这条流水线只有一段。
+        if (aiIds.stage2Preset?.value && !plan.toStylist) {
+          showToast("阶段二预设已失效（本地找不到该预设），本次只会跑阶段一；请重新选择阶段二预设。", { tone: "watch", durationMs: 15000 });
+        }
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
