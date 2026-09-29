@@ -169,9 +169,10 @@ const status = {
   reasoningEffort: "",
   projectKey: "",
   rowsSignature: "",
-  // 本次任务从哪一段起步：stage1/stage2/stage3 只跑一段，all 是「初审 → 复审 → 仲裁」级联。
-  // 客户端刷新页面后靠它恢复「当前这条流水线是级联模式」的按钮与徽标状态。
+  // 本次任务从哪一段起步（stage1/stage2/stage3），以及这条流水线会往下走到哪：
+  // 「起点 + 下游配置」决定一切，客户端刷新页面后靠这两个字段恢复按钮与徽标状态。
   stageMode: "stage1",
+  stageCascade: { toStylist: false, toArbiter: false },
   total: 0,
   queued: 0,
   processed: 0,
@@ -302,6 +303,7 @@ function clientStatus(options = {}) {
     projectKey: status.projectKey,
     rowsSignature: status.rowsSignature,
     stageMode: status.stageMode,
+    stageCascade: { ...status.stageCascade },
     total: status.total,
     queued: status.queued,
     processed: status.processed,
@@ -405,6 +407,20 @@ function requireMatchingProjectSnapshot(inputProject, currentProject) {
   if (!sameProjectSnapshot(inputProject, currentProject)) {
     throw new Error("AI 校对请求不属于当前项目快照，请重新生成并打开工作台。");
   }
+}
+
+// 独立阶段二/三任务能不能复用上一轮任务留在内存里的结论。
+// 从备注文本反推初审结论是有损的（lowScore 丢失、score 用 80 兜底、better 靠「参考/对照」字样猜），
+// 而同一项目快照下的内存结论是完整的。项目或行集一变就不能复用——行号对不上，宁可退回有损重建。
+function reusePreviousResults(config = {}) {
+  if (config.targetStage !== "stage2" && config.targetStage !== "stage3") return false;
+  return Boolean(
+    status.results.size > 0
+    && status.projectKey
+    && status.projectKey === config.projectKey
+    && status.rowsSignature
+    && status.rowsSignature === config.rowsSignature
+  );
 }
 
 function cleanConfig(input = {}) {
@@ -593,7 +609,12 @@ function resetStatus(config, rowsLength) {
   status.reasoningEffort = config.reasoningEffort;
   status.projectKey = config.projectKey;
   status.rowsSignature = config.rowsSignature;
-  status.stageMode = config.targetStage;
+  {
+    // 如实回报本次任务的起点与级联范围：客户端据此恢复按钮态与徽标，不靠猜。
+    const plan = stagePlan(config);
+    status.stageMode = plan.startsAt;
+    status.stageCascade = { toStylist: plan.cascadeToStylist, toArbiter: plan.cascadeToArbiter };
+  }
   status.concurrency = config.concurrency;
   status.smartConcurrency = Boolean(config.smartConcurrency);
   status.currentConcurrency = config.concurrency;
@@ -932,6 +953,9 @@ async function startProofread(input) {
     config.systemPrompt = proofreadPromptFor(config.proofreadMode, config.profileId).system;
   }
   if (config.proofreadMode === "bilingual") config.target = "cn";
+  // 独立阶段二/三任务要复用上一轮留在内存里的结论：resetStatus 会清空 status.results，
+  // 所以必须在它之前把可复用的快照摘出来，否则复审只能从备注文本反推（有损）。
+  const reusableResults = reusePreviousResults(config) ? new Map(status.results) : new Map();
   resetStatus(config, rows.length);
   // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
   resetPromptTrim();
@@ -974,7 +998,8 @@ async function startProofread(input) {
       const idx = Number(row.index);
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
-      const memoryResult = status.results.get(idx);
+      // 优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推。
+      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
       const hasSuggestion = isStage2Candidate(noteText, memoryResult);
       const isUnclear = Boolean(
         memoryResult?.stageResult?.decision === "unclear" ||
@@ -1034,7 +1059,8 @@ async function startProofread(input) {
       const idx = Number(row.index);
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
-      const memoryResult = status.results.get(idx);
+      // 优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推。
+      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
       const hasDispute = isStage3DisputeRow(row, noteText, memoryResult);
       if (hasDispute) {
         if (config.continueOnly && (noteText.includes("Arbiter仲裁") || memoryResult?.arbitration)) {
@@ -1368,20 +1394,37 @@ function parseRateLimitReason(error) {
 
 // all 模式只有在阶段二真的配了模型时才级联：否则 runStage2Stylist 会回落主配置，
 // 等于背着用户多跑一轮复审。抽成纯函数是为了让这条前提能被直接断言。
+// 阶段编排只有两个输入：从哪一段起步（targetStage），以及这条流水线到底有几段（下游配没配模型）。
+// 行为统一为「从起点一路推进到已启用的尽头」——只跑单阶段就是下游没配模型，
+// 不再有「级联 / 不级联」的模式开关：那会让「阶段一 开始」这一个按钮同时表示两件事。
+function stagePlan(config = {}) {
+  const persona = Boolean(config.singleModelPersona);
+  const hasStylist = Boolean(config.stylistConfig) || persona;
+  const hasArbiter = (Boolean(config.arbiterConfig) || persona) && config.arbiterEnabled !== false;
+  // "all" 是旧客户端传来的兼容值，语义等同「从阶段一起步」。
+  const startsAt = config.targetStage === "stage2" ? "stage2"
+    : (config.targetStage === "stage3" ? "stage3" : "stage1");
+  return {
+    startsAt,
+    // 从阶段一起步时初审产出的行继续往下走；从阶段二起步时复审产生的分歧继续往下走。
+    // 仲裁只能接在复审后面，所以从阶段一起步时必须先有复审才谈得上仲裁。
+    cascadeToStylist: startsAt === "stage1" && hasStylist,
+    cascadeToArbiter: (startsAt === "stage1" ? hasStylist : startsAt === "stage2") && hasArbiter,
+  };
+}
+
 function shouldCascadeStages(config = {}) {
-  return config.targetStage === "all" && Boolean(config.stylistConfig || config.singleModelPersona);
+  return stagePlan(config).cascadeToStylist;
 }
 
 async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // 流水线阶段解耦队列（Staged Pipelining Queues）
   // 各阶段独立并发、独立退避：stage1 初审完一行就把它推给 stage2Pending，
   // stage2 复审出分歧就推给 stage3Pending，谁都不必等前一阶段整体收尾。
-  // targetStage 决定"从哪一段开始"：stage1/stage2/stage3 只跑一段（stage2/3 的队列由备注重建），
-  // all 从阶段一起步并一路级联到底。
-  const shouldCascade = shouldCascadeStages(config);
-  const stage1Pending = (config.targetStage === "stage1" || config.targetStage === "all") ? [...queue] : [];
-  const stage2Pending = config.targetStage === "stage2" ? [...(stageItems.stage2 || [])] : [];
-  const stage3Pending = config.targetStage === "stage3" ? [...(stageItems.stage3 || [])] : [];
+  const plan = stagePlan(config);
+  const stage1Pending = plan.startsAt === "stage1" ? [...queue] : [];
+  const stage2Pending = plan.startsAt === "stage2" ? [...(stageItems.stage2 || [])] : [];
+  const stage3Pending = plan.startsAt === "stage3" ? [...(stageItems.stage3 || [])] : [];
 
   let stage1InFlight = 0;
   let stage2InFlight = 0;
@@ -1446,10 +1489,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage3.smartConcurrency = s3Ctrl.isSmart;
   }
   syncStagePipelineQueues();
-  if (shouldCascade) {
-    pushLog(`级联流水线：阶段一初审完一行立即移交阶段二文学复审（并发 ${s2Ctrl.currentConcurrency}）${config.arbiterEnabled === false ? "，阶段三终审仲裁未启用" : "，复审出分歧立即移交阶段三终审仲裁"}，不再等前一阶段整体完成。`);
-  } else if (config.targetStage === "all") {
-    pushLog("级联流水线：阶段二未配置模型预设，本次按阶段一独立执行。");
+  if (plan.cascadeToStylist) {
+    pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发 ${s2Ctrl.currentConcurrency}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发 ${s3Ctrl.currentConcurrency}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
+  } else if (plan.cascadeToArbiter) {
+    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发 ${s3Ctrl.currentConcurrency}），不等复审整体跑完。`);
   }
 
   function onStageSuccess(ctrl) {
@@ -1618,10 +1661,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
         const isUnclearOrNeedsContext = s1.decision?.needsContext === true || s1.decision?.better === "unclear" || s1.decision?.decision === "unclear";
         // 认知审核新契约：无需修改且非存疑行 Fast Pass 放行直接完成；提改行与存疑待判行在级联模式下均流入 Stage 2！
-        const canCascadeToStage2 = shouldCascade && (isNeedsEdit || isUnclearOrNeedsContext);
+        const canCascadeToStage2 = plan.cascadeToStylist && (isNeedsEdit || isUnclearOrNeedsContext);
 
         if (!canCascadeToStage2) {
-          // 命中无需修改直通放行，或处于独立 stage1 执行模式：无需 Stage 2，直接完成输出
+          // 命中无需修改直通放行，或这条流水线没有下游：无需 Stage 2，直接完成输出
           const result = finalizeRowResult(s1, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== row.index);
@@ -1706,13 +1749,13 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             stage2AttitudesLive[liveAttitude] += 1;
           }
         }
-        if (s2.arbCheck?.triggered && shouldCascade && config.arbiterEnabled !== false) {
-          // 产生分歧，仅在 all 级联流水线模式下推入 Stage 3 队列！
+        if (s2.arbCheck?.triggered && plan.cascadeToArbiter) {
+          // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
           stage3Pending.push(s2);
           syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
-          // 独立 Stage 2 模式或未产生分歧：采纳复审结论，直接完成
+          // 没有下游仲裁，或未产生分歧：采纳复审结论，直接完成
           const result = finalizeRowResult(s2, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2.row.index);
@@ -1735,7 +1778,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
-        if (!shouldCascade || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
+        if (!plan.cascadeToArbiter || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
           if (!stage2Pending.some((item) => item.row?.index === s1Item.row.index)) {
             status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           }
@@ -4069,5 +4112,7 @@ module.exports = {
   testModel,
   cleanConfig,
   cleanSubStageConfig,
+  stagePlan,
   shouldCascadeStages,
+  reusePreviousResults,
 };

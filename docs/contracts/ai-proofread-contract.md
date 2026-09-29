@@ -183,20 +183,40 @@
 
 ---
 
-## 阶段编排与级联流水线（`runQueue`）
+## 阶段编排：起点 + 下游配置（`stagePlan` / `runQueue`）
 
-三阶段（Gatekeeper 初审 → Stylist 文学复审 → Arbiter 终审仲裁）只有两种编排形态，都由 `cleanConfig` 归一成 `targetStage`：
+三阶段（Gatekeeper 初审 → Stylist 文学复审 → Arbiter 终审仲裁）的编排只有两个输入，都由 `stagePlan` 归一：
 
-- **单阶段**（`stage1`/`stage2`/`stage3`）：只跑指定阶段。阶段二/三的队列从**备注文本**重建（`reconstructStage1Result`/`reconstructStage2Result`），属于有损路径——`resetStatus` 已清空 `status.results`，重建只能靠解析 `[AI校对]` 备注，`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠"参考/对照"字样反推。
-- **`all` 级联**：同一个任务里跑完整条流水线。`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）、独立的退避窗口与智能并发上探；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+- **起点**：`targetStage` = `stage1`/`stage2`/`stage3`。`all` 是旧客户端的兼容别名，等同 `stage1`。
+- **这条流水线有几段**：配了 `stylistConfig`（或 `singleModelPersona`）才有复审段；配了 `arbiterConfig`（或 `singleModelPersona`）且 `arbiterEnabled !== false` 才有仲裁段。仲裁只能接在复审后面，所以从阶段一起步时必须先有复审，才谈得上仲裁。
 
-### 级联前提与单任务互斥
+行为统一为**「从起点一路推进到已启用的尽头」**，没有「级联 / 不级联」的模式开关：
 
-- **必须真的配了阶段二才级联**（`shouldCascadeStages`）：`config.stylistConfig` 与 `config.singleModelPersona` 都为空时，`targetStage="all"` 只当 `stage1` 跑并写一条日志——否则 `runStage2Stylist` 会回落主配置，等于背着用户多跑一轮复审。
-- **服务端同一时刻只允许一个 AI 任务**：`startProofread` 遇到 `status.running` 直接抛 `RUNNING`（HTTP 409）。所以「阶段二不必等阶段一整体结束」只能靠**启动时就选 `all`** 实现，无法在中途把阶段二追加到正在跑的 stage1 任务上；客户端也不得退回到「排队等前一阶段收尾、再起第二个任务」的默认路径。
-- 客户端「级联下游」开关（`#stageCascadeToggle`，默认勾选、随 AI 配置持久化）决定阶段一启动传 `all` 还是 `stage1`；阶段二/三单独启动仍是单阶段，用于对已有结论补跑。级联运行中点阶段二/三只提示「已包含在流水线中」，不再进入排队。
-- `clientStatus().stageMode` 如实回报本次任务的 `targetStage`：客户端刷新页面后本地 `runningAiStage` 会丢，靠这个字段恢复「当前跑的是不是级联流水线」的按钮态——级联中三个「开始」全禁用、三个「停止」全可用，因为停的都是同一条流水线。
-- 级联模式下 `continueOnly` 的跳过口径是「整行已经走完该走的所有阶段」：已终审、复审已定案（非 `提交仲裁`/`升级仲裁`）、初审明确通过且非复审候选都算完成；初审提改却还没复审的行必须留在流水线里，不能被当成已完成跳过。
+| 起点 | 配了复审 | 配了仲裁 | 实际行为 |
+| --- | --- | --- | --- |
+| stage1 | 否 | — | 只跑初审 |
+| stage1 | 是 | 否 | 初审 → 复审 |
+| stage1 | 是 | 是 | 初审 → 复审 → 仲裁 |
+| stage2 | — | 否 | 只跑复审 |
+| stage2 | — | 是 | 复审 → 仲裁 |
+| stage3 | — | — | 只跑仲裁 |
+
+阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）、独立的退避窗口与智能并发上探；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+
+### 独立阶段二/三的队列来源
+
+`stage2`/`stage3` 起点的队列在 `startProofread` 里按行筛选（`isStage2Candidate` / `isStage3DisputeRow`），行的上一阶段结论有两个来源，**优先内存**：
+
+1. **复用上一轮的内存结论**（`reusePreviousResults`）：要求 `targetStage` 是 stage2/stage3、`status.results` 非空、且上一轮的 `projectKey` 与 `rowsSignature` 与本次完全相同。跨项目或重新对齐后行号对不上，绝不复用。
+2. **从备注文本反推**（`reconstructStage1Result`/`reconstructStage2Result`）：有损路径——`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠「参考/对照」字样反推。服务重启、切换项目、重新对齐后只能走这条。
+
+### 单任务互斥与客户端契约
+
+- **服务端同一时刻只允许一个 AI 任务**：`startProofread` 遇到 `status.running` 直接抛 `RUNNING`（HTTP 409）。所以「阶段二不必等阶段一整体结束」只能靠**同一个任务内的队列级联**实现，无法在中途把阶段二追加到正在跑的初审任务上；客户端也不得退回到「排队等前一阶段收尾、再起第二个任务」的默认路径。
+- **客户端三个「开始」按钮只报起点**，级联范围由服务端算。`clientStatus()` 如实回报 `stageMode`（起点）与 `stageCascade`（`{ toStylist, toArbiter }`）；客户端刷新页面后本地状态会丢，按钮态一律以这两个字段为准——级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
+- 当前流水线已经覆盖某个下游时，客户端再点那一段只提示「已包含在当前流水线中」，不进入排队。
+- `continueOnly` 的跳过口径随覆盖范围变化：**一路推进时**整行必须走完从起点往下的所有阶段才算处理过——已终审、复审已定案、初审明确通过且非复审候选都算走完；`提交仲裁`/`升级仲裁` 是复审的**中途态不是结论**，有分歧却还没仲裁的行、初审提改却还没复审的行都必须留在流水线里。只跑单阶段时才用「本阶段已处理」的宽松口径。
+- 运行中的「复审数 / 立场分布」用 `stagePipelines.stage2.reviewed` 与 `.attitudes` 的**实时计数**显示（复审一结束就 +1，不等仲裁定案），否则会出现「阶段二只复审 1 行、阶段三却在仲裁 4 行」的假象；任务结束后流水线重置，自动回落到 `stageMetrics` 的最终值。
 
 ---
 

@@ -170,8 +170,10 @@ index-X 结构与命名规范契约：
 
 - `public/workbench-diff.js` 只负责纯文本差异算法和 HTML 转义回调，不读取 DOM、备注、筛选或任务状态。`public/workbench-client.js` 只持有缓存并决定差异插槽的展示。
 - AI 调度的 `concurrency-controller.js` 只负责阶段控制器参数归一化、频控后的并发下调、退避时间和重试判定；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
-- 阶段编排只有两种形态，都由 `cleanConfig` 归一成 `targetStage`：单阶段（`stage1`/`stage2`/`stage3`，阶段二/三的队列由备注文本 `reconstructStage1Result` 重建，属于有损路径）与 `all` 级联（初审完一行立即推入复审队列、复审分歧立即推入仲裁队列，三个阶段各自独立并发与退避，同一个任务内跑完）。级联由客户端「级联下游」开关决定，且 `shouldCascadeStages` 要求真的配了阶段二——否则 `runStage2Stylist` 会回落主配置，等于背着用户多跑一轮复审。
-- 服务端同一时刻只允许一个 AI 任务（`startProofread` 遇到 `status.running` 直接报 `RUNNING`），所以「阶段二不等阶段一」只能靠启动时就选 `all` 实现，不能在中途追加阶段。客户端不得恢复成「排队等前一阶段整体结束再起第二个任务」的默认路径。
+- 阶段编排只有两个输入，都由 `stagePlan` 归一：**起点**（`targetStage`；`all` 是旧客户端的兼容别名，等同 `stage1`）与**这条流水线有几段**（下游配没配模型）。行为统一为「从起点一路推进到已启用的尽头」：配了 `stylistConfig` 才从初审接到复审，配了 `arbiterConfig` 才从复审接到仲裁（仲裁只能接在复审后面，所以从阶段一起步时必须先有复审）。**不要重新引入「级联 / 不级联」的模式开关**——那会让「阶段一 开始」一个按钮同时表示两件事，而且状态会被持久化。
+- 客户端三个「开始」按钮**只报起点**，级联范围由服务端算并在 `clientStatus().stageCascade` 里如实回报（`stageMode` 报起点）。刷新页面后本地状态会丢，按钮态一律以这两个字段为准；级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
+- 服务端同一时刻只允许一个 AI 任务（`startProofread` 遇到 `status.running` 直接报 `RUNNING`），所以「阶段二不等阶段一」只能靠同一个任务内的队列级联实现，不能在中途追加阶段。客户端不得恢复成「排队等前一阶段整体结束再起第二个任务」的默认路径。
+- 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
 - 调整客户端资源后，执行 `npm run layout` 或控制台「应用新布局」，再 F5；不需要重新对齐。调整纯 AI 服务或调度后需重启控制台服务。
 - 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
 

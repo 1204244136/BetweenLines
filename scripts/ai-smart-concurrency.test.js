@@ -18,7 +18,9 @@ const {
   stopProofread,
   cleanConfig,
   cleanSubStageConfig,
+  stagePlan,
   shouldCascadeStages,
+  reusePreviousResults,
 } = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
 const {
@@ -581,30 +583,68 @@ test("多阶段独立并发：各子阶段预设能够正确保留并清洗并�
   assert.equal(conf.arbiterConfig.concurrencyMax, 3);
 });
 
-test("级联流水线：all 模式解析为级联，且必须真的配了阶段二才级联", () => {
-  // 客户端契约：stage="all" 是「初审 → 复审 → 仲裁」一次提交，targetStage 归一为 all。
-  assert.equal(cleanConfig({ stage: "all" }).targetStage, "all");
-  assert.equal(cleanConfig({ targetStage: "all" }).targetStage, "all");
+test("起点语义：三个「开始」只表示起点，往下走到哪一段由下游配没配模型决定", () => {
+  // 客户端契约：前端只报起点，级联范围由服务端算。
+  assert.equal(cleanConfig({ stage: "all" }).targetStage, "all", "旧客户端的 all 继续被接受");
   assert.equal(cleanConfig({ stage: "stage1" }).targetStage, "stage1");
   assert.equal(cleanConfig({ stage: "stage2" }).targetStage, "stage2");
   assert.equal(cleanConfig({ stage: "stage3" }).targetStage, "stage3");
 
   const stylist = { provider: "compatible", model: "gemini-3.8-flash" };
-  // 配了阶段二才级联：否则 runStage2Stylist 会回落主配置，等于背着用户多跑一轮复审。
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all", stylistConfig: stylist })), true);
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all" })), false);
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all", singleModelPersona: true })), true);
-  // 非 all 模式永远不级联，哪怕配了阶段二。
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1", stylistConfig: stylist })), false);
+  const arbiter = { provider: "compatible", model: "kimi-k3" };
+
+  // 从阶段一起步：配了复审才往下走，配了仲裁才走到仲裁（仲裁只能接在复审后面）。
+  const soloStage1 = stagePlan(cleanConfig({ stage: "stage1" }));
+  assert.equal(soloStage1.startsAt, "stage1");
+  assert.equal(soloStage1.cascadeToStylist, false, "没配阶段二就是纯初审");
+  assert.equal(soloStage1.cascadeToArbiter, false);
+
+  const withStylist = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist }));
+  assert.equal(withStylist.cascadeToStylist, true);
+  assert.equal(withStylist.cascadeToArbiter, false, "没配仲裁就停在复审");
+
+  const withBoth = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist, arbiterConfig: arbiter }));
+  assert.equal(withBoth.cascadeToStylist, true);
+  assert.equal(withBoth.cascadeToArbiter, true);
+
+  // 从阶段二起步：不会再回到复审，但分歧照样往下走到仲裁。
+  const fromStage2 = stagePlan(cleanConfig({ stage: "stage2", stylistConfig: stylist, arbiterConfig: arbiter }));
+  assert.equal(fromStage2.startsAt, "stage2");
+  assert.equal(fromStage2.cascadeToStylist, false);
+  assert.equal(fromStage2.cascadeToArbiter, true, "独立阶段二复审出分歧必须能进仲裁");
+
+  const stage2NoArbiter = stagePlan(cleanConfig({ stage: "stage2", stylistConfig: stylist }));
+  assert.equal(stage2NoArbiter.cascadeToArbiter, false, "没配仲裁就停在复审");
+
+  // 阶段三是尽头，没有下游。
+  const stage3 = stagePlan(cleanConfig({ stage: "stage3", arbiterConfig: arbiter }));
+  assert.equal(stage3.cascadeToStylist, false);
+  assert.equal(stage3.cascadeToArbiter, false);
+
+  // 旧客户端的 all 语义等同「从阶段一起步」。
+  const legacyAll = stagePlan(cleanConfig({ stage: "all", stylistConfig: stylist, arbiterConfig: arbiter }));
+  assert.equal(legacyAll.startsAt, "stage1");
+  assert.equal(legacyAll.cascadeToStylist, true);
+  assert.equal(legacyAll.cascadeToArbiter, true);
+
+  // arbiterEnabled=false 是显式关闸：即使配了仲裁预设也不往下走。
+  const arbiterOff = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist, arbiterConfig: arbiter, arbiterEnabled: false }));
+  assert.equal(arbiterOff.cascadeToArbiter, false);
+
+  // 兼容入口：shouldCascadeStages 现在就是「会不会走到复审」。
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1", stylistConfig: stylist })), true);
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1" })), false);
   assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage2", stylistConfig: stylist })), false);
 });
 
-test("级联流水线：状态接口如实回报本次任务的起步阶段，供刷新后恢复按钮态", () => {
-  // 空闲时默认按阶段一回报：客户端据此知道当前没有级联任务在跑。
-  assert.equal(clientStatus({ includeResults: false }).stageMode, "stage1");
+test("起点语义：状态接口如实回报起点与级联范围，供刷新后恢复按钮态", () => {
+  // 空闲时默认按阶段一、无级联回报：客户端据此知道当前没有流水线在跑。
+  const idle = clientStatus({ includeResults: false });
+  assert.equal(idle.stageMode, "stage1");
+  assert.deepEqual(idle.stageCascade, { toStylist: false, toArbiter: false });
 });
 
-test("级联流水线：all 模式下初审提改行立即移交复审，不等阶段一整体跑完", async () => {
+test("起点语义：从阶段一起步且配了复审时，初审提改行立即移交复审，不等阶段一整体跑完", async () => {
   clearProofreadCache();
   const totalRows = 6;
   const { project } = setupMockProject(totalRows, "cascade");
@@ -652,7 +692,8 @@ test("级联流水线：all 模式下初审提改行立即移交复审，不等�
       model: "test-model",
       proofreadMode: "bilingual",
       concurrency: 2,
-      stage: "all",
+      // 前端只报起点：配了 stylistConfig 就等于这条流水线有第二阶段，服务端据此级联。
+      stage: "stage1",
       stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
       arbiterEnabled: false,
       projectKey: project.projectKey,
@@ -670,7 +711,8 @@ test("级联流水线：all 模式下初审提改行立即移交复审，不等�
 
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.equal(finished.stageMode, "all", "状态接口应回报本次是 all 级联任务");
+    assert.equal(finished.stageMode, "stage1", "状态接口应回报起点是阶段一");
+    assert.deepEqual(finished.stageCascade, { toStylist: true, toArbiter: false }, "回报的级联范围应与配置一致");
     assert.equal(finished.errors, 0);
     assert.equal(peakLiveReviewed > 0, true, "运行中必须能看到复审的实时计数");
     assert.equal(stylistRequests, totalRows, "每一行初审提改都要进入复审");
@@ -680,9 +722,137 @@ test("级联流水线：all 模式下初审提改行立即移交复审，不等�
       `复审必须在阶段一整体跑完之前就开始（实际在第 ${stylistFirstSeenAtStage1Completed} 行初审完成后）`,
     );
     assert.ok(
-      finished.logs.some((log) => log.includes("级联流水线：阶段一初审完一行立即移交阶段二文学复审")),
+      finished.logs.some((log) => log.includes("级联流水线：从阶段一起步，初审完一行立即移交复审")),
       "日志应说明本次走的是级联流水线",
     );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的进仲裁（不再被直接吞掉）", async () => {
+  clearProofreadCache();
+  const totalRows = 3;
+  const { project } = setupMockProject(totalRows, "stage2cascade");
+
+  let stylistRequests = 0;
+  let arbiterRequests = 0;
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      // 仲裁载荷同时含 gatekeeperReview 与 stylistReview；复审载荷只有前者。
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      let content;
+      if (isArbiter) {
+        arbiterRequests += 1;
+        content = { winner: "stylist", reason: "复审方案更贴切", finalDecision: "replace", revisedText: "终审定案", riskFlags: [] };
+      } else if (isStylist) {
+        stylistRequests += 1;
+        // 显式请求终审：这是最确定的仲裁触发条件，不依赖 Butler 漂移判据。
+        content = { critique: { attitude: "escalate", rationale: "与初审方案分歧明显，请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" };
+      } else {
+        content = { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      }
+
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+      }, 5);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const waitDone = async () => {
+      const deadline = Date.now() + 10000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    // 第一轮：只跑初审，留下内存结论（独立阶段二会复用它们，不必从备注重建）。
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    await waitDone();
+    assert.equal(clientStatus({ includeResults: false }).stageMode, "stage1");
+
+    const rowNotes = {};
+    for (const result of clientStatus().results) {
+      if (result?.note) rowNotes[result.index] = result.note;
+    }
+
+    // 第二轮：从阶段二起步 + 配了仲裁 → 分歧必须继续往下走到仲裁。
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage2",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      rowNotes,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const live = clientStatus({ includeResults: false });
+    assert.equal(live.stageMode, "stage2", "状态接口应回报起点是阶段二");
+    assert.deepEqual(live.stageCascade, { toStylist: false, toArbiter: true }, "从阶段二起步应能级联到仲裁");
+
+    await waitDone();
+
+    assert.equal(stylistRequests, totalRows, "每一行初审提改都要复审");
+    assert.ok(arbiterRequests > 0, "复审明确请求仲裁时，分歧必须真的进仲裁，不能被直接采纳复审结论吞掉");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("独立阶段二复用内存结论：只在同一项目快照上复用，跨快照一律退回备注重建", async () => {
+  clearProofreadCache();
+  const { project } = setupMockProject(2, "reuse");
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ semanticSame: true, needsEdit: false, decision: "keep", summary: "翻译准确" }) } }],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    await startProofread({
+      provider: "compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      model: "test-model",
+      proofreadMode: "bilingual",
+      stage: "stage1",
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+    const deadline = Date.now() + 5000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(clientStatus().results.length > 0, "第一轮应留下内存结论");
+
+    const sameSnapshot = { targetStage: "stage2", projectKey: project.projectKey, rowsSignature: project.rowsSignature };
+    assert.equal(reusePreviousResults(sameSnapshot), true, "同项目快照 + 从阶段二起步应复用内存结论");
+    assert.equal(reusePreviousResults({ ...sameSnapshot, targetStage: "stage3" }), true, "阶段三同理");
+    // 行集或项目一变，行号就对不上：绝不能复用，宁可退回有损重建。
+    assert.equal(reusePreviousResults({ ...sameSnapshot, rowsSignature: "other-rows" }), false);
+    assert.equal(reusePreviousResults({ ...sameSnapshot, projectKey: "other-project" }), false);
+    // 从阶段一起步不涉及复用。
+    assert.equal(reusePreviousResults({ ...sameSnapshot, targetStage: "stage1" }), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
