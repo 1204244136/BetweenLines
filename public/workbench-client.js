@@ -5473,7 +5473,11 @@
             aiConfirmIds.dialog.showModal();
             return;
           }
-          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）${cascadeNote}`)) {
+          // 「继续剩下的」在级联时会续跑：已有初审结论、只差复审的行直接进复审队列，不重跑初审。
+          const resumeHint = plan.toStylist
+            ? "\n点击「取消」：继续剩下的（保留已有方案；已有初审结论、只差复审的行直接进复审，其余行继续校对）"
+            : "\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）";
+          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）${resumeHint}${cascadeNote}`)) {
             const cleared = clearUnconfirmedAiProofreadNotes();
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
@@ -5674,9 +5678,10 @@
           const tailText = plan.toStylist
             ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
             : (plan.toArbiter ? "复审 → 仲裁" : "");
-          showToast(tailText
-            ? `保留已有方案，仅校对剩余未处理行；本次会一路推进：${tailText}。`
-            : "保留已有方案，仅校对剩余未处理行。", { tone: "info", durationMs: 4000 });
+          const resumeText = plan.toStylist
+            ? "已有初审结论、只差复审的行直接进复审，其余行继续校对。"
+            : "仅校对剩余未处理行。";
+          showToast(`保留已有方案；${resumeText}${tailText ? `本次会一路推进：${tailText}。` : ""}`, { tone: "info", durationMs: 4000 });
           await startAiProofread({ continueOnly: true, stage: pendingStartStage });
         });
       }

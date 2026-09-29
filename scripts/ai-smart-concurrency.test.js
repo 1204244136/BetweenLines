@@ -858,6 +858,90 @@ test("独立阶段二复用内存结论：只在同一项目快照上复用，�
   }
 });
 
+test("级联续跑：已有初审结论、只差复审的行直接进复审队列，不再重跑初审", async () => {
+  clearProofreadCache();
+  const totalRows = 6;
+  const { project } = setupMockProject(totalRows, "resume");
+
+  let stage1Requests = 0;
+  let stylistRequests = 0;
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isStylist = userText.includes("gatekeeperReview");
+      const content = isStylist
+        ? { critique: { attitude: "accept", rationale: "同意初审改案" }, revisedText: "复审定案", summary: "复审采纳" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      if (isStylist) stylistRequests += 1;
+      else stage1Requests += 1;
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+      }, 10);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const waitDone = async () => {
+      const deadline = Date.now() + 10000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    // 第一轮：只跑初审，每行都提改（没配复审，提改行直接定案并写进备注）。
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 3, stage: "stage1",
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    await waitDone();
+    assert.equal(stage1Requests, totalRows, "第一轮每行都要初审");
+    assert.equal(stylistRequests, 0, "没配复审就不该有复审请求");
+
+    const rowNotes = {};
+    for (const result of clientStatus().results) {
+      if (result?.note) rowNotes[result.index] = result.note;
+    }
+    assert.equal(Object.keys(rowNotes).length, totalRows, "第一轮应给每行留下备注");
+
+    const stage1Before = stage1Requests;
+
+    // 第二轮：从阶段一起步 + 配了复审 + 「继续剩下的」→ 这 6 行应当直接进复审队列。
+    // 修之前它们会先被重新初审一遍，复审只能等初审逐行产出，界面上就是「待复审 N 行但只有 1 处理中」。
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 3, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      continueOnly: true,
+      rowNotes,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const live = clientStatus({ includeResults: false });
+    assert.equal(live.stageCascade.toStylist, true);
+
+    await waitDone();
+
+    assert.equal(stage1Requests, stage1Before, "已有初审结论的行不得重跑初审");
+    assert.equal(stylistRequests, totalRows, "这 6 行应当全部直接进入复审队列");
+    assert.ok(
+      clientStatus().logs.some((log) => log.includes(`级联续跑：${totalRows} 行已有初审结论`)),
+      "日志应说明续跑了多少行",
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
   const tools = createPresetTools();
   const storage = {

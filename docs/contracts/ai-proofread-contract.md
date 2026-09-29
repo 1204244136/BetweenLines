@@ -210,6 +210,16 @@
 1. **复用上一轮的内存结论**（`reusePreviousResults`）：要求 `targetStage` 是 stage2/stage3、`status.results` 非空、且上一轮的 `projectKey` 与 `rowsSignature` 与本次完全相同。跨项目或重新对齐后行号对不上，绝不复用。
 2. **从备注文本反推**（`reconstructStage1Result`/`reconstructStage2Result`）：有损路径——`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠「参考/对照」字样反推。服务重启、切换项目、重新对齐后只能走这条。
 
+### 级联续跑（`collectResumedStage2`）
+
+从阶段一起步、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
+
+- 判据是 `isStage2Candidate(noteText, memoryResult)` 成立、且**没有**复审结论（`noteText.includes("Stylist复审") || memoryResult?.stylistReview` 为假）。
+- 这些行从初审队列里摘掉（`resumedStage2.indexes`），与初审刚产出的行走**同一个** `stage2Pending`、同一套并发控制器与退避窗口。
+- 对照表已经直接定案的行（`resolvedByTermTable`）不续跑，否则会白花一次调用。
+- **没有这一步**，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来（现象：并发 20、实际只有 1 处理中，一行一行慢慢审）。
+- 「从未人工确认处开始」（`continueOnly: false`）不走续跑：前端已经把这些行的备注清掉了，本来就没东西可续。
+
 ### 单任务互斥与客户端契约
 
 - **服务端同一时刻只允许一个 AI 任务**：`startProofread` 遇到 `status.running` 直接抛 `RUNNING`（HTTP 409）。所以「阶段二不必等阶段一整体结束」只能靠**同一个任务内的队列级联**实现，无法在中途把阶段二追加到正在跑的初审任务上；客户端也不得退回到「排队等前一阶段收尾、再起第二个任务」的默认路径。

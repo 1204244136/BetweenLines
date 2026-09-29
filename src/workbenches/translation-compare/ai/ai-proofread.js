@@ -985,6 +985,54 @@ async function startProofread(input) {
     ? (labels.jp || "原文 A")
     : (defaultCounterpartKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C"));
 
+  // 复审队列条目：优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推（有损）。
+  function buildStage2Item(row, noteText, memoryResult) {
+    const isUnclear = Boolean(
+      memoryResult?.stageResult?.decision === "unclear" ||
+      memoryResult?.stageResult?.better === "unclear" ||
+      memoryResult?.stageResult?.needsContext === true ||
+      noteText.includes("是否需要修改：待人工确认") ||
+      noteText.includes("存疑转人工") ||
+      noteText.includes("初审存疑")
+    );
+    if (memoryResult && memoryResult.stageResult && (memoryResult.stageResult.needsEdit || isUnclear)) {
+      return {
+        row,
+        decision: memoryResult.decision || memoryResult.stageResult,
+        targetKey: memoryResult.targetKey || defaultTargetKey,
+        targetLabel: memoryResult.targetLabel || defaultTargetLabel,
+        counterpartKey: memoryResult.counterpartKey || defaultCounterpartKey,
+        counterpartLabel: memoryResult.counterpartLabel || defaultCounterpartLabel,
+        targetText: memoryResult.targetText || textForKey(row, memoryResult.targetKey || defaultTargetKey),
+        counterpartText: memoryResult.counterpartText || textForKey(row, memoryResult.counterpartKey || defaultCounterpartKey),
+        lowScore: null,
+      };
+    }
+    return reconstructStage1Result(row, noteText, config, labels);
+  }
+
+  // 已经有初审结论、只差复审的行：它们不该再跑一遍初审，直接进复审队列。
+  // 没有这一步，「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来。
+  function collectResumedStage2(resolvedByTermTable = new Set()) {
+    const resumed = [];
+    const indexes = new Set();
+    for (const row of rows) {
+      const idx = Number(row.index);
+      if (config.completedIndexes.has(idx)) continue;
+      // 对照表已经直接定案的行（term-only）不再送复审，否则会白花一次调用。
+      if (resolvedByTermTable.has(idx)) continue;
+      const noteText = config.rowNotes[idx] || "";
+      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
+      if (!isStage2Candidate(noteText, memoryResult)) continue;
+      // 已经有复审结论的行（含等待仲裁的）不在这里补跑：重跑复审只会白花一次调用。
+      if (noteText.includes("Stylist复审") || memoryResult?.stylistReview) continue;
+      resumed.push(buildStage2Item(row, noteText, memoryResult));
+      indexes.add(idx);
+    }
+    return { resumed, indexes };
+  }
+
+  const plan = stagePlan(config);
   let stageItems = { stage2: [], stage3: [] };
 
   if (config.targetStage === "stage2") {
@@ -1001,33 +1049,12 @@ async function startProofread(input) {
       // 优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推。
       const memoryResult = reusableResults.get(idx) || status.results.get(idx);
       const hasSuggestion = isStage2Candidate(noteText, memoryResult);
-      const isUnclear = Boolean(
-        memoryResult?.stageResult?.decision === "unclear" ||
-        memoryResult?.stageResult?.better === "unclear" ||
-        memoryResult?.stageResult?.needsContext === true ||
-        noteText.includes("是否需要修改：待人工确认") ||
-        noteText.includes("存疑转人工") ||
-        noteText.includes("初审存疑")
-      );
       if (hasSuggestion) {
         if (config.continueOnly && (noteText.includes("Stylist复审") || memoryResult?.stylistReview)) {
           status.skippedDone += 1;
           continue;
         }
-        const s1Item = (memoryResult && memoryResult.stageResult && (memoryResult.stageResult.needsEdit || isUnclear))
-          ? {
-              row,
-              decision: memoryResult.decision || memoryResult.stageResult,
-              targetKey: memoryResult.targetKey || defaultTargetKey,
-              targetLabel: memoryResult.targetLabel || defaultTargetLabel,
-              counterpartKey: memoryResult.counterpartKey || defaultCounterpartKey,
-              counterpartLabel: memoryResult.counterpartLabel || defaultCounterpartLabel,
-              targetText: memoryResult.targetText || textForKey(row, memoryResult.targetKey || defaultTargetKey),
-              counterpartText: memoryResult.counterpartText || textForKey(row, memoryResult.counterpartKey || defaultCounterpartKey),
-              lowScore: null,
-            }
-          : reconstructStage1Result(row, noteText, config, labels);
-        items.push(s1Item);
+        items.push(buildStage2Item(row, noteText, memoryResult));
       } else {
         status.skippedDone += 1;
       }
@@ -1105,11 +1132,24 @@ async function startProofread(input) {
   // 对照表预处理：先于规则/相似度预筛运行——命中的行直接用表里的内容判定，不再交给模型。
   const resolvedByTermTable = applyTermTable(config, rows, labels);
 
+  // 级联续跑：已经有初审结论、只差复审的行直接进复审队列，不再重跑初审。
+  // 没有这一步，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来。
+  // 只在「继续剩下的」时启用：「从未人工确认处开始」已经把这些行的备注清掉了，本来就没东西可续。
+  let resumedStage2 = { resumed: [], indexes: new Set() };
+  if (plan.cascadeToStylist && config.continueOnly) {
+    resumedStage2 = collectResumedStage2(resolvedByTermTable);
+    stageItems.stage2 = resumedStage2.resumed;
+    if (resumedStage2.resumed.length) {
+      pushLog(`级联续跑：${resumedStage2.resumed.length} 行已有初审结论、只差复审，直接进入复审队列（不再重跑初审）。`);
+    }
+  }
+
   for (const row of rows) {
     if (config.completedIndexes.has(Number(row.index))) {
       status.skippedDone += 1;
       continue;
     }
+    if (resumedStage2.indexes.has(Number(row.index))) continue;
     if (resolvedByTermTable.has(Number(row.index))) continue;
     // 术语冲突行不吃规则/相似度预筛：这一行的术语判断必须由模型结合整句给出。
     if (!isTermConflictRow(config, row.index)) {
@@ -1132,8 +1172,8 @@ async function startProofread(input) {
     queue.push(row);
   }
 
-  status.queued = queue.length;
-  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对。`);
+  status.queued = queue.length + resumedStage2.resumed.length;
+  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2.resumed.length ? `；另有 ${resumedStage2.resumed.length} 行续跑复审` : ""}。`);
   pushLog(config.smartConcurrency
     ? `智能并发：已开启，初始并发 ${config.concurrency}，上限 ${config.concurrencyMax}。稳定请求自动上探，遭遇频控限制自动退避降速。`
     : `并发设置：固定并发 ${config.concurrency}。`);
@@ -1423,7 +1463,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // stage2 复审出分歧就推给 stage3Pending，谁都不必等前一阶段整体收尾。
   const plan = stagePlan(config);
   const stage1Pending = plan.startsAt === "stage1" ? [...queue] : [];
-  const stage2Pending = plan.startsAt === "stage2" ? [...(stageItems.stage2 || [])] : [];
+  // 阶段二的初始队列：从阶段二起步时是本次筛出的复审行；从阶段一起步且配了复审时，
+  // 是「已有初审结论、只差复审」的续跑行——它们与初审刚产出的行走同一个队列、同一套并发。
+  const stage2Pending = (plan.startsAt === "stage2" || plan.cascadeToStylist) ? [...(stageItems.stage2 || [])] : [];
   const stage3Pending = plan.startsAt === "stage3" ? [...(stageItems.stage3 || [])] : [];
 
   let stage1InFlight = 0;
