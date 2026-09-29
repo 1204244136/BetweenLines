@@ -61,6 +61,8 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="stage2Stop"/);
   assert.match(html, /id="stage3Start"/);
   assert.match(html, /id="stage3Stop"/);
+  // 级联下游开关默认勾选：阶段一启动即一路级联到已启用的下游，不必等前一阶段收尾。
+  assert.match(html, /id="stageCascadeToggle" checked/);
   assert.match(html, /id="aiStageFastPassRate"/);
   assert.match(html, /id="stage1StatusPill"/);
   assert.match(html, /id="stage2StatusPill"/);
@@ -475,18 +477,18 @@ test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按�
   assert.equal(ui.fetches.filter((u) => u === "/api/ai-proofread/stop").length, 1);
 });
 
-test("独立三阶段执行：每个阶段开始按钮传递独立 stage 参数，分别独立执行", async () => {
+test("独立三阶段执行：未启用级联时，每个阶段开始按钮传递独立 stage 参数，分别独立执行", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-staged", results: [] } },
     },
   });
 
-  // 1. 点击阶段一「开始」
+  // 1. 点击阶段一「开始」（此时阶段二尚未配置，没有可级联的下游）
   await ui.element("stage1Start").dispatch("click");
   let lastStartPost = ui.posts.at(-1);
   assert.equal(lastStartPost.url, "/api/ai-proofread/start");
-  assert.equal(lastStartPost.body.stage, "stage1", "阶段一启动必须指定 stage=stage1，不自动跑阶段二");
+  assert.equal(lastStartPost.body.stage, "stage1", "阶段二未配置时阶段一启动只跑初审，不自动跑阶段二");
 
   // 模拟阶段一产出建议行，且阶段二配置了预设
   ui.run(`
@@ -521,6 +523,138 @@ test("独立三阶段执行：每个阶段开始按钮传递独立 stage 参数�
   await ui.element("stage3Start").dispatch("click");
   lastStartPost = ui.posts.at(-1);
   assert.equal(lastStartPost.body.stage, "stage3", "阶段三启动必须指定 stage=stage3，专门仲裁分歧行");
+});
+
+test("级联流水线：阶段二已配置时，阶段一「开始」一次性提交 all 级联任务", async () => {
+  const runningAi = { ok: true, ai: { kind: "ai", running: true, runId: "run-cascade", stageMode: "all", results: [] } };
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: { "/api/ai-proofread/start": runningAi },
+    statusQueue: [runningAi, runningAi, runningAi, runningAi],
+  });
+
+  // 阶段二配好预设 + 级联开关打开（页面默认勾选，夹具需显式置位）
+  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.cascadeToggle.checked = true;');
+  assert.equal(ui.run("cascadeDownstreamEnabled()"), true);
+
+  await ui.element("stage1Start").dispatch("click");
+  const post = ui.posts.at(-1);
+  assert.equal(post.url, "/api/ai-proofread/start");
+  assert.equal(post.body.stage, "all", "配置了阶段二后，阶段一启动必须走 all 级联模式，不再等阶段一整体收尾");
+  assert.equal(ui.run("runningAiStage"), "all");
+
+  // 级联运行中整条流水线是一个任务：三个「开始」都禁用，三个「停止」都可用。
+  assert.equal(ui.element("stage1Start").disabled, true);
+  assert.equal(ui.element("stage2Start").disabled, true);
+  assert.equal(ui.element("stage3Start").disabled, true);
+  assert.equal(ui.element("stage1Stop").disabled, false);
+  assert.equal(ui.element("stage2Stop").disabled, false, "级联中任意停止按钮停的都是整条流水线，不能出现停不掉的死角");
+  assert.equal(ui.element("stage3Stop").disabled, false);
+});
+
+test("级联流水线：关闭级联开关后，阶段一「开始」仍只提交 stage1", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-solo", stageMode: "stage1", results: [] } },
+    },
+  });
+
+  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.cascadeToggle.checked = false;');
+  assert.equal(ui.run("cascadeDownstreamEnabled()"), false);
+
+  await ui.element("stage1Start").dispatch("click");
+  assert.equal(ui.posts.at(-1).body.stage, "stage1", "关掉级联后阶段一只跑初审");
+  assert.equal(ui.run("runningAiStage"), "stage1");
+});
+
+test("级联流水线：阶段二未配置时阶段一只跑初审，没有可级联的下游", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-nostage2", stageMode: "stage1", results: [] } },
+    },
+  });
+
+  ui.run("aiIds.cascadeToggle.checked = true;");
+  assert.equal(ui.run("cascadeDownstreamEnabled()"), false);
+
+  await ui.element("stage1Start").dispatch("click");
+  assert.equal(ui.posts.at(-1).body.stage, "stage1");
+});
+
+test("级联流水线：运行中点阶段二/阶段三不再排队等待，直接说明已包含在流水线中", async () => {
+  const runningAi = { ok: true, ai: { kind: "ai", running: true, runId: "run-cascade-live", stageMode: "all", results: [] } };
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: { "/api/ai-proofread/start": runningAi },
+    statusQueue: [runningAi, runningAi, runningAi, runningAi],
+  });
+
+  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3"; aiIds.cascadeToggle.checked = true;');
+  await ui.element("stage1Start").dispatch("click");
+  // 启动后紧接着的状态轮询是异步的：先把它抽干，避免它把 runningAiStage 冲成 null。
+  for (let step = 0; step < 24; step += 1) await Promise.resolve();
+  assert.equal(ui.run("runningAiStage"), "all");
+  const postsBefore = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
+
+  await ui.element("stage2Start").dispatch("click");
+  assert.equal(ui.run("stage2WaitingForStage1"), false, "级联模式不再退回到排队等待");
+  assert.match(toastMessages(ui).join("|"), /阶段二已包含在级联流水线中/);
+
+  await ui.element("stage3Start").dispatch("click");
+  assert.equal(ui.run("stage3WaitingForStage2"), false);
+  assert.match(toastMessages(ui).join("|"), /阶段三已包含在级联流水线中/);
+
+  const postsAfter = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
+  assert.equal(postsAfter, postsBefore, "级联运行中绝不发起并发的 start 请求");
+});
+
+test("级联流水线：任务结束时不走排队接力，直接回报流水线收尾", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-cascade-done", stageMode: "all", results: [] } },
+    },
+  });
+
+  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.cascadeToggle.checked = true;');
+  await ui.element("stage1Start").dispatch("click");
+  assert.equal(ui.run("runningAiStage"), "all");
+
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: false,
+      stopRequested: false,
+      finishedAt: new Date().toISOString(),
+      runId: "run-cascade-done",
+      stageMode: "all",
+      results: [],
+    });
+  `);
+
+  assert.equal(ui.run("runningAiStage"), null);
+  assert.match(toastMessages(ui).join("|"), /级联流水线已完成/);
+});
+
+test("级联流水线：页面刷新后按服务端回报的 stageMode 恢复级联按钮态", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-idle", results: [] } },
+    },
+  });
+
+  // 模拟刷新：本地 runningAiStage 已丢失，服务端回报的仍是正在跑的级联任务。
+  assert.equal(ui.run("runningAiStage"), null);
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      runId: "run-cascade-restored",
+      stageMode: "all",
+      results: [],
+    });
+  `);
+
+  assert.equal(ui.run("runningAiStage"), "all");
+  assert.equal(ui.element("stage2Start").disabled, true, "恢复级联态后阶段二开始按钮必须禁用");
+  assert.equal(ui.element("stage3Stop").disabled, false, "级联态下任意停止按钮都可用（停的是整条流水线）");
 });
 
 test("多阶段审核轨迹：右侧卡片仅保留评审意见与分析，不重复渲染改案文本", () => {

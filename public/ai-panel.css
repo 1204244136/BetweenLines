@@ -883,6 +883,40 @@ details[open] > summary .details-toggle::before {
   cursor: not-allowed;
 }
 
+/* 级联下游开关：阶段一启动时是否把初审产出的行立即移交给后续阶段，而不是等阶段一整体跑完。 */
+.ai-stage-cascade-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  color: var(--ai-text);
+  border: 1px solid var(--ai-line);
+  border-radius: var(--ai-radius-btn, 4px);
+  background: var(--ai-surface-subtle);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ai-stage-cascade-toggle input {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--ai-focus);
+}
+
+.ai-stage-cascade-toggle:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ai-stage-cascade-toggle input:disabled {
+  cursor: not-allowed;
+}
+
 .ai-stage-preset-select {
   max-width: 140px;
   height: 22px;

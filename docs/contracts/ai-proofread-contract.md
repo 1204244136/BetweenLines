@@ -183,6 +183,23 @@
 
 ---
 
+## 阶段编排与级联流水线（`runQueue`）
+
+三阶段（Gatekeeper 初审 → Stylist 文学复审 → Arbiter 终审仲裁）只有两种编排形态，都由 `cleanConfig` 归一成 `targetStage`：
+
+- **单阶段**（`stage1`/`stage2`/`stage3`）：只跑指定阶段。阶段二/三的队列从**备注文本**重建（`reconstructStage1Result`/`reconstructStage2Result`），属于有损路径——`resetStatus` 已清空 `status.results`，重建只能靠解析 `[AI校对]` 备注，`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠"参考/对照"字样反推。
+- **`all` 级联**：同一个任务里跑完整条流水线。`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）、独立的退避窗口与智能并发上探；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+
+### 级联前提与单任务互斥
+
+- **必须真的配了阶段二才级联**（`shouldCascadeStages`）：`config.stylistConfig` 与 `config.singleModelPersona` 都为空时，`targetStage="all"` 只当 `stage1` 跑并写一条日志——否则 `runStage2Stylist` 会回落主配置，等于背着用户多跑一轮复审。
+- **服务端同一时刻只允许一个 AI 任务**：`startProofread` 遇到 `status.running` 直接抛 `RUNNING`（HTTP 409）。所以「阶段二不必等阶段一整体结束」只能靠**启动时就选 `all`** 实现，无法在中途把阶段二追加到正在跑的 stage1 任务上；客户端也不得退回到「排队等前一阶段收尾、再起第二个任务」的默认路径。
+- 客户端「级联下游」开关（`#stageCascadeToggle`，默认勾选、随 AI 配置持久化）决定阶段一启动传 `all` 还是 `stage1`；阶段二/三单独启动仍是单阶段，用于对已有结论补跑。级联运行中点阶段二/三只提示「已包含在流水线中」，不再进入排队。
+- `clientStatus().stageMode` 如实回报本次任务的 `targetStage`：客户端刷新页面后本地 `runningAiStage` 会丢，靠这个字段恢复「当前跑的是不是级联流水线」的按钮态——级联中三个「开始」全禁用、三个「停止」全可用，因为停的都是同一条流水线。
+- 级联模式下 `continueOnly` 的跳过口径是「整行已经走完该走的所有阶段」：已终审、复审已定案（非 `提交仲裁`/`升级仲裁`）、初审明确通过且非复审候选都算完成；初审提改却还没复审的行必须留在流水线里，不能被当成已完成跳过。
+
+---
+
 ## 相关测试集
 
 修改 AI 校对与提示词逻辑必须执行：

@@ -169,6 +169,9 @@ const status = {
   reasoningEffort: "",
   projectKey: "",
   rowsSignature: "",
+  // 本次任务从哪一段起步：stage1/stage2/stage3 只跑一段，all 是「初审 → 复审 → 仲裁」级联。
+  // 客户端刷新页面后靠它恢复「当前这条流水线是级联模式」的按钮与徽标状态。
+  stageMode: "stage1",
   total: 0,
   queued: 0,
   processed: 0,
@@ -298,6 +301,7 @@ function clientStatus(options = {}) {
     reasoningEffort: status.reasoningEffort,
     projectKey: status.projectKey,
     rowsSignature: status.rowsSignature,
+    stageMode: status.stageMode,
     total: status.total,
     queued: status.queued,
     processed: status.processed,
@@ -589,6 +593,7 @@ function resetStatus(config, rowsLength) {
   status.reasoningEffort = config.reasoningEffort;
   status.projectKey = config.projectKey;
   status.rowsSignature = config.rowsSignature;
+  status.stageMode = config.targetStage;
   status.concurrency = config.concurrency;
   status.smartConcurrency = Boolean(config.smartConcurrency);
   status.currentConcurrency = config.concurrency;
@@ -1361,11 +1366,20 @@ function parseRateLimitReason(error) {
   return "接口频控限制";
 }
 
+// all 模式只有在阶段二真的配了模型时才级联：否则 runStage2Stylist 会回落主配置，
+// 等于背着用户多跑一轮复审。抽成纯函数是为了让这条前提能被直接断言。
+function shouldCascadeStages(config = {}) {
+  return config.targetStage === "all" && Boolean(config.stylistConfig || config.singleModelPersona);
+}
+
 async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // 流水线阶段解耦队列（Staged Pipelining Queues）
-  // 正常流程下各阶段独立控制，仅在显式 all 模式下连贯自动推进
-  const shouldCascade = config.targetStage === "all";
-  const stage1Pending = (config.targetStage === "stage1" || shouldCascade) ? [...queue] : [];
+  // 各阶段独立并发、独立退避：stage1 初审完一行就把它推给 stage2Pending，
+  // stage2 复审出分歧就推给 stage3Pending，谁都不必等前一阶段整体收尾。
+  // targetStage 决定"从哪一段开始"：stage1/stage2/stage3 只跑一段（stage2/3 的队列由备注重建），
+  // all 从阶段一起步并一路级联到底。
+  const shouldCascade = shouldCascadeStages(config);
+  const stage1Pending = (config.targetStage === "stage1" || config.targetStage === "all") ? [...queue] : [];
   const stage2Pending = config.targetStage === "stage2" ? [...(stageItems.stage2 || [])] : [];
   const stage3Pending = config.targetStage === "stage3" ? [...(stageItems.stage3 || [])] : [];
 
@@ -1425,6 +1439,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage3.smartConcurrency = s3Ctrl.isSmart;
   }
   syncStagePipelineQueues();
+  if (shouldCascade) {
+    pushLog(`级联流水线：阶段一初审完一行立即移交阶段二文学复审（并发 ${s2Ctrl.currentConcurrency}）${config.arbiterEnabled === false ? "，阶段三终审仲裁未启用" : "，复审出分歧立即移交阶段三终审仲裁"}，不再等前一阶段整体完成。`);
+  } else if (config.targetStage === "all") {
+    pushLog("级联流水线：阶段二未配置模型预设，本次按阶段一独立执行。");
+  }
 
   function onStageSuccess(ctrl) {
     if (!ctrl.isSmart) return;
@@ -4033,4 +4052,5 @@ module.exports = {
   testModel,
   cleanConfig,
   cleanSubStageConfig,
+  shouldCascadeStages,
 };

@@ -284,6 +284,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <option value="">使用主配置</option>
                     </select>
                     <div class="ai-stage-card-actions">
+                      <label class="ai-stage-cascade-toggle" title="勾选后：阶段一初审完一行立即移交阶段二复审，复审出分歧立即移交阶段三仲裁，不必等前一阶段整体跑完；取消勾选则本次只跑阶段一。阶段二未选预设时本项无效。"><input type="checkbox" id="stageCascadeToggle" checked><span>级联下游</span></label>
                       <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段一事实初审">开始</button>
                       <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段一任务">停止</button>
                     </div>

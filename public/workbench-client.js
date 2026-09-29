@@ -352,6 +352,7 @@
       stage1Preset: document.getElementById("stage1PresetSelect"),
       stage2Preset: document.getElementById("stage2PresetSelect"),
       stage3Preset: document.getElementById("stage3PresetSelect"),
+      cascadeToggle: document.getElementById("stageCascadeToggle"),
       stage2Card: document.getElementById("stage2Card"),
       stage3Card: document.getElementById("stage3Card"),
       start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
@@ -1045,6 +1046,13 @@
         pill3.dataset.state = hasStage3 ? "idle" : "disabled";
         pill3.textContent = hasStage3 ? "待命" : "未启用";
       }
+      // 级联下游开关只在阶段二真的配了预设时才有意义：没有下游就没有可级联的对象。
+      if (aiIds.cascadeToggle) {
+        aiIds.cascadeToggle.disabled = !hasStage2;
+        aiIds.cascadeToggle.title = hasStage2
+          ? "勾选后：阶段一初审完一行立即移交阶段二复审，复审出分歧立即移交阶段三仲裁，不必等前一阶段整体跑完；取消勾选则本次只跑阶段一。"
+          : "需先在阶段二选择模型预设，才可启用级联下游。";
+      }
     }
 
     function applyPreset(preset) {
@@ -1138,6 +1146,7 @@
         stage1PresetId: aiIds.stage1Preset?.value || "",
         stage2PresetId: aiIds.stage2Preset?.value || "",
         stage3PresetId: aiIds.stage3Preset?.value || "",
+        cascadeDownstream: aiIds.cascadeToggle ? Boolean(aiIds.cascadeToggle.checked) : true,
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
       if (projectAiConfigStorageKey) {
@@ -1234,6 +1243,9 @@
       }
       if (saved.stage3PresetId && aiIds.stage3Preset) {
         aiIds.stage3Preset.value = saved.stage3PresetId;
+      }
+      if (aiIds.cascadeToggle && saved.cascadeDownstream != null) {
+        aiIds.cascadeToggle.checked = Boolean(saved.cascadeDownstream);
       }
       updateStagePresetDependencies();
     }
@@ -4296,11 +4308,24 @@
       const previousRunning = currentAiRunning;
       currentAiRunning = Boolean(ai.running);
       const isRunning = Boolean(ai.running);
+      // 刷新页面后本地 runningAiStage 会丢：用服务端回报的 stageMode 恢复「当前跑的是不是级联流水线」，
+      // 否则级联运行中三个「开始」按钮会退回到可点状态。
+      if (isRunning && !runningAiStage && ai.stageMode) {
+        runningAiStage = ai.stageMode;
+      }
 
       if (!isRunning && (previousRunning || runningAiStage)) {
         const finishedStage = runningAiStage;
         runningAiStage = null;
-        if (finishedStage === "stage1" && stage2WaitingForStage1) {
+        if (finishedStage === "all") {
+          // 级联任务在一次运行里自己跑完三个阶段，不需要任何排队接力。
+          stage2WaitingForStage1 = false;
+          stage3WaitingForStage2 = false;
+          showToast(ai.stopRequested
+            ? "级联流水线已终止（初审 → 复审 → 仲裁）。"
+            : "级联流水线已完成：初审 → 复审 → 仲裁全部收尾。",
+          { tone: ai.stopRequested ? "info" : "success", durationMs: 7000 });
+        } else if (finishedStage === "stage1" && stage2WaitingForStage1) {
           stage2WaitingForStage1 = false;
           const hasStage1Suggestions = Object.values(notes).some((item) => {
             const text = String(item?.note || "");
@@ -4908,6 +4933,12 @@
         saveAiConfig();
       });
     }
+    if (aiIds.cascadeToggle) {
+      aiIds.cascadeToggle.addEventListener("change", () => {
+        suppressStageCardFilter(600);
+        saveAiConfig();
+      });
+    }
     if (aiIds.smartConcurrency) {
       aiIds.smartConcurrency.addEventListener("change", () => {
         updateConcurrencyControls();
@@ -5189,6 +5220,20 @@
     let stage2WaitingForStage1 = false;
     let stage3WaitingForStage2 = false;
 
+    // 级联下游：阶段二配了预设且开关打开时，阶段一启动即按 all 模式跑整条流水线——
+    // 初审完一行立刻交给复审、复审出分歧立刻交给仲裁，而不是等阶段一整体收尾后才开始复审
+    // （那会让复审空转掉一整个阶段一的时长，而且只能从备注文本反推初审结论，属于有损重建）。
+    function cascadeDownstreamEnabled() {
+      const hasDownstream = Boolean(aiIds.stage2Preset?.value);
+      const toggleOn = aiIds.cascadeToggle ? Boolean(aiIds.cascadeToggle.checked) : true;
+      return hasDownstream && toggleOn;
+    }
+
+    // 从哪一段起步就级联到已启用的下游；阶段二/三单独启动仍只跑该阶段（用于对已有结论补跑）。
+    function startModeForStage(stage) {
+      return stage === "stage1" && cascadeDownstreamEnabled() ? "all" : stage;
+    }
+
     function getStageActiveStates(running, stagePipelines = null) {
       const isRunning = running != null ? Boolean(running) : currentAiRunning;
       if (!isRunning) {
@@ -5233,6 +5278,9 @@
       }
       const isRunning = running != null ? Boolean(running) : currentAiRunning;
       const active = getStageActiveStates(isRunning, stagePipelines || latestStagePipelines);
+      // 级联流水线是一个整体任务：三个「开始」一律禁用（无法中途插入单阶段），
+      // 三个「停止」一律可用（任意一个停的都是这条流水线），避免出现停不掉的死角。
+      const cascading = isRunning && runningAiStage === "all";
 
       const s1Start = document.getElementById("stage1Start") || aiIds.start;
       const s1Stop = document.getElementById("stage1Stop") || aiIds.stop;
@@ -5241,14 +5289,14 @@
       const s3Start = document.getElementById("stage3Start");
       const s3Stop = document.getElementById("stage3Stop");
 
-      if (s1Start) s1Start.disabled = active.stage1;
-      if (s1Stop) s1Stop.disabled = !active.stage1;
+      if (s1Start) s1Start.disabled = active.stage1 || cascading;
+      if (s1Stop) s1Stop.disabled = !active.stage1 && !cascading;
 
-      if (s2Start) s2Start.disabled = active.stage2 || stage2WaitingForStage1;
-      if (s2Stop) s2Stop.disabled = !active.stage2 && !stage2WaitingForStage1;
+      if (s2Start) s2Start.disabled = active.stage2 || stage2WaitingForStage1 || cascading;
+      if (s2Stop) s2Stop.disabled = !active.stage2 && !stage2WaitingForStage1 && !cascading;
 
-      if (s3Start) s3Start.disabled = active.stage3 || stage3WaitingForStage2;
-      if (s3Stop) s3Stop.disabled = !active.stage3 && !stage3WaitingForStage2;
+      if (s3Start) s3Start.disabled = active.stage3 || stage3WaitingForStage2 || cascading;
+      if (s3Stop) s3Stop.disabled = !active.stage3 && !stage3WaitingForStage2 && !cascading;
     }
     setAllStageButtonsRunning(false);
 
@@ -5260,6 +5308,10 @@
       if (stage === "stage2") {
         if (!aiIds.stage2Preset?.value) {
           showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
+          return;
+        }
+        if (runningAiStage === "all") {
+          showToast("阶段二已包含在级联流水线中：初审产出的行会立即自动移交复审，无需单独启动。", { tone: "info", durationMs: 6000 });
           return;
         }
         if (currentAiRunning || runningAiStage === "stage1") {
@@ -5322,6 +5374,10 @@
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
           return;
         }
+        if (runningAiStage === "all") {
+          showToast("阶段三已包含在级联流水线中：复审产生分歧的行会立即自动移交仲裁，无需单独启动。", { tone: "info", durationMs: 6000 });
+          return;
+        }
 
         let arbitratedCount = 0;
         let pendingArbCount = 0;
@@ -5381,6 +5437,9 @@
       }
 
       if (stage === "stage1") {
+        // 阶段一起步就决定本次是「只跑初审」还是「一路级联到已启用的下游」：
+        // 级联由服务端 all 模式在同一个任务里做，客户端不再排队等阶段一收尾。
+        const startStage = startModeForStage("stage1");
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
@@ -5395,13 +5454,13 @@
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
             }
-            await startAiProofread({ continueOnly: false, stage: "stage1" });
+            await startAiProofread({ continueOnly: false, stage: startStage });
           } else {
-            await startAiProofread({ continueOnly: true, stage: "stage1" });
+            await startAiProofread({ continueOnly: true, stage: startStage });
           }
           return;
         }
-        await startAiProofread({ continueOnly: false, stage: "stage1" });
+        await startAiProofread({ continueOnly: false, stage: startStage });
       } else {
         await startAiProofread({ continueOnly: false, stage });
       }
@@ -5412,7 +5471,7 @@
       setAllStageButtonsRunning(true);
       if (aiIds.status) aiIds.status.dataset.cacheCleared = "";
       if (aiIds.panel) aiIds.panel.open = true;
-      const stageNames = { stage1: "阶段一 事实初审", stage2: "阶段二 文学复审", stage3: "阶段三 终审仲裁" };
+      const stageNames = { stage1: "阶段一 事实初审", stage2: "阶段二 文学复审", stage3: "阶段三 终审仲裁", all: "级联流水线（初审 → 复审 → 仲裁）" };
       setRuntimeStatus("正在启动 " + (stageNames[stage] || "AI 校对") + "...");
 
       const baseConfig = aiConfig();
@@ -5437,7 +5496,18 @@
           }
           const noteText = String(item.note || "").trim();
           const p = parseAutomatedNote(noteText);
-          if (stage === "stage1") {
+          if (stage === "all") {
+            // 级联任务一次覆盖三个阶段：只有「整行已经走完该走的所有阶段」才算处理过。
+            // 已终审、复审已定案、初审明确通过且非复审候选，都算完成；
+            // 初审提改却还没复审的行必须留在流水线里，不能被当成已完成跳过。
+            const stage3Done = Boolean(p?.stage3 || noteText.includes("Arbiter仲裁"));
+            const s2Attitude = String(p?.stage2?.attitude || "");
+            const stage2Settled = Boolean(p?.stage2)
+              && !/提交仲裁|升级仲裁/.test(s2Attitude)
+              && !/Stylist复审\[(?:提交仲裁|升级仲裁)\]/.test(noteText);
+            const stage1Clear = p?.modify === "否" && !isStage2CandidateNote(p, noteText);
+            if (item.aiDone && (stage3Done || stage2Settled || stage1Clear)) completedSet.add(num);
+          } else if (stage === "stage1") {
             if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
           } else if (stage === "stage2") {
             const hasS2 = hasCompletedStage2Note(p, noteText);

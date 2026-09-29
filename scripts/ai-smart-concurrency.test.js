@@ -18,6 +18,7 @@ const {
   stopProofread,
   cleanConfig,
   cleanSubStageConfig,
+  shouldCascadeStages,
 } = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
 const {
@@ -580,8 +581,30 @@ test("多阶段独立并发：各子阶段预设能够正确保留并清洗并�
   assert.equal(conf.arbiterConfig.concurrencyMax, 3);
 });
 
-test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
-  const tools = createPresetTools();
+test("级联流水线：all 模式解析为级联，且必须真的配了阶段二才级联", () => {
+  // 客户端契约：stage="all" 是「初审 → 复审 → 仲裁」一次提交，targetStage 归一为 all。
+  assert.equal(cleanConfig({ stage: "all" }).targetStage, "all");
+  assert.equal(cleanConfig({ targetStage: "all" }).targetStage, "all");
+  assert.equal(cleanConfig({ stage: "stage1" }).targetStage, "stage1");
+  assert.equal(cleanConfig({ stage: "stage2" }).targetStage, "stage2");
+  assert.equal(cleanConfig({ stage: "stage3" }).targetStage, "stage3");
+
+  const stylist = { provider: "compatible", model: "gemini-3.8-flash" };
+  // 配了阶段二才级联：否则 runStage2Stylist 会回落主配置，等于背着用户多跑一轮复审。
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all", stylistConfig: stylist })), true);
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all" })), false);
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all", singleModelPersona: true })), true);
+  // 非 all 模式永远不级联，哪怕配了阶段二。
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1", stylistConfig: stylist })), false);
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage2", stylistConfig: stylist })), false);
+});
+
+test("级联流水线：状态接口如实回报本次任务的起步阶段，供刷新后恢复按钮态", () => {
+  // 空闲时默认按阶段一回报：客户端据此知道当前没有级联任务在跑。
+  assert.equal(clientStatus({ includeResults: false }).stageMode, "stage1");
+});
+
+test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {  const tools = createPresetTools();
   const storage = {
     data: new Map([
       [
