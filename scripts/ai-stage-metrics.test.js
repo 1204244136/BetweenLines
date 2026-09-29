@@ -215,10 +215,12 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("metricFastPassHits").textContent, 2);
   assert.equal(ui.element("aiStageFastPassRate").textContent, "快速直通: 100%");
   assert.equal(ui.element("metricStage2Reviewed").textContent, 2); // 行3调整 + 行4提交仲裁
-  assert.equal(ui.element("metricStage2Diverged").textContent, 1); // 行4分歧进入仲裁
+  assert.equal(ui.element("metricStage2Diverged").textContent, 2); // 行3调整与行4提交仲裁都算复审分歧
   assert.equal(ui.element("metricCritiqueModify").textContent, 1);
   assert.equal(ui.element("metricCritiqueEscalate").textContent, 1);
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1); // 行4仲裁
+  assert.equal(ui.element("metricStage3Pending").textContent, 1); // 行3已分歧但尚未仲裁
+  assert.equal(ui.element("stage3PendingItem").hidden, false, "存在未仲裁的分歧行时必须露出「待仲裁」");
   assert.equal(ui.element("metricArbGatekeeper").textContent, 1); // 行4仲裁采纳初审方案
   assert.equal(ui.element("metricStage3Settled").textContent, 1);
 
@@ -229,6 +231,63 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("stage2StatusPill").textContent, "就绪");
   assert.equal(ui.element("stage3StatusPill").dataset.state, "done");
   assert.equal(ui.element("stage3StatusPill").textContent, "就绪");
+});
+
+test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不得塌回「已仲裁数」", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-arb", results: [] } },
+    },
+  });
+
+  // 4 行复审分歧：2 行「调整」+ 1 行「升级仲裁」尚未仲裁，1 行已仲裁定案。
+  // 仲裁队列此刻是空的——分歧数只能从备注里读出来，不能靠队列实时计数兜。
+  ui.run(`
+    aiIds.stage3Preset.value = "preset-s3";
+    notes["1"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\n修改结果：复审案1",
+      revisionText: "复审案1",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+    notes["2"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案2\\nStylist复审[调整]：调整语序\\n复审改案：复审案2\\n修改结果：复审案2",
+      revisionText: "复审案2",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+    notes["3"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案3\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：复审案3\\n修改结果：初审案3",
+      revisionText: "初审案3",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+    notes["4"] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案4\\nStylist复审[驳回]：原译文意顺畅\\nArbiter仲裁[维持原译]：维持原译\\n修改结果：译文四",
+      revisionText: "译文四",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+  `);
+
+  ui.run("markNotesDirtyForMetrics(); updateStageMetricsDashboard();");
+
+  // 卡片「分歧」= 复审与初审产生分歧的全部行（含已仲裁与待仲裁），不是「已仲裁数」
+  assert.equal(ui.element("metricStage2Diverged").textContent, 4, "分歧 = 已仲裁 1 + 待仲裁 3");
+  assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
+  assert.equal(ui.element("metricStage3Pending").textContent, 3, "待仲裁 = 分歧 4 − 已仲裁 1");
+
+  // 「启动 AI 校对」弹窗里的待仲裁行数必须与卡片同源
+  await ui.element("stage3Start").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, true, "已有仲裁方案且仍有分歧行时必须弹确认窗");
+  assert.match(
+    ui.element("aiConfirmMessage").innerHTML,
+    /<strong>1<\/strong> 条终审仲裁方案，<strong>3<\/strong> 条分歧行待仲裁/
+  );
 });
 
 test("空闲且全为零的 AI 状态不覆盖从备注中恢复的阶段指标", () => {

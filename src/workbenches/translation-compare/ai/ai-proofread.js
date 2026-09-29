@@ -767,12 +767,19 @@ function addResult(result, { prefilterKind = "" } = {}) {
       if (attitude === "reject") status.stageMetrics.critiqueReject += 1;
       if (attitude === "modify") status.stageMetrics.critiqueModify += 1;
       if (attitude === "escalate") status.stageMetrics.critiqueEscalate += 1;
+      // 「复审分歧」是复审与初审产生立场或方案分歧的行数（含已仲裁与待仲裁），
+      // 不是「已仲裁数」：只在仲裁结束后才 +1，任务跑完时分歧会塌回仲裁数，
+      // 与「启动 AI 校对」弹窗按备注统计出的待仲裁行数对不上。
+      if (attitude === "modify" || attitude === "reject" || attitude === "escalate") {
+        status.stageMetrics.stage2Diverged = (status.stageMetrics.stage2Diverged || 0) + 1;
+      }
     } else if (result.status === "suggestion" && result.stageResult?.stage === "stylist") {
       status.stageMetrics.stage2Reviewed += 1;
     }
 
     if (result.arbitration || result.stageResult?.stage === "arbiter") {
       status.stageMetrics.stage3Arbitrated += 1;
+      // 兜底：仲裁过的行必然是分歧行（复审记录缺失时上面那次按态度计数拿不到）。
       status.stageMetrics.stage2Diverged = Math.max(status.stageMetrics.stage3Arbitrated, status.stageMetrics.stage2Diverged || 0);
       const winner = String(result.arbitration?.winner || result.stageResult?.winner || "");
       if (winner === "gatekeeper" || winner.includes("初审")) {
@@ -865,11 +872,13 @@ function removeStageMetricsForResult(result = {}) {
     if (attitude === "reject") dec("critiqueReject");
     if (attitude === "modify") dec("critiqueModify");
     if (attitude === "escalate") dec("critiqueEscalate");
+    // 与上面的计数严格对称：分歧按复审态度计入，撤销也必须按同一条态度撤销，
+    // 否则重跑/复审过的行会把自己的分歧贡献留两份。
+    if (attitude === "modify" || attitude === "reject" || attitude === "escalate") dec("stage2Diverged");
   }
   if (result.arbitration || result.stageResult?.stage === "arbiter") {
     dec("stage3Arbitrated");
     dec("stage3Settled");
-    dec("stage2Diverged");
   }
   metrics.stage1Total = (metrics.stage1Passed || 0) + (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0);
   metrics.totalAudited = Math.max(0, (metrics.totalAudited || 0) - 1);

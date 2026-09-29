@@ -2114,6 +2114,19 @@
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
     }
 
+    // 复审与初审产生立场或方案分歧的判据：阶段二卡片「分歧」、阶段三「待仲裁」、
+    // 「待终审仲裁」筛选与「启动 AI 校对」弹窗共用这一份，避免同一批行各处各说各话。
+    function isStage2DivergedNote(parsed, noteText = "") {
+      const text = String(noteText || "");
+      const hasS2 = Boolean(parsed?.stage2 || text.includes("Stylist复审"));
+      if (!hasS2) return false;
+      const att = String(parsed?.stage2?.attitude || "");
+      return att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
+        att === "modify" || att === "reject" || att === "escalate" ||
+        text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate") ||
+        Boolean(parsed?.stage1Revision && parsed?.stage2Revision && parsed.stage1Revision !== parsed.stage2Revision);
+    }
+
     function getStage3RowStatus(item) {
       if (!item || item.manualDone) return { isArbitrated: false, isPending: false, isRelevant: false };
       const text = String(item.note || "").trim();
@@ -2126,14 +2139,7 @@
         return { isArbitrated: true, isPending: false, isRelevant: true };
       }
 
-      const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-      const att = String(p.stage2?.attitude || "");
-      const isDiverged = att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
-        att === "modify" || att === "reject" || att === "escalate" ||
-        text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate") ||
-        Boolean(p.stage1Revision && p.stage2Revision && p.stage1Revision !== p.stage2Revision);
-
-      if (hasS2 && isDiverged) {
+      if (isStage2DivergedNote(p, text)) {
         return { isArbitrated: false, isPending: true, isRelevant: true };
       }
 
@@ -4179,10 +4185,18 @@
           }
         }
 
+        // 「复审分歧」= 复审与初审产生立场或方案分歧的行数（含已仲裁与待仲裁）。
+        // 判据必须与「待终审仲裁」筛选、启动弹窗同源（getStage3RowStatus）：
+        // 只在拿到仲裁结论时才 +1 的话，仲裁队列跑空后分歧会塌回「已仲裁数」，
+        // 于是卡片写「1 分歧」、弹窗写「1583 条分歧行待仲裁」，两边各说各话。
+        const stage3RowStatus = getStage3RowStatus(item);
+        if (stage3RowStatus.isArbitrated || stage3RowStatus.isPending) {
+          stage2Diverged += 1;
+        }
+
         // 阶段三终审仲裁指标
         if (hasStage3) {
           stage3Arbitrated += 1;
-          stage2Diverged += 1;
           const winner = String(parsed.stage3?.winner || "").toLowerCase();
           if (winner.includes("初审") || winner.includes("gatekeeper") || winner.includes("gk")) {
             arbitrationGatekeeper += 1;
@@ -4204,6 +4218,9 @@
       }
 
       stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
+      // 人工确认过的分歧行不计入分歧（与弹窗、筛选口径一致），但仲裁数照样如实反映：
+      // 分歧数绝不能低于已仲裁数，否则「待仲裁 = 分歧 − 已仲裁」会被算成负数再被夹回 0。
+      stage2Diverged = Math.max(stage2Diverged, stage3Arbitrated);
       const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
       // The visible count follows the same note-level predicate as the filter,
       // so incomplete/failed Stylist rows remain actionable instead of being

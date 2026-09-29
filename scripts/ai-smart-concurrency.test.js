@@ -1000,6 +1000,55 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
   }
 });
 
+test("复审分歧计数：复审出分歧但没有下游仲裁时，「分歧」不能是 0", async () => {
+  clearProofreadCache();
+  const totalRows = 2;
+  const { project } = setupMockProject(totalRows, "diverged");
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isStylist = userText.includes("gatekeeperReview");
+      const content = isStylist
+        ? { critique: { attitude: "modify", rationale: "调整语序更自然" }, revisedText: "复审改案", summary: "调整" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      // 只配复审、不配仲裁：复审出的分歧没有下游可去，分歧数依然必须如实统计，
+      // 否则「分歧」会退化成「已仲裁数」= 0，与弹窗按备注数出的待仲裁行数打架。
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stageMetrics.stage2Reviewed, totalRows, "两行都复审过");
+    assert.equal(finished.stageMetrics.stage2Diverged, totalRows, "复审出分歧的行必须计入分歧，不能只在仲裁完成后才 +1");
+    assert.equal(finished.stageMetrics.stage3Arbitrated, 0, "没配仲裁就不该有仲裁");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
   const tools = createPresetTools();
   const storage = {
