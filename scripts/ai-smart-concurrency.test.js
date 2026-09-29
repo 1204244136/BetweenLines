@@ -383,6 +383,81 @@ test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在�
   }
 });
 
+test("固定并发（未开智能并发）遭遇 429 同样退避重试，不再直接判失败", async () => {
+  clearProofreadCache();
+  const { project } = setupMockProject(4, "fixed429");
+
+  const rateLimitAttempts = new Map();
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const match = body.match(/段落 (\d+)/);
+      const rowNum = match ? Number(match[1]) : 0;
+      const seen = rateLimitAttempts.get(rowNum) || 0;
+      rateLimitAttempts.set(rowNum, seen + 1);
+
+      if (seen === 0) {
+        res.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": "0.1",
+        });
+        res.end(JSON.stringify({
+          error: { message: "Rate limit reached for requests per minute." },
+        }));
+        return;
+      }
+
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              semanticSame: true,
+              needsEdit: false,
+              decision: "keep",
+              summary: "校对无误",
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    await startProofread({
+      provider: "compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      model: "test-model",
+      proofreadMode: "bilingual",
+      // 关键：不开智能并发。频控退避与重试不该依赖这个开关——否则固定并发的用户
+      // 遇到 429 会被当成普通失败，一次不重试地刷到队列尽头。
+      smartConcurrency: false,
+      concurrency: 2,
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 8000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.smartConcurrency, false);
+    assert.equal(finished.concurrencyLimits >= 1, true, "429 必须被识别为频控");
+    assert.ok(finished.logs.some((log) => log.includes("[频控退避]")), "退避重试必须留下日志");
+    assert.equal(finished.errors, 0, "首轮 429 应被重试消化，不该记成失败");
+    assert.equal(finished.processed, 4);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("智能并发：超出重试上限的持续 429 记为单行失败且不崩溃队列", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(4, "persistent429");

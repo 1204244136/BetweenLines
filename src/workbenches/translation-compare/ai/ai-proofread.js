@@ -1604,7 +1604,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
     if (shouldRetryRow(retries, maxRowRetries, status.stopRequested)) {
       const stageNamePart = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}`;
-      pushLog(`[智能并发] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${ctrl.currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
+      pushLog(`[频控退避] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${ctrl.currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
       pendingQueue.unshift(itemToRetry);
       syncStagePipelineQueues();
       return true;
@@ -1739,7 +1739,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = s1Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        // 频控识别不依赖「智能并发」开关：退避与重试对固定并发同样必要。
+        // 之前带上 s1Ctrl.isSmart 时，没开智能并发的用户遇到 429 会被当成普通失败，
+        // 一次不重试地一路刷到队列尽头（用户只看到「异常」疯涨）。
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
 
         if (isRefusal) {
@@ -1751,7 +1754,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         } else if (isRateLimit) {
           const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row);
           if (!retried) {
-            pushLog(`[智能并发] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
+            pushLog(`[频控退避] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             addResult({
               runId: status.runId,
               index: row.index,
@@ -1826,7 +1829,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = s2Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        // 与初审一致：频控退避不依赖「智能并发」开关。
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
@@ -1834,7 +1838,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           // 成功推回 stage2Pending 重试
         } else {
           if (isRateLimit) {
-            pushLog(`[智能并发] 第 ${s1Item.row.index} 行文学复审连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至初审方案。`);
+            pushLog(`[频控退避] 第 ${s1Item.row.index} 行文学复审连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至初审方案。`);
           } else {
             pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
           }
@@ -1877,7 +1881,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         status.active = status.active.filter((idx) => idx !== s2Item.row.index);
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = s3Ctrl.isSmart && !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        // 与初审一致：频控退避不依赖「智能并发」开关。
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
@@ -1886,7 +1891,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           // 成功推回 stage3Pending 重试
         } else {
           if (isRateLimit) {
-            pushLog(`[智能并发] 第 ${s2Item.row.index} 行终审仲裁连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至复审方案。`);
+            pushLog(`[频控退避] 第 ${s2Item.row.index} 行终审仲裁连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至复审方案。`);
           } else {
             pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
           }
