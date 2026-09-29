@@ -128,6 +128,76 @@ test("弹窗中选择「从未人工确认处开始」，清空未确认的 AI �
   assert.deepEqual(toastMessages(ui), ["已清空 2 条未人工确认的 AI 校对信息。"]);
 });
 
+// 有未确认记录时点「开始」必经确认弹窗：弹窗里的两个选项都必须过一遍 startModeForStage，
+// 否则阶段一配了「级联下游」也会被这条路径悄悄降级成单阶段（复审永远等不到行）。
+function setupCascadeDialogWorkbench() {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-dialog-cascade", stageMode: "all", results: [] } },
+    },
+  });
+  ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
+    { id: "preset_s2", name: "Gemini 复审", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
+  ]));
+  ui.run("restoreAiConfig()");
+  ui.run('aiIds.stage2Preset.value = "preset_s2"; aiIds.cascadeToggle.checked = true;');
+  ui.run(`
+    notes["1"] = {
+      note: "[AI校对]\\n语义是否相同：不同\\n是否需要修改：是\\n分析：漏译。\\n修改结果：修订一",
+      revisionText: "修订一",
+      revisionTarget: "cn",
+      manualDone: false,
+      done: false,
+      aiDone: true,
+    };
+  `);
+  return ui;
+}
+
+test("级联流水线：确认弹窗「继续剩下的」必须保持 all 级联，不得降级成单阶段", async () => {
+  const ui = setupCascadeDialogWorkbench();
+  assert.equal(ui.run("cascadeDownstreamEnabled()"), true);
+
+  await ui.element("aiStart").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, true, "有未确认记录时仍应先弹确认弹窗");
+  assert.match(ui.element("aiConfirmMessage").innerHTML, /级联流水线/, "弹窗应说明本次按级联流水线推进");
+
+  await ui.element("aiConfirmKeep").dispatch("click");
+  const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
+  assert.ok(post, "发起启动请求");
+  assert.equal(post.body.stage, "all", "确认弹窗不得绕过级联开关把阶段一降级成单阶段");
+  assert.ok(post.body.stylistConfig, "级联必须带上阶段二预设配置");
+  assert.match(toastMessages(ui).join("|"), /本次按级联流水线推进/);
+});
+
+test("级联流水线：确认弹窗「从未人工确认处开始」同样保持 all 级联", async () => {
+  const ui = setupCascadeDialogWorkbench();
+
+  await ui.element("aiStart").dispatch("click");
+  assert.equal(ui.element("aiConfirmDialog").open, true);
+
+  await ui.element("aiConfirmClear").dispatch("click");
+  const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
+  assert.ok(post, "发起启动请求");
+  assert.equal(post.body.stage, "all", "清空重跑同样必须保持级联");
+  assert.ok(post.body.stylistConfig, "级联必须带上阶段二预设配置");
+});
+
+test("级联流水线：阶段二预设取不到时（下拉残留旧 id）不传 all，避免服务端静默按单阶段跑", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stale-preset", results: [] } },
+    },
+  });
+
+  // 下拉里留着一个本地已经不存在的预设 id。
+  ui.run('aiIds.stage2Preset.value = "preset_gone"; aiIds.cascadeToggle.checked = true;');
+  assert.equal(ui.run("cascadeDownstreamEnabled()"), false, "取不到预设就等于没有下游");
+
+  await ui.element("aiStart").dispatch("click");
+  assert.equal(ui.posts.at(-1).body.stage, "stage1");
+});
+
 test("没有未人工确认的 AI 校对信息时，点击开始校对不弹窗直接启动", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {

@@ -604,7 +604,87 @@ test("级联流水线：状态接口如实回报本次任务的起步阶段，�
   assert.equal(clientStatus({ includeResults: false }).stageMode, "stage1");
 });
 
-test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {  const tools = createPresetTools();
+test("级联流水线：all 模式下初审提改行立即移交复审，不等阶段一整体跑完", async () => {
+  clearProofreadCache();
+  const totalRows = 6;
+  const { project } = setupMockProject(totalRows, "cascade");
+
+  let stage1Completed = 0;
+  let stylistRequests = 0;
+  let stylistFirstSeenAtStage1Completed = null;
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      // 复审请求的 user 载荷里带 gatekeeperReview，初审请求没有：据此区分两个阶段。
+      const isStylist = userText.includes("gatekeeperReview");
+      const content = isStylist
+        ? { critique: { attitude: "accept", rationale: "同意初审改案" }, revisedText: "复审定案", summary: "复审采纳" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+
+      if (isStylist) {
+        stylistRequests += 1;
+        if (stylistFirstSeenAtStage1Completed === null) {
+          stylistFirstSeenAtStage1Completed = stage1Completed;
+        }
+      } else {
+        stage1Completed += 1;
+      }
+
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+      }, isStylist ? 5 : 30);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    await startProofread({
+      provider: "compatible",
+      baseUrl,
+      model: "test-model",
+      proofreadMode: "bilingual",
+      concurrency: 2,
+      stage: "all",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterEnabled: false,
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stageMode, "all", "状态接口应回报本次是 all 级联任务");
+    assert.equal(finished.errors, 0);
+    assert.equal(stylistRequests, totalRows, "每一行初审提改都要进入复审");
+    assert.ok(stylistFirstSeenAtStage1Completed !== null, "复审请求必须真的发生");
+    assert.ok(
+      stylistFirstSeenAtStage1Completed < totalRows,
+      `复审必须在阶段一整体跑完之前就开始（实际在第 ${stylistFirstSeenAtStage1Completed} 行初审完成后）`,
+    );
+    assert.ok(
+      finished.logs.some((log) => log.includes("级联流水线：阶段一初审完一行立即移交阶段二文学复审")),
+      "日志应说明本次走的是级联流水线",
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段独立并发指标", () => {
+  const tools = createPresetTools();
   const storage = {
     data: new Map([
       [

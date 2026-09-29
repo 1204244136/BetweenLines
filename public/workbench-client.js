@@ -5224,9 +5224,12 @@
     // 初审完一行立刻交给复审、复审出分歧立刻交给仲裁，而不是等阶段一整体收尾后才开始复审
     // （那会让复审空转掉一整个阶段一的时长，而且只能从备注文本反推初审结论，属于有损重建）。
     function cascadeDownstreamEnabled() {
-      const hasDownstream = Boolean(aiIds.stage2Preset?.value);
+      const presetId = aiIds.stage2Preset?.value || "";
       const toggleOn = aiIds.cascadeToggle ? Boolean(aiIds.cascadeToggle.checked) : true;
-      return hasDownstream && toggleOn;
+      if (!presetId || !toggleOn) return false;
+      // 预设被删掉时下拉框里可能还留着旧 id：取不到预设就等于没有下游，
+      // 否则会把 all 传下去、服务端却因 stylistConfig 为空而按单阶段跑，看起来就像「级联没生效」。
+      return Boolean(presetTools.getPreset(localStorage, presetId));
     }
 
     // 从哪一段起步就级联到已启用的下游；阶段二/三单独启动仍只跑该阶段（用于对已有结论补跑）。
@@ -5440,16 +5443,19 @@
         // 阶段一起步就决定本次是「只跑初审」还是「一路级联到已启用的下游」：
         // 级联由服务端 all 模式在同一个任务里做，客户端不再排队等阶段一收尾。
         const startStage = startModeForStage("stage1");
+        const cascade = startStage === "all";
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
             if (aiConfirmIds.message) {
-              aiConfirmIds.message.innerHTML = `检测到当前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。<br>请选择本次启动方式：`;
+              aiConfirmIds.message.innerHTML = `检测到当前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。`
+                + (cascade ? "<br>本次将按<strong>级联流水线</strong>推进：初审 → 复审 → 仲裁。" : "")
+                + "<br>请选择本次启动方式：";
             }
             aiConfirmIds.dialog.showModal();
             return;
           }
-          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）`)) {
+          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）${cascade ? "\n\n本次按级联流水线推进：初审完一行立即移交复审，复审出分歧立即移交仲裁。" : ""}`)) {
             const cleared = clearUnconfirmedAiProofreadNotes();
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
@@ -5618,7 +5624,9 @@
                   : `已清空 ${cleared} 条未人工确认的方案。`));
             showToast(msg, { tone: "info", durationMs: 6000 });
           }
-          await startAiProofread({ continueOnly: false, stage: pendingStartStage });
+          // 清空的是哪个阶段的记录，和本次从哪里起步是两件事：起步阶段必须过一遍
+          // startModeForStage，否则阶段一配了级联也会被这个弹窗悄悄降级成单阶段。
+          await startAiProofread({ continueOnly: false, stage: startModeForStage(pendingStartStage) });
         });
       }
       if (aiConfirmIds.keep) {
@@ -5634,8 +5642,11 @@
               return;
             }
           }
-          showToast("保留已有方案，仅校对剩余未处理行。", { tone: "info", durationMs: 4000 });
-          await startAiProofread({ continueOnly: true, stage: pendingStartStage });
+          const keepStage = startModeForStage(pendingStartStage);
+          showToast(keepStage === "all"
+            ? "保留已有方案，仅校对剩余未处理行；本次按级联流水线推进（初审 → 复审 → 仲裁）。"
+            : "保留已有方案，仅校对剩余未处理行。", { tone: "info", durationMs: 4000 });
+          await startAiProofread({ continueOnly: true, stage: keepStage });
         });
       }
       if (aiConfirmIds.cancel) {

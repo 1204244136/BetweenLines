@@ -525,9 +525,21 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
   assert.equal(lastStartPost.body.stage, "stage3", "阶段三启动必须指定 stage=stage3，专门仲裁分歧行");
 });
 
+// 级联回归用的工作台：级联要求阶段二预设真的能从本地存储解析出来——
+// 只把下拉框 value 设成一个不存在的 id 不算「配了阶段二」，那种情况按设计不级联。
+function createCascadeWorkbench(options = {}) {
+  const ui = createWorkbench(storageFixture({}), options);
+  ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
+    { id: "preset-s2", name: "Gemini 复审", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
+    { id: "preset-s3", name: "Kimi 仲裁", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "kimi-k3" },
+  ]));
+  ui.run("restoreAiConfig()");
+  return ui;
+}
+
 test("级联流水线：阶段二已配置时，阶段一「开始」一次性提交 all 级联任务", async () => {
   const runningAi = { ok: true, ai: { kind: "ai", running: true, runId: "run-cascade", stageMode: "all", results: [] } };
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createCascadeWorkbench({
     apiResponses: { "/api/ai-proofread/start": runningAi },
     statusQueue: [runningAi, runningAi, runningAi, runningAi],
   });
@@ -552,7 +564,7 @@ test("级联流水线：阶段二已配置时，阶段一「开始」一次性�
 });
 
 test("级联流水线：关闭级联开关后，阶段一「开始」仍只提交 stage1", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createCascadeWorkbench({
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-solo", stageMode: "stage1", results: [] } },
     },
@@ -582,7 +594,7 @@ test("级联流水线：阶段二未配置时阶段一只跑初审，没有可�
 
 test("级联流水线：运行中点阶段二/阶段三不再排队等待，直接说明已包含在流水线中", async () => {
   const runningAi = { ok: true, ai: { kind: "ai", running: true, runId: "run-cascade-live", stageMode: "all", results: [] } };
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createCascadeWorkbench({
     apiResponses: { "/api/ai-proofread/start": runningAi },
     statusQueue: [runningAi, runningAi, runningAi, runningAi],
   });
@@ -607,7 +619,7 @@ test("级联流水线：运行中点阶段二/阶段三不再排队等待，直�
 });
 
 test("级联流水线：任务结束时不走排队接力，直接回报流水线收尾", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createCascadeWorkbench({
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-cascade-done", stageMode: "all", results: [] } },
     },
