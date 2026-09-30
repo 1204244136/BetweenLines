@@ -28,7 +28,12 @@
    两边 token 值一致，组件渲染结果相同。
    ========================================================================== */
 
-.ai-panel {
+/* token 别名必须挂在 :root：行内多阶段审核组件（.stage-pipeline-badge、.stage-report-card、
+   .pipeline-step、.revision-stage-pills 等）渲染在表格里，并不在 .ai-panel 子树内。
+   别名挂在面板作用域时，这些 var() 在使用处一律解析失败，徽标会退化成无背景、无边框、
+   hover 也没有反馈的裸文字——「审核轨迹」因此显得不像可点击的控件。
+   别名解析发生在使用元素上，所以两套页面 token 的兼容语义不变。 */
+:root {
   --ai-line: var(--line, var(--speaker-line));
   --ai-line-strong: var(--line-strong, var(--speaker-line-strong));
   --ai-surface: var(--surface, var(--speaker-surface));
@@ -1147,6 +1152,14 @@ details[open] > summary .details-toggle::before {
 .stage-pipeline-badge:hover {
   border-color: var(--ai-focus);
   background: var(--ai-surface-selected);
+}
+
+/* 键盘可达：阶段卡片正文与行内「审核轨迹」徽标都是可聚焦的 role="button"，
+   必须有可见的焦点环，否则 Tab 过去看不出焦点停在哪里。 */
+.ai-stage-card-body:focus-visible,
+.stage-pipeline-badge:focus-visible {
+  outline: 2px solid var(--ai-focus);
+  outline-offset: 2px;
 }
 
 .pipeline-step {

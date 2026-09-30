@@ -272,6 +272,16 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /select\.tabIndex = -1;/);
   assert.match(script, /select\.setAttribute\("aria-hidden", "true"\)/);
   assert.match(script, /const triggerLabel = String\(select\.labels\?\.\[0\]\?\.textContent \|\| ""\)\.trim\(\)/);
+  // 「点击指标即筛选」的两个入口原先都只绑了 click，纯键盘用户完全够不着：
+  // 阶段卡片正文与行内「审核轨迹」徽标现在是可聚焦的 role="button"，并有键盘等价操作与焦点环。
+  assert.match(html, /<div class="ai-stage-card-body" role="button" tabindex="0" aria-pressed="false"/);
+  assert.match(script, /role="button" tabindex="0" aria-expanded="' \+ \(defaultOpen \? "true" : "false"\)/);
+  assert.match(script, /card\.addEventListener\("keydown", \(event\) => \{[\s\S]*?toggleStageFilter\(card\)/);
+  assert.match(script, /pipelineBtn\.click\(\)/);
+  assert.match(html, /\.ai-stage-card-body:focus-visible,\s*\.stage-pipeline-badge:focus-visible \{/);
+  // 行内审核组件的 token 必须挂在 :root：它们渲染在表格里，不在 .ai-panel 子树内，
+  // 挂在面板作用域会让徽标退化成无背景、无边框、hover 也无反馈的裸文字。
+  assert.match(html, /:root \{[\s\S]{0,200}--ai-line: var\(--line, var\(--speaker-line\)\);/);
   assert.match(script, /event\.key === "ArrowDown" \? 1 : -1/);
   assert.match(script, /preferredTop = Math\.max\(headerHeight \+ 16, Math\.round\(tableFrame\.clientHeight \* 0\.18\)\)/);
   assert.match(script, /keyboardScrollSpacer\.style\.height = Math\.max\(0, tableFrame\.clientHeight - preferredTop\) \+ "px"/);

@@ -2211,7 +2211,7 @@
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-final-check" title="经审查仍难以断定，终审定案为待人工确认">待人工确认</span>';
         }
 
-        pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" title="点击展开/收起多阶段审核轨迹">' +
+        pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" role="button" tabindex="0" aria-expanded="' + (defaultOpen ? "true" : "false") + '" title="点击展开/收起多阶段审核轨迹（回车或空格同样有效）">' +
           stepsHtml +
           '<span class="pipeline-expand-hint">' + expandHintText + '</span>' +
         '</div>' +
@@ -2974,6 +2974,8 @@
           details.hidden = !details.hidden;
           // 记住用户这一行的开合选择：重渲染会重建行节点，不记就会弹回默认态。
           setPipelineOpen(rowId, !details.hidden);
+          // 开合状态同步给辅助技术与键盘用户（徽标是 role="button" 的可聚焦元素）。
+          pipelineBtn.setAttribute("aria-expanded", String(!details.hidden));
           const hint = pipelineBtn.querySelector(".pipeline-expand-hint");
           if (hint) hint.textContent = details.hidden ? "审核轨迹 ▾" : "收起 ▴";
           // 这里刻意不做任何布局同步：展开/收起只改本行行高，既不移动表格容器
@@ -2988,6 +2990,16 @@
       if (previous) previous.classList.remove("active-row");
       activeRowId = row.dataset.index;
       row.classList.add("active-row");
+    });
+
+    // 行内「审核轨迹」徽标是 role="button" 的可聚焦元素：键盘要用 Enter/空格能打开，
+    // 否则多阶段审核卡片只有鼠标用户看得到。这里直接复用 click 路径，避免两套逻辑漂移。
+    tbody.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const pipelineBtn = event.target.closest?.("[data-pipeline-toggle]");
+      if (!pipelineBtn || typeof pipelineBtn.click !== "function") return;
+      event.preventDefault();
+      pipelineBtn.click();
     });
 
     query.addEventListener("input", scheduleFilter);
@@ -3060,6 +3072,36 @@
         });
       });
 
+      // 卡片正文（.ai-stage-card-body）是「点指标即筛选」的入口，但它原本只是个纯 div：
+      // 鼠标能点、键盘完全够不着。现在正文带 role="button" + tabindex="0"（见构建模板），
+      // 这里补上键盘等价操作，并把选中态同步到 aria-pressed。
+      function syncStageCardPressed() {
+        for (const card of cards) {
+          const body = card.querySelector?.(".ai-stage-card-body");
+          if (body && typeof body.setAttribute === "function") {
+            body.setAttribute("aria-pressed", String(card.classList.contains("is-active-filter")));
+          }
+        }
+      }
+
+      function toggleStageFilter(card) {
+        const stage = card.dataset.filterStage;
+        if (!stage) return;
+        if (activeStageFilter === stage) {
+          activeStageFilter = null;
+          card.classList.remove("is-active-filter");
+          showToast("已取消阶段筛选，展示全部行", { tone: "info", durationMs: 2500 });
+        } else {
+          cards.forEach((c) => c.classList.remove("is-active-filter"));
+          activeStageFilter = stage;
+          card.classList.add("is-active-filter");
+          const names = { "1": "阶段一 事实初审", "2": "阶段二 文学复审", "3": "阶段三 终审仲裁" };
+          showToast("已筛选 " + names[stage] + " 相关行（再次点击指标可取消）", { tone: "info", durationMs: 3000 });
+        }
+        syncStageCardPressed();
+        applyFilters({ reset: true });
+      }
+
       cards.forEach((card) => {
         card.addEventListener("click", (event) => {
           // 1. 若处于预设选择器的交互抑制窗口内（防原生 select 关闭时的合成穿透点击），忽略
@@ -3070,20 +3112,15 @@
           if (event?.target?.closest && event.target.closest(".ai-stage-card-head, .ai-stage-preset-select, select, option, label, button, input")) {
             return;
           }
+          toggleStageFilter(card);
+        });
 
-          const stage = card.dataset.filterStage;
-          if (activeStageFilter === stage) {
-            activeStageFilter = null;
-            card.classList.remove("is-active-filter");
-            showToast("已取消阶段筛选，展示全部行", { tone: "info", durationMs: 2500 });
-          } else {
-            cards.forEach((c) => c.classList.remove("is-active-filter"));
-            activeStageFilter = stage;
-            card.classList.add("is-active-filter");
-            const names = { "1": "阶段一 事实初审", "2": "阶段二 文学复审", "3": "阶段三 终审仲裁" };
-            showToast("已筛选 " + names[stage] + " 相关行（再次点击指标可取消）", { tone: "info", durationMs: 3000 });
-          }
-          applyFilters({ reset: true });
+        // 键盘等价操作：只在焦点落在卡片正文上时响应，不跟卡片内的下拉与按钮抢键。
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          if (!event.target?.closest?.(".ai-stage-card-body")) return;
+          event.preventDefault();
+          toggleStageFilter(card);
         });
       });
 
@@ -3291,9 +3328,14 @@
       doneFilter.textContent = "未人工确认";
       if (activeStageFilter) {
         activeStageFilter = null;
-        ["stage1Card", "stage2Card", "stage3Card"].forEach((id) => {
-          document.getElementById(id)?.classList.remove("is-active-filter");
-        });
+        for (const id of ["stage1Card", "stage2Card", "stage3Card"]) {
+          const card = document.getElementById(id);
+          if (!card) continue;
+          card.classList.remove("is-active-filter");
+          // 状态同时回写到键盘可达的正文上，清筛选后 aria-pressed 不能停在 true。
+          const body = card.querySelector?.(".ai-stage-card-body");
+          if (body && typeof body.setAttribute === "function") body.setAttribute("aria-pressed", "false");
+        }
       }
       if (activeSummaryFilter) {
         activeSummaryFilter = null;

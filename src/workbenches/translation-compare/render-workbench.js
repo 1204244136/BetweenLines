@@ -290,7 +290,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                   </div>
                 </div>
-                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段一通过行">
+                <div class="ai-stage-card-body" role="button" tabindex="0" aria-pressed="false" title="点击指标筛选/取消筛选阶段一通过行（回车或空格同样有效）">
                   <div class="ai-stage-card-main">
                     <div class="ai-stage-card-value" title="初审直接合格放行行数"><strong id="metricStage1Passed">0</strong><span class="ai-stage-unit">通过</span></div>
                     <div class="ai-stage-card-flow" title="初审发现硬伤或存疑待定，流入阶段二文学复审">
@@ -325,7 +325,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                   </div>
                 </div>
-                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段二复审行">
+                <div class="ai-stage-card-body" role="button" tabindex="0" aria-pressed="false" title="点击指标筛选/取消筛选阶段二复审行（回车或空格同样有效）">
                   <div class="ai-stage-card-main">
                     <div class="ai-stage-card-value" title="承接阶段一初审提改行进行文学复审"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">复审</span></div>
                     <div class="ai-stage-card-flow" title="复审与初审产生立场或方案分歧，流入阶段三终审仲裁">
@@ -365,7 +365,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                   </div>
                 </div>
-                <div class="ai-stage-card-body" title="点击指标筛选/取消筛选阶段三仲裁行">
+                <div class="ai-stage-card-body" role="button" tabindex="0" aria-pressed="false" title="点击指标筛选/取消筛选阶段三仲裁行（回车或空格同样有效）">
                   <div class="ai-stage-card-main">
                     <div class="ai-stage-card-value" title="承接阶段二分歧行进行终审仲裁裁决"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">仲裁</span></div>
                     <div class="ai-stage-card-flow" title="终审裁决完毕，形成最终定案修改建议">
