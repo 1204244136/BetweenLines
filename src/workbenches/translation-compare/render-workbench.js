@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
-const { providerDefaults, errorCircuitBreaker } = require("./ai/proofread-defaults");
+const { providerDefaults } = require("./ai/proofread-defaults");
 const { proofreadPromptFor, listProfiles } = require("./ai/proofread-contract");
 const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
@@ -241,16 +241,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <select id="aiProfile" title="${escapeHtml(profileOptions.map((profile) => `${profile.name}：${profile.summary}`).join("\n"))}">
                     ${profileOptions.map((profile) => `<option value="${escapeHtml(profile.id)}"${profile.id === proofreadPrompt.profileId ? " selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}
                   </select>
-                </div>
-                <div class="ai-field" id="aiBreakerField">
-                  <div class="ai-field-head">
-                    <label for="aiBreakerThreshold">熔断阈值</label>
-                    <label class="ai-breaker-off" for="aiBreakerDisabled" title="关闭后 AI 调用失败不再自动终止任务；接口配置或响应异常仍会终止。"><input id="aiBreakerDisabled" type="checkbox">关闭</label>
-                  </div>
-                  <div class="ai-breaker-inputs">
-                    <input id="aiBreakerThreshold" type="text" inputmode="decimal" value="${Math.round(errorCircuitBreaker.errorRate * 100)}%"
-                      title="最近 ${errorCircuitBreaker.windowSize} 次 AI 调用中失败占比达到该比例时自动终止任务；累计满 ${errorCircuitBreaker.minimumSamples} 次结果后开始判定。范围 ${Math.round(errorCircuitBreaker.minErrorRate * 100)}%–100%。">
-                  </div>
                 </div>
                 <div class="ai-field ai-field--wide">
                   <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>

@@ -504,7 +504,6 @@ test("智能并发：超出重试上限的持续 429 记为单行失败且不崩
       smartConcurrency: true,
       concurrency: 3,
       concurrencyMax: 5,
-      circuitBreakerEnabled: false, // 关闭熔断以便观察重试上限
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -1064,8 +1063,6 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
       stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
-      // 仲裁两行必然失败：关掉熔断，避免任务被提前终止而看不到计数。
-      circuitBreakerEnabled: false,
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1121,8 +1118,6 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
       stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
-      // 熔断保持开启（默认阈值 50%、最少 10 个样本）：仲裁全失败必须被拦下。
-      circuitBreakerErrorRate: 0.5,
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1181,8 +1176,6 @@ test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷�
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
       stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
-      // 关掉熔断，确保终止来自致命错误闸门而不是熔断。
-      circuitBreakerEnabled: false,
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1312,4 +1305,132 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
 
   assert.match(activeText3, /8, 9/);
   assert.match(activeText3, /并发 2\/3/);
+});
+
+function passingBody() {
+  return JSON.stringify({
+    choices: [{
+      message: {
+        content: JSON.stringify({ semanticSame: true, needsEdit: false, decision: "keep", summary: "正常" }),
+      },
+    }],
+  });
+}
+
+async function withBreakerTimeScale(scale, run) {
+  const previous = process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE;
+  process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE = String(scale);
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE;
+    else process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE = previous;
+  }
+}
+
+test("限流熔断：上游持续 429 时按冷却阶梯探测，阶梯用尽后终止且不刷满队列", async () => {
+  clearProofreadCache();
+  const totalRows = 12;
+  const { project } = setupMockProject(totalRows, "limitsaturation");
+  let requestCount = 0;
+  const server = http.createServer((req, res) => {
+    requestCount += 1;
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+      res.end(JSON.stringify({ error: { message: "all channels in 429 cooldown" } }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    await withBreakerTimeScale(0.001, async () => {
+      await startProofread({
+        provider: "compatible",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        model: "test-model",
+        proofreadMode: "bilingual",
+        concurrency: 1,
+        projectKey: project.projectKey,
+        rowsSignature: project.rowsSignature,
+      });
+      const deadline = Date.now() + 15000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, true);
+    assert.match(finished.error, /AI 上游持续限流熔断（初审）：已按 3 档冷却重试/);
+    const logs = finished.logs.join("\n");
+    assert.match(logs, /\[熔断\] 初审：连续多行限流重试用尽，暂停派发/);
+    assert.match(logs, /\[熔断\] 初审：探测仍被限流，继续冷却/);
+    // 前两行按原逻辑记失败，第三行起进入冷却而不是继续记失败，最后一次探测触发终止。
+    assert.ok(finished.errors <= 3, `冷却期间的行不该记成失败，实际异常 ${finished.errors} 行`);
+    assert.ok(finished.processed < totalRows, "熔断后剩余行不应被处理");
+    // 3 行 × 4 次 + 3 次单发探测；绝不该刷满 12 行 × 4 次。
+    assert.ok(requestCount <= 20, `限流下必须停手，实际发出 ${requestCount} 次请求`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("限流熔断：冷却后探测成功即恢复，被暂缓的行不记失败并跑完全程", async () => {
+  clearProofreadCache();
+  const totalRows = 8;
+  const { project } = setupMockProject(totalRows, "limitrecover");
+  let requestCount = 0;
+  // 前 14 个请求全部 429：前三行各用尽 4 次（12 次）后断路器打开，
+  // 第 13、14 次是两次失败的探测，第 15 次起放行。
+  const limitedRequests = 14;
+  const server = http.createServer((req, res) => {
+    requestCount += 1;
+    const limited = requestCount <= limitedRequests;
+    req.resume();
+    req.on("end", () => {
+      if (limited) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+        res.end(JSON.stringify({ error: { message: "all channels in 429 cooldown" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(passingBody());
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    await withBreakerTimeScale(0.001, async () => {
+      await startProofread({
+        provider: "compatible",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        model: "test-model",
+        proofreadMode: "bilingual",
+        concurrency: 1,
+        projectKey: project.projectKey,
+        rowsSignature: project.rowsSignature,
+      });
+      const deadline = Date.now() + 15000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, false);
+    assert.equal(finished.error, "");
+    assert.equal(finished.processed, totalRows);
+    // 只有冷却打开之前用尽重试的前两行记为失败；第三行被暂缓后探测成功，正常完成。
+    assert.equal(finished.errors, 2);
+    const third = finished.results.find((r) => r.index === 3);
+    assert.ok(third && third.status !== "error", "被暂缓的行不能记成失败");
+    const logs = finished.logs.join("\n");
+    assert.match(logs, /\[熔断\] 初审：连续多行限流重试用尽，暂停派发/);
+    assert.match(logs, /限流冷却解除，恢复正常派发/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

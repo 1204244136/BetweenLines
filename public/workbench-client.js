@@ -346,8 +346,6 @@
       smartConcurrency: document.getElementById("aiSmartConcurrency"),
       concurrencyMax: document.getElementById("aiConcurrencyMax"),
       concurrencyMaxWrap: document.getElementById("aiConcurrencyMaxWrap"),
-      breakerThreshold: document.getElementById("aiBreakerThreshold"),
-      breakerDisabled: document.getElementById("aiBreakerDisabled"),
       promptVisible: document.getElementById("aiPromptVisible"),
       stage1Preset: document.getElementById("stage1PresetSelect"),
       stage2Preset: document.getElementById("stage2PresetSelect"),
@@ -633,14 +631,6 @@
 
     function normalizeSimilarityInput() {
       prefilterIds.similarity.value = formatPercentRatio(prefilterIds.similarity.value);
-    }
-
-    function normalizeBreakerInput() {
-      aiIds.breakerThreshold.value = formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1);
-    }
-
-    function updateBreakerControls() {
-      aiIds.breakerThreshold.disabled = aiIds.breakerDisabled.checked;
     }
 
     function updateConcurrencyControls() {
@@ -1133,13 +1123,6 @@
         aiIds.concurrencyMax.value = preset.concurrencyMax;
       }
       updateConcurrencyControls();
-      if (preset.breakerThreshold != null) {
-        aiIds.breakerThreshold.value = formatPercentRatio(preset.breakerThreshold, 0.5, 0.1);
-      }
-      if (preset.breakerDisabled != null) {
-        aiIds.breakerDisabled.checked = Boolean(preset.breakerDisabled);
-      }
-      updateBreakerControls();
       currentPresetId = preset.id;
       if (aiIds.presetSelect) aiIds.presetSelect.value = preset.id;
       syncEnhancedSelect(aiIds.presetSelect);
@@ -1173,8 +1156,6 @@
         concurrency: aiIds.concurrency ? aiIds.concurrency.value : (prevSaved.concurrency != null ? prevSaved.concurrency : "3"),
         smartConcurrency,
         concurrencyMax,
-        breakerThreshold: aiIds.breakerThreshold ? formatPercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1) : (prevSaved.breakerThreshold || "50%"),
-        breakerDisabled: aiIds.breakerDisabled ? aiIds.breakerDisabled.checked : Boolean(prevSaved.breakerDisabled),
         similarity: prefilterIds.similarity ? formatPercentRatio(prefilterIds.similarity.value) : (prevSaved.similarity || "92%"),
         promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
@@ -1248,9 +1229,6 @@
         aiIds.concurrencyMax.value = saved.concurrencyMax;
       }
       updateConcurrencyControls();
-      if (saved.breakerThreshold != null) aiIds.breakerThreshold.value = formatPercentRatio(saved.breakerThreshold, 0.5, 0.1);
-      aiIds.breakerDisabled.checked = Boolean(saved.breakerDisabled);
-      updateBreakerControls();
       if (saved.similarity != null) prefilterIds.similarity.value = formatPercentRatio(saved.similarity);
       if (aiIds.promptVisible) aiIds.promptVisible.checked = Boolean(saved.promptVisible);
       if (typeof savedPrompt.systemPrompt === "string" && savedPrompt.systemPrompt) {
@@ -3748,8 +3726,6 @@
         concurrency: mainConcurrency,
         smartConcurrency: mainSmartConcurrency,
         concurrencyMax: mainConcurrencyMax,
-        circuitBreakerErrorRate: parsePercentRatio(aiIds.breakerThreshold.value, 0.5, 0.1),
-        circuitBreakerEnabled: !aiIds.breakerDisabled.checked,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
         labels: pageLabels,
@@ -4913,8 +4889,6 @@
           concurrency: aiIds.concurrency.value,
           smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
           concurrencyMax: aiIds.concurrencyMax?.value || 10,
-          breakerThreshold: aiIds.breakerThreshold.value,
-          breakerDisabled: aiIds.breakerDisabled.checked,
         };
 
         const saved = presetTools.savePreset(localStorage, presetData);
@@ -4956,8 +4930,6 @@
           concurrency: aiIds.concurrency.value,
           smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
           concurrencyMax: aiIds.concurrencyMax?.value || 10,
-          breakerThreshold: aiIds.breakerThreshold.value,
-          breakerDisabled: aiIds.breakerDisabled.checked,
         };
 
         const saved = presetTools.savePreset(localStorage, presetData);
@@ -5038,15 +5010,6 @@
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
     prefilterIds.similarity.addEventListener("change", () => {
       normalizeSimilarityInput();
-      saveAiConfig();
-    });
-    aiIds.breakerThreshold.addEventListener("input", saveAiConfig);
-    aiIds.breakerThreshold.addEventListener("change", () => {
-      normalizeBreakerInput();
-      saveAiConfig();
-    });
-    aiIds.breakerDisabled.addEventListener("change", () => {
-      updateBreakerControls();
       saveAiConfig();
     });
     if (aiIds.prompt) {

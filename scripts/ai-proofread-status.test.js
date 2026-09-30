@@ -615,13 +615,12 @@ test("译文在原文接续片段末尾引入引述动词时，基础轮主动�
   assert.equal(finished.errors, 0);
 });
 
-test("调高熔断阈值允许 50% 错误率的任务继续跑完全程", async () => {
+test("间歇性失败低于内部熔断阈值时任务继续跑完全程", async () => {
   const { finished, rows } = await runProofreadAgainst({
-    label: "raised-threshold",
+    label: "below-threshold",
     rowCount: 24,
-    breaker: { circuitBreakerErrorRate: 0.9 },
     respond: (count, response) => {
-      if (count % 2 === 1) {
+      if (count % 3 === 1) {
         response.statusCode = 500;
         response.end(JSON.stringify({ message: "temporary upstream failure" }));
         return;
@@ -633,25 +632,24 @@ test("调高熔断阈值允许 50% 错误率的任务继续跑完全程", async 
   assert.equal(finished.stopRequested, false);
   assert.equal(finished.error, "");
   assert.equal(finished.processed, rows.length);
-  assert.match(finished.logs.join("\n"), /错误率熔断：最近 20 次调用中失败占比达到 90% 时自动终止/);
+  assert.match(finished.logs.join("\n"), /自动熔断：最近 20 次调用中失败占比达到 50% 时终止任务/);
 });
 
-test("禁用熔断器时允许全失败任务逐行执行至完毕", async () => {
-  const { finished, requestCount, rows } = await runProofreadAgainst({
-    label: "breaker-disabled",
-    rowCount: 12,
-    breaker: { circuitBreakerErrorRate: 0.1, circuitBreakerEnabled: false },
+test("熔断由内部决策：请求体里的熔断开关与阈值一律无效，全失败任务照样被拦下", async () => {
+  const { finished, requestCount } = await runProofreadAgainst({
+    label: "breaker-not-switchable",
+    rowCount: 40,
+    // 旧客户端可能仍会带这两个字段；服务端必须不再读取。
+    breaker: { circuitBreakerErrorRate: 1, circuitBreakerEnabled: false },
     respond: (count, response) => {
       response.statusCode = 500;
       response.end(JSON.stringify({ message: "permanent upstream failure" }));
     },
   });
   assert.equal(finished.running, false);
-  assert.equal(finished.stopRequested, false);
-  assert.equal(requestCount, rows.length);
-  assert.equal(finished.errors, rows.length);
-  assert.equal(finished.processed, rows.length);
-  assert.match(finished.logs.join("\n"), /错误率熔断：已关闭/);
+  assert.equal(finished.stopRequested, true);
+  assert.match(finished.error, /错误率熔断（初审）：最近 10 次处理中有 10 次失败（100%，阈值 50%）/);
+  assert.ok(requestCount <= 12, `熔断必须在刷满 40 行之前生效，实际发出 ${requestCount} 次请求`);
 });
 
 test("对齐片段行在模型索要上下文后直接终局，不再扩展相邻行", async () => {
@@ -990,7 +988,6 @@ test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不�
   const { finished, rows } = await runProofreadAgainst({
     label: "model-refusal",
     rowCount: 6,
-    breaker: { circuitBreakerErrorRate: 0.5, circuitBreakerEnabled: true },
     respond: (_count, response) => {
       let raw = "";
       const request = response.req;

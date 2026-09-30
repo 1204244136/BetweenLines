@@ -115,9 +115,9 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(html, /id="aiServiceLabel" class="ai-config-label">AI 服务/);
   assert.match(html, /<option value="claude">Claude<\/option>/);
   assert.match(html, /id="aiProofreadLabel" class="ai-config-label">校对设置/);
-  // 熔断阈值可在「校对设置」里手动调整，并支持整体停用
-  assert.match(html, /id="aiBreakerThreshold" type="text" inputmode="decimal" value="50%"/);
-  assert.match(html, /<input id="aiBreakerDisabled" type="checkbox">关闭/);
+  // 熔断由服务端内部决策，页面不得再提供阈值或开关控件，也不得把这类字段带进请求
+  assert.doesNotMatch(html, /aiBreaker|ai-breaker|熔断阈值/);
+  assert.doesNotMatch(html, /circuitBreaker(ErrorRate|Enabled)|breakerThreshold|breakerDisabled/);
   assert.match(html, /id="aiStageDashboard"/);
   assert.match(html, /class="ai-stage-dashboard-header"/);
   assert.doesNotMatch(html, /id="aiProofreadModeHint"/);

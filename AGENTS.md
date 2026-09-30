@@ -144,9 +144,10 @@ index-X 结构与命名规范契约：
    - 翻译比较与说话人推断使用独立的工作台数据模型、结果和备注空间。
    - 共享 LLM 传输层只请求 `http:`/`https:`，拒绝云元数据、link-local、多播与自动重定向。
    - 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪。
+   - 熔断（`ai/circuit-breaker.js`）由服务端内部决策，页面、预设与请求体都不得再携带熔断开关或阈值；失败轨终止任务，限流轨先冷却探测再终止。
    - 提示词按五层组装（①通用侧 ②模式层 ③特化侧 ④动态上下文 ⑤固定尾巴），合并顺序固定。
    - 输出侧三大确定性门禁漏斗：`ensureRevisedText` → 成品格式门禁（`format-guard.js`）→ 标点规范化（`punctuation.js`）→ 语言护栏（`guardTargetScript`）→ `decisionToResult`。
-   - 验证执行 `node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/ai-smart-concurrency.test.js`。
+   - 验证执行 `node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/ai-smart-concurrency.test.js scripts/circuit-breaker.test.js`。
    - **详细规范**：五层提示词规范、判定链流程、按行特征裁剪、实体闸门、输出格式门禁/标点规范化/语言护栏、译名对照表与注音口径、低分归因、线上查证与说话习惯契约详见 **[docs/contracts/ai-proofread-contract.md](docs/contracts/ai-proofread-contract.md)**。
 
 9. `src/workbenches/speaker-attribution/`

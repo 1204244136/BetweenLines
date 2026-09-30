@@ -79,7 +79,7 @@
 ## AI 模型预设管理（`ai-presets.js`）
 
 - 存储键：`translation-compare-ai-presets-v1`。
-- 包含完整连接与模型参数（`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`、`smartConcurrency`、`concurrencyMax`、`breakerThreshold`、`breakerDisabled`）。
+- 包含完整连接与模型参数（`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`、`smartConcurrency`、`concurrencyMax`）。熔断由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃。
 - 当前预设 ID 保存在 `translation-compare-ai-config-v1` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。
 - 支持下拉切换、覆盖保存、另存为和删除预设，操作回执均通过 Toast 提示。
 
@@ -90,7 +90,7 @@
 - 调度器采用 AIMD（加法递增、乘法递减）机制：
   - **动态上探**：连续 5 次请求成功且与上次调整间隔 ≥3s 自动上探（并发 +1，最高至 `concurrencyMax`，默认上限 10）。
   - **遇限下调**：遭遇频控或并发限制（HTTP 429、503、529 或包含 rate limit/TPM/RPM/quota/overload 等报错）自动下调（>3 时降至 70%，≤3 时减 1，保底 1），进入指数抖动退避窗口或遵循 `Retry-After`。
-  - **重试保障**：单行支持最多 3 次自动重试，重试期间不计入熔断错误统计，达到重试上限才终局报错。
+  - **重试保障**：单行支持最多 3 次自动重试，重试期间不计入熔断统计；达到重试上限后由该阶段的限流熔断器裁决（先记失败，持续限流则整阶段冷却探测，详见 ai-proofread-contract.md「熔断是内部决策」）。
   - **开关边界**：`smartConcurrency` 只决定「连续成功后是否自动上探」与 `concurrencyMax` 是否生效（`createStageController.isSmart`）。**识别频控、退避、下调并发、单行重试对所有模式都生效**——早期实现把频控判定也挂在 `isSmart` 上，导致固定并发的用户遇到 429 被当成普通失败，一次不重试地刷到队列尽头（实测一次任务 220 行全灭、`concurrencyLimits`/`concurrencyDowns` 恒为 0、日志里一条退避都没有）。频控相关日志前缀统一为 `[频控退避]`。
   - **并发边界**：主并发（初始并发）与 `concurrencyMax` 共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
 - **项目级持久化与防冲刷保障**：

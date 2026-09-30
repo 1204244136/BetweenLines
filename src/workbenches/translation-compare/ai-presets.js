@@ -42,11 +42,6 @@ function createPresetTools() {
     const rawConcurrencyMax = Number(item.concurrencyMax);
     const concurrencyMax = clampPresetConcurrency(rawConcurrencyMax, DEFAULT_CONCURRENCY_MAX);
 
-    const breakerThreshold = typeof item.breakerThreshold === "string" && item.breakerThreshold.trim()
-      ? item.breakerThreshold.trim()
-      : "50%";
-    const breakerDisabled = Boolean(item.breakerDisabled);
-
     const now = Date.now();
     const createdAt = Number.isSafeInteger(Number(item.createdAt)) && Number(item.createdAt) > 0
       ? Number(item.createdAt)
@@ -69,8 +64,6 @@ function createPresetTools() {
       concurrency,
       smartConcurrency,
       concurrencyMax,
-      breakerThreshold,
-      breakerDisabled,
       createdAt,
       updatedAt,
     };

@@ -262,15 +262,14 @@ details[open] > summary .details-toggle::before {
   align-items: start;
 }
 .ai-proofread-fields {
-  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(240px, 1.5fr) minmax(180px, 1fr);
+  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(240px, 1.5fr);
   grid-template-areas:
-    "mode target profile breaker"
-    "hints hints  hints   hints";
+    "mode target profile"
+    "hints hints  hints";
 }
 .ai-proofread-fields > .ai-field:nth-child(1) { grid-area: mode; }
 .ai-proofread-fields > .ai-field:nth-child(2) { grid-area: target; }
 .ai-proofread-fields > .ai-field:nth-child(3) { grid-area: profile; }
-.ai-proofread-fields > #aiBreakerField       { grid-area: breaker; }
 .ai-proofread-fields > .ai-field--wide       { grid-area: hints; }
 .ai-field {
   min-width: 0;
@@ -324,15 +323,13 @@ details[open] > summary .details-toggle::before {
   white-space: nowrap;
 }
 /* 并发与智能并发设置 */
-.ai-concurrency-inputs,
-.ai-breaker-inputs {
+.ai-concurrency-inputs {
   display: flex;
   align-items: center;
   gap: 6px;
   min-height: 28px;
 }
-.ai-concurrency-inputs input,
-.ai-breaker-inputs input {
+.ai-concurrency-inputs input {
   height: 28px;
   box-sizing: border-box;
 }
@@ -355,8 +352,7 @@ details[open] > summary .details-toggle::before {
   white-space: nowrap;
   font-weight: 600;
 }
-.ai-concurrency-smart,
-.ai-breaker-off {
+.ai-concurrency-smart {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -368,18 +364,12 @@ details[open] > summary .details-toggle::before {
   cursor: pointer;
   user-select: none;
 }
-.ai-concurrency-smart input[type="checkbox"],
-.ai-breaker-off input[type="checkbox"] {
+.ai-concurrency-smart input[type="checkbox"] {
   width: 13px;
   height: 13px;
   margin: 0;
   accent-color: var(--ai-focus);
   cursor: pointer;
-}
-.ai-breaker-inputs input:disabled {
-  color: var(--ai-muted);
-  background: var(--ai-surface);
-  opacity: 0.6;
 }
 /* 模型字段标题右侧的内联操作提示（拉取模型结果等），就近展示、不占用运行状态栏且不破坏网格垂直对齐 */
 .ai-model-hint {

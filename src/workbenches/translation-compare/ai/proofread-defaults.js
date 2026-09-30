@@ -23,11 +23,4 @@ const providerDefaults = {
   },
 };
 
-const errorCircuitBreaker = {
-  minimumSamples: 10,
-  windowSize: 20,
-  errorRate: 0.5,
-  minErrorRate: 0.1,
-};
-
-module.exports = { providerDefaults, errorCircuitBreaker };
+module.exports = { providerDefaults };

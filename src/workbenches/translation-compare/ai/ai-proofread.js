@@ -1,4 +1,5 @@
-const { providerDefaults, errorCircuitBreaker } = require("./proofread-defaults");
+const { providerDefaults } = require("./proofread-defaults");
+const { createStageBreaker, describeTrip, describePolicy } = require("./circuit-breaker");
 const {
   createStageController,
   nextConcurrencyAfterLimit,
@@ -262,10 +263,10 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
 let controllers = new Set();
 // 每行当前结果对 stageMetrics 的贡献快照；行被重写/重跑时按同一份快照整体撤销，保证添加与撤销对称。
 let resultMetricDeltas = new Map();
-// 熔断窗口按阶段隔离：三个阶段各维护自己的成功/失败序列（见 recordModelOutcome）。
+// 熔断由 circuit-breaker.js 内部裁决（不接受任何外部开关或阈值），且按阶段隔离：三个阶段各持一个断路器。
 // 共用一个窗口时，「初审成功 + 复审成功 + 仲裁全失败」的单阶段塌方会被前两个阶段的成功稀释，
 // 错误率永远够不到阈值，该阶段就会一行行刷到队列尽头。
-let recentModelOutcomesByStage = new Map();
+let stageBreakers = new Map();
 const STAGE_OUTCOME_LABELS = { stage1: "初审", stage2: "文学复审", stage3: "终审仲裁" };
 
 function pushLog(line) {
@@ -451,12 +452,6 @@ function cleanConfig(input = {}) {
     clampInteger(rawConcurrencyMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, AI_CONCURRENCY_LIMITS.defaultMax),
   );
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
-  const circuitBreakerErrorRate = clampNumber(
-    input.circuitBreakerErrorRate,
-    errorCircuitBreaker.minErrorRate,
-    1,
-    errorCircuitBreaker.errorRate,
-  );
   const model = String(input.model || defaults.model).trim();
   // 特化侧档案：未知 id 一律回落到默认档案，避免旧客户端或手填值把提示词打空。
   // 档案决定默认提示词与两类辅助数据表，这里只解析一次。
@@ -513,8 +508,6 @@ function cleanConfig(input = {}) {
     smartConcurrency,
     concurrencyMax,
     similarityThreshold,
-    circuitBreakerErrorRate,
-    circuitBreakerEnabled: input.circuitBreakerEnabled !== false,
     projectKey: String(input.projectKey || "").trim(),
     rowsSignature: String(input.rowsSignature || "").trim(),
     baseUrl: String(input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, ""),
@@ -694,7 +687,7 @@ function resetStatus(config, rowsLength) {
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();
-  recentModelOutcomesByStage = new Map();
+  stageBreakers = new Map();
 }
 
 function makePrefilterResult(row, labels, classification, comparisonMode = "trilingual") {
@@ -1061,9 +1054,7 @@ async function startProofread(input) {
   pushLog(config.smartConcurrency
     ? `智能并发：已开启，初始并发 ${config.concurrency}，上限 ${config.concurrencyMax}。稳定请求自动上探，遭遇频控限制自动退避降速。`
     : `并发设置：固定并发 ${config.concurrency}。`);
-  pushLog(config.circuitBreakerEnabled
-    ? `错误率熔断：最近 ${errorCircuitBreaker.windowSize} 次调用中失败占比达到 ${Math.round(config.circuitBreakerErrorRate * 100)}% 时自动终止。`
-    : "错误率熔断：已关闭，调用失败不会自动终止任务。");
+  pushLog(describePolicy());
   runQueue(queue, rows, config, labels, stageItems).catch((error) => {
     status.error = error.message || String(error);
     pushLog(status.error);
@@ -1242,7 +1233,7 @@ function clearProofreadCache() {
   status.resultChanges = [];
   status.resultRevision = 0;
   controllers = new Set();
-  recentModelOutcomesByStage = new Map();
+  stageBreakers = new Map();
   return clientStatus();
 }
 
@@ -1447,6 +1438,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
   }
 
+  // 成功既喂断路器，也可能顺带解除它设下的冷却（迟到的成功说明上游已经放行）。
+  function noteStageSuccess(ctrl) {
+    if (recordStageSuccess(ctrl.stageKey)) ctrl.backoffUntil = Math.min(ctrl.backoffUntil, Date.now());
+    onStageSuccess(ctrl);
+  }
+
   function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry) {
     status.concurrencyLimits += 1;
     ctrl.consecutiveSuccesses = 0;
@@ -1481,7 +1478,29 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       return true;
     }
-    return false;
+
+    // 单行重试已用尽：交给该阶段的断路器裁决是「记这一行失败」「整阶段冷却」还是「终止任务」。
+    if (status.stopRequested) return false;
+    const verdict = stageBreaker(ctrl.stageKey).recordLimitExhausted();
+    if (verdict.action === "fail") return false;
+    if (verdict.action === "trip") {
+      stopForBreakerTrip(verdict, ctrl.stageKey);
+      return false;
+    }
+    // 冷却：这一行没有真正被处理过，不记失败，回到队头等冷却结束；
+    // 重试计数置满，让它成为「单发探测」——再被限流就立刻回报断路器，而不是再烧一轮退避。
+    ctrl.rowRetryCounts.set(rowIndex, maxRowRetries);
+    ctrl.backoffUntil = Math.max(ctrl.backoffUntil, verdict.until);
+    pendingQueue.unshift(itemToRetry);
+    syncStagePipelineQueues();
+    if (verdict.opened) {
+      const label = STAGE_OUTCOME_LABELS[ctrl.stageKey] || ctrl.stageKey;
+      const attempt = `第 ${verdict.cycle}/${verdict.cycles} 档`;
+      pushLog(verdict.cycle === 1
+        ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
+        : `[熔断] ${label}：探测仍被限流，继续冷却 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却）。`);
+    }
+    return true;
   }
 
   return new Promise((resolve) => {
@@ -1585,8 +1604,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
-          recordModelOutcome(false, config, "stage1");
-          onStageSuccess(s1Ctrl);
+          noteStageSuccess(s1Ctrl);
         }
 
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
@@ -1636,7 +1654,6 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
               done: false,
               note: `[AI校对]\n调用失败（频控限制已达重试上限）：${error.message || String(error)}`,
             });
-            recordModelOutcome(true, config, "stage1");
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
@@ -1652,7 +1669,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
-            recordModelOutcome(true, config, "stage1");
+            recordStageFailure("stage1");
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         }
@@ -1675,8 +1692,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s2.stageError) throw s2.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          recordModelOutcome(false, config, "stage2");
-          onStageSuccess(s2Ctrl);
+          noteStageSuccess(s2Ctrl);
         }
         // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
         // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，看起来像「阶段二没干活」。
@@ -1719,7 +1735,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
-          else if (!status.stopRequested) recordModelOutcome(true, config, "stage2");
+          else if (!status.stopRequested && !isRateLimit) recordStageFailure("stage2");
         }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
@@ -1745,8 +1761,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s3.stageError) throw s3.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          recordModelOutcome(false, config, "stage3");
-          onStageSuccess(s3Ctrl);
+          noteStageSuccess(s3Ctrl);
         }
         const result = finalizeRowResult(s3, config);
         addResult(result);
@@ -1772,7 +1787,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
-          else if (!status.stopRequested) recordModelOutcome(true, config, "stage3");
+          else if (!status.stopRequested && !isRateLimit) recordStageFailure("stage3");
         }
       } finally {
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
@@ -1920,31 +1935,36 @@ function stopForFatalRequestError(error) {
   for (const controller of controllers) controller.abort();
 }
 
-function recordModelOutcome(failed, config = {}, stageKey = "stage1") {
-  if (config.circuitBreakerEnabled === false) return;
-  const threshold = clampNumber(config.circuitBreakerErrorRate, errorCircuitBreaker.minErrorRate, 1, errorCircuitBreaker.errorRate);
-  // 窗口按阶段隔离：某个阶段连续塌方时，别的阶段的成功不该把它稀释掉，
-  // 否则「仲裁全失败」这种单阶段事故永远不会熔断，只会一行行刷到队列尽头。
-  let recent = recentModelOutcomesByStage.get(stageKey);
-  if (!recent) {
-    recent = [];
-    recentModelOutcomesByStage.set(stageKey, recent);
+function stageBreaker(stageKey) {
+  let breaker = stageBreakers.get(stageKey);
+  if (!breaker) {
+    // TRANSCOMPARATOR_BREAKER_TIME_SCALE 只缩放冷却时长，供回归测试把分钟级冷却压到毫秒级；不是运行时开关。
+    breaker = createStageBreaker({ timeScale: Number(process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE) || 1 });
+    stageBreakers.set(stageKey, breaker);
   }
-  recent.push(Boolean(failed));
-  if (recent.length > errorCircuitBreaker.windowSize) {
-    recent.splice(0, recent.length - errorCircuitBreaker.windowSize);
-  }
-  if (recent.length < errorCircuitBreaker.minimumSamples) return;
+  return breaker;
+}
 
-  const errorCount = recent.filter(Boolean).length;
-  const errorRate = errorCount / recent.length;
-  if (errorRate < threshold) return;
-
-  const stageLabel = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
+function stopForBreakerTrip(trip, stageKey) {
+  if (status.stopRequested) return;
   status.stopRequested = true;
-  status.error = `AI 请求错误率熔断（${stageLabel}）：最近 ${recent.length} 次处理中有 ${errorCount} 次失败（${Math.round(errorRate * 100)}%，阈值 ${Math.round(threshold * 100)}%），任务已自动终止。`;
+  status.error = describeTrip(trip, STAGE_OUTCOME_LABELS[stageKey] || stageKey);
   pushLog(status.error);
   for (const controller of controllers) controller.abort();
+}
+
+// 一次成功的模型调用。返回 recovered=true 表示该阶段刚从限流冷却中恢复。
+function recordStageSuccess(stageKey) {
+  const { recovered, trip } = stageBreaker(stageKey).recordSuccess();
+  if (recovered) pushLog(`[熔断] ${STAGE_OUTCOME_LABELS[stageKey] || stageKey}：请求重新通过，限流冷却解除，恢复正常派发。`);
+  if (trip) stopForBreakerTrip(trip, stageKey);
+  return recovered;
+}
+
+// 一次非限流的真实失败（5xx、超时、断连等）。限流耗尽走 onStageRateLimit 里的限流轨，不进这里。
+function recordStageFailure(stageKey) {
+  const { trip } = stageBreaker(stageKey).recordFailure();
+  if (trip) stopForBreakerTrip(trip, stageKey);
 }
 
 async function runStage1Gatekeeper(row, allRows, config, labels) {
@@ -4037,7 +4057,6 @@ module.exports = {
   decisionToResult,
   detectModelCapabilities,
   diffSummary,
-  errorCircuitBreaker,
   extractClaudeText,
   findContinuationContext,
   findInferredSubjectContext,
