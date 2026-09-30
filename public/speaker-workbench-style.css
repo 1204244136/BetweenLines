@@ -9,7 +9,8 @@
   --speaker-line-strong: #c3ccd9;
   --speaker-text: #161d27;
   --speaker-muted: #5b6675;
-  --speaker-muted-2: #8a94a4;
+  /* 与 workbench-style.css 同一口径：#8a94a4 在白底上约 2.6:1，不达 WCAG AA 的 4.5:1。 */
+  --speaker-muted-2: #667085;
   --speaker-focus: #2a63cf;
   --speaker-focus-hover: #1f4fa6;
   --speaker-focus-soft: #e9f1ff;

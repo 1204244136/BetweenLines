@@ -10,7 +10,9 @@
       --line-strong: #c3ccd9;
       --text: #161d27;
       --muted: #5b6675;
-      --muted-2: #8a94a4;
+      /* 次要文字/图标色：原值 #8a94a4 在白底上约 2.6:1，低于 WCAG AA 对普通文本的 4.5:1，
+         而工作台里大量说明性文案都用它。#667085 约 4.97:1，达标且仍保持弱化层级。 */
+      --muted-2: #667085;
       --focus: #2a63cf;
       --focus-hover: #1f4fa6;
       --review: #fdeceb;
