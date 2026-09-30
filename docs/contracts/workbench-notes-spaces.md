@@ -66,9 +66,13 @@
 ## 浮动提示（Toast）与状态行分工
 
 - **一次性回执走 Toast**：按钮与控件结果（批量确认/写回、预筛/校对完成、模型刷新、空间备份找回删除等）渲染到 `#toastStack`（页面唯一浮动容器，在 `.app-shell` 之外）。
+- **两个工作台共享同一份实现与样式**：实现是 `public/workbench-shared.js` 的 `createToastCenter()`，样式是 `public/toast.css`（在 `.toast-stack` 上把 `--line/--focus…` 与 `--speaker-*` 两套 token 映射成 `--toast-*`）。翻译比较与说话人归属各自在页面里建一个中心并注入同一份样式——**不要把实现或样式复制回任一侧**，否则两边行为会各自漂移。
+- **禁止阻塞式 `window.alert`**：说话人归属工作台原先所有一次性回执都走 alert，会打断校对流程且无法区分语气；一次性回执一律走 Toast，`scripts/speaker-attribution.test.js` 锁住这条边界。
 - 语气包含 `info`、`success`、`watch`、`error`；同一消息连续出现只保留一条并顺延存活时间；最多同时显示 4 条。
+- **停留时长口径**：`durationMs` 是基准时长，实际停留 = 基准 × `durationScale`（0.5）。**`error` 不参与缩放**——出错提示往往最长（定位失败原因、未写入行数、接口报错原文），折半会让用户读不完就被关掉。
 - **固定状态行只留持续状态**：`setRuntimeStatus` 只承载 AI/预筛的运行进度、跑完统计、服务连接状态，不设时长、不自动消失。
 - 备注面板为唯一双写区域：`notesPanelStatus` 既写面板内就地状态行，也弹浮动提示。
+- **不可逆操作走页内确认弹窗**：写回原文件、清空本页/历史空间、删除历史空间、从备份登记一律经 `askConfirm()`（`#genericConfirmDialog`）二次确认，不再用 `window.confirm`；`askConfirm` 必须把 Esc 关闭（`close` 事件）也当作取消，否则 Promise 不 settle，调用方流程会静默卡住。写回类确认发生在按钮切到「写回中」之前，取消时按钮不会卡在禁用态。
 
 ---
 

@@ -118,7 +118,7 @@ index-X 结构与命名规范契约：
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`。裁剪只删字段，不改变 `signature`/`rowsSignature` 取值。
    - 输出 HTML、CSV、JSON。
    - 生成页面的控制栈是四个 `<details class="panel-details">` 抽屉：预筛选、AI 辅助校对、筛选与批处理、备注空间与找回；按数据流方向自上而下排列。统一置于父抽屉 `#controlStackPanel`（`.panel-group`）内。
-   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出，持续状态由固定状态行承载；AI 预设管理与智能并发 AIMD 调度完整集成。
+   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由固定状态行承载；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与智能并发 AIMD 调度完整集成。
    - 验证执行 `node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js`。
    - **详细规范**：前端控制栈结构、多历史空间合并算法（`mergeNotes`）、确定性匹配证据通道、载入自愈、Toast 提示设计、预设管理与智能并发契约详见 **[docs/contracts/workbench-notes-spaces.md](docs/contracts/workbench-notes-spaces.md)**。
 
@@ -153,6 +153,7 @@ index-X 结构与命名规范契约：
 - `src/core/`、`src/storage/`、`src/ingest/`：共享能力。修改时必须检查所有工作台和项目快照调用方。
 - `src/workbenches/<name>/`：领域工作台。工作台拥有自己的结果模型、构建器、提示词、缓存和备注空间，不得复用另一工作台的 rows 或 notes 作为数据模型。
 - `src/workbenches/<name>/client/` 或 `public/`：浏览器端交互逻辑与表现层代码。
+- `public/` 下跨工作台共享的浏览器资源（`workbench-shared.js`、`toast.css`、`workbench-diff.js`）由两个构建器各自读取并内联注入页面：改一处必须同时核对翻译比较与说话人归属两个工作台，并跑 `npm test`。**不要把它们复制成各工作台自己的副本**——两份实现会各自漂移（说话人工作台原先就是各写一套 `window.alert`，与翻译比较的 Toast 体系长期不一致）。
 - `docs/contracts/`：面向代理与维护者的详细领域契约、算法规格与故障排查手册。
 - 新增通用格式转换优先扩展 `pandoc-utils.js`；新增特定格式的业务准入与提取逻辑在 `src/ingest/` 中独立实现。
 
