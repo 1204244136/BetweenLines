@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  AI_ERROR_ROW_SAMPLE_LIMIT,
   classifyAiError,
   recordAiErrorKind,
   mergeAiErrorKinds,
@@ -57,7 +58,7 @@ test("异常明细：按类别累计行号并保留代表性消息，超出样�
   assert.equal(sorted[0].label, "请求超时");
 });
 
-test("异常明细：两端口径合并取 max 计数与行号并集，不重复计同一行", () => {
+test("异常明细：两端口径按行号合并，同一批行只算一次", () => {
   const fromNotes = { rate_limit: { count: 3, rows: [1, 2, 3], sample: "备注口径" } };
   const fromServer = { rate_limit: { count: 2, rows: [2, 3], sample: "服务端口径" } };
   const merged = mergeAiErrorKinds(fromNotes, fromServer);
@@ -71,6 +72,53 @@ test("异常明细：两端口径合并取 max 计数与行号并集，不重复
   const combined = mergeAiErrorKinds(historical, current);
   assert.equal(combined.timeout.count, 4);
   assert.deepEqual(combined.timeout.rows, [1, 2, 7, 8]);
+});
+
+test("异常明细：两端把同一行归到不同类别时以服务端为准，不会让这一行同时出现在两类里", () => {
+  // 服务端看得到 code（ECONNRESET → 网络），备注只有「请求失败」这类没有线索的文本（→ 其他）。
+  const fromNotes = { unknown: { count: 3, rows: [1, 2, 3], sample: "请求失败" } };
+  const fromServer = { network: { count: 3, rows: [1, 2, 3], sample: "请求失败" } };
+  const merged = mergeAiErrorKinds(fromNotes, fromServer);
+  assert.deepEqual(Object.keys(merged), ["network"], "被服务端认领的行不能在本地口径里再出现一次");
+  assert.equal(merged.network.count, 3);
+
+  // 只有部分行被服务端认领：其余行保留本地口径的归类。
+  const partial = mergeAiErrorKinds(
+    { unknown: { count: 4, rows: [1, 2, 3, 4], sample: "本地" } },
+    { network: { count: 2, rows: [1, 2], sample: "服务端" } },
+  );
+  assert.equal(partial.network.count, 2);
+  assert.deepEqual(partial.network.rows, [1, 2]);
+  assert.equal(partial.unknown.count, 2);
+  assert.deepEqual(partial.unknown.rows, [3, 4]);
+  assert.equal(partial.unknown.sample, "本地");
+
+  const total = Object.values(partial).reduce((sum, entry) => sum + entry.count, 0);
+  assert.equal(total, 4, "分类明细的总行数与实际出错行数一致");
+});
+
+test("异常明细：行号样本被截断的部分无法逐行去重，同类里按 max 处理而不是累加", () => {
+  const capped = Array.from({ length: AI_ERROR_ROW_SAMPLE_LIMIT }, (_, offset) => offset + 1);
+  const merged = mergeAiErrorKinds(
+    { timeout: { count: AI_ERROR_ROW_SAMPLE_LIMIT + 100, rows: capped } },
+    { timeout: { count: AI_ERROR_ROW_SAMPLE_LIMIT + 50, rows: capped } },
+  );
+  assert.equal(merged.timeout.count, AI_ERROR_ROW_SAMPLE_LIMIT + 100, "超出样本上限的行只有计数，两端取较大者");
+  assert.equal(merged.timeout.rows.length, AI_ERROR_ROW_SAMPLE_LIMIT);
+
+  // 老服务端只回报计数、没有行号：仍要保留计数，不能被行号并集吞掉。
+  const countOnly = mergeAiErrorKinds({}, { rate_limit: { count: 5 } });
+  assert.equal(countOnly.rate_limit.count, 5);
+});
+
+test("异常明细：合并不改动入参，空入参得到空结果", () => {
+  const base = { timeout: { count: 1, rows: [1], sample: "a" } };
+  const extra = { timeout: { count: 1, rows: [2], sample: "b" } };
+  const snapshot = JSON.stringify([base, extra]);
+  mergeAiErrorKinds(base, extra);
+  assert.equal(JSON.stringify([base, extra]), snapshot);
+  assert.deepEqual(mergeAiErrorKinds(null, undefined), {});
+  assert.deepEqual(mergeAiErrorKinds({ timeout: { count: 0, rows: [] } }, {}), {}, "零计数的类别不进入结果");
 });
 
 test("悬停文本：逐类列出问题、行号与代表性消息", () => {

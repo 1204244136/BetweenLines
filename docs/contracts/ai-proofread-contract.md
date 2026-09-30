@@ -234,7 +234,7 @@
 - **服务端**：`status.stageErrors`（阶段 → 行号 → `{ kind, message }`），随 `clientStatus().stageErrors` 回报聚合后的 `{ [kind]: { count, rows, sample } }`。记录点与计数同源：初审在两条失败 `addResult` 之前，复审/仲裁在 `stageNErrors += 1` 的同一处。
 - **重跑要撤旧账**：`executeStage1/2/3` 进入时先 `clearStageError(阶段, 行号)`，成功即不再补记。只在失败处新增而不清除的话，一行重跑成功后旧明细会一直挂在悬停提示里。
 - **分类规则只有一份**：`ai/error-kinds.js` 是纯函数模块，服务端直接 `require`，构建器把常量与函数 `.toString()` 注入页面（见 `render-workbench.js`）。判定顺序有语义：拒答不算接口故障、503/529 算频控而非 5xx、非 JSON 响应优先于网络故障；客户端拿不到 `httpStatus`，用消息里的三位状态码兜底（`域名解析失败` 与 `JSON 解析失败` 都含「解析失败」，所以 bad_response 只认限定说法）。
-- **两端口径合并**：`computeStageMetricsFromNotes` 从失败备注得到本地分类（备注口径把「校对已终止。」也算失败行），`updateStageMetricsDashboard` 用 `mergeAiErrorKinds` 与服务端明细合并——计数取 max、行号取并集，两端口径观察的常是同一批行，相加会重复计数。
+- **两端口径合并**：`computeStageMetricsFromNotes` 从失败备注得到本地分类（备注口径把「校对已终止。」也算失败行），`updateStageMetricsDashboard` 用 `mergeAiErrorKinds` 与服务端明细合并——**按行号去重、同一行以服务端为准**。两端观察的常是同一批行，但对同一行的归类可能不同（服务端看得到 `code`，备注只有文本），按类别取 max 会让这一行同时出现在两类里。服务端已登记的行号从本地各类里剔除，行号不重叠时取并集；行号样本有上限（`AI_ERROR_ROW_SAMPLE_LIMIT`），超出部分只有计数、无法逐行去重，同类里按 max 处理，宁可低估也不重复累加。
 - **渲染**：`renderStageMetricsDashboard` 把明细写进 `stage{1,2,3}ErrorItem.title`（逐类列出类别、行数、出错行号与代表性消息），无异常时恢复构建器写在 HTML 上的静态 title。
 - 已知边界：明细只活在本次运行的进程内，页面刷新后阶段二/三的明细会丢（这两阶段的失败不写失败备注，只在服务端内存留档），此时悬停会如实说明「暂无可分类的失败明细」。
 

@@ -116,29 +116,56 @@ function recordAiErrorKind(kinds, kind, row, sample = "") {
 }
 
 /**
- * 合并两端口径的分类明细。计数取 max 而不是相加：备注与服务端明细观察的常常是同一批行，
- * 相加会把同一行算两次；但两边行号不重叠时（历史遗留 + 本次运行）以行号并集为准，避免低估。
+ * 合并两端口径的分类明细：base 是客户端从备注反推的，extra 是服务端记录的，同一行以 extra 为准。
+ *
+ * 按行号去重，而不是按类别取 max：备注与服务端观察的常常是同一批行，但两端对同一行的归类
+ * 可能不同（服务端看得到 code，备注只有文本），按类别取 max 会让这一行同时出现在两类里。
+ * - extra 已登记的行号，从 base 的各类里剔除；两边行号不重叠时（历史遗留 + 本次运行）取并集。
+ * - 行号样本有上限（AI_ERROR_ROW_SAMPLE_LIMIT），超出的部分只有计数、没有行号，无法逐行去重：
+ *   同一类里这部分按 max 处理，宁可低估也不重复累加。
  */
 function mergeAiErrorKinds(base, extra) {
-  const merged = {};
-  for (const source of [base, extra]) {
-    if (!source || typeof source !== "object") continue;
+  const normalize = (source) => {
+    const result = {};
+    if (!source || typeof source !== "object") return result;
     for (const [kind, raw] of Object.entries(source)) {
       const entry = raw && typeof raw === "object" ? raw : {};
-      const target = merged[kind] || (merged[kind] = { count: 0, rows: [], sample: "" });
-      target.count = Math.max(target.count, Math.max(0, Number(entry.count) || 0));
-      if (!target.sample && entry.sample) target.sample = String(entry.sample);
+      const rows = [];
       for (const row of Array.isArray(entry.rows) ? entry.rows : []) {
         const index = Number(row);
-        if (!Number.isFinite(index) || target.rows.includes(index)) continue;
-        if (target.rows.length >= AI_ERROR_ROW_SAMPLE_LIMIT) break;
-        target.rows.push(index);
+        if (Number.isFinite(index) && !rows.includes(index)) rows.push(index);
       }
+      const count = Math.max(0, Number(entry.count) || 0);
+      result[kind] = {
+        rows,
+        unlisted: Math.max(0, count - rows.length),
+        sample: entry.sample ? String(entry.sample) : "",
+      };
     }
+    return result;
+  };
+  const baseKinds = normalize(base);
+  const extraKinds = normalize(extra);
+  const claimed = new Set();
+  for (const entry of Object.values(extraKinds)) {
+    for (const row of entry.rows) claimed.add(row);
   }
-  for (const entry of Object.values(merged)) {
-    entry.rows.sort((a, b) => a - b);
-    entry.count = Math.max(entry.count, entry.rows.length);
+
+  const merged = {};
+  for (const kind of new Set([...Object.keys(baseKinds), ...Object.keys(extraKinds)])) {
+    const fromBase = baseKinds[kind];
+    const fromExtra = extraKinds[kind];
+    const keptBaseRows = fromBase ? fromBase.rows.filter((row) => !claimed.has(row)) : [];
+    const baseSurvives = keptBaseRows.length > 0 || Boolean(fromBase && fromBase.unlisted > 0);
+    const allRows = [...(fromExtra ? fromExtra.rows : []), ...keptBaseRows].sort((a, b) => a - b);
+    const unlisted = Math.max(baseSurvives ? fromBase.unlisted : 0, fromExtra ? fromExtra.unlisted : 0);
+    const count = allRows.length + unlisted;
+    if (count <= 0) continue;
+    merged[kind] = {
+      count,
+      rows: allRows.slice(0, AI_ERROR_ROW_SAMPLE_LIMIT),
+      sample: (baseSurvives && fromBase.sample) || (fromExtra ? fromExtra.sample : ""),
+    };
   }
   return merged;
 }

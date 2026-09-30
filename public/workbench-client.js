@@ -4335,7 +4335,7 @@
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
 
       // 异常分类明细：本地备注口径（历史遗留 + 本次）与服务端本次运行的记录合并，
-      // 计数取 max、行号取并集——两端口径观察的常是同一批行，相加会把同一行算两次。
+      // 按行号去重、同一行以服务端为准——两端观察的常是同一批行，但对同一行的归类可能不同。
       const stageErrorKinds = {};
       for (const stage of ["stage1", "stage2", "stage3"]) {
         stageErrorKinds[stage] = mergeAiErrorKinds(localMetrics.stageErrorKinds?.[stage], serverStageErrors?.[stage]);
