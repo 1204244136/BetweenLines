@@ -1477,7 +1477,119 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
     assert.equal(finished.processed, totalRows, "每一行都要走完并回退到复审方案");
     assert.equal(finished.stageMetrics.stage3Errors, totalRows, "拒答行仍如实计入仲裁异常，指标口径不变");
     assert.match(finished.logs.join("\n"), /终审仲裁被模型拒答（内容安全审查），回退至复审方案/);
+    // 拒答不是接口故障：明细里要单列为「模型拒答」，而不是被归成 4xx 的配置错误。
+    const refusals = finished.stageErrors.stage3.refusal;
+    assert.equal(refusals.count, totalRows, "拒答的每一行都要登记为 refusal 类");
+    assert.deepEqual(Object.keys(finished.stageErrors.stage3), ["refusal"], "拒答行不能同时落进别的类别");
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("异常明细不跨任务残留：上一次运行的失败行，在新任务启动后不再挂在悬停明细里", async () => {
+  clearProofreadCache();
+  const totalRows = 2;
+  const { project } = setupMockProject(totalRows, "errscope");
+  let arbiterHealthy = false;
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      if (isArbiter && !arbiterHealthy) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "arbiter down" } }));
+        return;
+      }
+      const content = isArbiter
+        ? { verdict: "keep_stylist", revisedText: "仲裁定案", summary: "仲裁通过" }
+        : isStylist
+          ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+          : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const runToEnd = async (baseUrl) => {
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return clientStatus();
+  };
+
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    const first = await runToEnd(baseUrl);
+    assert.equal(first.stageErrors.stage3.server_error.count, totalRows, "前提：第一次运行确实记下了仲裁失败");
+
+    arbiterHealthy = true;
+    const second = await runToEnd(baseUrl);
+    assert.equal(second.running, false);
+    assert.equal(second.stageMetrics.stage3Errors, 0, "第二次运行仲裁全部成功");
+    assert.deepEqual(second.stageErrors.stage3, {}, "上一次运行的失败明细不能残留到新任务里");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("异常明细：用户停止任务时，被打断的行归为「任务已终止」而不是网络故障", async () => {
+  clearProofreadCache();
+  const totalRows = 3;
+  const { project } = setupMockProject(totalRows, "errstop");
+  let received = 0;
+
+  // 服务端收到请求后既不应答也不断开：让这一行稳稳停在「调用中」，再由用户按下停止。
+  const server = http.createServer(() => { received += 1; });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 1, stage: "stage1",
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    const awaitDeadline = Date.now() + 5000;
+    while (received === 0 && Date.now() < awaitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(received > 0, "前提：至少有一行已经发出请求");
+
+    stopProofread();
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    // 被打断那一行的 catch 在 running 翻成 false 之后才跑到：等明细落下再断言，别读到中间态。
+    const settleDeadline = Date.now() + 2000;
+    while (!clientStatus({ includeResults: false }).stageErrors.stage1.stopped && Date.now() < settleDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    const stage1 = finished.stageErrors.stage1;
+    assert.ok(stage1.stopped?.count >= 1, "被打断的行要登记为「任务已终止」");
+    assert.equal(stage1.network, undefined, "中断异常不能被记成网络故障");
+    assert.equal(stage1.unknown, undefined, "中断异常不能落进「其他错误」");
+  } finally {
+    server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
 });
