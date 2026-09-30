@@ -1638,74 +1638,8 @@
     .empty-state.visible {
       display: block;
     }
-    /* 浮动提示：按钮/控件一次性回执的落点。固定在右下角，不占表格与分页条的布局；
-       语气只靠左侧色条区分（info 中性、success 成功、watch 需留意、error 失败）。 */
-    .toast-stack {
-      position: fixed;
-      right: 16px;
-      bottom: 16px;
-      z-index: 60;
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2);
-      width: min(380px, calc(100vw - 32px));
-      pointer-events: none;
-    }
-    .toast {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: var(--space-2);
-      align-items: start;
-      padding: 10px 12px;
-      border: 1px solid var(--line-strong);
-      border-left: 4px solid var(--info-strong);
-      border-radius: var(--radius);
-      background: var(--surface);
-      color: var(--text);
-      box-shadow: var(--shadow-pop);
-      pointer-events: auto;
-      animation: toast-in 160ms ease-out;
-    }
-    .toast--leaving {
-      animation: toast-out 180ms ease-in forwards;
-      pointer-events: none;
-    }
-    .toast--success { border-left-color: var(--ok-strong); }
-    .toast--watch { border-left-color: var(--watch-strong); }
-    .toast--error { border-left-color: var(--review-strong); }
-    .toast-text {
-      font-size: var(--fs-section);
-      line-height: 1.6;
-      overflow-wrap: anywhere;
-    }
-    .toast-dismiss {
-      width: 20px;
-      height: 20px;
-      padding: 0;
-      border: 0;
-      border-radius: var(--radius-pill);
-      background: transparent;
-      color: var(--muted-2);
-      font-size: 15px;
-      line-height: 1;
-    }
-    .toast-dismiss:hover {
-      background: var(--head);
-      color: var(--text);
-      border-color: transparent;
-    }
-    @keyframes toast-in {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: none; }
-    }
-    @keyframes toast-out {
-      from { opacity: 1; transform: none; }
-      to { opacity: 0; transform: translateY(4px); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .toast { animation: none; }
-      .toast--leaving { opacity: 0; }
-    }
+    /* 浮动提示（Toast）样式已抽到共享的 public/toast.css：两个工作台共用同一份，
+       由各自的构建器注入，避免两页各存一份会各自漂移的副本。 */
     @media (max-width: 1100px) {
       .app-shell { min-width: 760px; }
       body { font-size: 14px; }

@@ -53,6 +53,84 @@ async function copyText(value) {
   }
 }
 
+/**
+ * 浮动提示（Toast）中心：翻译比较与说话人归属两个工作台共用这一份实现，避免各写一套
+ * 各自漂移的行为。共享的契约有：
+ *   - 同一条消息连续出现只保留一条，并顺延它的存活时间；
+ *   - 最多同时可见 maxVisible 条，超出淘汰最旧的一条；
+ *   - 关闭先播淡出动画，动画结束（或超时兜底）才移除节点；
+ *   - durationMs 是基准时长，实际停留 = durationMs × durationScale；error 语气不缩放（见 toastTimer），
+ *     因为出错提示通常最长，折半会让用户读不完就被关掉（durationMs <= 0 表示不自动消失）。
+ * 页面需要提供唯一容器 <div id="toastStack" class="toast-stack">…</div>，样式见 public/toast.css。
+ */
+function createToastCenter({ stackId = "toastStack", maxVisible = 4, durationScale = 0.5, fadeMs = 180, defaultDurationMs = 6000 } = {}) {
+  const toasts = [];
+  let seq = 0;
+
+  // 出错提示是唯一的例外：它往往最长（含定位失败原因、未写入行数、接口报错原文），
+  // 再按 durationScale 折半会让用户读不完就被关掉，所以按调用方给的时长原样停留。
+  function toastTimer(toast, durationMs) {
+    const scale = toast.tone === "error" ? 1 : durationScale;
+    const visibleMs = durationMs > 0 ? Math.max(1, Math.round(durationMs * scale)) : 0;
+    return visibleMs > 0 ? window.setTimeout(() => dismissToast(toast.id), visibleMs) : 0;
+  }
+
+  function dismissToast(id) {
+    const index = toasts.findIndex((toast) => toast.id === String(id ?? ""));
+    if (index < 0) return false;
+    const [toast] = toasts.splice(index, 1);
+    if (toast.timer) window.clearTimeout(toast.timer);
+    const node = toast.node;
+    if (!node) return true;
+    if (typeof node.classList?.add === "function") node.classList.add("toast--leaving");
+    let removed = false;
+    const remove = () => {
+      if (removed) return;
+      removed = true;
+      if (typeof node.remove === "function") node.remove();
+    };
+    if (typeof node.addEventListener === "function") node.addEventListener("animationend", remove, { once: true });
+    window.setTimeout(remove, fadeMs + 80);
+    return true;
+  }
+
+  // tone 表示结果的语气：info 中性、success 成功、watch 需要留意但没失败、error 失败。
+  function showToast(message, { tone = "info", durationMs = defaultDurationMs } = {}) {
+    const text = String(message ?? "").trim();
+    if (!text) return "";
+    const stack = document.getElementById(stackId);
+    if (!stack) return "";
+    const last = toasts[toasts.length - 1];
+    if (last && last.message === text && last.tone === tone) {
+      if (last.timer) window.clearTimeout(last.timer);
+      last.timer = toastTimer(last, durationMs);
+      return last.id;
+    }
+    const node = document.createElement("div");
+    node.className = "toast toast--" + tone;
+    node.setAttribute("role", tone === "error" ? "alert" : "status");
+    node.dataset.toastId = String(++seq);
+    const line = document.createElement("span");
+    line.className = "toast-text";
+    line.textContent = text;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-dismiss";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "关闭提示");
+    close.addEventListener("click", () => dismissToast(node.dataset.toastId));
+    node.append(line, close);
+    stack.append(node);
+    const toast = { id: node.dataset.toastId, message: text, tone, node, timer: 0 };
+    toasts.push(toast);
+    toast.timer = toastTimer(toast, durationMs);
+    while (toasts.length > maxVisible) dismissToast(toasts[0].id);
+    return toast.id;
+  }
+
+  return { showToast, dismissToast, toasts };
+}
+
 const thinkingLevelLabels = {
   "": "模型默认",
   off: "关闭思考",
@@ -129,6 +207,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildReasoningOptions,
     calculateTotalPages,
     copyText,
+    createToastCenter,
     escapeHtml,
     getClientModelCapabilities,
     nonGptIntensityOptions,

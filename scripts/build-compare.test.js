@@ -281,13 +281,16 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.doesNotMatch(html, /backdrop-filter/);
   // 一次性回执（按钮结果、行内写回、模型刷新、一轮跑完）走浮动提示；
   // 固定状态行只留机器任务的持续状态，旧的 setTemporaryStatus 口径已删除。
-  assert.match(script, /function showToast\(message, \{ tone = "info", durationMs = 6000 \} = \{\}\)/);
-  assert.match(script, /const toastDurationScale = 0\.5/);
-  assert.match(script, /const toastFadeMs = 180/);
+  // 一次性回执（按钮结果、行内写回、模型刷新、一轮跑完）走浮动提示；固定状态行只留机器任务的
+  // 持续状态，旧的 setTemporaryStatus 口径已删除。实现本身抽到共享的 workbench-shared.js，
+  // 由页面显式建一个 toast 中心并接线，说话人归属工作台用的是同一份。
+  assert.match(script, /function createToastCenter\(\{ stackId = "toastStack", maxVisible = 4, durationScale = 0\.5, fadeMs = 180, defaultDurationMs = 6000 \} = \{\}\)/);
+  assert.match(script, /const toastCenter = createToastCenter\(\);/);
+  assert.match(script, /const showToast = toastCenter\.showToast;/);
+  assert.match(script, /const dismissToast = toastCenter\.dismissToast;/);
   assert.match(script, /node\.classList\.add\("toast--leaving"\)/);
-  assert.match(script, /function dismissToast\(id\)/);
+  assert.match(script, /while \(toasts\.length > maxVisible\) dismissToast\(toasts\[0\]\.id\)/);
   assert.match(html, /@keyframes toast-out/);
-  assert.match(script, /while \(toasts\.length > toastMaxVisible\) dismissToast\(toasts\[0\]\.id\)/);
   assert.match(script, /showToast\(ai\.error \|\| finishedStatus/);
   assert.doesNotMatch(script, /setTemporaryStatus/);
   assert.doesNotMatch(script, /aiIds.modelHint/);

@@ -1444,75 +1444,15 @@
     // 用户在「筛选与批处理」里点批量按钮、在行内点「写回」时，回执被写进一个看不见的位置。固定状态行只留
     // 「机器任务的持续状态」（正在跑什么、跑完的统计、未连接本地服务、被跳过/忽略的结果汇总），
     // 一次性回执一律浮动提示。
-    const toastMaxVisible = 4;
-    const toastDurationScale = 0.5;
-    const toastFadeMs = 180;
-    const toasts = [];
-    let toastSeq = 0;
+    // 实现抽到共享的 public/workbench-shared.js：说话人归属工作台用同一份，行为不会再各自漂移。
+    const toastCenter = createToastCenter();
+    const showToast = toastCenter.showToast;
+    const dismissToast = toastCenter.dismissToast;
+    const toasts = toastCenter.toasts;
     // 本页亲眼看到「正在运行」的那一轮：只有它跑完才弹结束提示。页面刚打开时从服务端认领到的
     // 历史轮次（没看到运行中）不弹，否则每次重新生成工作台都会收到一条过期回执。
     let observedRunningRunId = "";
     let notifiedFinishedRunId = "";
-
-    // tone 表示结果的语气：info 中性、success 成功、watch 需要留意但没失败、error 失败。
-    // durationMs <= 0 表示不自动消失（等下一步结果替换它，或人工关闭）。
-    function showToast(message, { tone = "info", durationMs = 6000 } = {}) {
-      const text = String(message ?? "").trim();
-      if (!text) return "";
-      const stack = document.getElementById("toastStack");
-      if (!stack) return "";
-      // 同一条消息连续出现（例如地址输入框每敲一个字符就提示一次）只保留一条，并顺延它的存活时间。
-      const last = toasts[toasts.length - 1];
-      if (last && last.message === text && last.tone === tone) {
-        if (last.timer) window.clearTimeout(last.timer);
-        last.timer = toastTimer(last, durationMs);
-        return last.id;
-      }
-      const node = document.createElement("div");
-      node.className = "toast toast--" + tone;
-      node.setAttribute("role", tone === "error" ? "alert" : "status");
-      node.dataset.toastId = String(++toastSeq);
-      const line = document.createElement("span");
-      line.className = "toast-text";
-      line.textContent = text;
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "toast-dismiss";
-      close.textContent = "×";
-      close.setAttribute("aria-label", "关闭提示");
-      close.addEventListener("click", () => dismissToast(node.dataset.toastId));
-      node.append(line, close);
-      stack.append(node);
-      const toast = { id: node.dataset.toastId, message: text, tone, node, timer: 0 };
-      toasts.push(toast);
-      toast.timer = toastTimer(toast, durationMs);
-      while (toasts.length > toastMaxVisible) dismissToast(toasts[0].id);
-      return toast.id;
-    }
-
-    function toastTimer(toast, durationMs) {
-      const visibleMs = durationMs > 0 ? Math.max(1, Math.round(durationMs * toastDurationScale)) : 0;
-      return visibleMs > 0 ? window.setTimeout(() => dismissToast(toast.id), visibleMs) : 0;
-    }
-
-    function dismissToast(id) {
-      const index = toasts.findIndex((toast) => toast.id === String(id ?? ""));
-      if (index < 0) return false;
-      const [toast] = toasts.splice(index, 1);
-      if (toast.timer) window.clearTimeout(toast.timer);
-      const node = toast.node;
-      if (!node) return true;
-      if (typeof node.classList?.add === "function") node.classList.add("toast--leaving");
-      let removed = false;
-      const remove = () => {
-        if (removed) return;
-        removed = true;
-        if (typeof node.remove === "function") node.remove();
-      };
-      if (typeof node.addEventListener === "function") node.addEventListener("animationend", remove, { once: true });
-      window.setTimeout(remove, toastFadeMs + 80);
-      return true;
-    }
 
     function clearLocalAiCache() {
       appliedAiResults.clear();

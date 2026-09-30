@@ -52,7 +52,7 @@ test("同一条提示不叠加，超过上限淘汰最旧，也可以手动关�
   await ui.element("aiBaseUrl").dispatch("input");
   await ui.element("aiBaseUrl").dispatch("input");
   assert.deepEqual(toastMessages(ui), ["地址已修改，可点击刷新获取模型列表。"], "连续同一条提示只保留一条");
-  assert.equal(ui.timeouts.at(-1).delay, 3000, "提示持续时间按传入时长减半");
+  assert.equal(ui.timeouts.at(-1).delay, 3000, "非错误提示的持续时间按传入时长减半");
   await ui.element("aiBaseUrl").dispatch("change");
   assert.equal(toastMessages(ui).length, 2);
   ui.run('for (let i = 1; i <= 6; i += 1) showToast("提示 " + i);');
@@ -123,4 +123,13 @@ test("「确认自动不改」无视当前筛选，直接确认全部 AI 判断�
 
   await ui.element("acceptAiSame").dispatch("click");
   assert.equal(toastMessages(ui).at(-1), "没有待确认的自动不改行。");
+});
+
+test("出错提示不被时长缩放：error 按调用方给的时长原样停留", () => {
+  const ui = createWorkbench(storageFixture());
+  ui.run('showToast("写回失败：原文件中没有匹配的段落。", { tone: "error", durationMs: 12000 })');
+  assert.equal(ui.run("toasts[0].tone"), "error");
+  assert.equal(ui.timeouts.at(-1).delay, 12000, "error 不折半，保证用户读得完");
+  ui.run('showToast("已写回 3 处修改。", { tone: "success", durationMs: 12000 })');
+  assert.equal(ui.timeouts.at(-1).delay, 6000, "其余语气仍按基准时长折半，避免提示堆积");
 });

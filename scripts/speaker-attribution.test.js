@@ -420,3 +420,39 @@ test("说话人工作台渲染带分页的复核工作区", () => {
   assert.equal(rows[0].sourceText, "谁在说话？");
   assert.doesNotThrow(() => new Function(scripts.at(-1)[1]));
 });
+
+// 说话人工作台原先所有一次性回执都走 window.alert：阻塞式弹窗打断校对流程，且与翻译比较
+// 工作台的 Toast 体系完全脱节。这里锁住「共享实现 + 容器 + 危险写回要确认」三条边界。
+test("说话人工作台的一次性回执走共享浮动提示，写回前必须确认", () => {
+  const html = renderHtml({
+    analysisKey: "test",
+    sourceLineCount: 1,
+    parallelLineCount: 0,
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    selection: { mode: "monolingual", files: { source: "source.txt" } },
+    alignment: { version: "none", unmatchedSource: 0, unmatchedParallel: 0, lowConfidence: 0 },
+    rows: [{
+      id: "line-1",
+      source: { text: "谁在说话？" },
+      parallel: [],
+      context: [],
+      alignment: { status: "source-only", relation: "1:0", score: 1 },
+      speaker: "",
+      confidence: "",
+      status: "needs-review",
+      evidence: "",
+    }],
+  });
+  const script = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].at(-1)[1];
+
+  // 容器与共享实现都要真的注入：缺容器 showToast 会静默丢弃，缺实现会直接抛错。
+  assert.match(html, /<div id="toastStack" class="toast-stack" role="region" aria-live="polite" aria-label="操作提示"><\/div>/);
+  assert.match(html, /@keyframes toast-out/, "共享的 public/toast.css 必须注入");
+  assert.match(script, /function createToastCenter\(/);
+  assert.match(script, /const \{ showToast \} = createToastCenter\(\);/);
+  assert.doesNotMatch(script, /window\.alert\(/, "一次性回执不再使用阻塞式 alert");
+
+  // 写回会直接改动原始源文件：单行与批量都必须先确认。
+  assert.match(script, /将 \$\{rowsToWrite\.length\} 行的说话人写回原文件/);
+  assert.match(script, /将第 \$\{row\.index\} 行的说话人/);
+});

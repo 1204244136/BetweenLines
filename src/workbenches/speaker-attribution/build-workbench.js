@@ -35,6 +35,7 @@ function readSpeakerWorkbenchAssets() {
   return {
     workbenchStyle: fs.readFileSync(path.join(publicDir, "speaker-workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
+    toastStyle: fs.readFileSync(path.join(publicDir, "toast.css"), "utf8"),
     workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "speaker-workbench-client.js"), "utf8"),
   };
@@ -342,7 +343,7 @@ function renderHtml(model) {
 
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="transcomparator-session-token" content="">
-<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}</style></head>
+<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}</style></head>
 <body><div class="speaker-app${bilingual ? " is-bilingual" : " is-monolingual"}">
   <header class="speaker-header"><div class="speaker-topbar">
     <div><p class="speaker-kicker">BetweenLines / 说话人归属</p><h1>说话人归属工作台</h1>
@@ -460,7 +461,9 @@ function renderHtml(model) {
     <div id="speakerPagination" class="speaker-pagination"><div id="speakerPaginationStatus">正在准备行数据...</div><div class="speaker-pagination-actions"><button id="speakerFirstPage" type="button">首页</button><button id="speakerPrevPage" type="button">上一页</button><label for="speakerPageInput">第</label><input id="speakerPageInput" type="number" min="1" value="1" aria-label="页码"><span id="speakerPageTotal">/ 1 页</span><button id="speakerNextPage" type="button">下一页</button><button id="speakerLastPage" type="button">末页</button></div><label class="speaker-pagination-size" for="speakerPageSize"><span>每页</span><select id="speakerPageSize"><option value="25">25 行</option><option value="50" selected>50 行</option><option value="100">100 行</option><option value="200">200 行</option></select></label></div>
     <div id="speakerEmpty" class="speaker-empty">没有匹配的行</div>
   </main>
-</div><script id="rowData" type="application/json">${rowsJson}</script><script>
+</div>
+<div id="toastStack" class="toast-stack" role="region" aria-live="polite" aria-label="操作提示"></div>
+<script id="rowData" type="application/json">${rowsJson}</script><script>
 window.speakerStorageKey = ${safeJson(`between-lines:speaker-attribution:${model.analysisKey}:v2`)};
 window.speakerPageMeta = ${safeJson(pageMeta)};
 ${assets.workbenchShared}

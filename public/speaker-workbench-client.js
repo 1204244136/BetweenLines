@@ -12,6 +12,10 @@
   const pageTotal = document.getElementById("speakerPageTotal");
   const pageSize = document.getElementById("speakerPageSize");
   const exportButton = document.getElementById("speakerExport");
+  // 一次性回执走共享的浮动提示（容器 #toastStack + public/toast.css + workbench-shared.js 的
+  // createToastCenter），与翻译比较工作台同一套语气、去重和停留规则；
+  // 不再用阻塞式的 window.alert 打断校对流程。
+  const { showToast } = createToastCenter();
   const storageKey = String(window.speakerStorageKey || "between-lines:speaker-attribution");
   const speakerBackupStorageKey = "between-lines:speaker-writeback-backup-v1";
   function getSpeakerWritebackBackup() {
@@ -460,7 +464,7 @@
     });
 
     if (!rowsToWrite.length) {
-      window.alert(minConfidence > 0 ? "未找到置信度 ≥ 80% 且已指定说话人的行。" : "未找到已填写说话人的行。");
+      showToast(minConfidence > 0 ? "未找到置信度 ≥ 80% 且已指定说话人的行。" : "未找到已填写说话人的行。", { tone: "watch" });
       return;
     }
 
@@ -511,9 +515,14 @@
         written += 1;
       }
       scheduleSave();
-      if (missedIndexes.size) {
-        window.alert(`已写回 ${written} 行；${missedIndexes.size} 行未写入（原文件中定位不到或多处同段），仍留在复核视野里。`);
-      }
+      // 成功与部分未写入都要有回执：原实现只在「有行没写进去」时才弹窗，
+      // 全部成功时页面只剩按钮文字变化，用户滚到别处就看不到结果了。
+      showToast(
+        missedIndexes.size
+          ? `已写回 ${written} 行；${missedIndexes.size} 行未写入（原文件中定位不到或多处同段），仍留在复核视野里。`
+          : `已写回 ${written} 行说话人。`,
+        missedIndexes.size ? { tone: "watch", durationMs: 12000 } : { tone: "success" },
+      );
       if (btn) {
         btn.textContent = `已写回 ${result.updated} 行`;
         window.setTimeout(() => {
@@ -527,7 +536,7 @@
         btn.disabled = false;
         btn.textContent = originalText;
       }
-      window.alert(error.message || String(error));
+      showToast(error.message || String(error), { tone: "error", durationMs: 12000 });
     }
   }
 
@@ -626,7 +635,7 @@
     if (!row) return;
     const record = recordFor(row);
     if (!record.speaker.trim()) {
-      window.alert("该行尚未指定说话人，无法写回。");
+      showToast("该行尚未指定说话人，无法写回。", { tone: "watch" });
       return;
     }
     // 单行写回与批量写回同一口径：确认发生在按钮切到「写回中」之前。
@@ -666,6 +675,7 @@
       notes[rowId] ||= {};
       notes[rowId].isWritten = true;
       scheduleSave();
+      showToast(`第 ${row.index} 行的说话人已写回原文件。`, { tone: "success" });
       button.textContent = "✓ 已写回";
       button.classList.add("is-written");
       window.setTimeout(() => {
@@ -676,7 +686,7 @@
     } catch (error) {
       button.disabled = false;
       button.textContent = originalText;
-      window.alert(error.message || String(error));
+      showToast(error.message || String(error), { tone: "error", durationMs: 12000 });
     }
   }
 
@@ -688,11 +698,11 @@
       return;
     }
     const copyButton = event.target.closest("[data-copy-text]");
-    if (copyButton) copyText(copyButton.dataset.copyText || "").catch(() => window.alert("复制失败，请手动选择文本复制。"));
+    if (copyButton) copyText(copyButton.dataset.copyText || "").catch(() => showToast("复制失败，请手动选择文本复制。", { tone: "error" }));
     const promptButton = event.target.closest("[data-copy-prompt]");
     if (promptButton) {
       const row = allRows.find((item) => item.id === promptButton.dataset.copyPrompt);
-      if (row) copyText(promptTextFor(row)).catch(() => window.alert("复制失败，请手动选择文本复制。"));
+      if (row) copyText(promptTextFor(row)).catch(() => showToast("复制失败，请手动选择文本复制。", { tone: "error" }));
     }
   });
   tbody.addEventListener("focusin", (event) => {

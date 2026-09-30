@@ -1,0 +1,107 @@
+/* ==========================================================================
+   共享浮动提示（Toast）组件（public/toast.css）
+
+   翻译比较工作台与说话人归属工作台的一次性回执共用本文件：按钮与控件的结果
+   落在这里，固定状态行只留机器任务的持续状态（正在跑什么、跑完统计、服务连接）。
+
+   两个页面的 token 前缀不同（翻译比较是 --line/--focus…，说话人是 --speaker-*），
+   这里统一在 .toast-stack 上做一次别名映射，组件内部只认 --toast-*，
+   两边共用同一份视觉与动画，不再各存一份会漂移的副本。
+
+   页面需要在正文之后提供唯一容器：一个 class 为 toast-stack 的 div（id 为 toastStack，
+   role="region"，aria-live="polite"，aria-label="操作提示"）。这里不写完整示例，
+   避免 CSS 里出现与页面 DOM 相同的标记被结构断言误命中。
+   ========================================================================== */
+
+.toast-stack {
+  --toast-line-strong: var(--line-strong, var(--speaker-line-strong, #c3ccd9));
+  --toast-surface: var(--surface, var(--speaker-surface, #ffffff));
+  --toast-text: var(--text, var(--speaker-text, #161d27));
+  --toast-muted-2: var(--muted-2, var(--speaker-muted-2, #667085));
+  --toast-head: var(--head, var(--speaker-head, #eaeef4));
+  --toast-info-strong: var(--info-strong, var(--speaker-focus, #2a63cf));
+  --toast-ok-strong: var(--ok-strong, #1c7a42);
+  --toast-watch-strong: var(--watch-strong, #946312);
+  --toast-review-strong: var(--review-strong, #c2392f);
+  --toast-radius: var(--radius, var(--speaker-radius, 8px));
+  --toast-radius-pill: var(--radius-pill, 999px);
+  --toast-shadow-pop: var(--shadow-pop, 0 12px 28px rgba(16, 24, 40, 0.16));
+  --toast-gap: var(--space-2, var(--speaker-space-2, 8px));
+  --toast-font-size: var(--fs-section, 13px);
+
+  /* 固定在右下角，不占表格与分页条的布局；整组收起的抽屉滚出视野时仍然可见。 */
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--toast-gap);
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+/* 语气只靠左侧色条区分：info 中性、success 成功、watch 需留意、error 失败。 */
+.toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--toast-gap);
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--toast-line-strong);
+  border-left: 4px solid var(--toast-info-strong);
+  border-radius: var(--toast-radius);
+  background: var(--toast-surface);
+  color: var(--toast-text);
+  box-shadow: var(--toast-shadow-pop);
+  pointer-events: auto;
+  animation: toast-in 160ms ease-out;
+}
+
+.toast--leaving {
+  animation: toast-out 180ms ease-in forwards;
+  pointer-events: none;
+}
+
+.toast--success { border-left-color: var(--toast-ok-strong); }
+.toast--watch { border-left-color: var(--toast-watch-strong); }
+.toast--error { border-left-color: var(--toast-review-strong); }
+
+.toast-text {
+  font-size: var(--toast-font-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.toast-dismiss {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--toast-radius-pill);
+  background: transparent;
+  color: var(--toast-muted-2);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.toast-dismiss:hover {
+  background: var(--toast-head);
+  color: var(--toast-text);
+  border-color: transparent;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast--leaving { opacity: 0; }
+}
