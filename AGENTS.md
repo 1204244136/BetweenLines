@@ -29,11 +29,19 @@
   - 若用户对最近一次的 commit 表达了否定意见（如明确指出改动不符合预期、方向错误或要求重做），接下来的改动必须**先撤回被否定的 commit**（优先通过 `git revert` 撤销该提交，确保回退到该 commit 之前的干净基线）。
   - 严禁在已被否定的错误提交上直接叠加修改；撤回后再展开新的实现与改动。
 - **改动层级与刷新提示契约**：
-  编码代理在完成修改后，必须根据本次改动的具体层级，在回复中明确告知用户对应的**最小必要操作**，严禁不加区分地要求深层重建，避免浪费时间：
-  1. 🟢 **纯实时静态资源/无需改动快照**：**只需 F5 刷新页面**（如直接生效的动态样式或浏览器视图）。
-  2. 🟡 **工作台页面结构 / 样式 / 客户端脚本微调**（改动了 `build-compare.js` 的 HTML 模板、`public/workbench-client.js`、`public/*.css`、`notes-spaces.js` 等）：底层已支持工作台模块缓存热失效与静态资源动态重载，**只需在控制台点击「应用新布局」（或在终端执行 `npm run layout`），然后 F5 刷新页面即可即时生效**，绝不需要重启 `start-setup.bat`，也绝不需要耗时重跑对齐！
-  3. 🔵 **纯服务端接口与常驻服务逻辑**（改动了 `src/runtime/input-server.js`、`ai-proofread.js` 后端服务分发、`arbiter.js` 等常驻 Node 进程代码）：控制台服务为常驻进程，修改后**需重启控制台服务（重新运行根目录下的 `start-setup.bat` 或在终端重启 `npm run setup`）**，页面未改动时**无需应用新布局**，严禁误告用户“下一次请求会自动生效”。
-  4. 🔴 **源文本解析 / 正文过滤 / 跨语言对齐算法**（改动了 `src/ingest/`、`align_jp.py` 等直接影响行集和对齐组的内容）：**才必须重新对齐与重建工作台**（`npm run align:jp && npm run build`）。
+  完成修改后，必须在回复里给出与本次改动对应的**最小必要操作**。生效路径只有两条且**互不包含**：**常驻进程加载的代码**（不重启不换）与**已发布快照里的页面内容**（不重新渲染不换）。不要逐级累加，也别指望「做了底层，表层自动就好了」：
+
+  | 改了什么 | 最小必要操作 |
+  |---|---|
+  | `public/setup.html` | 控制台 F5（静态文件按 `no-store` 每次重读） |
+  | `public/*.js`、`public/*.css`、`src/workbenches/translation-compare/**`、`src/core/**`（除下行列出的三个） | 控制台点「应用新布局」（或 `npm run layout`）→ F5；**不用重启** |
+  | `src/runtime/**`、`src/storage/**`、`src/core/{atomic-fs,storage-layout,progress}.js` | **重启控制台服务**（`start-setup.bat` / `npm run setup`） |
+  | `src/workbenches/speaker-attribution/**` | **重启服务 + 重新生成说话人工作台**：它的页面输出到 `out/runtime/speaker-attribution/`、不在项目快照里，「应用新布局」碰不到它 |
+  | `src/ingest/**`、`align_jp.py`（行集与对齐口径） | **重新生成**（控制台「开始生成」，或 `npm run align:jp && npm run build`）；生成走 npm 子进程，读到的都是最新代码，**不用重启** |
+
+  - 重启只换常驻进程的代码，**不会**重渲染已发布的快照：同时改了服务端与 `public/*.js` 时，重启后仍要点一次「应用新布局」，F5 才看得到新客户端脚本（脚本是内联在快照 HTML 里的）。同样严禁把「下一次请求会自动生效」当作常驻进程代码的生效方式。
+  - **重新生成包含「应用新布局」的效果**（都会重渲染并发布新快照）——这是唯一的包含关系，重跑对齐时不必再点布局按钮。
+  - 回复里必须写成「哪部分改动 → 对应什么操作」。多处改动各自对应不同动作时逐条标明，不要丢给用户一串没有主语的步骤，否则会被读成「这些都得按顺序做一遍」。
 - **通用约束与协作**：
   - 优先使用确定性的本地 scripts，不要手工改 spreadsheet。
   - 变更输入格式、正文过滤、heading detection 或段落切分后，必须重新运行导出和对齐。
@@ -178,7 +186,7 @@ index-X 结构与命名规范契约：
 - `runStage2Stylist` / `runStage3Arbiter` **不得在自己内部吞掉异常**：错误必须挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 throw 后再走「频控重试 → 计入 stageNErrors → 回退上一阶段方案」。内部 catch 后只 pushLog 会让那一行在指标上凭空消失（既不算定案也不算异常）。
 - 客户端在「任务在跑 + 服务端回报了 `stagePipelines` + 没有 `stageCascade`」时判定常驻服务是旧版，提示一次重启并让阶段三卡片显示「未接入」；判据必须同时要求 `stagePipelines`，否则会把精简的状态桩误判成旧服务。
 - 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
-- 调整客户端资源后，执行 `npm run layout` 或控制台「应用新布局」，再 F5；不需要重新对齐。调整纯 AI 服务或调度后需重启控制台服务。
+- 调整客户端资源、构建器或服务端代码后的生效操作，按「改动层级与刷新提示契约」执行；这些调整都不需要重新对齐。
 - 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
 
 ## 控制台模块边界
