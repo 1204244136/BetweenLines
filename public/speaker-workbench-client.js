@@ -464,6 +464,10 @@
       return;
     }
 
+    // 与翻译比较工作台同一口径：批量写回会直接改动原始源文件，落盘前必须二次确认。
+    const backupTip = getSpeakerWritebackBackup() ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
+    if (!window.confirm(`将 ${rowsToWrite.length} 行的说话人写回原文件？\n定位不到或多处同段的段落不会写入，仍留在复核视野里。\n${backupTip}`)) return;
+
     const originalText = btn?.textContent || "批量写回";
     if (btn) {
       btn.textContent = "写回中...";
@@ -625,6 +629,9 @@
       window.alert("该行尚未指定说话人，无法写回。");
       return;
     }
+    // 单行写回与批量写回同一口径：确认发生在按钮切到「写回中」之前。
+    const backupTip = getSpeakerWritebackBackup() ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
+    if (!window.confirm(`将第 ${row.index} 行的说话人「${record.speaker}」写回原文件？\n${backupTip}`)) return;
     const originalText = button.textContent;
     button.textContent = "写回中...";
     button.disabled = true;

@@ -3505,9 +3505,13 @@
         showToast("第 " + id + " 行没有可写回的修改结果。", { tone: "watch", durationMs: 6000 });
         return;
       }
+      // 「写回原文件」是不可逆的破坏性操作：单行写回与批量写回必须走同一套确认口径。
+      // 确认发生在按钮切到「写回中」之前，用户取消时按钮不会卡在禁用态。
+      const backup = getWritebackBackupSetting();
+      const backupTip = backup ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
+      if (!confirm("将第 " + id + " 行的修改结果写回原文件？\n定位失败或有多处同段的段落不会被写入。" + backupTip)) return;
       button.disabled = true;
       button.textContent = "写回中...";
-      const backup = getWritebackBackupSetting();
       try {
         const entries = [{ id: String(id), targetKey, searchText, replaceText: revision }];
         const response = await apiFetch("/api/translation-export", {
