@@ -264,6 +264,8 @@ test("审核轨迹开关：点击不触发任何整表布局工作", async () =>
     dataset: { pipelineToggle: "1" },
     querySelector: () => null,
     closest: () => null,
+    attrs: {},
+    setAttribute(name, value) { this.attrs[name] = String(value); },
   };
   const details = ui.element("pipelineDetails_1");
   details.hidden = true;
@@ -277,6 +279,7 @@ test("审核轨迹开关：点击不触发任何整表布局工作", async () =>
   await ui.element("tbody").dispatch("click", event);
 
   assert.equal(details.hidden, false, "点击后轨迹抽屉必须展开（功能不能被优化掉）");
+  assert.equal(badge.attrs["aria-expanded"], "true", "展开态要如实回报给辅助技术与键盘用户");
   assert.equal(counters.heightReads, 0, "开关审核轨迹不得重新量高");
   assert.equal(counters.editorQueries, 0, "开关审核轨迹不得查编辑器列表");
   assert.equal(counters.frameRects, 0, "开关审核轨迹不得读容器矩形");
@@ -319,7 +322,7 @@ test("审核轨迹：手动开合的选择必须跨重渲染保持，否则用�
   assert.equal(renderedHidden("2"), false, "待人工确认行的审核轨迹默认展开");
 
   // 用户点击收起第 2 行。
-  const badge = { dataset: { pipelineToggle: "2" }, querySelector: () => null, closest: () => null };
+  const badge = { dataset: { pipelineToggle: "2" }, querySelector: () => null, closest: () => null, attrs: {}, setAttribute(name, value) { this.attrs[name] = String(value); } };
   const click = async () => {
     await ui.element("tbody").dispatch("click", {
       target: { closest: (selector) => (selector === "[data-pipeline-toggle]" ? badge : null) },
@@ -329,6 +332,7 @@ test("审核轨迹：手动开合的选择必须跨重渲染保持，否则用�
   };
   await click();
   assert.equal(ui.element("pipelineDetails_2").hidden, true, "点击后必须收起");
+  assert.equal(badge.attrs["aria-expanded"], "false", "收起后 aria-expanded 必须同步，否则读屏状态与实际不符");
 
   // 重渲染（筛选 / 翻页 / 改每页行数 / AI 结果到达都会走这里）后必须保持收起，
   // 否则用户收起的行又弹开，只能反复点——每次点击都连带一次整页重渲染。

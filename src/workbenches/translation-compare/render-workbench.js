@@ -480,6 +480,14 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <button id="aiConfirmClear" class="btn btn--primary" type="button">从未人工确认处开始</button>
         </div>
       </dialog>
+      <dialog id="genericConfirmDialog" class="notes-recovery-dialog generic-confirm-dialog" aria-labelledby="genericConfirmTitle">
+        <h2 id="genericConfirmTitle">请确认</h2>
+        <p id="genericConfirmMessage" class="generic-confirm-message"></p>
+        <div class="notes-dialog-actions">
+          <button id="genericConfirmCancel" class="btn btn--ghost" type="button" autofocus>取消</button>
+          <button id="genericConfirmOk" class="btn btn--primary" type="button">确认</button>
+        </div>
+      </dialog>
     </div>
     <main class="wrap">
       <div class="table-frame">

@@ -60,6 +60,12 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           };
         })(),
         addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, []); listeners.get(name).push(fn); },
+        removeEventListener(name, fn) {
+          const list = listeners.get(name);
+          if (!list) return;
+          const index = list.indexOf(fn);
+          if (index >= 0) list.splice(index, 1);
+        },
         async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
         setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
         querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; },
@@ -79,7 +85,17 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           if (parent) parent.children = parent.children.filter((item) => item !== this);
         },
         focus() {}, click() {},
-        showModal() { this.open = true; }, close() { this.open = false; },
+        showModal() {
+          this.open = true;
+          // 页内确认弹窗（workbench-client.js 的 askConfirm）在测试里默认按 fixture 的
+          // confirm 语义落定：默认「确认」，传 confirm: () => false 即「取消」。
+          // 其它 dialog（备注找回预览、AI 启动方式选择）保持只打开，由测试自行驱动。
+          if (id !== "genericConfirmDialog") return;
+          const answer = options.confirm ? options.confirm("") : true;
+          const target = elements.get(answer ? "genericConfirmOk" : "genericConfirmCancel");
+          if (target) target.dispatch("click", { target });
+        },
+        close() { this.open = false; },
         getBoundingClientRect() { return { height: 0, top: 0, bottom: 0 }; },
       });
     }

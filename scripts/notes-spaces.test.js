@@ -153,6 +153,27 @@ test("清空当前备注保留历史，清空历史保留当前空间", async ()
   assert.equal(ui.storage.getItem(historyKey), null);
 });
 
+test("清空类操作走页内确认弹窗：取消时不落盘，弹窗带上条数与影响范围", async () => {
+  const historyKey = "translation-compare-notes-v7:previous:rows";
+  const storage = storageFixture({
+    [key]: JSON.stringify({ 1: { note: "当前记录" } }),
+    [historyKey]: JSON.stringify({ 1: { note: "历史记录" } }),
+  });
+  // confirm: () => false 在夹具里等价于「用户在页内弹窗上点了取消」。
+  const ui = createWorkbench(storage, { confirm: () => false });
+
+  await ui.element("clearCurrentNotes").dispatch("click");
+  assert.equal(ui.element("genericConfirmTitle").textContent, "清空本页备注");
+  assert.match(ui.element("genericConfirmMessage").textContent, /清空本页备注空间中的 1 条记录/);
+  assert.equal(ui.element("genericConfirmDialog").open, false, "落定后弹窗必须关闭");
+  assert.notEqual(storage.getItem(key), null, "取消后不得清空当前空间");
+  assert.equal(ui.run("Object.keys(notes).length"), 1);
+
+  await ui.element("clearHistoryNotes").dispatch("click");
+  assert.match(ui.element("genericConfirmTitle").textContent, /清空历史空间/);
+  assert.notEqual(storage.getItem(historyKey), null, "取消后不得清空历史空间");
+});
+
 test("低分归因与线上查证属于分析栏，不会被并进可写回的修改结果", () => {
   const prose = [
     "修改结果：不如说越来越大了。",

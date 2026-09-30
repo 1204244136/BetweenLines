@@ -386,6 +386,49 @@
       keep: document.getElementById("aiConfirmKeep"),
       clear: document.getElementById("aiConfirmClear"),
     };
+    // 危险且不可逆的操作（清空备注空间、删除历史空间、从备份登记）统一走页内确认弹窗：
+    // 原来是 window.confirm，样式与语气都和页面里其它弹窗不一致，多行长文案还会被系统
+    // 弹窗挤成一大段纯文本。没有 <dialog> 支持时回退 window.confirm，行为不变。
+    const genericConfirmIds = {
+      dialog: document.getElementById("genericConfirmDialog"),
+      title: document.getElementById("genericConfirmTitle"),
+      message: document.getElementById("genericConfirmMessage"),
+      ok: document.getElementById("genericConfirmOk"),
+      cancel: document.getElementById("genericConfirmCancel"),
+    };
+
+    function askConfirm(message, { title = "请确认", confirmText = "确认", danger = true } = {}) {
+      const text = String(message ?? "");
+      const dialog = genericConfirmIds.dialog;
+      const { ok, cancel } = genericConfirmIds;
+      if (!dialog || !ok || !cancel || typeof dialog.showModal !== "function") {
+        return Promise.resolve(Boolean(confirm(text)));
+      }
+      genericConfirmIds.title.textContent = title;
+      genericConfirmIds.message.textContent = text;
+      ok.textContent = confirmText;
+      ok.className = danger ? "btn btn--danger" : "btn btn--primary";
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          ok.removeEventListener("click", onOk);
+          cancel.removeEventListener("click", onCancel);
+          dialog.removeEventListener("close", onClose);
+          if (dialog.open) dialog.close();
+          resolve(value);
+        };
+        // Esc 关闭也要算取消：漏了这条，Promise 永远不 settle，调用方的流程会静默卡住。
+        const onClose = () => finish(false);
+        const onOk = () => finish(true);
+        const onCancel = () => finish(false);
+        ok.addEventListener("click", onOk);
+        cancel.addEventListener("click", onCancel);
+        dialog.addEventListener("close", onClose);
+        dialog.showModal();
+      });
+    }
     const appliedAiResults = new Set();
     const aiActiveIds = new Set();
     const clearedAiRunIds = new Set();
@@ -5958,7 +6001,7 @@
       notesPanelIds.dialog.showModal();
     }
 
-    notesPanelIds.panel.addEventListener("click", (event) => {
+    notesPanelIds.panel.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-notes-export], [data-notes-restore], [data-notes-index], [data-notes-drop]");
       if (!button) return;
       const action = ["notesExport", "notesRestore", "notesIndex", "notesDrop"].find((key) => key in button.dataset);
@@ -5970,7 +6013,7 @@
       } else if (action === "notesRestore" || action === "notesIndex") {
         if (!space.current && space.data) previewNotesRecovery(space, action === "notesIndex");
       } else if (!space.current) {
-        if (!confirm("删除「" + notesSpaceTitle(space) + "」的 " + space.entries + " 条记录？\n删除不可撤销，请确认已经导出备份。")) return;
+        if (!(await askConfirm("删除「" + notesSpaceTitle(space) + "」的 " + space.entries + " 条记录？\n删除不可撤销，请确认已经导出备份。", { title: "删除历史空间", confirmText: "删除" }))) return;
         try {
           localStorage.removeItem(space.key);
           renderNotesSpaces();
@@ -6009,10 +6052,10 @@
       downloadNotesJson("betweenlines-notes-backup.json", notesBackup(collectNotesSpaces()));
       notesPanelStatus("已导出本页和全部历史空间。", { tone: "success" });
     });
-    notesPanelIds.clearCurrent.addEventListener("click", () => {
+    notesPanelIds.clearCurrent.addEventListener("click", async () => {
       const current = collectNotesSpaces().find((space) => space.current);
       if (!current?.entries) { notesPanelStatus("本页没有可清空的备注记录。", { tone: "watch" }); return; }
-      if (!confirm("清空本页备注空间中的 " + current.entries + " 条记录？\n这会同时清除人工确认和修改结果，历史空间不会受影响。\n\n建议先备份，再确认清空。")) return;
+      if (!(await askConfirm("清空本页备注空间中的 " + current.entries + " 条记录？\n这会同时清除人工确认和修改结果，历史空间不会受影响。\n\n建议先备份，再确认清空。", { title: "清空本页备注", confirmText: "清空" }))) return;
       try {
         localStorage.setItem(storageKey, "{}");
         for (const id of Object.keys(notes)) delete notes[id];
@@ -6027,11 +6070,11 @@
         notesPanelStatus("已清空本页备注空间；历史空间仍保留。", { tone: "success" });
       } catch { notesPanelStatus("清空失败：浏览器未允许修改本地存储。", { tone: "error" }); }
     });
-    notesPanelIds.clearHistory.addEventListener("click", () => {
+    notesPanelIds.clearHistory.addEventListener("click", async () => {
       const history = collectNotesSpaces().filter((space) => !space.current && space.entries);
       if (!history.length) { notesPanelStatus("没有可清空的历史备注空间。", { tone: "watch" }); return; }
       const count = history.reduce((total, space) => total + space.entries, 0);
-      if (!confirm("清空 " + history.length + " 个历史空间中的 " + count + " 条记录？\n此操作不可撤销，请先点击「备份全部」。")) return;
+      if (!(await askConfirm("清空 " + history.length + " 个历史空间中的 " + count + " 条记录？\n此操作不可撤销，请先点击「备份全部」。", { title: "清空历史空间", confirmText: "清空" }))) return;
       try {
         for (const space of history) localStorage.removeItem(space.key);
         renderNotesSpaces();
@@ -6044,7 +6087,7 @@
       if (!file) return;
       try {
         const spaces = notesTools.decodeBackup(JSON.parse(await file.text()));
-        if (!confirm("从备份登记 " + spaces.length + " 个空间？\n相同内容跳过；同名且内容不同会保留为副本。导入后可在列表预览找回。")) return;
+        if (!(await askConfirm("从备份登记 " + spaces.length + " 个空间？\n相同内容跳过；同名且内容不同会保留为副本。导入后可在列表预览找回。", { title: "导入备份", confirmText: "导入", danger: false }))) return;
         const result = notesTools.importBackup(localStorage, spaces, storageKey);
         renderNotesSpaces();
         notesPanelStatus("已导入 " + result.imported.length + " 个空间，跳过 " + result.skipped + " 个相同空间。"
