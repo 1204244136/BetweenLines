@@ -141,3 +141,26 @@ test("终止文案：失败轨保持既有措辞，策略摘要如实描述内�
   );
   assert.match(describePolicy(), /最近 20 次调用中失败占比达到 50% 时终止任务.*20 秒 → 60 秒 → 180 秒/);
 });
+
+test("限流轨：探测拿到非限流的失败或拒答，同样视为限流已解除", () => {
+  for (const settle of [
+    (breaker) => breaker.recordFailure(),
+    (breaker) => breaker.recordNotLimited(),
+  ]) {
+    const clock = fakeClock();
+    const breaker = createStageBreaker({ now: clock.now });
+    for (let i = 0; i < 3; i += 1) breaker.recordLimitExhausted();
+    clock.advance(20000);
+    assert.equal(breaker.state, "half-open");
+    assert.equal(settle(breaker).recovered, true);
+    assert.equal(breaker.state, "closed");
+  }
+});
+
+test("拒答只解除限流轨，不进失败窗口", () => {
+  const breaker = createStageBreaker();
+  for (let i = 0; i < 20; i += 1) assert.equal(breaker.recordNotLimited().recovered, false);
+  // 窗口里没有任何样本：仍要攒满 10 次才可能判定。
+  for (let i = 0; i < 9; i += 1) assert.equal(breaker.recordFailure().trip, null);
+  assert.ok(breaker.recordFailure().trip);
+});

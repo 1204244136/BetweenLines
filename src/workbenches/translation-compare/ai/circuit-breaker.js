@@ -67,6 +67,14 @@ function createStageBreaker({ policy = BREAKER_POLICY, now = Date.now, timeScale
     };
   }
 
+  // 限流轨清零；若此前处于冷却/半开则视为恢复并返回 true。
+  function clearLimit() {
+    const recovered = cycle > 0;
+    limitStreak = 0;
+    if (recovered) reset();
+    return recovered;
+  }
+
   function startCooldown() {
     const cooldownMs = cooldowns[cycle];
     cycle += 1;
@@ -80,16 +88,19 @@ function createStageBreaker({ policy = BREAKER_POLICY, now = Date.now, timeScale
     // 窗口判据对每个新样本都重新评估（成功样本挤掉旧成功、把错误率抬到阈值时同样成立），不只看失败那一刻。
     recordSuccess() {
       pushOutcome(false);
-      const recovered = cycle > 0;
-      limitStreak = 0;
-      if (recovered) reset();
-      return { recovered, trip: evaluateWindow() };
+      return { recovered: clearLimit(), trip: evaluateWindow() };
     },
 
     // 一次非限流的真实失败。返回 { trip }：trip 非空时应终止任务。
+    // 请求拿到了非限流的答复，同样说明上游的限流已经放行，限流轨随之解除。
     recordFailure() {
       pushOutcome(true);
-      return { trip: evaluateWindow() };
+      return { recovered: clearLimit(), trip: evaluateWindow() };
+    },
+
+    // 拒答等「上游正常应答、但不该计入成败」的结果：只解除限流轨，不进失败窗口。
+    recordNotLimited() {
+      return { recovered: clearLimit() };
     },
 
     // 单行限流重试已用尽。action：

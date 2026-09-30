@@ -1434,3 +1434,69 @@ test("限流熔断：冷却后探测成功即恢复，被暂缓的行不记失�
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("限流熔断：冷却结束后只放行一个探测请求，探测通过才恢复到设定并发", async () => {
+  clearProofreadCache();
+  const totalRows = 8;
+  const { project } = setupMockProject(totalRows, "halfopen");
+  const okRequests = [];
+  // 首档冷却按 0.03 缩放后为 600ms。服务端轮询日志，看到断路器真正打开后再计时，
+  // 冷却期内一律 429（含迟到的在途请求），冷却结束后放行并稍作延迟，
+  // 让「探测尚未返回时是否又冲出别的请求」可被观察到。
+  const cooldownMs = 600;
+  let openedAt = 0;
+  const watcher = setInterval(() => {
+    if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
+      openedAt = Date.now();
+    }
+  }, 5);
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      if (!openedAt || Date.now() < openedAt + cooldownMs + 30) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+        res.end(JSON.stringify({ error: { message: "all channels in 429 cooldown" } }));
+        return;
+      }
+      const record = { start: Date.now(), end: 0 };
+      okRequests.push(record);
+      setTimeout(() => {
+        record.end = Date.now();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 80);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    await withBreakerTimeScale(0.03, async () => {
+      await startProofread({
+        provider: "compatible",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        model: "test-model",
+        proofreadMode: "bilingual",
+        concurrency: 32,
+        projectKey: project.projectKey,
+        rowsSignature: project.rowsSignature,
+      });
+      const deadline = Date.now() + 15000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, false);
+    assert.match(finished.logs.join("\n"), /限流冷却解除/);
+    assert.ok(okRequests.length >= 2, "探测通过后剩余行应继续处理");
+    assert.ok(
+      okRequests[1].start >= okRequests[0].end,
+      "半开阶段探测未返回前不得再放行第二个请求（并发 32 时不应一拥而上）",
+    );
+  } finally {
+    clearInterval(watcher);
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

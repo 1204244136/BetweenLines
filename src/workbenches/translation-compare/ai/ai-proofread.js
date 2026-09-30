@@ -1440,8 +1440,22 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
   // 成功既喂断路器，也可能顺带解除它设下的冷却（迟到的成功说明上游已经放行）。
   function noteStageSuccess(ctrl) {
-    if (recordStageSuccess(ctrl.stageKey)) ctrl.backoffUntil = Math.min(ctrl.backoffUntil, Date.now());
+    clearCooldownIf(ctrl, recordStageSuccess(ctrl.stageKey));
     onStageSuccess(ctrl);
+  }
+
+  // 断路器恢复：撤销冷却窗口，并把退避档位归零。
+  // consecutiveLimits 原本只在智能并发下由成功清零，固定并发下会一直停在最大档，恢复后的下一次 429 仍按最长退避。
+  function clearCooldownIf(ctrl, recovered) {
+    if (!recovered) return;
+    ctrl.backoffUntil = Math.min(ctrl.backoffUntil, Date.now());
+    ctrl.consecutiveLimits = 0;
+  }
+
+  // 半开探测期（冷却已过、尚未收到非限流答复）只放行一个请求：
+  // 否则并发数是 10 就会同时打出 10 个请求，等于对着刚冷却完的上游再硬打一轮。
+  function dispatchLimit(ctrl) {
+    return stageBreaker(ctrl.stageKey).state === "half-open" ? 1 : ctrl.currentConcurrency;
   }
 
   function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry) {
@@ -1550,7 +1564,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }, waitMs);
       }
       if (!s3InBackoff) {
-        while (stage3InFlight < s3Ctrl.currentConcurrency && stage3Pending.length > 0 && !status.stopRequested && !settled) {
+        while (stage3InFlight < dispatchLimit(s3Ctrl) && stage3Pending.length > 0 && !status.stopRequested && !settled) {
           const s2Item = stage3Pending.shift();
           stage3InFlight += 1;
           syncStagePipelineQueues();
@@ -1568,7 +1582,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }, waitMs);
       }
       if (!s2InBackoff) {
-        while (stage2InFlight < s2Ctrl.currentConcurrency && stage2Pending.length > 0 && !status.stopRequested && !settled) {
+        while (stage2InFlight < dispatchLimit(s2Ctrl) && stage2Pending.length > 0 && !status.stopRequested && !settled) {
           const s1Item = stage2Pending.shift();
           stage2InFlight += 1;
           syncStagePipelineQueues();
@@ -1586,7 +1600,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }, waitMs);
       }
       if (!s1InBackoff) {
-        while (stage1InFlight < s1Ctrl.currentConcurrency && stage1Pending.length > 0 && !status.stopRequested && !settled) {
+        while (stage1InFlight < dispatchLimit(s1Ctrl) && stage1Pending.length > 0 && !status.stopRequested && !settled) {
           const row = stage1Pending.shift();
           stage1InFlight += 1;
           syncStagePipelineQueues();
@@ -1636,6 +1650,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
 
         if (isRefusal) {
+          clearCooldownIf(s1Ctrl, recordStageNotLimited("stage1"));
           status.modelRefusals += 1;
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
@@ -1669,7 +1684,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
-            recordStageFailure("stage1");
+            clearCooldownIf(s1Ctrl, recordStageFailure("stage1"));
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         }
@@ -1735,7 +1750,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
-          else if (!status.stopRequested && !isRateLimit) recordStageFailure("stage2");
+          else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s2Ctrl, recordStageFailure("stage2"));
         }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
@@ -1787,7 +1802,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
-          else if (!status.stopRequested && !isRateLimit) recordStageFailure("stage3");
+          else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s3Ctrl, recordStageFailure("stage3"));
         }
       } finally {
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
@@ -1963,8 +1978,17 @@ function recordStageSuccess(stageKey) {
 
 // 一次非限流的真实失败（5xx、超时、断连等）。限流耗尽走 onStageRateLimit 里的限流轨，不进这里。
 function recordStageFailure(stageKey) {
-  const { trip } = stageBreaker(stageKey).recordFailure();
+  const { recovered, trip } = stageBreaker(stageKey).recordFailure();
+  if (recovered) pushLog(`[熔断] ${STAGE_OUTCOME_LABELS[stageKey] || stageKey}：请求已拿到非限流的答复，限流冷却解除。`);
   if (trip) stopForBreakerTrip(trip, stageKey);
+  return recovered;
+}
+
+// 拒答：上游正常应答，只解除限流轨，不计成败。
+function recordStageNotLimited(stageKey) {
+  const { recovered } = stageBreaker(stageKey).recordNotLimited();
+  if (recovered) pushLog(`[熔断] ${STAGE_OUTCOME_LABELS[stageKey] || stageKey}：请求已拿到非限流的答复，限流冷却解除。`);
+  return recovered;
 }
 
 async function runStage1Gatekeeper(row, allRows, config, labels) {
