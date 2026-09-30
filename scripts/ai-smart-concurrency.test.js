@@ -1500,3 +1500,60 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完，回退复审方案", async () => {
+  clearProofreadCache();
+  const totalRows = 12;
+  const { project } = setupMockProject(totalRows, "arbrefusal");
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch { payload = {}; }
+      const userText = String((payload.messages || []).find((message) => message.role === "user")?.content || "");
+      const isArbiter = userText.includes("stylistReview");
+      const isStylist = !isArbiter && userText.includes("gatekeeperReview");
+
+      if (isArbiter) {
+        // 拒答是上游的正常应答（内容安全审查），不是接口故障，不能被熔断当成失败样本。
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "The model declined to answer" } }));
+        return;
+      }
+      const content = isStylist
+        ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, false, "拒答不该触发熔断");
+    assert.equal(finished.error, "");
+    assert.equal(finished.processed, totalRows, "每一行都要走完并回退到复审方案");
+    assert.equal(finished.stageMetrics.stage3Errors, totalRows, "拒答行仍如实计入仲裁异常，指标口径不变");
+    assert.match(finished.logs.join("\n"), /终审仲裁被模型拒答（内容安全审查），回退至复审方案/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

@@ -1742,6 +1742,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         } else {
           if (isRateLimit) {
             pushLog(`[频控退避] 第 ${s1Item.row.index} 行文学复审连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至初审方案。`);
+          } else if (isRefusal) {
+            pushLog(`第 ${s1Item.row.index} 行：文学复审被模型拒答（内容安全审查），回退至初审方案。`);
           } else {
             pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
           }
@@ -1750,6 +1752,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
+          // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
+          else if (isRefusal) clearCooldownIf(s2Ctrl, recordStageNotLimited("stage2"));
           else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s2Ctrl, recordStageFailure("stage2"));
         }
       } finally {
@@ -1794,6 +1798,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         } else {
           if (isRateLimit) {
             pushLog(`[频控退避] 第 ${s2Item.row.index} 行终审仲裁连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至复审方案。`);
+          } else if (isRefusal) {
+            pushLog(`第 ${s2Item.row.index} 行：终审仲裁被模型拒答（内容安全审查），回退至复审方案。`);
           } else {
             pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
           }
@@ -1802,6 +1808,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
+          else if (isRefusal) clearCooldownIf(s3Ctrl, recordStageNotLimited("stage3"));
           else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s3Ctrl, recordStageFailure("stage3"));
         }
       } finally {
