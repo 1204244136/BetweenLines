@@ -1497,6 +1497,12 @@
       if (!select || select.dataset.enhanced) return;
       select.dataset.enhanced = "1";
       select.classList.add("enhanced-select");
+      // 原生 select 已被视觉隐藏（1×1px、opacity:0），但它仍然留在 Tab 序列里：键盘用户会先
+      // 聚焦到一个完全看不见的控件，再 Tab 一次才轮到真正可见的 trigger——每个下拉都是这样
+      // 一个「看得见焦点却看不到控件」的停靠点。这里把它从 Tab 序列与可访问树里摘掉，
+      // 只保留 trigger；程序化读写 select.value / 派发 change 都不受影响。
+      select.tabIndex = -1;
+      select.setAttribute("aria-hidden", "true");
 
       const wrapper = document.createElement("div");
       wrapper.className = "select-combobox";
@@ -1505,6 +1511,10 @@
       trigger.className = "select-trigger";
       trigger.setAttribute("aria-haspopup", "listbox");
       trigger.setAttribute("aria-expanded", "false");
+      // 原生 select 已从可访问树摘掉，它关联的 <label> 不会再被读到：把标签文本搬给 trigger，
+      // 键盘与读屏用户仍然知道这个下拉在选什么。
+      const triggerLabel = String(select.labels?.[0]?.textContent || "").trim();
+      if (triggerLabel) trigger.setAttribute("aria-label", triggerLabel);
       const value = document.createElement("span");
       value.className = "select-value";
       const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");

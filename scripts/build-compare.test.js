@@ -267,6 +267,11 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.doesNotMatch(script, /data-export-revision/);
   assert.doesNotMatch(script, /buildPgaContent/);
   assert.match(script, /input:not\(\[type="checkbox"\]\), textarea, select/);
+  // 自定义下拉把被隐藏的原生 select 从 Tab 序列与可访问树里摘掉，否则每个下拉都会多出
+  // 一个「聚焦了却看不见」的键盘停靠点；标签文本改挂到可见的 trigger 上。
+  assert.match(script, /select\.tabIndex = -1;/);
+  assert.match(script, /select\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(script, /const triggerLabel = String\(select\.labels\?\.\[0\]\?\.textContent \|\| ""\)\.trim\(\)/);
   assert.match(script, /event\.key === "ArrowDown" \? 1 : -1/);
   assert.match(script, /preferredTop = Math\.max\(headerHeight \+ 16, Math\.round\(tableFrame\.clientHeight \* 0\.18\)\)/);
   assert.match(script, /keyboardScrollSpacer\.style\.height = Math\.max\(0, tableFrame\.clientHeight - preferredTop\) \+ "px"/);
