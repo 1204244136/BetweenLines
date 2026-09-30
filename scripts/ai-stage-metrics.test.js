@@ -496,6 +496,82 @@ test("客户端看板：各阶段调用异常与错误能够对应到对应阶�
   assert.equal(ui.element("stage3ErrorItem").classList.contains("has-errors"), false);
 });
 
+test("客户端看板：异常悬停提示按类别展开问题、行号与代表性错误", () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: { note: "[AI校对]\n调用失败：请求超时，网络连接超时或模型响应过慢。", aiDone: false },
+      2: { note: "[AI校对]\n调用失败：请求超时，网络连接超时或模型响应过慢。", aiDone: false },
+      3: { note: "[AI校对]\n调用失败：请求受限或额度不足（HTTP 429）：遭遇并发频控（Rate Limit）。", aiDone: false },
+      4: { note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：无误", aiDone: true },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+      { index: 3, jp: "A3", cn: "B3", relation: "1:1", score: 0.9, signature: "sig-3" },
+      { index: 4, jp: "A4", cn: "B4", relation: "1:1", score: 0.9, signature: "sig-4" },
+    ],
+  });
+
+  assert.equal(ui.element("metricStage1Errors").textContent, 3);
+  const title = ui.element("stage1ErrorItem").title;
+  assert.match(title, /^阶段一 事实初审 · 异常 3 行/, "悬停标题先给总数");
+  assert.match(title, /· 请求超时：2 行（第 1 行、第 2 行）/, "同类问题合并计数并列出出错行号");
+  assert.match(title, /· 频控限流：1 行（第 3 行）/);
+  assert.match(title, /请求超时，网络连接超时或模型响应过慢。/, "带出该类问题的代表性错误消息");
+});
+
+test("客户端看板：服务端回报的异常分类明细并入悬停提示", () => {
+  const ui = createWorkbench(storageFixture({}), {
+    rows: [{ index: 7, jp: "A7", cn: "B7", relation: "1:1", score: 0.9, signature: "sig-7" }],
+  });
+
+  ui.run(`
+    renderAiStatus({
+      running: false,
+      stageMetrics: { stage3Arbitrated: 1, stage3Errors: 2 },
+      stageErrors: {
+        stage3: { server_error: { count: 2, rows: [7, 9], sample: "模型服务端异常（HTTP 500）：服务提供方内部发生错误。" } },
+      },
+      stagePipelines: {},
+      results: [],
+    });
+  `);
+
+  const item = ui.element("stage3ErrorItem");
+  assert.equal(ui.element("metricStage3Errors").textContent, 2);
+  assert.equal(item.classList.contains("has-errors"), true);
+  assert.match(item.title, /^阶段三 终审仲裁 · 异常 2 行/);
+  assert.match(item.title, /· 服务端错误：2 行（第 7 行、第 9 行）/);
+});
+
+test("客户端看板：异常清零后悬停提示恢复构建器写入的静态说明", () => {
+  const ui = createWorkbench(storageFixture({}), {
+    rows: [{ index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" }],
+  });
+
+  const item = ui.element("stage1ErrorItem");
+  item.title = "阶段一调用失败/异常行数";
+  ui.run(`
+    renderAiStatus({
+      running: false,
+      stageMetrics: { stage1Errors: 3 },
+      stageErrors: { stage1: { timeout: { count: 3, rows: [1, 2, 3] } } },
+      stagePipelines: {},
+      results: [],
+    });
+  `);
+  assert.match(item.title, /· 请求超时：3 行/);
+
+  ui.run(`
+    renderAiStatus({ running: false, stageMetrics: {}, stageErrors: {}, stagePipelines: {}, results: [] });
+  `);
+  assert.equal(item.title, "阶段一调用失败/异常行数", "清零后不能残留上一轮的分类明细");
+});
+
 test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按钮并联动运行状态", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {

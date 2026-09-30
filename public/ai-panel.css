@@ -1083,6 +1083,12 @@ details[open] > summary .details-toggle::before {
   background: color-mix(in srgb, #ef4444 12%, transparent);
   padding: 0 4px;
   border-radius: var(--ai-radius-badge, 3px);
+  /* 悬停展开「到底出了哪些问题」的分类明细（哪几类、各多少行、出在哪几行）。 */
+  cursor: help;
+}
+
+.ai-stage-sub-item--error.has-errors:hover {
+  background: color-mix(in srgb, #ef4444 22%, transparent);
 }
 
 .ai-stage-sub-item--error.has-errors [id^="metric"] {

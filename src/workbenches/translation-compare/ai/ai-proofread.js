@@ -102,6 +102,7 @@ const {
   applyArbitrationDecision,
   formatArbitrationNoteLines,
 } = require("./arbiter");
+const { classifyAiError, recordAiErrorKind } = require("./error-kinds");
 const {
   getModelProfile,
   scheduleModels,
@@ -156,6 +157,44 @@ const contextBudget = {
   maxRows: 12,
   maxChars: 6000,
 };
+
+/**
+ * 本次运行的失败明细：阶段 → 行号 → { kind, message }。
+ * 与 stageMetrics 的异常计数分开存：计数是可撤销的数值 delta，明细是给人看的原始证据，
+ * 用来回答「这些异常到底是哪几类问题、出在哪几行」。行重跑成功时按阶段精确清除。
+ */
+function createStageErrors() {
+  return { stage1: {}, stage2: {}, stage3: {} };
+}
+
+function recordStageError(stage, rowIndex, error, forcedKind = "") {
+  const bucket = status.stageErrors?.[stage];
+  if (!bucket) return;
+  const message = String(error?.message || error || "").replace(/\s+/g, " ").trim();
+  bucket[String(rowIndex)] = {
+    // 用户终止时 error 往往是中断异常（Aborted / socket closed），照它归类会记成网络故障，
+    // 由调用点显式指定类别，别把「我按了停止」算成故障。
+    kind: forcedKind || classifyAiError(error),
+    message: message.slice(0, 200),
+  };
+}
+
+function clearStageError(stage, rowIndex) {
+  const bucket = status.stageErrors?.[stage];
+  if (bucket) delete bucket[String(rowIndex)];
+}
+
+/** 明细按阶段聚合成 { kind: { count, rows, sample } }，随状态接口回报给页面。 */
+function stageErrorKindsSnapshot() {
+  const snapshot = { stage1: {}, stage2: {}, stage3: {} };
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    const bucket = status.stageErrors?.[stage] || {};
+    for (const [row, detail] of Object.entries(bucket)) {
+      recordAiErrorKind(snapshot[stage], detail?.kind, Number(row), detail?.message);
+    }
+  }
+  return snapshot;
+}
 
 const status = {
   running: false,
@@ -231,6 +270,7 @@ const status = {
   active: [],
   error: "",
   stageMetrics: createStageMetrics(),
+  stageErrors: createStageErrors(),
   stagePipelines: createStagePipelines(),
   metrics: {
     promptTokens: 0,
@@ -377,6 +417,8 @@ function clientStatus(options = {}) {
     active: status.active,
     error: status.error,
     stageMetrics: { ...status.stageMetrics },
+    // 异常分类明细：页面把「异常」指标的悬停提示按类别展开（哪几类问题、各多少行、出在哪几行）。
+    stageErrors: stageErrorKindsSnapshot(),
     stagePipelines: createStagePipelines(status.stagePipelines),
     metrics: { ...status.metrics },
     feedbackStats: globalFeedbackCollector.getStatistics(),
@@ -672,6 +714,7 @@ function resetStatus(config, rowsLength) {
   status.active = [];
   status.error = "";
   status.stageMetrics = createStageMetrics();
+  status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
   status.metrics = {
     promptTokens: 0,
@@ -1226,6 +1269,7 @@ function clearProofreadCache() {
   status.active = [];
   status.error = "";
   status.stageMetrics = createStageMetrics();
+  status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
   status.logs = [];
   status.results = new Map();
@@ -1615,6 +1659,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       status.active.push(row.index);
       status.stagePipelines.stage1.activeRows.push(row.index);
       syncStagePipelineQueues();
+      // 这一行正在被（重新）处理：先撤掉它上一次的初审异常明细，成功就不再补记，失败才重新登记。
+      clearStageError("stage1", row.index);
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
@@ -1660,6 +1706,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row);
           if (!retried) {
             pushLog(`[频控退避] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
+            recordStageError("stage1", row.index, error, "rate_limit");
             addResult({
               runId: status.runId,
               index: row.index,
@@ -1672,14 +1719,16 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
+          const isStopped = status.stopRequested && !fatalRequestError;
+          recordStageError("stage1", row.index, error, isStopped ? "stopped" : "");
           addResult({
             runId: status.runId,
             index: row.index,
             signature: rowSignature(row),
             stage: "stage1",
-            status: status.stopRequested && !fatalRequestError ? "stopped" : "error",
+            status: isStopped ? "stopped" : "error",
             done: false,
-            note: `[AI校对]\n${status.stopRequested && !fatalRequestError ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
+            note: `[AI校对]\n${isStopped ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
           });
           if (fatalRequestError) {
             stopForFatalRequestError(error);
@@ -1700,6 +1749,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!status.active.includes(s1Item.row.index)) status.active.push(s1Item.row.index);
       status.stagePipelines.stage2.activeRows.push(s1Item.row.index);
       syncStagePipelineQueues();
+      // 与初审对称：这一行正在被（重新）复审，先撤掉上一次的复审异常明细，失败才重新登记。
+      clearStageError("stage2", s1Item.row.index);
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
         // 复审内部已经把异常回退成「采纳初审方案」，但这一行仍必须走统一错误处理：
@@ -1748,6 +1799,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
           }
           status.stageMetrics.stage2Errors += 1;
+          recordStageError("stage2", s1Item.row.index, error, isRateLimit ? "rate_limit" : (isRefusal ? "refusal" : ""));
           const result = finalizeRowResult(s1Item, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
@@ -1773,6 +1825,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!status.active.includes(s2Item.row.index)) status.active.push(s2Item.row.index);
       status.stagePipelines.stage3.activeRows.push(s2Item.row.index);
       syncStagePipelineQueues();
+      // 同理：先撤掉这一行上一次的仲裁异常明细。
+      clearStageError("stage3", s2Item.row.index);
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels, allRows);
         // 同理：仲裁失败的行走统一错误处理（频控重试 / 计入仲裁异常 / 回退复审方案），
@@ -1804,6 +1858,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
           }
           status.stageMetrics.stage3Errors += 1;
+          recordStageError("stage3", s2Item.row.index, error, isRateLimit ? "rate_limit" : (isRefusal ? "refusal" : ""));
           const result = finalizeRowResult(s2Item, config);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);

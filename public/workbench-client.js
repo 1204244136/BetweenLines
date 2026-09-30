@@ -3824,7 +3824,29 @@
       hint.title = [files.join("\n"), ...errors].join("\n");
     }
 
-    function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false) {
+    /**
+     * 「异常」指标：数字照旧，悬停时按分类展开「到底出了哪些问题、各多少行、出在哪几行」。
+     * 无异常时恢复构建器写在 HTML 上的静态说明，避免上一轮的明细残留在 tooltip 里。
+     * 明细总数与卡片计数不一致时取较大者：停止任务留下的「已终止」行在备注口径里算失败行，
+     * 服务端计数却不算，两边都如实反映才不会让悬停明细看起来「比卡片少」。
+     */
+    function renderStageErrorItem(itemId, metricId, count, kinds, stageLabel) {
+      const metric = document.getElementById(metricId);
+      if (metric) metric.textContent = count;
+      const item = document.getElementById(itemId);
+      if (!item) return;
+      item.classList.toggle("has-errors", count > 0);
+      if (!item.dataset.defaultTitle) item.dataset.defaultTitle = item.title || "";
+      const entries = sortAiErrorKinds(kinds);
+      const kindsTotal = entries.reduce((sum, entry) => sum + entry.count, 0);
+      if (count > 0 || kindsTotal > 0) {
+        item.title = formatAiErrorHoverTitle(stageLabel, Math.max(count, kindsTotal), kinds);
+      } else {
+        item.title = item.dataset.defaultTitle;
+      }
+    }
+
+    function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false, stageErrorKinds = null) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
       const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
       const s1Unclear = Math.max(0, Number(stageMetrics.stage1Unclear) || 0);
@@ -3887,9 +3909,7 @@
       if (elS1Total) elS1Total.textContent = s1Total;
       const elS1Err = document.getElementById("metricStage1Errors");
       if (elS1Err) {
-        elS1Err.textContent = s1Errors;
-        const item = document.getElementById("stage1ErrorItem");
-        if (item) item.classList.toggle("has-errors", s1Errors > 0);
+        renderStageErrorItem("stage1ErrorItem", "metricStage1Errors", s1Errors, stageErrorKinds?.stage1, "阶段一 事实初审");
       }
       const elFp = document.getElementById("metricFastPassHits");
       if (elFp) elFp.textContent = fpHits;
@@ -3901,9 +3921,7 @@
       if (elS2Diverged) elS2Diverged.textContent = s2Diverged;
       const elS2Err = document.getElementById("metricStage2Errors");
       if (elS2Err) {
-        elS2Err.textContent = s2Errors;
-        const item = document.getElementById("stage2ErrorItem");
-        if (item) item.classList.toggle("has-errors", s2Errors > 0);
+        renderStageErrorItem("stage2ErrorItem", "metricStage2Errors", s2Errors, stageErrorKinds?.stage2, "阶段二 文学复审");
       }
       const s1PendingTotal = s1NeedsEdit + s1Unclear;
       // 优先使用与筛选器同源的逐行谓词结果（stage2Pending），聚合相减只作缺省兜底。
@@ -3955,9 +3973,7 @@
       if (elArbOrig) elArbOrig.textContent = arbOrig;
       const elS3Err = document.getElementById("metricStage3Errors");
       if (elS3Err) {
-        elS3Err.textContent = s3Errors;
-        const item = document.getElementById("stage3ErrorItem");
-        if (item) item.classList.toggle("has-errors", s3Errors > 0);
+        renderStageErrorItem("stage3ErrorItem", "metricStage3Errors", s3Errors, stageErrorKinds?.stage3, "阶段三 终审仲裁");
       }
 
       const elRate = document.getElementById("aiStageFastPassRate");
@@ -4122,8 +4138,10 @@
       let totalAudited = 0;
       let lowScoreHits = 0;
       let webLookupHits = 0;
+      // 失败行的分类明细：与「异常」计数同一轮遍历得出，用来回答悬停时的「到底出了哪些问题」。
+      const stageErrorKinds = { stage1: {}, stage2: {}, stage3: {} };
 
-      for (const item of Object.values(sourceNotes || {})) {
+      for (const [noteRowKey, item] of Object.entries(sourceNotes || {})) {
         if (!item) continue;
         const noteText = latestAiNotePart(item.note || "").trim();
         if (!noteText) continue;
@@ -4133,13 +4151,17 @@
           // 只认失败行「以阶段名开头」（如「Stylist复审调用异常」）；错误正文里恰好带 Arbiter 等词不算，
           // 否则「调用失败：Arbiter endpoint 404」这类初审报错会被归到别的阶段。
           const failureLine = noteText.split(/\n+/).map((line) => line.trim()).filter(Boolean)[1] || "";
+          let failureStage = "stage1";
           if (/^(Arbiter|终审仲裁)/.test(failureLine)) {
+            failureStage = "stage3";
             stage3Errors += 1;
           } else if (/^(Stylist|文学复审)/.test(failureLine)) {
+            failureStage = "stage2";
             stage2Errors += 1;
           } else {
             stage1Errors += 1;
           }
+          recordAiErrorKind(stageErrorKinds[failureStage], classifyAiError(failureLine || noteText), Number(noteRowKey), failureLine);
           continue;
         }
 
@@ -4296,6 +4318,7 @@
         totalAudited,
         lowScoreHits,
         webLookupHits,
+        stageErrorKinds,
       };
 
       if (sourceNotes === notes) {
@@ -4305,7 +4328,7 @@
       return resultMetrics;
     }
 
-    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false) {
+    function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false, serverStageErrors = null) {
       const localMetrics = computeStageMetricsFromNotes(notes);
       let stageMetrics = localMetrics;
       const hasOverride = overrideMetrics && Object.values(overrideMetrics).some((v) => Number(v) > 0);
@@ -4350,7 +4373,14 @@
       if (aiIds.status) aiIds.status.dataset.stageMetrics = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
 
-      renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning);
+      // 异常分类明细：本地备注口径（历史遗留 + 本次）与服务端本次运行的记录合并，
+      // 计数取 max、行号取并集——两端口径观察的常是同一批行，相加会把同一行算两次。
+      const stageErrorKinds = {};
+      for (const stage of ["stage1", "stage2", "stage3"]) {
+        stageErrorKinds[stage] = mergeAiErrorKinds(localMetrics.stageErrorKinds?.[stage], serverStageErrors?.[stage]);
+      }
+
+      renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning, stageErrorKinds);
       return stageMetrics;
     }
 
@@ -4419,7 +4449,7 @@
         currentStageCascade = reportedCascade;
       }
 
-      const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning);
+      const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
       const stageMetricsSummary = aiIds.status?.dataset.stageMetrics || "";
       const aiRunId = ai.runId || "";
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {

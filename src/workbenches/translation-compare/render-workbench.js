@@ -13,6 +13,19 @@ const { resolveModelOptions, normalizeApiBaseUrl, restorableModelOptions } = req
 const { alignLegacyNotes, alignNotesByIndex } = require("./notes-recovery");
 const { loadJpPivotLang } = require("./alignment-artifact");
 const { workbenchClientRows } = require("./row-output");
+const {
+  AI_ERROR_KIND_ORDER,
+  AI_ERROR_KIND_LABELS,
+  AI_ERROR_ROW_SAMPLE_LIMIT,
+  AI_ERROR_ROW_DISPLAY_LIMIT,
+  AI_ERROR_SAMPLE_DISPLAY_LIMIT,
+  classifyAiError,
+  recordAiErrorKind,
+  mergeAiErrorKinds,
+  sortAiErrorKinds,
+  formatAiErrorRowList,
+  formatAiErrorHoverTitle,
+} = require("./ai/error-kinds");
 
 function readWorkbenchAssets() {
   const publicDir = path.join(__dirname, "..", "..", "..", "public");
@@ -530,6 +543,18 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${createNotesTools.toString()}
     ${createPresetTools.toString()}
     ${normalizeGrade.toString()}
+    // 异常分类：与服务端同一份规则（ai/error-kinds.js），页面只负责把分类结果渲染成悬停明细。
+    const AI_ERROR_KIND_ORDER = ${safeJson(AI_ERROR_KIND_ORDER)};
+    const AI_ERROR_KIND_LABELS = ${safeJson(AI_ERROR_KIND_LABELS)};
+    const AI_ERROR_ROW_SAMPLE_LIMIT = ${safeJson(AI_ERROR_ROW_SAMPLE_LIMIT)};
+    const AI_ERROR_ROW_DISPLAY_LIMIT = ${safeJson(AI_ERROR_ROW_DISPLAY_LIMIT)};
+    const AI_ERROR_SAMPLE_DISPLAY_LIMIT = ${safeJson(AI_ERROR_SAMPLE_DISPLAY_LIMIT)};
+    ${classifyAiError.toString()}
+    ${recordAiErrorKind.toString()}
+    ${mergeAiErrorKinds.toString()}
+    ${sortAiErrorKinds.toString()}
+    ${formatAiErrorRowList.toString()}
+    ${formatAiErrorHoverTitle.toString()}
 
     const storageKey = ${JSON.stringify(storageKey)};
     const pageMeta = ${safeJson(clientMeta)};

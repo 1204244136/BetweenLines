@@ -1075,6 +1075,12 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
     assert.equal(finished.running, false);
     assert.equal(finished.stageMetrics.stage3Arbitrated, 0, "仲裁全失败，不该有任何定案");
     assert.equal(finished.stageMetrics.stage3Errors, totalRows, "仲裁失败的每一行都必须计入仲裁异常，不能凭空消失");
+    // 「异常」指标悬停时要能回答「到底出了哪些问题」：服务端把每一行的失败原因分类后随状态回报。
+    const stage3Errors = finished.stageErrors.stage3;
+    assert.equal(stage3Errors.server_error.count, totalRows, "5xx 仲裁失败应归类为服务端错误");
+    assert.deepEqual(stage3Errors.server_error.rows, [1, 2], "明细要带出具体出错的行号");
+    assert.match(stage3Errors.server_error.sample, /HTTP 500/, "明细要带出该类问题的代表性错误消息");
+    assert.deepEqual(Object.keys(finished.stageErrors.stage1), [], "未失败阶段的明细必须为空");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

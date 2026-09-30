@@ -34,7 +34,8 @@
   | 改了什么 | 最小必要操作 |
   |---|---|
   | `public/setup.html` | 控制台 F5（静态文件按 `no-store` 每次重读） |
-  | `public/*.js`、`public/*.css`、`src/workbenches/translation-compare/**`、`src/core/**`（除下行列出的三个） | 控制台点「应用新布局」（或 `npm run layout`）→ F5；**不用重启** |
+  | `public/*.js`、`public/*.css`、`src/workbenches/translation-compare/**`（`ai/**` 见下行）、`src/core/**`（除下行列出的三个） | 控制台点「应用新布局」（或 `npm run layout`）→ F5；**不用重启** |
+  | `src/workbenches/translation-compare/ai/**`（AI 校对与预筛任务的执行体，被 `src/runtime/routes/ai.js` 顶层 require） | **重启控制台服务**（`start-setup.bat` / `npm run setup`）；同时改了构建器或 `public/*.js` 时，重启后仍要点一次「应用新布局」 |
   | `src/runtime/**`、`src/storage/**`、`src/core/{atomic-fs,storage-layout,progress}.js` | **重启控制台服务**（`start-setup.bat` / `npm run setup`） |
   | `src/workbenches/speaker-attribution/**` | **重启服务 + 重新生成说话人工作台**：它的页面输出到 `out/runtime/speaker-attribution/`、不在项目快照里，「应用新布局」碰不到它 |
   | `src/ingest/**`、`align_jp.py`（行集与对齐口径） | **重新生成**（控制台「开始生成」，或 `npm run align:jp && npm run build`）；生成走 npm 子进程，读到的都是最新代码，**不用重启** |
@@ -147,7 +148,7 @@ index-X 结构与命名规范契约：
    - 熔断（`ai/circuit-breaker.js`）由服务端内部决策，页面、预设与请求体都不得再携带熔断开关或阈值；失败轨终止任务，限流轨先冷却探测再终止。
    - 提示词按五层组装（①通用侧 ②模式层 ③特化侧 ④动态上下文 ⑤固定尾巴），合并顺序固定。
    - 输出侧三大确定性门禁漏斗：`ensureRevisedText` → 成品格式门禁（`format-guard.js`）→ 标点规范化（`punctuation.js`）→ 语言护栏（`guardTargetScript`）→ `decisionToResult`。
-   - 验证执行 `node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/ai-smart-concurrency.test.js scripts/circuit-breaker.test.js`。
+   - 验证执行 `node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/ai-smart-concurrency.test.js scripts/ai-error-kinds.test.js scripts/ai-stage-metrics.test.js scripts/circuit-breaker.test.js`。
    - **详细规范**：五层提示词规范、判定链流程、按行特征裁剪、实体闸门、输出格式门禁/标点规范化/语言护栏、译名对照表与注音口径、低分归因、线上查证与说话习惯契约详见 **[docs/contracts/ai-proofread-contract.md](docs/contracts/ai-proofread-contract.md)**。
 
 9. `src/workbenches/speaker-attribution/`
@@ -179,6 +180,7 @@ index-X 结构与命名规范契约：
 ## 客户端与 AI 调度边界
 
 - `public/workbench-diff.js` 只负责纯文本差异算法和 HTML 转义回调，不读取 DOM、备注、筛选或任务状态。`public/workbench-client.js` 只持有缓存并决定差异插槽的展示。
+- `ai/error-kinds.js` 是异常分类的唯一实现（服务端直接 require，构建器把常量与纯函数 `.toString()` 注入页面）。服务端 `clientStatus().stageErrors` 回报本次运行的失败明细，客户端从失败备注得到本地明细后与之合并；**两端不得各写一套分类规则**，否则「异常」悬停提示的分类口径会分叉。
 - AI 调度的 `concurrency-controller.js` 只负责阶段控制器参数归一化、频控后的并发下调、退避时间和重试判定；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
 - 阶段编排只有两个输入，都由 `stagePlan` 归一：**起点**（`targetStage`；`all` 是旧客户端的兼容别名，等同 `stage1`）与**这条流水线有几段**（下游配没配模型）。行为统一为「从起点一路推进到已启用的尽头」：配了 `stylistConfig` 才从初审接到复审，配了 `arbiterConfig` 才从复审接到仲裁（仲裁只能接在复审后面，所以从阶段一起步时必须先有复审）。**不要重新引入「级联 / 不级联」的模式开关**——那会让「阶段一 开始」一个按钮同时表示两件事，而且状态会被持久化。
 - 客户端三个「开始」按钮**只报起点**，级联范围由服务端算并在 `clientStatus().stageCascade` 里如实回报（`stageMode` 报起点）。刷新页面后本地状态会丢，按钮态一律以这两个字段为准；级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。

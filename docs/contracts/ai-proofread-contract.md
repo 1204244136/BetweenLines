@@ -227,6 +227,19 @@
 - 反过来做（内部 `catch` 后只 `pushLog` 就回退）会让这一行**在指标上凭空消失**：既不算复审/仲裁，也不算异常。用户看到的就是「阶段三处理了很多行，定案数却一直不动、异常还是 0」。
 - `proofreadRow` 的单行路径仍会拿到带 `stageError` 的返回值，调用方自行决定处置。
 
+### 异常分类明细（悬停展开）
+
+卡片上的「异常」只是数字，用户还需要知道**到底出了哪些问题**。因此异常在计数之外另存一份明细：
+
+- **服务端**：`status.stageErrors`（阶段 → 行号 → `{ kind, message }`），随 `clientStatus().stageErrors` 回报聚合后的 `{ [kind]: { count, rows, sample } }`。记录点与计数同源：初审在两条失败 `addResult` 之前，复审/仲裁在 `stageNErrors += 1` 的同一处。
+- **重跑要撤旧账**：`executeStage1/2/3` 进入时先 `clearStageError(阶段, 行号)`，成功即不再补记。只在失败处新增而不清除的话，一行重跑成功后旧明细会一直挂在悬停提示里。
+- **分类规则只有一份**：`ai/error-kinds.js` 是纯函数模块，服务端直接 `require`，构建器把常量与函数 `.toString()` 注入页面（见 `render-workbench.js`）。判定顺序有语义：拒答不算接口故障、503/529 算频控而非 5xx、非 JSON 响应优先于网络故障；客户端拿不到 `httpStatus`，用消息里的三位状态码兜底（`域名解析失败` 与 `JSON 解析失败` 都含「解析失败」，所以 bad_response 只认限定说法）。
+- **两端口径合并**：`computeStageMetricsFromNotes` 从失败备注得到本地分类（备注口径把「校对已终止。」也算失败行），`updateStageMetricsDashboard` 用 `mergeAiErrorKinds` 与服务端明细合并——计数取 max、行号取并集，两端口径观察的常是同一批行，相加会重复计数。
+- **渲染**：`renderStageMetricsDashboard` 把明细写进 `stage{1,2,3}ErrorItem.title`（逐类列出类别、行数、出错行号与代表性消息），无异常时恢复构建器写在 HTML 上的静态 title。
+- 已知边界：明细只活在本次运行的进程内，页面刷新后阶段二/三的明细会丢（这两阶段的失败不写失败备注，只在服务端内存留档），此时悬停会如实说明「暂无可分类的失败明细」。
+
+验证：`node --test scripts/ai-error-kinds.test.js scripts/ai-stage-metrics.test.js scripts/ai-smart-concurrency.test.js`。
+
 ### 阶段异常的三道闸门（与初审对称）
 
 「计入异常」只解决了可见性，还必须有东西**拦住它**，否则一次配置错误就是一行行刷到队列尽头：
