@@ -12,7 +12,7 @@
 // 2. 限流轨（429/503/529 且单行重试已用尽）
 //    - 被限流的请求会被上游直接拒掉、不计费，冷却后通常能恢复，所以不该一刀切终止，也不该硬打。
 //    - 连续 exhaustedRowsToOpen 行「重试用尽」且中间没有任何成功 → 断路器打开：整个阶段停止派发，
-//      按 cooldownsMs 阶梯冷却（20s → 60s → 180s）；冷却结束后放行探测请求（半开）：
+//      按 cooldownsMs 阶梯冷却（30s → 90s → 4min → 10min）；冷却结束后放行探测请求（半开）：
 //      探测成功即恢复，探测再次被限流则进入下一档冷却；阶梯用尽仍被限流才终止任务。
 //    - 冷却期间到达的「迟到」结果不推进状态（它们发出时断路器还没打开）。
 //
@@ -33,7 +33,14 @@ const BREAKER_POLICY = Object.freeze({
   }),
   limit: Object.freeze({
     exhaustedRowsToOpen: 3,
-    cooldownsMs: Object.freeze([20000, 60000, 180000]),
+    // 冷却阶梯（累计 16 分钟）。被限流的请求由上游直接拒掉、不计费，等待只花时间不花钱，
+    // 而过早放弃要人工点「继续剩下的」，所以整体宁长勿短：
+    // - 30s：单行退避重试（1.5s 起，Retry-After 封顶 15s）用尽时已过去约 10~20s，再等 30s 正好盖过常见的 1 分钟速率窗口（RPM/TPM）；
+    // - 90s：覆盖一个完整分钟窗口再加抖动，第 1 档没盖住的窗口在这里必然放行；
+    // - 4min、10min：中转渠道的自动熔断与上游过载（503/529）常按分钟级恢复。累计约 16 分钟仍被限流，
+    //   基本可以判定是额度耗尽或长时间故障，继续等没有意义，此时终止并保留已完成的行。
+    // 档间比约 3：探测频率随时间指数衰减，不会对一个还没恢复的上游高频敲门。
+    cooldownsMs: Object.freeze([30000, 90000, 240000, 600000]),
   }),
 });
 
@@ -142,21 +149,27 @@ function createStageBreaker({ policy = BREAKER_POLICY, now = Date.now, timeScale
   };
 }
 
-function formatSeconds(ms) {
-  return `${Math.max(1, Math.round(ms / 1000))} 秒`;
+// 时长文案：不足 1 分钟按秒，整分钟按「N 分钟」，其余「N 分 M 秒」。冷却阶梯最长十分钟，
+// 用「600 秒」「960 秒」既难读又容易让人误以为是秒级故障。
+function formatDuration(ms) {
+  const total = Math.max(1, Math.round(ms / 1000));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
 }
 
 // 终止原因文案。失败轨保持「错误率熔断」的既有措辞，限流轨单独成句并给出可操作的建议。
 function describeTrip(trip, stageLabel) {
   if (trip.kind === "limit-saturation") {
-    return `AI 上游持续限流熔断（${stageLabel}）：已按 ${trip.cycles} 档冷却重试（累计等待约 ${formatSeconds(trip.waitedMs)}）仍被限流，任务已自动终止。已完成的行会保留，稍后可用「继续剩下的」接着跑，或调低并发上限。`;
+    return `AI 上游持续限流熔断（${stageLabel}）：已按 ${trip.cycles} 档冷却重试（累计等待约 ${formatDuration(trip.waitedMs)}）仍被限流，任务已自动终止。已完成的行会保留，稍后可用「继续剩下的」接着跑，或调低并发上限。`;
   }
   return `AI 请求错误率熔断（${stageLabel}）：最近 ${trip.sampleCount} 次处理中有 ${trip.errorCount} 次失败（${Math.round(trip.errorRate * 100)}%，阈值 ${Math.round(trip.threshold * 100)}%），任务已自动终止。`;
 }
 
 function describePolicy(policy = BREAKER_POLICY) {
-  const cooldowns = policy.limit.cooldownsMs.map((ms) => formatSeconds(ms)).join(" → ");
+  const cooldowns = policy.limit.cooldownsMs.map((ms) => formatDuration(ms)).join(" → ");
   return `自动熔断：最近 ${policy.failure.windowSize} 次调用中失败占比达到 ${Math.round(policy.failure.errorRate * 100)}% 时终止任务；持续被限流时暂停并按 ${cooldowns} 冷却后探测，仍被限流才终止。`;
 }
 
-module.exports = { BREAKER_POLICY, createStageBreaker, describeTrip, describePolicy };
+module.exports = { BREAKER_POLICY, createStageBreaker, describeTrip, describePolicy, formatDuration };

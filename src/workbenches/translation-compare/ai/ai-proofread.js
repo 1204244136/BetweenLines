@@ -1,5 +1,5 @@
 const { providerDefaults } = require("./proofread-defaults");
-const { createStageBreaker, describeTrip, describePolicy } = require("./circuit-breaker");
+const { createStageBreaker, describeTrip, describePolicy, formatDuration } = require("./circuit-breaker");
 const {
   CONCURRENCY_POLICY,
   createStageController,
@@ -1544,8 +1544,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       const label = STAGE_OUTCOME_LABELS[ctrl.stageKey] || ctrl.stageKey;
       const attempt = `第 ${verdict.cycle}/${verdict.cycles} 档`;
       pushLog(verdict.cycle === 1
-        ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
-        : `[熔断] ${label}：探测仍被限流，继续冷却 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却）。`);
+        ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
+        : `[熔断] ${label}：探测仍被限流，继续冷却 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却）。`);
       // 只在第一档冷却说明一次：后续档位并发早已是最低，重复播报没有信息量。
       if (verdict.cycle === 1) {
         pushLog(`[并发调度] ${label}：熔断冷却，并发降到 ${collapsed.to}（冷却前 ${collapsed.from}）；恢复后从 ${collapsed.to} 起步慢启动，先爬到 ${restartTarget}，再逐步上探（上限 ${ctrl.maxConcurrency}）。`);

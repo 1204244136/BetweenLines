@@ -9,6 +9,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-smart-co
 const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
 process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
 
+const { BREAKER_POLICY } = require("../src/workbenches/translation-compare/ai/circuit-breaker");
 const {
   clearProofreadCache,
   clientStatus,
@@ -1237,6 +1238,9 @@ function passingBody() {
   });
 }
 
+// 首档冷却按缩放后的毫秒数：测试里用它判断「断路器打开后多久才放行」。
+const firstCooldownMs = (scale) => Math.round(BREAKER_POLICY.limit.cooldownsMs[0] * scale);
+
 async function withBreakerTimeScale(scale, run) {
   const previous = process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE;
   process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE = String(scale);
@@ -1283,7 +1287,7 @@ test("限流熔断：上游持续 429 时按冷却阶梯探测，阶梯用尽后
     const finished = clientStatus();
     assert.equal(finished.running, false);
     assert.equal(finished.stopRequested, true);
-    assert.match(finished.error, /AI 上游持续限流熔断（初审）：已按 3 档冷却重试/);
+    assert.match(finished.error, new RegExp(`AI 上游持续限流熔断（初审）：已按 ${BREAKER_POLICY.limit.cooldownsMs.length} 档冷却重试`));
     const logs = finished.logs.join("\n");
     assert.match(logs, /\[熔断\] 初审：连续多行限流重试用尽，暂停派发/);
     assert.match(logs, /\[熔断\] 初审：探测仍被限流，继续冷却/);
@@ -1360,10 +1364,10 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
   const totalRows = 8;
   const { project } = setupMockProject(totalRows, "halfopen");
   const okRequests = [];
-  // 首档冷却按 0.03 缩放后为 600ms。服务端轮询日志，看到断路器真正打开后再计时，
+  // 首档冷却按 0.03 缩放。服务端轮询日志，看到断路器真正打开后再计时，
   // 冷却期内一律 429（含迟到的在途请求），冷却结束后放行并稍作延迟，
   // 让「探测尚未返回时是否又冲出别的请求」可被观察到。
-  const cooldownMs = 600;
+  const cooldownMs = firstCooldownMs(0.03);
   let openedAt = 0;
   const watcher = setInterval(() => {
     if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
@@ -1486,9 +1490,9 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
   let inFlight = 0;
   let requestCount = 0;
   let openedAt = 0;
-  // 首档冷却按 0.03 缩放后为 600ms。看到断路器真正打开后再计时：冷却期内一律 429，
+  // 首档冷却按 0.03 缩放。看到断路器真正打开后再计时：冷却期内一律 429，
   // 冷却结束后放行。放行后记录每个请求发出时刻的在途数，用来检验恢复期的并发爬升曲线。
-  const cooldownMs = 600;
+  const cooldownMs = firstCooldownMs(0.03);
   const watcher = setInterval(() => {
     if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
       openedAt = Date.now();
