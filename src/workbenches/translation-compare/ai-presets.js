@@ -9,7 +9,6 @@ function createPresetTools() {
   const CONCURRENCY_MIN = 1;
   const CONCURRENCY_MAX = 32;
   const DEFAULT_CONCURRENCY = 3;
-  const DEFAULT_CONCURRENCY_MAX = 10;
 
   // 越界一律截断到边界，而不是回落到默认值：旧实现把 20 直接换成 3，
   // 用户在预设里选了 20 却静默跑成 3，且没有任何提示。
@@ -35,12 +34,12 @@ function createPresetTools() {
     const gptReasoningEffort = typeof item.gptReasoningEffort === "string" ? item.gptReasoningEffort : "";
     const nonGptIntensity = typeof item.nonGptIntensity === "string" ? item.nonGptIntensity : "";
 
-    const rawConcurrency = Number(item.concurrency);
-    const concurrency = clampPresetConcurrency(rawConcurrency, DEFAULT_CONCURRENCY);
-
-    const smartConcurrency = Boolean(item.smartConcurrency);
-    const rawConcurrencyMax = Number(item.concurrencyMax);
-    const concurrencyMax = clampPresetConcurrency(rawConcurrencyMax, DEFAULT_CONCURRENCY_MAX);
+    // 预设里只保存一个「并发上限」（字段名沿用 concurrency）。旧预设还带着 smartConcurrency + concurrencyMax：
+    // 开启智能并发时有效上限是 max(concurrency, concurrencyMax)，这里折算后丢弃这两个字段，旧预设无需迁移即可沿用原天花板。
+    let concurrency = clampPresetConcurrency(Number(item.concurrency), DEFAULT_CONCURRENCY);
+    if (item.smartConcurrency === true && item.concurrencyMax != null) {
+      concurrency = Math.max(concurrency, clampPresetConcurrency(Number(item.concurrencyMax), concurrency));
+    }
 
     const now = Date.now();
     const createdAt = Number.isSafeInteger(Number(item.createdAt)) && Number(item.createdAt) > 0
@@ -62,8 +61,6 @@ function createPresetTools() {
       gptReasoningEffort,
       nonGptIntensity,
       concurrency,
-      smartConcurrency,
-      concurrencyMax,
       createdAt,
       updatedAt,
     };

@@ -115,63 +115,52 @@ test("智能并发：错误检测准确识别速率限制、过载与并发信�
   assert.equal(parseRateLimitReason({ message: "exceeded tokens per minute" }), "Token 速率限制 (TPM)");
 });
 
-test("智能并发：预设工具正确清洗并持久化 smartConcurrency 与 concurrencyMax", () => {
+test("并发上限：预设只保存一个并发上限，旧预设的智能并发字段折算后丢弃", () => {
   const tools = createPresetTools();
 
-  const cleanedDefault = tools.sanitizePreset({
-    name: "默认预设",
-    provider: "local",
-  });
-  assert.equal(cleanedDefault.smartConcurrency, false);
+  const cleanedDefault = tools.sanitizePreset({ name: "默认预设", provider: "local" });
   assert.equal(cleanedDefault.concurrency, 3);
-  assert.equal(cleanedDefault.concurrencyMax, 10);
+  assert.equal("smartConcurrency" in cleanedDefault, false);
+  assert.equal("concurrencyMax" in cleanedDefault, false);
 
-  const cleanedCustom = tools.sanitizePreset({
-    name: "自适应预设",
-    provider: "compatible",
-    smartConcurrency: true,
-    concurrency: 5,
-    concurrencyMax: 15,
-  });
-  assert.equal(cleanedCustom.smartConcurrency, true);
-  assert.equal(cleanedCustom.concurrency, 5);
-  assert.equal(cleanedCustom.concurrencyMax, 15);
-
-  // concurrencyMax 边界裁剪：越界截断到上限
-  const cleanedClamped = tools.sanitizePreset({
-    name: "超界预设",
-    smartConcurrency: true,
-    concurrency: 4,
-    concurrencyMax: 99,
-  });
-  assert.equal(cleanedClamped.concurrencyMax, 32);
+  // 旧预设：开启智能并发时有效上限是 max(concurrency, concurrencyMax)。
+  const legacySmart = tools.sanitizePreset({ name: "自适应预设", provider: "compatible", smartConcurrency: true, concurrency: 5, concurrencyMax: 15 });
+  assert.equal(legacySmart.concurrency, 15);
+  assert.equal("smartConcurrency" in legacySmart, false);
+  assert.equal("concurrencyMax" in legacySmart, false);
+  // 旧预设：关闭智能并发时 concurrencyMax 从不生效，上限就是 concurrency。
+  assert.equal(tools.sanitizePreset({ name: "固定", smartConcurrency: false, concurrency: 5, concurrencyMax: 15 }).concurrency, 5);
+  // 折算后仍受 1~32 边界约束。
+  assert.equal(tools.sanitizePreset({ name: "超界", smartConcurrency: true, concurrency: 4, concurrencyMax: 99 }).concurrency, 32);
 });
 
 test("并发上限：预设与服务端一致放开到 32，20 不再被静默改写", () => {
   const tools = createPresetTools();
 
   // 用户这次的实际现象：预设里选 20，旧实现因 20 > 12 直接回落成 3。
-  const preset = tools.sanitizePreset({ name: "20 并发预设", concurrency: 20, concurrencyMax: 20 });
+  const preset = tools.sanitizePreset({ name: "20 并发预设", concurrency: 20 });
   assert.equal(preset.concurrency, 20);
-  assert.equal(preset.concurrencyMax, 20);
 
   // 预设侧边界：下界仍保底 1，上界截断到 32。
   assert.equal(tools.sanitizePreset({ name: "下界", concurrency: 0 }).concurrency, 1);
   assert.equal(tools.sanitizePreset({ name: "上界", concurrency: 33 }).concurrency, 32);
-  assert.equal(tools.sanitizePreset({ name: "上限越界", concurrencyMax: 33 }).concurrencyMax, 32);
   // 非整数仍回落到默认值，不参与截断。
   assert.equal(tools.sanitizePreset({ name: "非整数", concurrency: 2.5 }).concurrency, 3);
 
   // 服务端侧必须与预设侧同档，否则预设保存 20、运行又被压回 12。
-  const mainConf = cleanConfig({ concurrency: 20, concurrencyMax: 20 });
+  const mainConf = cleanConfig({ concurrency: 20 });
   assert.equal(mainConf.concurrency, 20);
-  assert.equal(mainConf.concurrencyMax, 20);
+  assert.equal("smartConcurrency" in mainConf, false, "服务端不再有智能并发开关");
+  assert.equal("concurrencyMax" in mainConf, false);
+  // 旧客户端仍会带 smartConcurrency + concurrencyMax：折算成同一个上限，不能被静默压回去。
+  assert.equal(cleanConfig({ concurrency: 4, smartConcurrency: true, concurrencyMax: 20 }).concurrency, 20);
+  assert.equal(cleanConfig({ concurrency: 4, smartConcurrency: false, concurrencyMax: 20 }).concurrency, 4);
   assert.equal(cleanConfig({ concurrency: 33 }).concurrency, 32);
   assert.equal(cleanConfig({ concurrency: 0 }).concurrency, 1);
 
-  const subConf = cleanSubStageConfig({ model: "gpt-4o", concurrency: 20, concurrencyMax: 20 });
+  const subConf = cleanSubStageConfig({ model: "gpt-4o", concurrency: 20 });
   assert.equal(subConf.concurrency, 20);
-  assert.equal(subConf.concurrencyMax, 20);
+  assert.equal("concurrencyMax" in subConf, false);
   assert.equal(cleanSubStageConfig({ model: "gpt-4o", concurrency: 33 }).concurrency, 32);
 
   // 生成页面也必须把放开后的上界写进控件，否则数字箭头上不去、提示文案还停在旧口径。
@@ -181,90 +170,63 @@ test("并发上限：预设与服务端一致放开到 32，20 不再被静默�
     { projectKey: "project", rowsSignature: "rows", notesStorage: { key: "rows" } },
   );
   assert.match(html, /id="aiConcurrency"[^>]*max="32"/);
-  assert.match(html, /id="aiConcurrencyMax"[^>]*max="32"/);
+  assert.equal(html.includes('id="aiConcurrencyMax"'), false, "页面不再有第二个并发输入框");
+  assert.equal(html.includes('id="aiSmartConcurrency"'), false, "页面不再有智能并发开关");
 });
 
-test("智能并发界面：渲染智能并发开关、控件与状态可见性联动", async () => {
-  const tools = createPresetTools();
+test("并发上限界面：页面只有一个「并发上限」输入，没有智能并发开关与第二个输入框", async () => {
+  const html = makeHtml(
+    [{ index: 1, jp: "原文一", cn: "译文一", relation: "1:1", score: 0.9, signature: "sig-1" }],
+    { comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" } },
+    { projectKey: "project", rowsSignature: "rows", notesStorage: { key: "rows" } },
+  );
+  assert.ok(html.includes('<label for="aiConcurrency" id="aiConcurrencyLabel">并发上限</label>'), "标签是「并发上限」");
+  assert.match(html, /id="aiConcurrency"[^>]*title="并发上限[^"]*调度器/);
+  for (const id of ["aiSmartConcurrency", "aiConcurrencyMax", "aiConcurrencyMaxWrap"]) {
+    assert.equal(html.includes(`id="${id}"`), false, `${id} 已从页面移除`);
+  }
+  const markup = html.split("<script")[0];
+  assert.equal(markup.includes("智能并发"), false, "页面可见文案里不再出现「智能并发」");
+
+  // 交互侧：改并发上限只保存 concurrency，存档里不再写智能并发字段。
   const storage = {
     data: new Map(),
     getItem(k) { return this.data.get(k) ?? null; },
     setItem(k, v) { this.data.set(k, v); },
     removeItem(k) { this.data.delete(k); },
   };
-
   const ui = createWorkbench(storage);
-  const smartCheckbox = ui.element("aiSmartConcurrency");
-  const concurrencyInput = ui.element("aiConcurrency");
-  const concurrencyLabel = ui.element("aiConcurrencyLabel");
-  const maxWrap = ui.element("aiConcurrencyMaxWrap");
-  const maxInput = ui.element("aiConcurrencyMax");
-
-  assert.ok(smartCheckbox, "aiSmartConcurrency checkbox exists");
-  assert.ok(maxWrap, "aiConcurrencyMaxWrap exists");
-  assert.ok(maxInput, "aiConcurrencyMax exists");
-
-  // 初始状态：未开启智能并发
-  assert.equal(smartCheckbox.checked, false);
-  assert.equal(concurrencyLabel.textContent, "并发");
-  assert.equal(maxWrap.hidden, true);
-
-  // 设置并发数值并开启智能并发
-  concurrencyInput.value = "3";
-  maxInput.value = "10";
-  smartCheckbox.checked = true;
-  await smartCheckbox.dispatch("change");
-
-  assert.equal(concurrencyLabel.textContent, "初始并发");
-  assert.equal(maxWrap.hidden, false);
-
-  // 检查保存到 storage
-  const savedConfig = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
-  assert.equal(savedConfig.smartConcurrency, true);
-  assert.equal(savedConfig.concurrency, "3");
-  assert.equal(savedConfig.concurrencyMax, "10");
-
-  // 关闭智能并发
-  smartCheckbox.checked = false;
-  await smartCheckbox.dispatch("change");
-  assert.equal(concurrencyLabel.textContent, "并发");
-  assert.equal(maxWrap.hidden, true);
+  const input = ui.element("aiConcurrency");
+  input.value = "12";
+  await input.dispatch("change");
+  const saved = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
+  assert.equal(saved.concurrency, "12");
+  assert.equal("smartConcurrency" in saved, false);
+  assert.equal("concurrencyMax" in saved, false);
 });
 
-test("智能并发：连续成功触发动态向上探测试探更高并发", async () => {
+test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到上限", async () => {
   clearProofreadCache();
-  const { project } = setupMockProject(15, "probe");
+  const { project } = setupMockProject(30, "probe");
 
-  let requestsHandled = 0;
   let maxConcurrentSeen = 0;
   let currentInFlight = 0;
 
   const server = http.createServer((req, res) => {
     currentInFlight += 1;
     maxConcurrentSeen = Math.max(maxConcurrentSeen, currentInFlight);
-    requestsHandled += 1;
-
+    req.resume();
     setTimeout(() => {
       currentInFlight -= 1;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              semanticSame: true,
-              needsEdit: false,
-              decision: "keep",
-              summary: "翻译准确",
-            }),
-          },
-        }],
-      }));
+      res.end(passingBody());
     }, 20);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 
-  const prevInterval = process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL;
-  process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL = "10"; // 缩短探测冷却时间以便快速上探
+  // 缩短「两次上探之间的最短间隔」以便快速上探；不是运行时开关。
+  const prevInterval = process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
+  process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = "10";
 
   try {
     const address = server.address();
@@ -273,9 +235,7 @@ test("智能并发：连续成功触发动态向上探测试探更高并发", as
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      smartConcurrency: true,
-      concurrency: 2, // 初始并发 2
-      concurrencyMax: 4, // 上限 4
+      concurrency: 4, // 并发上限 4：起步 3，一整轮请求正常后上探到 4
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -288,18 +248,21 @@ test("智能并发：连续成功触发动态向上探测试探更高并发", as
     const finished = clientStatus();
     assert.equal(finished.running, false);
     assert.equal(finished.errors, 0);
-    assert.equal(finished.smartConcurrency, true);
-    assert.equal(finished.peakConcurrency >= 3, true);
-    assert.equal(finished.concurrencyUps >= 1, true);
-    assert.ok(finished.logs.some((log) => log.includes("[智能并发] 连续 5 次请求正常，并发从 2 上探至 3")));
+    assert.equal(finished.concurrency, 3, "起步并发 = min(上限, 3)");
+    assert.equal(finished.concurrencyMax, 4, "状态里回报的是并发上限");
+    assert.equal(finished.peakConcurrency, 4, "稳定后应上探到上限");
+    assert.ok(finished.concurrencyUps >= 1);
+    assert.ok(maxConcurrentSeen <= 4, `任何时刻都不得超过并发上限，实际同时在途 ${maxConcurrentSeen}`);
+    assert.ok(finished.logs.some((log) => log.includes("[并发调度]") && log.includes("从 3")), "上探必须留下日志");
+    assert.equal("smartConcurrency" in finished, false, "状态接口不再回报智能并发开关");
   } finally {
-    if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL;
-    else process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL = prevInterval;
+    if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
+    else process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = prevInterval;
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在重试中完成", async () => {
+test("并发调度：遭遇 HTTP 429 频控时自动下调并发、退避并在重试中完成", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(8, "ratelimit");
 
@@ -355,9 +318,7 @@ test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在�
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      smartConcurrency: true,
-      concurrency: 4, // 初始并发 4
-      concurrencyMax: 6,
+      concurrency: 6, // 并发上限 6：起步 3，遇到频控自动下调
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -369,7 +330,6 @@ test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在�
 
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.equal(finished.smartConcurrency, true);
     // 遇到限流下调
     assert.equal(finished.concurrencyLimits >= 1, true);
     assert.equal(finished.concurrencyDowns >= 1, true);
@@ -377,13 +337,13 @@ test("智能并发：遭遇 HTTP 429 频控时自动下调并发、退避并在�
     assert.equal(finished.errors, 0);
     assert.equal(finished.processed, 8);
     assert.ok(finished.logs.some((log) => log.includes("遭遇HTTP 429 请求频次超限")));
-    assert.ok(finished.logs.some((log) => log.includes("智能并发统计：")));
+    assert.ok(finished.logs.some((log) => log.includes("并发调度统计：")));
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("固定并发（未开智能并发）遭遇 429 同样退避重试，不再直接判失败", async () => {
+test("并发上限很小（等于起步并发）时遭遇 429 同样退避重试，不再直接判失败", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(4, "fixed429");
 
@@ -433,9 +393,8 @@ test("固定并发（未开智能并发）遭遇 429 同样退避重试，不再
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      // 关键：不开智能并发。频控退避与重试不该依赖这个开关——否则固定并发的用户
-      // 遇到 429 会被当成普通失败，一次不重试地刷到队列尽头。
-      smartConcurrency: false,
+      // 关键：并发上限 2 < 起步值 3，调度器没有上探空间。频控退避与重试不该依赖能不能上探——
+      // 否则这类用户遇到 429 会被当成普通失败，一次不重试地刷到队列尽头。
       concurrency: 2,
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
@@ -448,7 +407,6 @@ test("固定并发（未开智能并发）遭遇 429 同样退避重试，不再
 
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.equal(finished.smartConcurrency, false);
     assert.equal(finished.concurrencyLimits >= 1, true, "429 必须被识别为频控");
     assert.ok(finished.logs.some((log) => log.includes("[频控退避]")), "退避重试必须留下日志");
     assert.equal(finished.errors, 0, "首轮 429 应被重试消化，不该记成失败");
@@ -458,7 +416,7 @@ test("固定并发（未开智能并发）遭遇 429 同样退避重试，不再
   }
 });
 
-test("智能并发：超出重试上限的持续 429 记为单行失败且不崩溃队列", async () => {
+test("并发调度：超出重试上限的持续 429 记为单行失败且不崩溃队列", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(4, "persistent429");
 
@@ -501,9 +459,7 @@ test("智能并发：超出重试上限的持续 429 记为单行失败且不崩
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      smartConcurrency: true,
-      concurrency: 3,
-      concurrencyMax: 5,
+      concurrency: 5,
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -527,7 +483,7 @@ test("智能并发：超出重试上限的持续 429 记为单行失败且不崩
   }
 });
 
-test("智能并发：状态与并发设置随项目独立持久化，跨项目切换互不污染", async () => {
+test("并发上限：设置随项目独立持久化，跨项目切换互不污染", async () => {
   const storage = {
     data: new Map(),
     getItem(k) { return this.data.get(k) ?? null; },
@@ -535,126 +491,85 @@ test("智能并发：状态与并发设置随项目独立持久化，跨项目�
     removeItem(k) { this.data.delete(k); },
   };
 
-  // 1. 打开项目 A（proj-alpha）：开启智能并发，设置初始并发 4，上限 12
+  // 1. 打开项目 A：并发上限设为 12
   const uiA = createWorkbench(storage, { projectKey: "proj-alpha" });
-  const chkA = uiA.element("aiSmartConcurrency");
   const concA = uiA.element("aiConcurrency");
-  const maxA = uiA.element("aiConcurrencyMax");
+  concA.value = "12";
+  await concA.dispatch("change");
 
-  assert.equal(chkA.checked, false);
-  concA.value = "4";
-  maxA.value = "12";
-  chkA.checked = true;
-  await chkA.dispatch("change");
-
-  // 验证全局与项目 A 专属 key 均持久化
   const globalA = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
-  assert.equal(globalA.smartConcurrency, true);
-  assert.equal(globalA.concurrency, "4");
-  assert.equal(globalA.concurrencyMax, "12");
-
+  assert.equal(globalA.concurrency, "12");
   const projectAConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-alpha") || "{}");
-  assert.equal(projectAConfig.smartConcurrency, true);
-  assert.equal(projectAConfig.concurrency, "4");
-  assert.equal(projectAConfig.concurrencyMax, "12");
+  assert.equal(projectAConfig.concurrency, "12");
 
-  // 2. 打开项目 B（proj-beta）：关闭智能并发，并将并发设为 2
+  // 2. 打开项目 B：新项目继承全局基线 12，用户改成 2
   const uiB = createWorkbench(storage, { projectKey: "proj-beta" });
-  const chkB = uiB.element("aiSmartConcurrency");
   const concB = uiB.element("aiConcurrency");
-
-  // 新项目继承全局 baseline，初始为 true
-  assert.equal(chkB.checked, true);
-  // 用户在项目 B 中关闭智能并发并调整为固定并发 2
-  chkB.checked = false;
+  assert.equal(concB.value, "12");
   concB.value = "2";
-  await chkB.dispatch("change");
-
+  await concB.dispatch("change");
   const projectBConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-beta") || "{}");
-  assert.equal(projectBConfig.smartConcurrency, false);
   assert.equal(projectBConfig.concurrency, "2");
 
-  // 3. 重新加载项目 A：验证依然保持项目 A 的配置（开启，并发 4，上限 12），未受项目 B 影响
-  const uiAReloaded = createWorkbench(storage, { projectKey: "proj-alpha" });
-  assert.equal(uiAReloaded.element("aiSmartConcurrency").checked, true);
-  assert.equal(uiAReloaded.element("aiConcurrency").value, "4");
-  assert.equal(uiAReloaded.element("aiConcurrencyMax").value, "12");
-  assert.equal(uiAReloaded.element("aiConcurrencyLabel").textContent, "初始并发");
-  assert.equal(uiAReloaded.element("aiConcurrencyMaxWrap").hidden, false);
-
-  // 4. 重新加载项目 B：验证依然保持项目 B 的配置（关闭，并发 2）
-  const uiBReloaded = createWorkbench(storage, { projectKey: "proj-beta" });
-  assert.equal(uiBReloaded.element("aiSmartConcurrency").checked, false);
-  assert.equal(uiBReloaded.element("aiConcurrency").value, "2");
-  assert.equal(uiBReloaded.element("aiConcurrencyLabel").textContent, "并发");
-  assert.equal(uiBReloaded.element("aiConcurrencyMaxWrap").hidden, true);
+  // 3. 重新加载项目 A / B：各自保持自己的并发上限
+  assert.equal(createWorkbench(storage, { projectKey: "proj-alpha" }).element("aiConcurrency").value, "12");
+  assert.equal(createWorkbench(storage, { projectKey: "proj-beta" }).element("aiConcurrency").value, "2");
 });
 
-test("智能并发：历史快照页面缺失控件时具备防冲刷保护，不将已有智能并发覆写为 false", async () => {
+test("并发上限：读取旧存档时折算智能并发字段，且保存后不再回写旧字段", () => {
   const storage = {
     data: new Map([
-      ["translation-compare-ai-config-v1", JSON.stringify({ smartConcurrency: true, concurrencyMax: 15 })],
-      ["translation-compare-ai-project-config-v1:proj-legacy", JSON.stringify({ smartConcurrency: true, concurrencyMax: 15 })],
+      // 全局存档：开启过智能并发，初始 4、上限 15 → 有效上限 15。
+      ["translation-compare-ai-config-v1", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
+      // 项目存档：关闭智能并发，concurrencyMax 是历史遗留、从不生效。
+      ["translation-compare-ai-project-config-v1:proj-fixed", JSON.stringify({ concurrency: "6", smartConcurrency: false, concurrencyMax: 20 })],
+      ["translation-compare-ai-project-config-v1:proj-smart", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
     ]),
     getItem(k) { return this.data.get(k) ?? null; },
     setItem(k, v) { this.data.set(k, v); },
     removeItem(k) { this.data.delete(k); },
   };
 
-  const uiLegacy = createWorkbench(storage, { projectKey: "proj-legacy" });
-  // 模拟历史快照 DOM 中缺失 aiSmartConcurrency 控件
-  uiLegacy.run("aiIds.smartConcurrency = null; aiIds.concurrencyMax = null;");
+  // 项目存档优先于全局：固定并发的项目按 6 运行，不能被全局的 15 或自己遗留的 20 覆盖。
+  const fixed = createWorkbench(storage, { projectKey: "proj-fixed" });
+  assert.equal(fixed.element("aiConcurrency").value, "6");
+  // 开启过智能并发的项目折算成 15，旧天花板不丢。
+  const smart = createWorkbench(storage, { projectKey: "proj-smart" });
+  assert.equal(smart.element("aiConcurrency").value, "15");
 
-  // 触发一次保存（如在历史快照页面中调整其他选项）
-  uiLegacy.run("saveAiConfig();");
-
-  // 验证防冲刷保护生效：已有的 smartConcurrency 依然为 true，上限 15 未被重置
-  const globalAfter = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
-  assert.equal(globalAfter.smartConcurrency, true);
-  assert.equal(globalAfter.concurrencyMax, 15);
-
-  const projectAfter = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-legacy") || "{}");
-  assert.equal(projectAfter.smartConcurrency, true);
-  assert.equal(projectAfter.concurrencyMax, 15);
+  // 触发一次保存：旧字段不再回写。
+  smart.run("saveAiConfig();");
+  const after = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-smart") || "{}");
+  assert.equal(after.concurrency, "15");
+  assert.equal("smartConcurrency" in after, false);
+  assert.equal("concurrencyMax" in after, false);
 });
 
-test("多阶段独立并发：各子阶段预设能够正确保留并清洗并发配置", () => {
+test("多阶段独立并发：各子阶段预设的并发上限各自保留，旧字段折算", () => {
   const conf = cleanConfig({
+    concurrency: 3,
+    stylistConfig: { provider: "compatible", model: "gemini-3.8-flash", concurrency: 4 },
+    arbiterConfig: { provider: "claude", model: "claude-opus-4.6-thinking", concurrency: 2 },
+  });
+  assert.equal(conf.concurrency, 3);
+  assert.equal(conf.stylistConfig.concurrency, 4);
+  assert.equal(conf.arbiterConfig.concurrency, 2);
+  for (const sub of [conf.stylistConfig, conf.arbiterConfig]) {
+    assert.equal("smartConcurrency" in sub, false);
+    assert.equal("concurrencyMax" in sub, false);
+  }
+
+  // 旧预设（开启智能并发）折算为各自的上限。
+  const legacy = cleanConfig({
     concurrency: 3,
     smartConcurrency: true,
     concurrencyMax: 10,
-    stylistConfig: {
-      provider: "compatible",
-      model: "gemini-3.8-flash",
-      concurrency: 4,
-      smartConcurrency: true,
-      concurrencyMax: 8,
-    },
-    arbiterConfig: {
-      provider: "claude",
-      model: "claude-opus-4.6-thinking",
-      concurrency: 2,
-      smartConcurrency: false,
-      concurrencyMax: 3,
-    },
+    stylistConfig: { provider: "compatible", model: "gemini-3.8-flash", concurrency: 4, smartConcurrency: true, concurrencyMax: 8 },
+    arbiterConfig: { provider: "claude", model: "claude-opus-4.6-thinking", concurrency: 2, smartConcurrency: false, concurrencyMax: 3 },
   });
-
-  // 主阶段
-  assert.equal(conf.concurrency, 3);
-  assert.equal(conf.smartConcurrency, true);
-  assert.equal(conf.concurrencyMax, 10);
-
-  // 阶段二文学复审预设
-  assert.ok(conf.stylistConfig);
-  assert.equal(conf.stylistConfig.concurrency, 4);
-  assert.equal(conf.stylistConfig.smartConcurrency, true);
-  assert.equal(conf.stylistConfig.concurrencyMax, 8);
-
-  // 阶段三终审仲裁预设
-  assert.ok(conf.arbiterConfig);
-  assert.equal(conf.arbiterConfig.concurrency, 2);
-  assert.equal(conf.arbiterConfig.smartConcurrency, false);
-  assert.equal(conf.arbiterConfig.concurrencyMax, 3);
+  assert.equal(legacy.concurrency, 10);
+  assert.equal(legacy.stylistConfig.concurrency, 8);
+  assert.equal(legacy.arbiterConfig.concurrency, 2, "关闭智能并发的旧预设，concurrencyMax 从不生效");
 });
 
 test("起点语义：三个「开始」只表示起点，往下走到哪一段由下游配没配模型决定", () => {
@@ -1258,8 +1173,8 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
       [
         "translation-compare-ai-presets-v1",
         JSON.stringify([
-          { id: "p1", name: "Gemini初审", provider: "compatible", model: "gemini-flash", concurrency: 4, smartConcurrency: true, concurrencyMax: 8 },
-          { id: "p2", name: "Claude仲裁", provider: "claude", model: "claude-opus", concurrency: 2, smartConcurrency: true, concurrencyMax: 3 },
+          { id: "p1", name: "Gemini初审", provider: "compatible", model: "gemini-flash", concurrency: 8 },
+          { id: "p2", name: "Claude仲裁", provider: "claude", model: "claude-opus", concurrency: 3 },
         ]),
       ],
     ]),
@@ -1275,7 +1190,7 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   const options = s2Preset.children || [];
   const geminiOpt = options.find((o) => o.textContent === "Gemini初审");
   assert.ok(geminiOpt);
-  assert.match(geminiOpt.title, /4~8智能并发/);
+  assert.match(geminiOpt.title, /并发上限 8/);
 
   // 模拟带有各阶段独立并发的多阶段运行状态
   ui.run(`
@@ -1287,13 +1202,12 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
       modelProcessed: 20,
       suggested: 5,
       errors: 0,
-      smartConcurrency: true,
       currentConcurrency: 3,
       concurrencyMax: 10,
       stagePipelines: {
-        stage1: { inFlight: 3, pending: 50, concurrency: 3, concurrencyMax: 10, smartConcurrency: true, activeRows: [1, 2, 3] },
-        stage2: { inFlight: 4, pending: 10, concurrency: 4, concurrencyMax: 8, smartConcurrency: true, activeRows: [4, 5, 6, 7] },
-        stage3: { inFlight: 2, pending: 2, concurrency: 2, concurrencyMax: 3, smartConcurrency: true, activeRows: [8, 9] },
+        stage1: { inFlight: 3, pending: 50, concurrency: 3, concurrencyMax: 10, activeRows: [1, 2, 3] },
+        stage2: { inFlight: 4, pending: 10, concurrency: 4, concurrencyMax: 8, activeRows: [4, 5, 6, 7] },
+        stage3: { inFlight: 2, pending: 2, concurrency: 2, concurrencyMax: 3, activeRows: [8, 9] },
       },
       results: [],
     });
@@ -1560,6 +1474,88 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
     assert.equal(finished.stageMetrics.stage3Errors, totalRows, "拒答行仍如实计入仲裁异常，指标口径不变");
     assert.match(finished.logs.join("\n"), /终审仲裁被模型拒答（内容安全审查），回退至复审方案/);
   } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后从低位重新爬升，不一步跳回冷却前水位", async () => {
+  clearProofreadCache();
+  const totalRows = 40;
+  const { project } = setupMockProject(totalRows, "breakerlink");
+  const inFlightAtSend = [];
+  let inFlight = 0;
+  let requestCount = 0;
+  let openedAt = 0;
+  // 首档冷却按 0.03 缩放后为 600ms。看到断路器真正打开后再计时：冷却期内一律 429，
+  // 冷却结束后放行。放行后记录每个请求发出时刻的在途数，用来检验恢复期的并发爬升曲线。
+  const cooldownMs = 600;
+  const watcher = setInterval(() => {
+    if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
+      openedAt = Date.now();
+    }
+  }, 5);
+  const server = http.createServer((req, res) => {
+    requestCount += 1;
+    inFlight += 1;
+    const limited = requestCount <= 3 * 4 /* 前三行各用尽 4 次重试，凑满 3 行触发断路器 */
+      || (openedAt && Date.now() < openedAt + cooldownMs + 30)
+      || !openedAt;
+    if (!limited) inFlightAtSend.push(inFlight);
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        inFlight -= 1;
+        if (limited) {
+          res.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+          res.end(JSON.stringify({ error: { message: "all channels in 429 cooldown" } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 30);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const prevInterval = process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
+  process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = "10";
+  try {
+    await withBreakerTimeScale(0.03, async () => {
+      await startProofread({
+        provider: "compatible",
+        baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+        model: "test-model",
+        proofreadMode: "bilingual",
+        concurrency: 32,
+        projectKey: project.projectKey,
+        rowsSignature: project.rowsSignature,
+      });
+      const deadline = Date.now() + 20000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, false, "探测成功后应恢复并跑完，不该被终止");
+    const logs = finished.logs.join("\n");
+    assert.match(logs, /\[熔断\] 初审：连续多行限流重试用尽，暂停派发/);
+    assert.match(logs, /\[并发调度\] 初审：熔断冷却，并发降到 1（冷却前 \d+）；恢复后从 1 起步慢启动，先爬到 \d+/, "断路器打开必须把并发塌到 1 并留下日志");
+    // 慢启动阈值应取出事水位的一半（>= 2），而不是拿已被压到 1 的当前并发去算。
+    const threshold = Number(logs.match(/先爬到 (\d+)/)[1]);
+    assert.ok(threshold >= 2 && threshold <= 16, `慢启动阈值应在 2~16 之间，实际 ${threshold}`);
+    assert.match(logs, /并发从 1 翻倍至 2/, "恢复后应走慢启动（一整轮正常即翻倍），而不是 15 次才 +1");
+    assert.match(logs, /限流冷却解除/);
+    // 恢复后的第一批请求不得一拥而上：半开探测只放行 1 个，探测通过后也是从低位慢启动，
+    // 而不是一步回到 3 或更高（旧行为：直接回到冷却前的水位）。
+    assert.ok(inFlightAtSend.length >= 2, "冷却解除后应继续处理剩余行");
+    assert.equal(inFlightAtSend[0], 1, "半开探测只放行一个请求");
+    assert.ok(inFlightAtSend.slice(0, 2).every((n) => n <= 2), `恢复初期并发必须处于低位，实际前两个请求发出时在途数 ${inFlightAtSend.slice(0, 2)}`);
+  } finally {
+    clearInterval(watcher);
+    if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
+    else process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = prevInterval;
     await new Promise((resolve) => server.close(resolve));
   }
 });

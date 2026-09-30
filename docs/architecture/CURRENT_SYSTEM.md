@@ -16,7 +16,7 @@
 - notes-spaces
 - writeback
 - AI 预设系统
-- 智能并发调度
+- 并发上限与内部自适应调度（慢启动 + 加法上探，与熔断联动）
 - staged review contracts（stage-results.js：CritiqueResult 归一化与 StageMetrics 状态快照）
 - scheduler-profile（模型六维画像系统与 Auto Scheduler 调度器）
 - persona-runtime（单模型人格分化运行时：Gatekeeper、Stylist、Arbiter 独立会话与阶梯推理档位）

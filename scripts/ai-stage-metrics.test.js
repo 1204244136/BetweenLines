@@ -128,7 +128,6 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
       total: 273,
       suggested: 17,
       errors: 1,
-      smartConcurrency: true,
       currentConcurrency: 2,
       concurrencyMax: 10,
       stageMetrics: {

@@ -343,9 +343,6 @@
       speechHabitHint: document.getElementById("aiSpeechHabitHint"),
       concurrency: document.getElementById("aiConcurrency"),
       concurrencyLabel: document.getElementById("aiConcurrencyLabel"),
-      smartConcurrency: document.getElementById("aiSmartConcurrency"),
-      concurrencyMax: document.getElementById("aiConcurrencyMax"),
-      concurrencyMaxWrap: document.getElementById("aiConcurrencyMaxWrap"),
       promptVisible: document.getElementById("aiPromptVisible"),
       stage1Preset: document.getElementById("stage1PresetSelect"),
       stage2Preset: document.getElementById("stage2PresetSelect"),
@@ -633,23 +630,6 @@
       prefilterIds.similarity.value = formatPercentRatio(prefilterIds.similarity.value);
     }
 
-    function updateConcurrencyControls() {
-      const isSmart = Boolean(aiIds.smartConcurrency?.checked);
-      if (aiIds.concurrencyMaxWrap) {
-        aiIds.concurrencyMaxWrap.hidden = !isSmart;
-      }
-      if (aiIds.concurrencyLabel) {
-        aiIds.concurrencyLabel.textContent = isSmart ? "初始并发" : "并发";
-      }
-      if (aiIds.concurrency) {
-        // 上限跟着页面上的 max 属性走，避免文案与实际边界各写一份数字后漂移。
-        const cap = String(aiIds.concurrency.max || "").trim();
-        aiIds.concurrency.title = isSmart
-          ? "初始并发数（默认 3，遇到频控可退避至 1）"
-          : (cap ? `并发数（1~${cap}）` : "并发数");
-      }
-    }
-
     function updateProofreadModeHint() {
       aiIds.proofreadMode.value = bilingualMode ? "bilingual" : "trilingual";
       const hint = bilingualMode
@@ -877,6 +857,18 @@
       if (item && !hasStoredNote(item) && !revisionTextFor(item) && !item.done && !item.manualDone && !item.aiDone && !item.recoveredUnverified) delete notes[id];
     }
 
+    // 旧版本存过 smartConcurrency + concurrencyMax：开启智能并发时有效上限是 max(concurrency, concurrencyMax)。
+    // 现在只有一个「并发上限」，读到旧存档时折算成它，旧数据不用迁移；下一次保存就只剩 concurrency。
+    // 必须对全局与项目两份存档各自折算后再合并：若合并后再折算，一份旧存档遗留的 concurrencyMax 会盖掉另一份新存档里用户刚改的值。
+    function foldLegacyConcurrency(config) {
+      const { smartConcurrency, concurrencyMax, ...rest } = config;
+      if (smartConcurrency === true && concurrencyMax != null && rest.concurrency != null) {
+        const merged = Math.max(Number(rest.concurrency) || 0, Number(concurrencyMax) || 0);
+        if (merged > 0) rest.concurrency = String(merged);
+      }
+      return rest;
+    }
+
     function loadSavedAiConfig() {
       let globalConfig = {};
       try {
@@ -894,7 +886,7 @@
       }
       if (!globalConfig || typeof globalConfig !== "object" || Array.isArray(globalConfig)) globalConfig = {};
       if (!projectConfig || typeof projectConfig !== "object" || Array.isArray(projectConfig)) projectConfig = {};
-      return { ...globalConfig, ...projectConfig };
+      return { ...foldLegacyConcurrency(globalConfig), ...foldLegacyConcurrency(projectConfig) };
     }
 
     function isReasoningModelName(model) {
@@ -992,8 +984,7 @@
         const s1Options = [
           { id: "", name: "使用主配置", title: "使用顶部 AI 服务填写的配置与并发" },
           ...presets.map((p) => {
-            const conc = p.concurrency || 3;
-            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 10) + "智能并发" : conc + "并发";
+            const concDetail = "并发上限 " + (p.concurrency || 3);
             return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
           }),
         ];
@@ -1013,8 +1004,7 @@
         const s2Options = [
           { id: "", name: "未启用", title: "未启用文学复审" },
           ...presets.map((p) => {
-            const conc = p.concurrency || 3;
-            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 10) + "智能并发" : conc + "并发";
+            const concDetail = "并发上限 " + (p.concurrency || 3);
             return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
           }),
         ];
@@ -1034,8 +1024,7 @@
         const s3Options = [
           { id: "", name: "未启用", title: "未启用终审仲裁" },
           ...presets.map((p) => {
-            const conc = p.concurrency || 2;
-            const concDetail = p.smartConcurrency ? conc + "~" + (p.concurrencyMax || 5) + "智能并发" : conc + "并发";
+            const concDetail = "并发上限 " + (p.concurrency || 2);
             return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
           }),
         ];
@@ -1116,13 +1105,6 @@
       if (preset.concurrency != null) {
         aiIds.concurrency.value = preset.concurrency;
       }
-      if (preset.smartConcurrency != null && aiIds.smartConcurrency) {
-        aiIds.smartConcurrency.checked = Boolean(preset.smartConcurrency);
-      }
-      if (preset.concurrencyMax != null && aiIds.concurrencyMax) {
-        aiIds.concurrencyMax.value = preset.concurrencyMax;
-      }
-      updateConcurrencyControls();
       currentPresetId = preset.id;
       if (aiIds.presetSelect) aiIds.presetSelect.value = preset.id;
       syncEnhancedSelect(aiIds.presetSelect);
@@ -1133,12 +1115,6 @@
     function saveAiConfig() {
       rememberInferenceSetting();
       const prevSaved = loadSavedAiConfig();
-      const smartConcurrency = aiIds.smartConcurrency
-        ? Boolean(aiIds.smartConcurrency.checked)
-        : Boolean(prevSaved.smartConcurrency);
-      const concurrencyMax = aiIds.concurrencyMax
-        ? aiIds.concurrencyMax.value
-        : (prevSaved.concurrencyMax != null ? prevSaved.concurrencyMax : 10);
       const config = {
         provider: aiIds.provider ? aiIds.provider.value : (prevSaved.provider || ""),
         baseUrl: aiIds.baseUrl ? aiIds.baseUrl.value : (prevSaved.baseUrl || ""),
@@ -1154,8 +1130,6 @@
         target: aiIds.target ? aiIds.target.value : (prevSaved.target || ""),
         profileId: aiIds.profile ? aiIds.profile.value : (prevSaved.profileId || ""),
         concurrency: aiIds.concurrency ? aiIds.concurrency.value : (prevSaved.concurrency != null ? prevSaved.concurrency : "3"),
-        smartConcurrency,
-        concurrencyMax,
         similarity: prefilterIds.similarity ? formatPercentRatio(prefilterIds.similarity.value) : (prevSaved.similarity || "92%"),
         promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
@@ -1222,13 +1196,6 @@
         aiIds.profile.value = saved.profileId;
       }
       if (saved.concurrency != null) aiIds.concurrency.value = saved.concurrency;
-      if (saved.smartConcurrency != null && aiIds.smartConcurrency) {
-        aiIds.smartConcurrency.checked = Boolean(saved.smartConcurrency);
-      }
-      if (saved.concurrencyMax != null && aiIds.concurrencyMax) {
-        aiIds.concurrencyMax.value = saved.concurrencyMax;
-      }
-      updateConcurrencyControls();
       if (saved.similarity != null) prefilterIds.similarity.value = formatPercentRatio(saved.similarity);
       if (aiIds.promptVisible) aiIds.promptVisible.checked = Boolean(saved.promptVisible);
       if (typeof savedPrompt.systemPrompt === "string" && savedPrompt.systemPrompt) {
@@ -3684,8 +3651,6 @@
       let mainApiKey = aiIds.apiKey.value;
 
       let mainConcurrency = Number(aiIds.concurrency.value);
-      let mainSmartConcurrency = Boolean(aiIds.smartConcurrency?.checked);
-      let mainConcurrencyMax = aiIds.concurrencyMax ? Number(aiIds.concurrencyMax.value) : 10;
 
       if (s1PresetId) {
         const s1Preset = presetTools.getPreset(localStorage, s1PresetId);
@@ -3696,8 +3661,6 @@
           mainReasoningEffort = s1Preset.reasoningEffort || mainReasoningEffort;
           mainApiKey = s1Preset.apiKey || mainApiKey;
           if (s1Preset.concurrency != null) mainConcurrency = Number(s1Preset.concurrency);
-          if (s1Preset.smartConcurrency != null) mainSmartConcurrency = Boolean(s1Preset.smartConcurrency);
-          if (s1Preset.concurrencyMax != null) mainConcurrencyMax = Number(s1Preset.concurrencyMax);
         }
       }
 
@@ -3724,8 +3687,6 @@
         stylistConfig,
         arbiterConfig,
         concurrency: mainConcurrency,
-        smartConcurrency: mainSmartConcurrency,
-        concurrencyMax: mainConcurrencyMax,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
         labels: pageLabels,
@@ -4015,7 +3976,7 @@
       if (active1 && activeText1) {
         if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
           active1.hidden = false;
-          const concText = p1.concurrency ? "（并发 " + p1.concurrency + (p1.smartConcurrency && p1.concurrencyMax ? "/" + p1.concurrencyMax : "") + "）" : "";
+          const concText = p1.concurrency ? "（并发 " + p1.concurrency + (p1.concurrencyMax ? "/" + p1.concurrencyMax : "") + "）" : "";
           activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active1.hidden = true;
@@ -4054,7 +4015,7 @@
       if (active2 && activeText2) {
         if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
           active2.hidden = false;
-          const concText = p2.concurrency ? "（并发 " + p2.concurrency + (p2.smartConcurrency && p2.concurrencyMax ? "/" + p2.concurrencyMax : "") + "）" : "";
+          const concText = p2.concurrency ? "（并发 " + p2.concurrency + (p2.concurrencyMax ? "/" + p2.concurrencyMax : "") + "）" : "";
           activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active2.hidden = true;
@@ -4099,7 +4060,7 @@
       if (active3 && activeText3) {
         if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
           active3.hidden = false;
-          const concText = p3.concurrency ? "（并发 " + p3.concurrency + (p3.smartConcurrency && p3.concurrencyMax ? "/" + p3.concurrencyMax : "") + "）" : "";
+          const concText = p3.concurrency ? "（并发 " + p3.concurrency + (p3.concurrencyMax ? "/" + p3.concurrencyMax : "") + "）" : "";
           activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active3.hidden = true;
@@ -4523,8 +4484,8 @@
         (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
         aiIds.stage2Preset?.value
       );
-      const concurrencyInfo = ai.smartConcurrency && ai.currentConcurrency
-        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || 10) + "）"
+      const concurrencyInfo = ai.currentConcurrency
+        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || ai.currentConcurrency) + "）"
         : "";
 
       let pipelineText = "";
@@ -4579,7 +4540,7 @@
         if (ai.running) {
           aiIds.panelState.textContent = isPrefilter
             ? "预筛选中..."
-            : ("校对中" + (ai.smartConcurrency && ai.currentConcurrency ? " (" + ai.currentConcurrency + ")" : "") + "...");
+            : ("校对中" + (ai.currentConcurrency ? " (" + ai.currentConcurrency + ")" : "") + "...");
           aiIds.panelState.className = "ai-status-badge is-running";
         } else if (ai.finishedAt) {
           aiIds.panelState.textContent = isPrefilter
@@ -4917,8 +4878,6 @@
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,
           concurrency: aiIds.concurrency.value,
-          smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
-          concurrencyMax: aiIds.concurrencyMax?.value || 10,
         };
 
         const saved = presetTools.savePreset(localStorage, presetData);
@@ -4958,8 +4917,6 @@
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,
           concurrency: aiIds.concurrency.value,
-          smartConcurrency: Boolean(aiIds.smartConcurrency?.checked),
-          concurrencyMax: aiIds.concurrencyMax?.value || 10,
         };
 
         const saved = presetTools.savePreset(localStorage, presetData);
@@ -4999,7 +4956,7 @@
         }
       });
     }
-    [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.concurrencyMax, aiIds.proofreadMode, aiIds.reasoningEffort].filter(Boolean).forEach((input) => {
+    [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].filter(Boolean).forEach((input) => {
       input.addEventListener("input", saveAiConfig);
       input.addEventListener("change", () => {
         saveAiConfig();
@@ -5027,12 +4984,6 @@
     if (aiIds.stage3Preset) {
       aiIds.stage3Preset.addEventListener("change", () => {
         suppressStageCardFilter(600);
-        saveAiConfig();
-      });
-    }
-    if (aiIds.smartConcurrency) {
-      aiIds.smartConcurrency.addEventListener("change", () => {
-        updateConcurrencyControls();
         saveAiConfig();
       });
     }

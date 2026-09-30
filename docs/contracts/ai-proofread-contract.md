@@ -201,7 +201,7 @@
 | stage2 | — | 是 | 复审 → 仲裁 |
 | stage3 | — | — | 只跑仲裁 |
 
-阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）、独立的退避窗口与智能并发上探；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`，各自的并发上限来自各自的预设）、独立的退避窗口与并发上探（自适应调度强制开启，详见 [workbench-notes-spaces.md](workbench-notes-spaces.md)「并发上限与内部自适应调度」，与熔断的联动也在那里）；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
 
 ### 独立阶段二/三的队列来源
 

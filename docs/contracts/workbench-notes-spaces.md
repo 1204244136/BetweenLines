@@ -79,23 +79,35 @@
 ## AI 模型预设管理（`ai-presets.js`）
 
 - 存储键：`translation-compare-ai-presets-v1`。
-- 包含完整连接与模型参数（`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`、`smartConcurrency`、`concurrencyMax`）。熔断由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃。
+- 包含完整连接与模型参数（`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
 - 当前预设 ID 保存在 `translation-compare-ai-config-v1` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。
 - 支持下拉切换、覆盖保存、另存为和删除预设，操作回执均通过 Toast 提示。
 
 ---
 
-## 智能并发自适应调度（AIMD）
+## 并发上限与内部自适应调度
 
-- 调度器采用 AIMD（加法递增、乘法递减）机制：
-  - **动态上探**：连续 5 次请求成功且与上次调整间隔 ≥3s 自动上探（并发 +1，最高至 `concurrencyMax`，默认上限 10）。
-  - **遇限下调**：遭遇频控或并发限制（HTTP 429、503、529 或包含 rate limit/TPM/RPM/quota/overload 等报错）自动下调（>3 时降至 70%，≤3 时减 1，保底 1），进入指数抖动退避窗口或遵循 `Retry-After`。
-  - **重试保障**：单行支持最多 3 次自动重试，重试期间不计入熔断统计；达到重试上限后由该阶段的限流熔断器裁决（先记失败，持续限流则整阶段冷却探测，详见 ai-proofread-contract.md「熔断是内部决策」）。
-  - **开关边界**：`smartConcurrency` 只决定「连续成功后是否自动上探」与 `concurrencyMax` 是否生效（`createStageController.isSmart`）。**识别频控、退避、下调并发、单行重试对所有模式都生效**——早期实现把频控判定也挂在 `isSmart` 上，导致固定并发的用户遇到 429 被当成普通失败，一次不重试地刷到队列尽头（实测一次任务 220 行全灭、`concurrencyLimits`/`concurrencyDowns` 恒为 0、日志里一条退避都没有）。频控相关日志前缀统一为 `[频控退避]`。
-  - **并发边界**：主并发（初始并发）与 `concurrencyMax` 共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
-- **项目级持久化与防冲刷保障**：
-  - 智能并发状态、并发数与上限随项目独立持久化（存储键：`translation-compare-ai-project-config-v1:<projectKey>`），未独立配置的项目平滑继承全局配置基线（`translation-compare-ai-config-v1`），确保跨项目切换时并发状态互不污染。
-  - 打开缺少 `#aiSmartConcurrency` 控件的历史快照页面时启用防冲刷保护，缺失 DOM 元素时保留已有配置，不将智能并发误写为 `false`。
+面板上只有一个「并发上限」输入。**没有「智能并发」开关**：自适应调度由服务端强制开启，实际并发在 1~上限 之间自动升降，用户填的数字只决定天花板。策略实现在纯函数模块 `ai/concurrency-controller.js`（不读 `status`、不碰网络，时钟可注入），阶段业务与状态写入仍归 `ai-proofread.js`。
+
+- **起步**：`min(上限, 3)`。默认上限 3 时就是固定 3，与旧行为一致；上限更高时先用 3 探路，不上来就用满上限去打陌生的上游。
+- **上探（两段式）**：
+  - *慢启动*：一整轮请求（数量 = 当前并发）全部正常，并发翻倍，封顶到慢启动阈值。上限 32 时 3→6→12→24→32，不必等 29 个「连续 5 次」。
+  - *加法上探*：到达阈值后，每连续 5 次正常应答 +1。要踏入「上次出事的水位」（`knownLimit`）及以上时，需要连续 15 次——上游天花板通常不变，反复撞同一堵墙只会多吃几次 429。
+  - 两次上探之间至少间隔 3 秒。
+- **下行**（只对「并发造成的压力」出手）：
+  - *频控*（HTTP 429/503/529 或速率/过载类报错）：并发 >3 时 ×0.7，否则 -1，保底 1。一次拥塞里同时返回的一批 429 只算一次：下调之前就已发出的请求（`startedAt` 早于上次下调）不再触发第二次下调，两次下调至少隔 800ms。
+  - *过载型失败*（`error-kinds.js` 归类为 `timeout` / `server_error` / `network`）：-1。这类失败未必是并发造成的，所以更温和；它们同时会进熔断的失败窗口，提前压并发是为了在错误率熔断终止任务之前先把失败率压回去。
+  - *拒答、坏 JSON、认证/配置错误*对并发中性：既不算加速也不触发降速。
+  - 连续下调属于同一段拥塞：`knownLimit` 取最高的那个水位，`slowStartThreshold` 只在首次出事时收紧，后续下调不再改它——否则连续限流会把阈值带到 1，恢复后没有慢启动可言。
+- **与熔断的联动**（`circuit-breaker.js` 只提供只读读数，判定逻辑与并发状态互不读写）：
+  - 断路器打开：并发塌到 1，慢启动阈值设为**出事水位的一半**（至少 2，只收紧不放宽）。冷却结束后半开只放行一个探测（`dispatchLimit`），探测通过后从 1 慢启动爬回阈值，再加法上探；不会一步跳回冷却前的水位去撞刚放行的上游。阈值取「出事水位」而不是塌缩那一刻的当前并发——断路器打开前的连续限流早已把并发压到 1，拿当前并发算一半只会得到 1。
+  - 失败窗口逼近熔断线：`pressure`（当前错误率 ÷ 熔断阈值）≥ 0.5 时暂停上探，回落后立即恢复；样本不足 5 个时恒为 0，偶发一次失败不会卡住上探。状态翻转各记一行日志。
+- **日志**：调度相关日志前缀 `[并发调度]`，频控退避为 `[频控退避]`，熔断为 `[熔断]`；任务结束输出「并发调度统计」（起步、峰值、下调/上探次数、限流次数）。
+- **状态接口**：`concurrency` 是起步并发，`concurrencyMax` 是并发上限，`currentConcurrency` 是初审当前放行的并发；`stagePipelines.stageN` 同样只有 `concurrency`（当前）与 `concurrencyMax`（上限）。不再回报 `smartConcurrency`。
+- **并发边界**：并发上限共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
+- **旧数据折算**：旧客户端、旧预设、旧本地存档还带着 `smartConcurrency` + `concurrencyMax`。开启智能并发的旧数据，有效上限是 `max(concurrency, concurrencyMax)`；关闭的，`concurrencyMax` 从不生效，上限就是 `concurrency`。服务端 `resolveConcurrencyCap`、预设 `sanitizePreset`、页面 `foldLegacyConcurrency` 三处按同一口径折算，读到旧数据即折成一个上限，下一次保存不再回写旧字段，无需迁移脚本。页面的折算必须对全局与项目两份存档**各自**折算后再合并；先合并再折算，会让一份旧存档遗留的 `concurrencyMax` 盖掉另一份存档里用户刚改的值。
+- **项目级持久化**：并发上限随项目独立持久化（存储键：`translation-compare-ai-project-config-v1:<projectKey>`），未独立配置的项目平滑继承全局配置基线（`translation-compare-ai-config-v1`），确保跨项目切换时互不污染。
+- **测试用环境变量**：`TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL` 只缩短「两次上探之间的最短间隔」，供回归测试把秒级等待压到毫秒级；不是运行时开关，页面与请求体都不携带调度参数。
 
 ---
 

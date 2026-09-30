@@ -127,9 +127,9 @@ index-X 结构与命名规范契约：
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`。裁剪只删字段，不改变 `signature`/`rowsSignature` 取值。
    - 输出 HTML、CSV、JSON。
    - 生成页面的控制栈是四个 `<details class="panel-details">` 抽屉：预筛选、AI 辅助校对、筛选与批处理、备注空间与找回；按数据流方向自上而下排列。统一置于父抽屉 `#controlStackPanel`（`.panel-group`）内。
-   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由固定状态行承载；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与智能并发 AIMD 调度完整集成。
+   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由固定状态行承载；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与并发上限（内部自适应调度、与熔断联动）完整集成。
    - 验证执行 `node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js`。
-   - **详细规范**：前端控制栈结构、多历史空间合并算法（`mergeNotes`）、确定性匹配证据通道、载入自愈、Toast 提示设计、预设管理与智能并发契约详见 **[docs/contracts/workbench-notes-spaces.md](docs/contracts/workbench-notes-spaces.md)**。
+   - **详细规范**：前端控制栈结构、多历史空间合并算法（`mergeNotes`）、确定性匹配证据通道、载入自愈、Toast 提示设计、预设管理与并发调度契约详见 **[docs/contracts/workbench-notes-spaces.md](docs/contracts/workbench-notes-spaces.md)**。
 
 7. `src/core/storage-layout.js`、`src/storage/project-store.js`、`src/runtime/generation-pipeline.js`
    - 将运行时输入、隔离 staging 和不可变项目快照划分到不同目录。
@@ -181,7 +181,7 @@ index-X 结构与命名规范契约：
 
 - `public/workbench-diff.js` 只负责纯文本差异算法和 HTML 转义回调，不读取 DOM、备注、筛选或任务状态。`public/workbench-client.js` 只持有缓存并决定差异插槽的展示。
 - `ai/error-kinds.js` 是异常分类的唯一实现（服务端直接 require，构建器把常量与纯函数 `.toString()` 注入页面）。服务端 `clientStatus().stageErrors` 回报本次运行的失败明细，客户端从失败备注得到本地明细后与之合并；**两端不得各写一套分类规则**，否则「异常」悬停提示的分类口径会分叉。
-- AI 调度的 `concurrency-controller.js` 只负责阶段控制器参数归一化、频控后的并发下调、退避时间和重试判定；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
+- AI 调度的 `concurrency-controller.js` 只负责并发策略（起步、慢启动与加法上探、频控/过载下调、熔断塌缩与恢复）、退避时间和重试判定，并发上限只有一个输入（`concurrency`），**不得重新引入前端「智能并发」开关**——自适应由服务端强制开启，页面与请求体都不携带调度参数；与熔断的联动只读 `circuit-breaker.js` 的 `state`/`pressure`，两边互不读写对方状态；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
 - 阶段编排只有两个输入，都由 `stagePlan` 归一：**起点**（`targetStage`；`all` 是旧客户端的兼容别名，等同 `stage1`）与**这条流水线有几段**（下游配没配模型）。行为统一为「从起点一路推进到已启用的尽头」：配了 `stylistConfig` 才从初审接到复审，配了 `arbiterConfig` 才从复审接到仲裁（仲裁只能接在复审后面，所以从阶段一起步时必须先有复审）。**不要重新引入「级联 / 不级联」的模式开关**——那会让「阶段一 开始」一个按钮同时表示两件事，而且状态会被持久化。
 - 客户端三个「开始」按钮**只报起点**，级联范围由服务端算并在 `clientStatus().stageCascade` 里如实回报（`stageMode` 报起点）。刷新页面后本地状态会丢，按钮态一律以这两个字段为准；级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
 - 服务端同一时刻只允许一个 AI 任务（`startProofread` 遇到 `status.running` 直接报 `RUNNING`），所以「阶段二不等阶段一」只能靠同一个任务内的队列级联实现，不能在中途追加阶段。客户端不得恢复成「排队等前一阶段整体结束再起第二个任务」的默认路径。

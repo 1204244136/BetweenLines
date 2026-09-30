@@ -322,7 +322,7 @@ details[open] > summary .details-toggle::before {
   padding: 0 8px;
   white-space: nowrap;
 }
-/* 并发与智能并发设置 */
+/* 并发上限设置 */
 .ai-concurrency-inputs {
   display: flex;
   align-items: center;
@@ -330,46 +330,10 @@ details[open] > summary .details-toggle::before {
   min-height: 28px;
 }
 .ai-concurrency-inputs input {
-  height: 28px;
-  box-sizing: border-box;
-}
-.ai-concurrency-inputs input {
   flex: 1 1 0;
   min-width: 44px;
-}
-.ai-concurrency-max-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 0;
-}
-.ai-concurrency-max-wrap[hidden] {
-  display: none !important;
-}
-.ai-concurrency-sep {
-  font-size: 11px;
-  color: var(--ai-muted);
-  white-space: nowrap;
-  font-weight: 600;
-}
-.ai-concurrency-smart {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 0;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ai-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.ai-concurrency-smart input[type="checkbox"] {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--ai-focus);
-  cursor: pointer;
+  height: 28px;
+  box-sizing: border-box;
 }
 /* 模型字段标题右侧的内联操作提示（拉取模型结果等），就近展示、不占用运行状态栏且不破坏网格垂直对齐 */
 .ai-model-hint {

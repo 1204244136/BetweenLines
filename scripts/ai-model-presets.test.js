@@ -296,7 +296,7 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
   const stage1Select = ui.element("stage1PresetSelect");
   const optionBefore = stage1Select.children.find((child) => child.value === p.id);
   assert.ok(optionBefore, "阶段一下拉包含该预设");
-  assert.equal(optionBefore.title, "本地 Ollama（qwen2.5:14b，2并发）");
+  assert.equal(optionBefore.title, "本地 Ollama（qwen2.5:14b，并发上限 2）");
 
   // 用户调整了模型和并发
   ui.element("aiModel").value = "qwen2.5:32b";
@@ -313,7 +313,7 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
   // 覆盖保存后：下拉提示必须同步到最新模型与并发，不能残留旧值（否则显示与实际生效配置不一致）
   const optionAfter = stage1Select.children.find((child) => child.value === p.id);
   assert.ok(optionAfter, "覆盖保存后该预设仍在下拉中");
-  assert.equal(optionAfter.title, "本地 Ollama（qwen2.5:32b，1并发）");
+  assert.equal(optionAfter.title, "本地 Ollama（qwen2.5:32b，并发上限 1）");
 
   const toasts = toastMessages(ui);
   assert.ok(toasts.some((msg) => msg.includes("已更新模型预设「本地 Ollama」")));

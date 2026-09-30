@@ -218,15 +218,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                     <div class="ai-field" id="aiConcurrencyField">
                       <div class="ai-field-head">
-                        <label for="aiConcurrency" id="aiConcurrencyLabel">并发</label>
-                        <label class="ai-concurrency-smart" for="aiSmartConcurrency" title="开启智能并发：以初始并发启动，连续请求稳定后自动向上试探，遇到并发/频控限制（HTTP 429 等）自动降低并发并退避重试。"><input id="aiSmartConcurrency" type="checkbox">智能并发</label>
+                        <label for="aiConcurrency" id="aiConcurrencyLabel">并发上限</label>
                       </div>
                       <div class="ai-concurrency-inputs">
-                        <input id="aiConcurrency" type="number" min="1" max="${concurrencyLimits.max}" value="3" title="并发数（开启智能并发时为初始并发，默认 3，上限 ${concurrencyLimits.max}）">
-                        <div id="aiConcurrencyMaxWrap" class="ai-concurrency-max-wrap" hidden>
-                          <span class="ai-concurrency-sep">上限</span>
-                          <input id="aiConcurrencyMax" type="number" min="1" max="${concurrencyLimits.maxSmart}" value="10" title="并发上限（智能并发允许达到的最大并发数，默认 10，上限 ${concurrencyLimits.maxSmart}）">
-                        </div>
+                        <input id="aiConcurrency" type="number" min="1" max="${concurrencyLimits.max}" value="3" title="并发上限（1~${concurrencyLimits.max}，默认 3）：实际并发由调度器在 1~上限 之间自动升降——请求稳定时逐步上探，遇到频控或过载自动降速，熔断冷却后从低位重新爬升。">
                       </div>
                     </div>
                   </div>

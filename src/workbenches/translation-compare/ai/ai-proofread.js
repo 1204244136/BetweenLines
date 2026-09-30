@@ -1,12 +1,18 @@
 const { providerDefaults } = require("./proofread-defaults");
 const { createStageBreaker, describeTrip, describePolicy } = require("./circuit-breaker");
 const {
+  CONCURRENCY_POLICY,
   createStageController,
-  nextConcurrencyAfterLimit,
+  stepUpOnSuccess,
+  stepDownOnLimit,
+  stepDownOnOverload,
+  collapseForBreaker,
+  initialConcurrencyFor,
+  describeConcurrencyPolicy,
   backoffDelayMs,
   shouldRetryRow,
 } = require("./concurrency-controller");
-const { AI_CONCURRENCY_LIMITS } = require("./concurrency-limits");
+const { AI_CONCURRENCY_LIMITS, resolveConcurrencyCap } = require("./concurrency-limits");
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
 const fs = require("fs");
 const { diffWordsWithSpace, diffChars } = require("diff");
@@ -102,7 +108,7 @@ const {
   applyArbitrationDecision,
   formatArbitrationNoteLines,
 } = require("./arbiter");
-const { classifyAiError, recordAiErrorKind } = require("./error-kinds");
+const { AI_ERROR_KIND_LABELS, classifyAiError, recordAiErrorKind } = require("./error-kinds");
 const {
   getModelProfile,
   scheduleModels,
@@ -365,7 +371,6 @@ function clientStatus(options = {}) {
     termConflicts: status.termConflicts,
     termInjected: status.termInjected,
     concurrency: status.concurrency,
-    smartConcurrency: status.smartConcurrency,
     currentConcurrency: status.currentConcurrency,
     concurrencyMax: status.concurrencyMax,
     concurrencyUps: status.concurrencyUps,
@@ -479,20 +484,9 @@ function cleanConfig(input = {}) {
   const defaults = providerDefaults[provider];
   const target = input.target === "tw" ? "tw" : "cn";
   const proofreadMode = input.proofreadMode === "trilingual" ? "trilingual" : "bilingual";
-  const envSmart = process.env.TRANSCOMPARATOR_SMART_CONCURRENCY === "1";
-  const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : envSmart;
-  const concurrency = clampInteger(
-    input.concurrency,
-    AI_CONCURRENCY_LIMITS.min,
-    AI_CONCURRENCY_LIMITS.max,
-    AI_CONCURRENCY_LIMITS.defaultConcurrency,
-  );
-  const envMax = process.env.TRANSCOMPARATOR_CONCURRENCY_MAX ? Number(process.env.TRANSCOMPARATOR_CONCURRENCY_MAX) : null;
-  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : (envMax ?? AI_CONCURRENCY_LIMITS.defaultMax);
-  const concurrencyMax = Math.max(
-    concurrency,
-    clampInteger(rawConcurrencyMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, AI_CONCURRENCY_LIMITS.defaultMax),
-  );
+  // 并发上限：调度器在 1~上限 之间自动升降（见 concurrency-controller.js），没有「智能并发」开关。
+  // resolveConcurrencyCap 同时把旧客户端的 smartConcurrency + concurrencyMax 折算成同一个上限。
+  const concurrency = resolveConcurrencyCap(input);
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
   const model = String(input.model || defaults.model).trim();
   // 特化侧档案：未知 id 一律回落到默认档案，避免旧客户端或手填值把提示词打空。
@@ -547,8 +541,6 @@ function cleanConfig(input = {}) {
     // 模型插入的换行与 `<br>` 一并并回本行；段数与 noteref 标记对不上时作废转人工（见 format-guard.js）。
     formatGuard: input.formatGuard !== false && process.env.TRANSCOMPARATOR_FORMAT !== "0",
     concurrency,
-    smartConcurrency,
-    concurrencyMax,
     similarityThreshold,
     projectKey: String(input.projectKey || "").trim(),
     rowsSignature: String(input.rowsSignature || "").trim(),
@@ -591,19 +583,8 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
     ? normalizeReasoningEffort(input.reasoningEffort, model)
     : normalizeNonGptIntensity(input.reasoningEffort);
 
-  const rawConcurrency = input.concurrency != null ? Number(input.concurrency) : defaultConcurrency;
-  const concurrency = clampInteger(
-    rawConcurrency,
-    AI_CONCURRENCY_LIMITS.min,
-    AI_CONCURRENCY_LIMITS.max,
-    defaultConcurrency,
-  );
-  const smartConcurrency = input.smartConcurrency != null ? Boolean(input.smartConcurrency) : false;
-  const rawConcurrencyMax = input.concurrencyMax != null ? Number(input.concurrencyMax) : AI_CONCURRENCY_LIMITS.defaultMax;
-  const concurrencyMax = Math.max(
-    concurrency,
-    clampInteger(rawConcurrencyMax, AI_CONCURRENCY_LIMITS.min, AI_CONCURRENCY_LIMITS.maxSmart, AI_CONCURRENCY_LIMITS.defaultMax),
-  );
+  // 各阶段各自的并发上限（预设里的 concurrency）；旧预设的 smartConcurrency + concurrencyMax 同样折算。
+  const concurrency = resolveConcurrencyCap(input, defaultConcurrency);
 
   return {
     provider,
@@ -612,8 +593,6 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
     apiKey,
     reasoningEffort,
     concurrency,
-    smartConcurrency,
-    concurrencyMax,
   };
 }
 
@@ -658,14 +637,14 @@ function resetStatus(config, rowsLength) {
     status.stageMode = plan.startsAt;
     status.stageCascade = { toStylist: plan.cascadeToStylist, toArbiter: plan.cascadeToArbiter };
   }
-  status.concurrency = config.concurrency;
-  status.smartConcurrency = Boolean(config.smartConcurrency);
-  status.currentConcurrency = config.concurrency;
-  status.concurrencyMax = config.concurrencyMax;
+  // concurrency 是起步并发、concurrencyMax 是并发上限；实际放行的并发随调度器升降，runQueue 开跑后覆盖 currentConcurrency。
+  status.concurrency = initialConcurrencyFor(config.concurrency);
+  status.currentConcurrency = status.concurrency;
+  status.concurrencyMax = config.concurrency;
   status.concurrencyUps = 0;
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
-  status.peakConcurrency = config.concurrency;
+  status.peakConcurrency = status.concurrency;
   status.total = rowsLength;
   status.queued = 0;
   status.processed = 0;
@@ -1094,9 +1073,7 @@ async function startProofread(input) {
 
   status.queued = queue.length + resumedStage2.resumed.length;
   pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2.resumed.length ? `；另有 ${resumedStage2.resumed.length} 行续跑复审` : ""}。`);
-  pushLog(config.smartConcurrency
-    ? `智能并发：已开启，初始并发 ${config.concurrency}，上限 ${config.concurrencyMax}。稳定请求自动上探，遭遇频控限制自动退避降速。`
-    : `并发设置：固定并发 ${config.concurrency}。`);
+  pushLog(describeConcurrencyPolicy(config.concurrency));
   pushLog(describePolicy());
   runQueue(queue, rows, config, labels, stageItems).catch((error) => {
     status.error = error.message || String(error);
@@ -1232,14 +1209,13 @@ function clearProofreadCache() {
   status.finishedAt = null;
   status.projectKey = "";
   status.rowsSignature = "";
-  status.concurrency = 3;
-  status.smartConcurrency = false;
-  status.currentConcurrency = 3;
-  status.concurrencyMax = 10;
+  status.concurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.currentConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.concurrencyMax = AI_CONCURRENCY_LIMITS.defaultConcurrency;
   status.concurrencyUps = 0;
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
-  status.peakConcurrency = 3;
+  status.peakConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
   status.total = 0;
   status.queued = 0;
   status.processed = 0;
@@ -1402,33 +1378,32 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const stage2AttitudesLive = { accept: 0, modify: 0, reject: 0, escalate: 0 };
 
   const minConcurrency = 1;
-  const scaleUpThreshold = 5;
-  const minProbeIntervalMs = Number(process.env.TRANSCOMPARATOR_SMART_PROBE_INTERVAL) || 3000;
   const maxRowRetries = 3;
+  // 上探最短间隔可被环境变量缩短，仅供回归测试把秒级间隔压到毫秒级；不是运行时开关。
+  const policy = {
+    ...CONCURRENCY_POLICY,
+    minStepIntervalMs: Number(process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL) || CONCURRENCY_POLICY.minStepIntervalMs,
+  };
+  // 过载型失败：并发过高时最典型的三种表现。拒答、坏 JSON、认证/配置错误都不是并发造成的，不参与。
+  const overloadKinds = new Set(["timeout", "server_error", "network"]);
 
-  const createStageCtrl = (stageKey, label, conf, defaultConcurrency = 3, defaultMax = 10) => createStageController({
+  // 各阶段的并发上限来自各自的预设（config.stylistConfig / arbiterConfig 的 concurrency）；没配预设时回落到默认。
+  const createStageCtrl = (stageKey, label, conf, defaultConcurrency) => createStageController({
     stageKey,
     label,
     config: conf,
     fallbackConcurrency: defaultConcurrency,
-    fallbackMax: config.concurrencyMax || defaultMax,
     clampInteger,
-    smartDefault: Boolean(config.smartConcurrency),
   });
 
-  const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency, config.concurrencyMax);
-  const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency || 3, config.concurrencyMax || 10);
-  const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2, 5);
+  const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency);
+  const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency);
+  const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2);
 
-  const isSmart = s1Ctrl.isSmart;
-  let currentConcurrency = s1Ctrl.currentConcurrency;
-  const maxConcurrency = s1Ctrl.maxConcurrency;
-
-  status.smartConcurrency = isSmart;
-  status.concurrency = config.concurrency;
-  status.currentConcurrency = currentConcurrency;
-  status.concurrencyMax = maxConcurrency;
-  status.peakConcurrency = currentConcurrency;
+  status.concurrency = s1Ctrl.initialConcurrency;
+  status.currentConcurrency = s1Ctrl.currentConcurrency;
+  status.concurrencyMax = s1Ctrl.maxConcurrency;
+  status.peakConcurrency = s1Ctrl.currentConcurrency;
   status.concurrencyUps = 0;
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
@@ -1438,7 +1413,6 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage1.inFlight = stage1InFlight;
     status.stagePipelines.stage1.concurrency = s1Ctrl.currentConcurrency;
     status.stagePipelines.stage1.concurrencyMax = s1Ctrl.maxConcurrency;
-    status.stagePipelines.stage1.smartConcurrency = s1Ctrl.isSmart;
 
     status.stagePipelines.stage2.pending = stage2Pending.length;
     status.stagePipelines.stage2.inFlight = stage2InFlight;
@@ -1446,40 +1420,43 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
     status.stagePipelines.stage2.concurrency = s2Ctrl.currentConcurrency;
     status.stagePipelines.stage2.concurrencyMax = s2Ctrl.maxConcurrency;
-    status.stagePipelines.stage2.smartConcurrency = s2Ctrl.isSmart;
 
     status.stagePipelines.stage3.pending = stage3Pending.length;
     status.stagePipelines.stage3.inFlight = stage3InFlight;
     status.stagePipelines.stage3.concurrency = s3Ctrl.currentConcurrency;
     status.stagePipelines.stage3.concurrencyMax = s3Ctrl.maxConcurrency;
-    status.stagePipelines.stage3.smartConcurrency = s3Ctrl.isSmart;
   }
   syncStagePipelineQueues();
   if (plan.cascadeToStylist) {
-    pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发 ${s2Ctrl.currentConcurrency}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发 ${s3Ctrl.currentConcurrency}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
+    pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发上限 ${s2Ctrl.maxConcurrency}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发上限 ${s3Ctrl.maxConcurrency}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
   } else if (plan.cascadeToArbiter) {
-    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发 ${s3Ctrl.currentConcurrency}），不等复审整体跑完。`);
+    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发上限 ${s3Ctrl.maxConcurrency}），不等复审整体跑完。`);
   }
 
+  // 并发变了：同步状态接口里的实时并发与峰值（状态接口的 currentConcurrency 只代表初审）。
+  function syncConcurrency(ctrl) {
+    status.peakConcurrency = Math.max(status.peakConcurrency, ctrl.currentConcurrency);
+    if (ctrl.stageKey === "stage1") status.currentConcurrency = ctrl.currentConcurrency;
+  }
+
+  const stageTag = (ctrl) => (ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`);
+
+  // 上游正常应答：喂给调度器判断要不要上探。失败窗口逼近熔断线（pressure）时调度器会暂停上探，
+  // 状态翻转时各记一行日志，让用户看得到「并发为什么停在这儿」。
   function onStageSuccess(ctrl) {
-    if (!ctrl.isSmart) return;
-    ctrl.consecutiveLimits = 0;
-    ctrl.consecutiveSuccesses += 1;
-    const elapsed = Date.now() - ctrl.lastAdjustmentAt;
-    if (ctrl.consecutiveSuccesses >= scaleUpThreshold && elapsed >= minProbeIntervalMs && ctrl.currentConcurrency < ctrl.maxConcurrency) {
-      const prev = ctrl.currentConcurrency;
-      ctrl.currentConcurrency = Math.min(ctrl.maxConcurrency, ctrl.currentConcurrency + 1);
-      status.peakConcurrency = Math.max(status.peakConcurrency, ctrl.currentConcurrency);
-      if (ctrl.stageKey === "stage1") {
-        currentConcurrency = ctrl.currentConcurrency;
-        status.currentConcurrency = currentConcurrency;
-      }
-      status.concurrencyUps += 1;
-      ctrl.consecutiveSuccesses = 0;
-      ctrl.lastAdjustmentAt = Date.now();
-      const prefix = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`;
-      pushLog(`[智能并发] ${prefix}连续 ${scaleUpThreshold} 次请求正常，并发从 ${prev} 上探至 ${ctrl.currentConcurrency}（上限 ${ctrl.maxConcurrency}）。`);
+    const wasPaused = ctrl.rampPaused;
+    const step = stepUpOnSuccess(ctrl, { pressure: stageBreaker(ctrl.stageKey).pressure, policy });
+    if (ctrl.rampPaused !== wasPaused) {
+      pushLog(ctrl.rampPaused
+        ? `[并发调度] ${stageTag(ctrl)}失败率已逼近熔断线，暂停上探，并发维持 ${ctrl.currentConcurrency}。`
+        : `[并发调度] ${stageTag(ctrl)}失败率回落，恢复上探。`);
     }
+    if (!step) return;
+    status.concurrencyUps += 1;
+    syncConcurrency(ctrl);
+    pushLog(step.mode === "slow-start"
+      ? `[并发调度] ${stageTag(ctrl)}一整轮请求全部正常，并发从 ${step.from} 翻倍至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`
+      : `[并发调度] ${stageTag(ctrl)}连续 ${step.successes} 次请求正常，并发从 ${step.from} 上探至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`);
   }
 
   // 成功既喂断路器，也可能顺带解除它设下的冷却（迟到的成功说明上游已经放行）。
@@ -1489,7 +1466,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   }
 
   // 断路器恢复：撤销冷却窗口，并把退避档位归零。
-  // consecutiveLimits 原本只在智能并发下由成功清零，固定并发下会一直停在最大档，恢复后的下一次 429 仍按最长退避。
+  // consecutiveLimits 只由成功清零，若停在最大档，恢复后的下一次 429 仍会按最长退避。
   function clearCooldownIf(ctrl, recovered) {
     if (!recovered) return;
     ctrl.backoffUntil = Math.min(ctrl.backoffUntil, Date.now());
@@ -1498,29 +1475,34 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
   // 半开探测期（冷却已过、尚未收到非限流答复）只放行一个请求：
   // 否则并发数是 10 就会同时打出 10 个请求，等于对着刚冷却完的上游再硬打一轮。
+  // 断路器打开时并发已被塌到 1（collapseForBreaker），这里是兜底：即使并发被别的路径抬高也不会一拥而上。
   function dispatchLimit(ctrl) {
     return stageBreaker(ctrl.stageKey).state === "half-open" ? 1 : ctrl.currentConcurrency;
   }
 
-  function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry) {
+  // 过载型失败（超时 / 5xx / 断连）：并发下调一档。这类失败不重试、也不退避，但它们会进熔断的失败窗口，
+  // 提前把并发压下来是为了在「错误率熔断」终止任务之前先把失败率压回去。返回是否属于过载型。
+  function onStageOverload(ctrl, rowIndex, error, startedAt) {
+    const kind = classifyAiError(error);
+    if (!overloadKinds.has(kind)) return false;
+    const step = stepDownOnOverload(ctrl, { startedAt, minConcurrency, policy });
+    if (step) {
+      status.concurrencyDowns += 1;
+      syncConcurrency(ctrl);
+      syncStagePipelineQueues();
+      pushLog(`[并发调度] ${stageTag(ctrl)}第 ${rowIndex} 行遭遇${AI_ERROR_KIND_LABELS[kind]}，并发从 ${step.from} 下调至 ${step.to}，先缓解上游压力。`);
+    }
+    return true;
+  }
+
+  function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry, startedAt) {
     status.concurrencyLimits += 1;
-    ctrl.consecutiveSuccesses = 0;
     ctrl.consecutiveLimits += 1;
 
-    const now = Date.now();
-    if (now - ctrl.lastScaleDownAt > 800) {
-      const prev = ctrl.currentConcurrency;
-      const next = nextConcurrencyAfterLimit(prev, minConcurrency);
-      if (next < prev) {
-        ctrl.currentConcurrency = next;
-        if (ctrl.stageKey === "stage1") {
-          currentConcurrency = next;
-          status.currentConcurrency = next;
-        }
-        status.concurrencyDowns += 1;
-        ctrl.lastScaleDownAt = now;
-        ctrl.lastAdjustmentAt = now;
-      }
+    const step = stepDownOnLimit(ctrl, { startedAt, minConcurrency, policy });
+    if (step) {
+      status.concurrencyDowns += 1;
+      syncConcurrency(ctrl);
     }
 
     const retries = (ctrl.rowRetryCounts.get(rowIndex) || 0) + 1;
@@ -1550,14 +1532,26 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     ctrl.rowRetryCounts.set(rowIndex, maxRowRetries);
     ctrl.backoffUntil = Math.max(ctrl.backoffUntil, verdict.until);
     pendingQueue.unshift(itemToRetry);
-    syncStagePipelineQueues();
     if (verdict.opened) {
+      // 联动：断路器打开意味着上游在当前并发下彻底拒绝服务。并发塌到最低，恢复后从低位慢启动，
+      // 而不是一步跳回冷却前的水位再撞一次刚放行的上游。
+      const collapsed = collapseForBreaker(ctrl, { minConcurrency, policy });
+      if (collapsed.from > collapsed.to) {
+        status.concurrencyDowns += 1;
+        syncConcurrency(ctrl);
+      }
+      const restartTarget = ctrl.slowStartThreshold;
       const label = STAGE_OUTCOME_LABELS[ctrl.stageKey] || ctrl.stageKey;
       const attempt = `第 ${verdict.cycle}/${verdict.cycles} 档`;
       pushLog(verdict.cycle === 1
         ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
         : `[熔断] ${label}：探测仍被限流，继续冷却 ${Math.round(verdict.cooldownMs / 1000)} 秒（${attempt}冷却）。`);
+      // 只在第一档冷却说明一次：后续档位并发早已是最低，重复播报没有信息量。
+      if (verdict.cycle === 1) {
+        pushLog(`[并发调度] ${label}：熔断冷却，并发降到 ${collapsed.to}（冷却前 ${collapsed.from}）；恢复后从 ${collapsed.to} 起步慢启动，先爬到 ${restartTarget}，再逐步上探（上限 ${ctrl.maxConcurrency}）。`);
+      }
     }
+    syncStagePipelineQueues();
     return true;
   }
 
@@ -1661,6 +1655,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 这一行正在被（重新）处理：先撤掉它上一次的初审异常明细，成功就不再补记，失败才重新登记。
       clearStageError("stage1", row.index);
+      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
+      const requestStartedAt = Date.now();
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
@@ -1689,9 +1685,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        // 频控识别不依赖「智能并发」开关：退避与重试对固定并发同样必要。
-        // 之前带上 s1Ctrl.isSmart 时，没开智能并发的用户遇到 429 会被当成普通失败，
-        // 一次不重试地一路刷到队列尽头（用户只看到「异常」疯涨）。
+        // 频控识别与并发调度无关：任何并发上限下 429 都要退避重试，不能当成普通失败一路刷到队列尽头。
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
 
@@ -1703,7 +1697,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
-          const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row);
+          const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row, requestStartedAt);
           if (!retried) {
             pushLog(`[频控退避] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             recordStageError("stage1", row.index, error, "rate_limit");
@@ -1733,6 +1727,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
+            onStageOverload(s1Ctrl, row.index, error, requestStartedAt);
             clearCooldownIf(s1Ctrl, recordStageFailure("stage1"));
           }
           status.active = status.active.filter((idx) => idx !== row.index);
@@ -1751,6 +1746,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 与初审对称：这一行正在被（重新）复审，先撤掉上一次的复审异常明细，失败才重新登记。
       clearStageError("stage2", s1Item.row.index);
+      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
+      const requestStartedAt = Date.now();
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
         // 复审内部已经把异常回退成「采纳初审方案」，但这一行仍必须走统一错误处理：
@@ -1783,12 +1780,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        // 与初审一致：频控退避不依赖「智能并发」开关。
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(s2Ctrl, s1Item.row.index, error, stage2Pending, s1Item)) {
+        if (isRateLimit && onStageRateLimit(s2Ctrl, s1Item.row.index, error, stage2Pending, s1Item, requestStartedAt)) {
           // 成功推回 stage2Pending 重试
         } else {
           if (isRateLimit) {
@@ -1806,7 +1802,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) stopForFatalRequestError(error);
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
           else if (isRefusal) clearCooldownIf(s2Ctrl, recordStageNotLimited("stage2"));
-          else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s2Ctrl, recordStageFailure("stage2"));
+          else if (!status.stopRequested && !isRateLimit) {
+            onStageOverload(s2Ctrl, s1Item.row.index, error, requestStartedAt);
+            clearCooldownIf(s2Ctrl, recordStageFailure("stage2"));
+          }
         }
       } finally {
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
@@ -1827,6 +1826,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 同理：先撤掉这一行上一次的仲裁异常明细。
       clearStageError("stage3", s2Item.row.index);
+      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
+      const requestStartedAt = Date.now();
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels, allRows);
         // 同理：仲裁失败的行走统一错误处理（频控重试 / 计入仲裁异常 / 回退复审方案），
@@ -1841,13 +1842,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         status.active = status.active.filter((idx) => idx !== s2Item.row.index);
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        // 与初审一致：频控退避不依赖「智能并发」开关。
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(s3Ctrl, s2Item.row.index, error, stage3Pending, s2Item)) {
+        if (isRateLimit && onStageRateLimit(s3Ctrl, s2Item.row.index, error, stage3Pending, s2Item, requestStartedAt)) {
           // 成功推回 stage3Pending 重试
         } else {
           if (isRateLimit) {
@@ -1864,7 +1864,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
           else if (isRefusal) clearCooldownIf(s3Ctrl, recordStageNotLimited("stage3"));
-          else if (!status.stopRequested && !isRateLimit) clearCooldownIf(s3Ctrl, recordStageFailure("stage3"));
+          else if (!status.stopRequested && !isRateLimit) {
+            onStageOverload(s3Ctrl, s2Item.row.index, error, requestStartedAt);
+            clearCooldownIf(s3Ctrl, recordStageFailure("stage3"));
+          }
         }
       } finally {
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
@@ -1925,9 +1928,7 @@ function finish() {
     if (!status.punctFixes && !status.punctQuoteVoids && !status.punctRestored && status.punctEnabled === false) {
       pushLog("标点规范化：已关闭。");
     }
-    if (status.smartConcurrency) {
-      pushLog(`智能并发统计：初始并发 ${status.concurrency || 3}，峰值并发 ${status.peakConcurrency || status.concurrency || 3}，并发下调 ${status.concurrencyDowns || 0} 次，并发上探 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
-    }
+    pushLog(`并发调度统计：起步并发 ${status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，峰值并发 ${status.peakConcurrency || status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，并发下调 ${status.concurrencyDowns || 0} 次，并发上探 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");

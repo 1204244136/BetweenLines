@@ -17,12 +17,19 @@
 //    - 冷却期间到达的「迟到」结果不推进状态（它们发出时断路器还没打开）。
 //
 // 拒答（模型内容安全拒绝）与致命配置错误（401/404/非 JSON）不进入本模块：前者是模型的正常回答，后者当场终止。
+//
+// 与并发调度（concurrency-controller.js）的联动只有两处，都是只读的：
+// - state：冷却/半开期间调度器把并发塌到 1，恢复后从低位慢启动，而不是一步跳回冷却前的水位；
+// - pressure：失败窗口离熔断线有多近。逼近时调度器停止上探，不往正在变差的上游继续加压。
+// 断路器本身不读取、也不修改并发状态，判定逻辑仍完全独立。
 
 const BREAKER_POLICY = Object.freeze({
   failure: Object.freeze({
     windowSize: 20,
     minimumSamples: 10,
     errorRate: 0.5,
+    // pressure 的最小样本数：样本太少时一次偶发失败就是 100%，不能拿来卡住并发上探。
+    pressureSamples: 5,
   }),
   limit: Object.freeze({
     exhaustedRowsToOpen: 3,
@@ -124,6 +131,13 @@ function createStageBreaker({ policy = BREAKER_POLICY, now = Date.now, timeScale
     get state() {
       if (cycle === 0) return "closed";
       return now() < openUntil ? "open" : "half-open";
+    },
+
+    // 失败窗口离熔断线有多近：当前错误率 / 熔断阈值（1 即已到线）。样本不足时为 0。
+    get pressure() {
+      if (recent.length < policy.failure.pressureSamples) return 0;
+      const rate = recent.filter(Boolean).length / recent.length;
+      return rate / policy.failure.errorRate;
     },
   };
 }

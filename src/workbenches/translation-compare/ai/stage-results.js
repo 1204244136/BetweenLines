@@ -126,8 +126,8 @@ function createStagePipelines(value = {}) {
     reviewed: Math.max(0, Number(stage.reviewed) || 0),
     attitudes: normalizeAttitudes(stage.attitudes),
     concurrency: stage.concurrency != null ? Math.max(1, Number(stage.concurrency) || 1) : null,
+    // 并发上限（面板上的「并发上限」）；concurrency 是调度器当前实际放行的并发。
     concurrencyMax: stage.concurrencyMax != null ? Math.max(1, Number(stage.concurrencyMax) || 1) : null,
-    smartConcurrency: stage.smartConcurrency != null ? Boolean(stage.smartConcurrency) : null,
     activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
   });
   return {
