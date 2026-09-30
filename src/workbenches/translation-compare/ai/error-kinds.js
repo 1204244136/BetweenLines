@@ -189,11 +189,15 @@ function sortAiErrorKinds(kinds) {
     .filter((entry) => entry.count > 0);
 }
 
-function formatAiErrorRowList(rows, limit = AI_ERROR_ROW_DISPLAY_LIMIT) {
+/**
+ * total 是这一类的真实行数：行号样本有上限（AI_ERROR_ROW_SAMPLE_LIMIT），超出的行只有计数、没有行号，
+ * 「另有 N 行」必须按总数算，否则出错行数超过样本上限时会少报。
+ */
+function formatAiErrorRowList(rows, limit = AI_ERROR_ROW_DISPLAY_LIMIT, total = 0) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return "";
   const shown = list.slice(0, limit).map((row) => `第 ${row} 行`);
-  const rest = list.length - shown.length;
+  const rest = Math.max(list.length, Number(total) || 0) - shown.length;
   return `（${shown.join("、")}${rest > 0 ? `，另有 ${rest} 行` : ""}）`;
 }
 
@@ -213,7 +217,7 @@ function formatAiErrorHoverTitle(stageLabel, total, kinds) {
   }
   const lines = [head];
   for (const entry of entries) {
-    lines.push(`· ${entry.label}：${entry.count} 行${formatAiErrorRowList(entry.rows)}`);
+    lines.push(`· ${entry.label}：${entry.count} 行${formatAiErrorRowList(entry.rows, AI_ERROR_ROW_DISPLAY_LIMIT, entry.count)}`);
     if (entry.sample) lines.push(`    ${entry.sample}`);
   }
   return lines.join("\n");

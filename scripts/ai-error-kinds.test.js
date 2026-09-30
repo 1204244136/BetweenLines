@@ -128,15 +128,20 @@ test("悬停文本：逐类列出问题、行号与代表性消息", () => {
   });
   const lines = title.split("\n");
   assert.equal(lines[0], "阶段三 终审仲裁 · 异常 12 行");
-  assert.match(lines[1], /^· 频控限流：8 行（第 1 行、第 2 行、第 3 行）$/);
+  assert.match(lines[1], /^· 频控限流：8 行（第 1 行、第 2 行、第 3 行，另有 5 行）$/, "只存了 3 个行号但共 8 行：其余 5 行要如实算进「另有」");
   assert.match(lines[2], /请求受限或额度不足（HTTP 429）/);
-  assert.match(lines[3], /^· 服务端错误：4 行（第 9 行、第 10 行）$/);
+  assert.match(lines[3], /^· 服务端错误：4 行（第 9 行、第 10 行，另有 2 行）$/);
 });
 
 test("悬停文本：行号过多时折叠，没有明细时不空着", () => {
   const manyRows = Array.from({ length: 30 }, (_, offset) => offset + 1);
   const title = formatAiErrorHoverTitle("阶段一 事实初审", 30, { timeout: { count: 30, rows: manyRows } });
   assert.match(title, /另有 18 行/, "只列前 12 个行号，其余折叠");
+
+  // 行号样本有上限：出错行数超过样本时，「另有 N 行」要按总数算，不能只数已存下来的行号。
+  const capped = Array.from({ length: AI_ERROR_ROW_SAMPLE_LIMIT }, (_, offset) => offset + 1);
+  const overflow = formatAiErrorHoverTitle("阶段一 事实初审", 500, { timeout: { count: 500, rows: capped } });
+  assert.match(overflow, /· 请求超时：500 行（.*，另有 488 行）/, "500 行里只列了 12 个，其余 488 行都要算进去");
 
   const noDetail = formatAiErrorHoverTitle("阶段二 文学复审", 4, {});
   assert.match(noDetail, /阶段二 文学复审 · 异常 4 行/);
