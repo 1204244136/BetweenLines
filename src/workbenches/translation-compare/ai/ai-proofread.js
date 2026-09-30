@@ -109,6 +109,7 @@ const {
   formatArbitrationNoteLines,
 } = require("./arbiter");
 const { AI_ERROR_KIND_LABELS, classifyAiError, recordAiErrorKind } = require("./error-kinds");
+const { latestAiNotePart, stageNoteState } = require("./stage-note-state");
 const {
   getModelProfile,
   scheduleModels,
@@ -557,7 +558,9 @@ function cleanConfig(input = {}) {
     targetStage: (input.stage === "stage2" || input.targetStage === "stage2") ? "stage2"
       : ((input.stage === "stage3" || input.targetStage === "stage3") ? "stage3"
       : ((input.stage === "all" || input.targetStage === "all") ? "all" : "stage1")),
-    rowNotes: (input.rowNotes && typeof input.rowNotes === "object") ? input.rowNotes : {},
+    rowNotes: Object.fromEntries(Object.entries(
+      (input.rowNotes && typeof input.rowNotes === "object") ? input.rowNotes : {}
+    ).map(([index, note]) => [index, latestAiNotePart(note).trim()])),
     multiStageEnabled: Boolean(input.multiStageEnabled || input.challengerEnabled || input.singleModelPersona || input.stylistConfig || input.stage2Preset),
     challengerEnabled: Boolean(input.challengerEnabled),
     singleModelPersona: Boolean(input.singleModelPersona),
@@ -884,6 +887,15 @@ async function startProofread(input) {
     ? (labels.jp || "原文 A")
     : (defaultCounterpartKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C"));
 
+  function memoryForRow(idx) {
+    const result = reusableResults.get(idx) || status.results.get(idx);
+    if (!result) return null;
+    // 同一快照也可能切换备注空间或重新初审；只复用与当前轮备注吻合的内存结论。
+    if (input.rowNotes && typeof input.rowNotes === "object" &&
+        (config.rowNotes[idx] || "") !== latestAiNotePart(result.note).trim()) return null;
+    return result;
+  }
+
   // 复审队列条目：优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推（有损）。
   function buildStage2Item(row, noteText, memoryResult) {
     const isUnclear = Boolean(
@@ -921,10 +933,10 @@ async function startProofread(input) {
       // 对照表已经直接定案的行（term-only）不再送复审，否则会白花一次调用。
       if (resolvedByTermTable.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
-      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
+      const memoryResult = memoryForRow(idx);
       if (!isStage2Candidate(noteText, memoryResult)) continue;
       // 已经有复审结论的行（含等待仲裁的）不在这里补跑：重跑复审只会白花一次调用。
-      if (noteText.includes("Stylist复审") || memoryResult?.stylistReview) continue;
+      if (stageNoteState(noteText).reviewed || stageNoteState(noteText).arbitrated || memoryResult?.stylistReview) continue;
       resumed.push(buildStage2Item(row, noteText, memoryResult));
       indexes.add(idx);
     }
@@ -946,10 +958,10 @@ async function startProofread(input) {
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       // 优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推。
-      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
+      const memoryResult = memoryForRow(idx);
       const hasSuggestion = isStage2Candidate(noteText, memoryResult);
       if (hasSuggestion) {
-        if (config.continueOnly && (noteText.includes("Stylist复审") || memoryResult?.stylistReview)) {
+        if (config.continueOnly && (stageNoteState(noteText).reviewed || stageNoteState(noteText).arbitrated || memoryResult?.stylistReview)) {
           status.skippedDone += 1;
           continue;
         }
@@ -986,10 +998,10 @@ async function startProofread(input) {
       if (config.completedIndexes.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       // 优先用上一轮的内存结论（无损），拿不到才退回从备注文本反推。
-      const memoryResult = reusableResults.get(idx) || status.results.get(idx);
+      const memoryResult = memoryForRow(idx);
       const hasDispute = isStage3DisputeRow(row, noteText, memoryResult);
       if (hasDispute) {
-        if (config.continueOnly && (noteText.includes("Arbiter仲裁") || memoryResult?.arbitration)) {
+        if (config.continueOnly && (stageNoteState(noteText).arbitrated || memoryResult?.arbitration)) {
           status.skippedDone += 1;
           continue;
         }
@@ -2236,7 +2248,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
 }
 
 function parseStoredNote(note = "") {
-  const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const lines = latestAiNotePart(note).split(/\n+/).map((line) => line.trim()).filter(Boolean);
   const data = {
     semantic: "",
     modify: "",
@@ -2274,6 +2286,10 @@ function parseStoredNote(note = "") {
 }
 
 function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
+  if (String(noteText || "").trim()) {
+    const state = stageNoteState(noteText);
+    return state.arbitrated || state.diverged;
+  }
   if (memoryResult) {
     if (memoryResult.arbitration) return true;
     if (memoryResult.arbCheck?.triggered || memoryResult.decision?.arbCheck?.triggered) return true;
@@ -2281,51 +2297,26 @@ function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
     if (critiqueAtt === "modify" || critiqueAtt === "reject" || critiqueAtt === "escalate") return true;
     if (memoryResult.stageResult?.decision === "escalate") return true;
   }
-  if (noteText) {
-    if (noteText.includes("Arbiter仲裁")) return true;
-    if (noteText.includes("提交仲裁") || noteText.includes("分歧") || noteText.includes("escalate")) return true;
-    const parsed = parseStoredNote(noteText);
-    if (parsed.stage3) return true;
-    if (parsed.stage2 || noteText.includes("Stylist复审")) {
-      const att = String(parsed.stage2?.attitude || "");
-      if (att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
-          att === "modify" || att === "reject" || att === "escalate" ||
-          noteText.includes("待人工确认") || noteText.includes("存疑")) {
-        return true;
-      }
-      if (parsed.stage1Revision && parsed.stage2Revision && parsed.stage1Revision !== parsed.stage2Revision) {
-        return true;
-      }
-      if (parsed.modify === "是" && (att.includes("驳回") || att === "reject")) {
-        return true;
-      }
-    }
-  }
   return false;
 }
 
 // Stage 2 consumes both Gatekeeper edits and unresolved/unclear rows.
 function isStage2Candidate(noteText = "", memoryResult = null) {
-  const text = String(noteText || "");
+  if (String(noteText || "").trim()) return stageNoteState(noteText).candidate;
   const stageResult = memoryResult?.stageResult || memoryResult?.decision || {};
   const isUnclear = Boolean(
     stageResult.decision === "unclear" ||
     stageResult.better === "unclear" ||
-    stageResult.needsContext === true ||
-    text.includes("是否需要修改：待人工确认") ||
-    text.includes("存疑转人工") ||
-    text.includes("初审存疑")
+    stageResult.needsContext === true
   );
   const hasEdit = Boolean(
-    stageResult.needsEdit === true ||
-    text.includes("是否需要修改：是") ||
-    text.includes("初审改案") ||
-    text.includes("Gatekeeper初审：建议修改")
+    stageResult.needsEdit === true
   );
   return hasEdit || isUnclear;
 }
 
 function reconstructStage1Result(row, noteText, config, labels) {
+  noteText = latestAiNotePart(noteText);
   const parsed = parseStoredNote(noteText);
   const bilingual = config.proofreadMode === "bilingual";
   const targetKey = bilingual ? "cn" : config.target;

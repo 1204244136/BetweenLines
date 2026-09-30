@@ -7,6 +7,7 @@ const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
+const { createStageNoteTools } = require("./ai/stage-note-state");
 const { AI_CONCURRENCY_LIMITS: concurrencyLimits } = require("./ai/concurrency-limits");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
 const { resolveModelOptions, normalizeApiBaseUrl, restorableModelOptions } = require("./model-options");
@@ -339,7 +340,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item" id="stage2EscalateItem" title="复审显式请求升级仲裁">升级仲裁: <span id="metricCritiqueEscalate">0</span></span>
                       <span class="ai-stage-sub-sep" id="stage2PendingSep" aria-hidden="true" hidden>·</span>
-                      <span class="ai-stage-sub-item ai-stage-sub-item--warn" id="stage2PendingItem" title="初审已提改但尚未执行文学复审的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></span>
+                      <span class="ai-stage-sub-item ai-stage-sub-item--warn" id="stage2PendingItem" title="最新一轮初审提改或存疑、尚未完成复审且未人工确认的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></span>
                       <span class="ai-stage-sub-sep" aria-hidden="true">·</span>
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage2ErrorItem" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></span>
                     </div>
@@ -537,6 +538,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${alignNotesByIndex.toString()}
     ${createNotesTools.toString()}
     ${createPresetTools.toString()}
+    ${createStageNoteTools.toString()}
+    const { latestAiNotePart, stageNoteState } = createStageNoteTools();
     ${normalizeGrade.toString()}
     // 异常分类：与服务端同一份规则（ai/error-kinds.js），页面只负责把分类结果渲染成悬停明细。
     const AI_ERROR_KIND_ORDER = ${safeJson(AI_ERROR_KIND_ORDER)};

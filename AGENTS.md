@@ -189,6 +189,7 @@ index-X 结构与命名规范契约：
 - `runStage2Stylist` / `runStage3Arbiter` **不得在自己内部吞掉异常**：错误必须挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 throw 后再走「频控重试 → 计入 stageNErrors → 回退上一阶段方案」。内部 catch 后只 pushLog 会让那一行在指标上凭空消失（既不算定案也不算异常）。
 - 客户端在「任务在跑 + 服务端回报了 `stagePipelines` + 没有 `stageCascade`」时判定常驻服务是旧版，提示一次重启并让阶段三卡片显示「未接入」；判据必须同时要求 `stagePipelines`，否则会把精简的状态桩误判成旧服务。
 - 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
+- `ai/stage-note-state.js` 是当前轮次备注与阶段待办判定的共享实现，由构建器序列化到页面。统计、点击筛选、启动弹窗、续跑跳过和服务端队列必须使用最新 `[AI校对]` 块，历史块不得参与本轮完成判断；人工确认行不计待办。请求携带备注快照时，内存结论还须与该行最新块相同才可复用，已清空或不在备注快照里的行不得借旧内存重新入队。阶段二/三清空重跑只修改最新块，保留历史块与人工备注。回归运行 `node --test scripts/stage-note-state.test.js scripts/ai-smart-concurrency.test.js`。
 - 调整客户端资源、构建器或服务端代码后的生效操作，按「改动层级与刷新提示契约」执行；这些调整都不需要重新对齐。
 - 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
 

@@ -644,12 +644,6 @@
       return automatedNoteMarkers.find((marker) => text.startsWith(marker)) || "";
     }
 
-    function latestAiNotePart(value) {
-      const parts = String(value || "").split(/\n\n+/).map((part) => part.trim()).filter(Boolean);
-      const aiParts = parts.filter((part) => part.startsWith("[AI校对]"));
-      return aiParts.length ? aiParts[aiParts.length - 1] : String(value || "");
-    }
-
     function isAutomatedNoteText(value) {
       return Boolean(automatedNoteMarker(value));
     }
@@ -1689,8 +1683,8 @@
 
         const noteData = parseAutomatedNote(item?.note, targetText);
         const s1Rev = noteData?.stage1Revision;
-        const hasStage2 = Boolean(noteData && (noteData.stage2 || String(item?.note || "").includes("Stylist复审")));
-        const hasStage3 = Boolean(noteData && (noteData.stage3 || String(item?.note || "").includes("Arbiter仲裁")));
+        const hasStage2 = Boolean(noteData?.stage2);
+        const hasStage3 = Boolean(noteData?.stage3);
         const hasStepProgression = Boolean(hasStage2 || hasStage3);
 
         const lang = targetKey === "tw" ? "zh-Hant" : "zh-Hans";
@@ -1821,7 +1815,7 @@
 
     function parseAutomatedNote(note, targetText = "") {
       if (!note) return null;
-      const str = String(note);
+      const str = latestAiNotePart(note);
       const cacheKey = targetText ? (str + "\u0000" + String(targetText)) : str;
       if (parsedAutomatedNoteCache.has(cacheKey)) {
         return parsedAutomatedNoteCache.get(cacheKey);
@@ -2058,33 +2052,34 @@
     // 复审与初审产生立场或方案分歧的判据：阶段二卡片「分歧」、阶段三「待仲裁」、
     // 「待终审仲裁」筛选与「启动 AI 校对」弹窗共用这一份，避免同一批行各处各说各话。
     function isStage2DivergedNote(parsed, noteText = "") {
-      const text = String(noteText || "");
-      const hasS2 = Boolean(parsed?.stage2 || text.includes("Stylist复审"));
-      if (!hasS2) return false;
-      const att = String(parsed?.stage2?.attitude || "");
-      return att.includes("调整") || att.includes("驳回") || att.includes("仲裁") ||
-        att === "modify" || att === "reject" || att === "escalate" ||
-        text.includes("提交仲裁") || text.includes("分歧") || text.includes("escalate") ||
-        Boolean(parsed?.stage1Revision && parsed?.stage2Revision && parsed.stage1Revision !== parsed.stage2Revision);
+      return stageNoteState(noteText).diverged;
     }
 
     function getStage3RowStatus(item) {
       if (!item || item.manualDone) return { isArbitrated: false, isPending: false, isRelevant: false };
-      const text = String(item.note || "").trim();
+      const text = latestAiNotePart(item.note).trim();
       if (!text || !hasAutomatedDecisionNote(text)) return { isArbitrated: false, isPending: false, isRelevant: false };
       const p = parseAutomatedNote(text);
       if (!p) return { isArbitrated: false, isPending: false, isRelevant: false };
 
-      const hasS3 = Boolean(p.stage3 || text.includes("Arbiter仲裁"));
+      const state = stageNoteState(text);
+      const hasS3 = state.arbitrated;
       if (hasS3) {
         return { isArbitrated: true, isPending: false, isRelevant: true };
       }
 
-      if (isStage2DivergedNote(p, text)) {
+      if (state.pendingArbitration) {
         return { isArbitrated: false, isPending: true, isRelevant: true };
       }
 
       return { isArbitrated: false, isPending: false, isRelevant: false };
+    }
+
+    function getStage2RowStatus(item) {
+      if (!item || item.manualDone) return { isReviewed: false, isPending: false, isRelevant: false };
+      const state = stageNoteState(item.note);
+      return { isReviewed: state.reviewed, isPending: state.pendingReview,
+        isRelevant: state.candidate || state.reviewed };
     }
 
     function gradeLabel(grade) {
@@ -2795,23 +2790,17 @@
         doneMode === "all" ||
         (doneMode === "open" && !isDone) ||
         (doneMode === "done" && isDone);
-      const rawNote = notes[id]?.note || "";
+      const rawNote = latestAiNotePart(notes[id]?.note);
       const matchesStage = !activeStageFilter ||
         (activeStageFilter === "1" && (rawNote.includes("是否需要修改：否") || (rawNote.includes("调用失败") && !rawNote.includes("Stylist") && !rawNote.includes("Arbiter")))) ||
         (activeStageFilter === "2" && (rawNote.includes("Stylist复审") || (rawNote.includes("调用失败") && rawNote.includes("Stylist")))) ||
         (activeStageFilter === "3" && (rawNote.includes("Arbiter仲裁") || (rawNote.includes("调用失败") && rawNote.includes("Arbiter"))));
       const isStage2PendingRow = (r) => {
-        const rowId = String(r.index);
-        const text = String(notes[rowId]?.note || "");
-        if (!text) return false;
-        const p = parseAutomatedNote(text);
-        if (!p) return false;
-        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-        return isStage2CandidateNote(p, text) && !hasS2;
+        return getStage2RowStatus(notes[String(r.index)]).isPending;
       };
       const isStage1UnclearRow = (r) => {
         const rowId = String(r.index);
-        const text = String(notes[rowId]?.note || "");
+        const text = latestAiNotePart(notes[rowId]?.note);
         if (!text) return false;
         const p = parseAutomatedNote(text);
         if (!p) return false;
@@ -3895,7 +3884,7 @@
       if (elS2Pending) elS2Pending.textContent = s2Pending;
       if (itemS2Pending) {
         itemS2Pending.hidden = s2Pending === 0;
-        itemS2Pending.title = "初审提改与存疑共 " + s1PendingTotal + " 行（提改 " + s1NeedsEdit + " + 存疑 " + s1Unclear + "），已复审 " + s2Reviewed + " 行，" + s2Pending + " 行尚未执行文学复审（点击可筛选）";
+        itemS2Pending.title = "最新一轮初审提改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（点击可筛选）。历史轮次不参与待办判断。";
       }
       if (sepS2Pending) sepS2Pending.hidden = s2Pending === 0;
 
@@ -3913,15 +3902,18 @@
       if (elS3) elS3.textContent = s3Arbitrated;
       const elS3Settled = document.getElementById("metricStage3Settled");
       if (elS3Settled) elS3Settled.textContent = s3Settled;
-      const s3Pending = Math.max(0, s2Diverged - s3Arbitrated);
-      // 显示用 s2Diverged 已含运行中的仲裁积压；stageMetrics.stage3Pending 只在静态时可信。
+      const localS3Pending = Number.isFinite(Number(stageMetrics.stage3Pending)) && stageMetrics.stage3Pending !== undefined
+        ? Math.max(0, Number(stageMetrics.stage3Pending))
+        : Math.max(0, s2Diverged - s3Arbitrated);
+      // 人工确认的已仲裁行不能抵扣其它待办；运行中仍补上尚未落备注的仲裁积压。
+      const s3Pending = Math.max(localS3Pending, arbiterBacklog);
       const elS3Pending = document.getElementById("metricStage3Pending");
       const itemS3Pending = document.getElementById("stage3PendingItem");
       const sepS3Pending = document.getElementById("stage3PendingSep");
       if (elS3Pending) elS3Pending.textContent = s3Pending;
       if (itemS3Pending) {
         itemS3Pending.hidden = s3Pending === 0;
-        itemS3Pending.title = "复审产生分歧 " + s2Diverged + " 行，已仲裁定案 " + s3Arbitrated + " 行，" + s3Pending + " 行尚未仲裁定案（含正在仲裁的行，点击可筛选）";
+        itemS3Pending.title = "最新一轮复审产生分歧、尚未仲裁定案且未人工确认：" + s3Pending + " 行（含正在仲裁的行，点击可筛选）。历史轮次不参与待办判断。";
       }
       if (sepS3Pending) sepS3Pending.hidden = s3Pending === 0;
       const elArbGK = document.getElementById("metricArbGatekeeper");
@@ -4140,8 +4132,9 @@
           finalNeedsCheck += 1;
         }
 
-        const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
-        const hasStage3 = Boolean(parsed.stage3 || noteText.includes("Arbiter仲裁"));
+        const state = stageNoteState(noteText);
+        const hasStage2 = state.reviewed;
+        const hasStage3 = state.arbitrated;
         const hasStage1Revision = Boolean(parsed.stage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
 
         // 阶段一事实初审指标：
@@ -4239,16 +4232,8 @@
       // The visible count follows the same note-level predicate as the filter,
       // so incomplete/failed Stylist rows remain actionable instead of being
       // hidden by subtracting aggregate counts from unrelated stages.
-      const stage2Pending = Object.values(sourceNotes || {}).filter((item) => {
-        if (!item || item.manualDone) return false;
-        const noteText = latestAiNotePart(item.note || "").trim();
-        if (!noteText || isAiFailureNote(noteText)) return false;
-        const parsed = parseAutomatedNote(noteText);
-        if (!parsed) return false;
-        const hasStage2 = Boolean(parsed.stage2 || noteText.includes("Stylist复审"));
-        return isStage2CandidateNote(parsed, noteText) && !hasStage2;
-      }).length;
-      const stage3Pending = Math.max(0, stage2Diverged - stage3Arbitrated);
+      const stage2Pending = Object.values(sourceNotes || {}).filter((item) => getStage2RowStatus(item).isPending).length;
+      const stage3Pending = Object.values(sourceNotes || {}).filter((item) => getStage3RowStatus(item).isPending).length;
 
       const resultMetrics = {
         stage1Passed,
@@ -5148,10 +5133,13 @@
       let clearedCount = 0;
       for (const [id, item] of Object.entries(notes)) {
         if (!item || item.manualDone) continue;
-        const note = String(item.note || "").trim();
+        const fullNote = String(item.note || "");
+        const note = latestAiNotePart(fullNote).trim();
         if (!note || !hasAutomatedDecisionNote(note)) continue;
         const p = parseAutomatedNote(note);
         if (!p) continue;
+        const noteStart = fullNote.lastIndexOf(note);
+        const replaceCurrentNote = (replacement) => fullNote.slice(0, noteStart) + replacement + fullNote.slice(noteStart + note.length);
 
         if (targetStage === "stage2") {
           if (!p.stage2 && !note.includes("Stylist复审")) continue;
@@ -5173,7 +5161,7 @@
             }
             item.revisionText = p.stage1Revision;
           }
-          item.note = lines.join("\n");
+          item.note = replaceCurrentNote(lines.join("\n"));
           clearedCount += 1;
         } else if (targetStage === "stage3") {
           if (!p.stage3 && !note.includes("Arbiter仲裁")) continue;
@@ -5193,7 +5181,7 @@
             }
             item.revisionText = fallbackRev;
           }
-          item.note = lines.join("\n");
+          item.note = replaceCurrentNote(lines.join("\n"));
           clearedCount += 1;
         }
       }
@@ -5365,8 +5353,7 @@
           setAllStageButtonsRunning(currentAiRunning);
           updateStageMetricsDashboard();
           const hasSuggestionsNow = Object.values(notes).some((item) => {
-            const text = String(item?.note || "");
-            return !item.manualDone && isStage2CandidateNote(parseAutomatedNote(text), text);
+            return getStage2RowStatus(item).isPending;
           });
           showToast(hasSuggestionsNow
             ? "已排队：当前已有初审建议，等待阶段一全部完成后自动启动文学复审。"
@@ -5374,24 +5361,19 @@
           return;
         }
         const hasStage1Suggestions = Object.values(notes).some((item) => {
-          const text = String(item?.note || "");
-          return !item.manualDone && isStage2CandidateNote(parseAutomatedNote(text), text);
+          return getStage2RowStatus(item).isRelevant;
         });
         if (!hasStage1Suggestions) {
-          showToast("当前没有未人工确认的初审修改建议行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
+          showToast("当前没有未人工确认的初审提改或存疑行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
           return;
         }
 
         let reviewedCount = 0;
         let pendingCount = 0;
         for (const [id, item] of Object.entries(notes)) {
-          if (!item || item.manualDone) continue;
-          const text = String(item.note || "");
-          const p = parseAutomatedNote(text);
-          if (!p) continue;
-          const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-          if (hasS2) reviewedCount += 1;
-          else if (isStage2CandidateNote(p, text)) pendingCount += 1;
+          const state = getStage2RowStatus(item);
+          if (state.isReviewed) reviewedCount += 1;
+          else if (state.isPending) pendingCount += 1;
         }
 
         if (reviewedCount > 0) {
@@ -5571,7 +5553,7 @@
             completedSet.add(num);
             continue;
           }
-          const noteText = String(item.note || "").trim();
+          const noteText = latestAiNotePart(item.note).trim();
           const p = parseAutomatedNote(noteText);
           if (cascadeToStylist || cascadeToArbiter) {
             // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。
@@ -5590,8 +5572,7 @@
           } else if (stage === "stage1") {
             if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
           } else if (stage === "stage2") {
-            const hasS2 = hasCompletedStage2Note(p, noteText);
-            if (hasS2 || !isStage2CandidateNote(p, noteText)) {
+            if (!getStage2RowStatus(item).isPending) {
               completedSet.add(num);
             }
           } else if (stage === "stage3") {
@@ -5622,27 +5603,11 @@
     }
 
     function hasCompletedStage2Note(parsed, noteText = "") {
-      if (!parsed?.stage2 && !String(noteText).includes("Stylist复审")) return false;
-      if (isAiFailureNote(noteText)) return false;
-      const text = String(noteText);
-      // A review marker without a conclusion is an interrupted/incomplete run.
-      return Boolean(parsed?.stage2 && (parsed.stage2Revision || parsed.revision || parsed.stage3)) ||
-        /Stylist复审\[(?:采纳|调整|驳回|提交仲裁|升级仲裁|保留原译|复审方案)\]/.test(text);
+      return stageNoteState(noteText).reviewed;
     }
 
     function isStage2CandidateNote(parsed, noteText = "") {
-      const text = String(noteText || "");
-      if (!parsed) return false;
-      const hasEdit = parsed.modify === "是" || Boolean(
-        parsed.stage1Revision ||
-        (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议")))
-      );
-      const isUnclear = parsed.stage1?.includes("存疑") ||
-        parsed.modify === "待人工确认" ||
-        parsed.modify === "人工确认" ||
-        text.includes("存疑转人工") ||
-        text.includes("初审存疑");
-      return hasEdit || isUnclear;
+      return stageNoteState(noteText).candidate;
     }
 
     async function stopAiProofread(targetBtnStage = "") {

@@ -288,10 +288,11 @@ test("页面在跑任务之前就显示本行命中了哪些术语", () => {
   };
   const source = [
     "termVariantKeyForPage", "currentTermVariant", "refreshTermVerdicts",
-    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "latestAiNotePart", "automatedNoteMarker", "isNoteProseLine", "parseAutomatedNote",
+    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "automatedNoteMarker", "isNoteProseLine", "parseAutomatedNote",
   ].map(grab).join("\n");
   const sandbox = {
     pageMeta, Map, Set, String, Number, Boolean, Object, Array, Math, JSON, Date, RegExp,
+    latestAiNotePart: require("../src/workbenches/translation-compare/ai/stage-note-state").latestAiNotePart,
     escapeHtml: (value) => String(value == null ? "" : value),
     renderDiffBlock: () => "",
     renderNoteSummary: () => "<!--note-summary-->",

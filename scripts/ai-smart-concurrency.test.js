@@ -940,6 +940,87 @@ test("级联续跑：已有初审结论、只差复审的行直接进复审队�
   }
 });
 
+test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧复审记录和内存均不阻挡", async () => {
+  clearProofreadCache();
+  const { project, rows } = setupMockProject(22, "latest-round");
+  const oldReview = "[AI校对]\n是否需要修改：是\n初审改案：旧初审方案\nStylist复审[调整]：旧复审\n复审改案：旧复审方案\nArbiter仲裁[复审方案]：旧仲裁";
+  const currentReview = "[AI校对]\n是否需要修改：是\n初审改案：本轮初审方案\nStylist复审[采纳]：同意\n复审改案：本轮初审方案";
+  const records = Object.fromEntries(rows.map((row) => [row.index, {
+    note: row.index === 21 ? currentReview : oldReview + "\n\n[AI校对]\n是否需要修改：" +
+      (row.index % 2 ? "是\nGatekeeper初审：建议修改\n初审改案：本轮初审方案" : "待人工确认\nGatekeeper初审：初审存疑"),
+    manualDone: row.index === 22,
+  }]));
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const payload = JSON.parse(body);
+      requests.push(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        critique: { attitude: "accept", rationale: "同意初审" }, revisedText: "本轮复审定案", summary: "复审采纳",
+      }) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    // 第二次独立复审故意保留上一轮内存结果，验证换备注后不能误用旧完成标记。
+    for (const stage of ["stage2", "stage2", "stage1"]) {
+      const ui = createWorkbench(undefined, {
+        rows, projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+        apiResponses: { "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "round", results: [] } } },
+      });
+      ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
+        { id: "latest-s2", name: "复审", provider: "compatible", baseUrl, model: "stylist-model" },
+      ]));
+      ui.run(`Object.assign(notes, ${JSON.stringify(records)}); restoreAiConfig();
+        aiIds.stage2Preset.value = "latest-s2";
+        aiIds.provider.value = "compatible"; aiIds.baseUrl.value = ${JSON.stringify(baseUrl)};
+        aiIds.model.value = "test-model"; saveNotes(); updateStageMetricsDashboard();`);
+      assert.equal(Number(ui.element("metricStage2Pending").textContent), 20);
+      await ui.element("stage2PendingItem").dispatch("click");
+      assert.equal(ui.run("filteredRows.length"), 20);
+      await ui.element(stage + "Start").dispatch("click");
+      await ui.element("aiConfirmKeep").dispatch("click");
+      const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
+      assert.ok(post);
+      assert.deepEqual(post.body.completedIndexes.sort((a, b) => a - b), [21, 22]);
+      const requestStart = requests.length;
+      await startProofread(post.body);
+      assert.equal(clientStatus({ includeResults: false }).queued, 20);
+      const deadline = Date.now() + 10000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const status = clientStatus();
+      assert.equal(status.running, false);
+      assert.equal(status.stageMetrics.stage2Errors, 0);
+      assert.equal(requests.length - requestStart, 20, "20 行必须全部实际发起复审调用");
+      assert.equal(status.stageMetrics.stage2Reviewed, 20);
+      for (const payload of requests.slice(requestStart)) {
+        const userText = payload.messages.find((message) => message.role === "user").content;
+        assert.match(userText, /gatekeeperReview/, "级联续跑也不得重新初审");
+        assert.doesNotMatch(userText, /旧初审方案|旧复审方案|旧仲裁/);
+      }
+    }
+    const beforeClear = requests.length;
+    await startProofread({
+      provider: "compatible", baseUrl, model: "test-model", stage: "stage2",
+      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+      rowNotes: {}, continueOnly: false,
+    });
+    assert.equal(clientStatus({ includeResults: false }).queued, 0, "空备注快照不能从旧内存复活待办");
+    assert.equal(clientStatus({ includeResults: false }).running, false);
+    assert.equal(requests.length, beforeClear);
+  } finally {
+    stopProofread();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并回退复审方案", async () => {
   clearProofreadCache();
   const totalRows = 2;
