@@ -1,42 +1,7 @@
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const test = require("node:test");
-const vm = require("node:vm");
 
-const html = fs.readFileSync(path.join(__dirname, "..", "public", "setup.html"), "utf8");
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-
-function createConsole() {
-  const elements = new Map();
-  const documentEvents = {};
-  const element = (id) => {
-    if (!elements.has(id)) {
-      const attributes = {};
-      elements.set(id, {
-        hidden: true, disabled: false, value: "", textContent: "", innerHTML: "",
-        dataset: {}, style: {}, classList: { toggle() {}, add() {}, remove() {} },
-        addEventListener() {}, replaceChildren() {},
-        setAttribute(name, value) { attributes[name] = value; },
-        getAttribute(name) { return attributes[name]; },
-        focus() { this.focused = true; },
-      });
-    }
-    return elements.get(id);
-  };
-  const context = vm.createContext({
-    document: {
-      getElementById: element, querySelector: element, createElement: () => element(Symbol()),
-      addEventListener(name, handler) { documentEvents[name] = handler; },
-    },
-    localStorage: { getItem() { return null; }, setItem() {} },
-    fetch: async () => ({ json: async () => ({ ok: false }) }),
-    setInterval() {},
-  });
-  vm.runInContext(script, context);
-  const run = (code) => vm.runInContext(code, context);
-  return { context, element, documentEvents, run };
-}
+const { createConsole, html } = require("./setup-console-fixture");
 
 for (const mode of ["file", "folder"]) {
   test(`控制台登记${mode === "folder" ? "文件夹" : "文件"}：具备忙碌态与成功反馈`, async () => {

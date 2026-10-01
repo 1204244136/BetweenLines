@@ -1123,6 +1123,10 @@
       pickingModes: {},
       projects: [],
       activeProjectKey: "",
+      // 上一次渲染时服务端活动项目的身份（项目 key + 快照）。它区分两件必须分开处理的事：
+      // 服务端换了活动项目（新生成完成、手动切换、删除后改指）必须跟随；
+      // 用户自己在下拉框里挑了别的项目查看，不能被 700ms 一次的轮询顶回去。
+      activeProjectIdentity: "",
       switchingProject: false,
       rebuildingLayout: false,
       deletingProject: false,
@@ -1330,10 +1334,20 @@
         : "删除所选项目：从本机移除该项目的快照与工作台页面。源文本和浏览器里的备注不会被删除。";
     }
 
+    // 活动项目身份 = 项目 key + 当前快照：同一份输入重新生成会换快照而不换 key，只比 key 会漏掉这种情况。
+    function activeProjectIdentity(projects, activeProjectKey) {
+      const active = projects.find((project) => project.active)
+        || projects.find((project) => project.id === activeProjectKey);
+      return active ? `${active.id}\u001f${active.snapshotId || ""}` : "";
+    }
+
     function renderProjects(projects = [], activeProjectKey = "") {
       const previousSelection = ids.projectSelect.value;
+      const identity = activeProjectIdentity(projects, activeProjectKey);
+      const followActive = identity !== state.activeProjectIdentity;
       state.projects = projects;
       state.activeProjectKey = activeProjectKey;
+      state.activeProjectIdentity = identity;
       ids.projectCount.textContent = `${projects.length} 个项目`;
       ids.projectSelect.disabled = projects.length === 0;
       ids.projectSelect.replaceChildren(...(projects.length ? projects.map((project) => {
@@ -1342,7 +1356,9 @@
         option.textContent = `${project.active ? "当前 · " : ""}${project.name}`;
         return option;
       }) : [new Option("尚无已生成项目", "")]));
-      const preferred = projects.some((project) => project.id === previousSelection)
+      // 活动项目变了就以服务端为准（生成完成后新项目必须自动选中）；
+      // 没变才保留用户的选择，否则轮询会把正在浏览的项目一直顶回活动项目。
+      const preferred = !followActive && projects.some((project) => project.id === previousSelection)
         ? previousSelection
         : (activeProjectKey || projects[0]?.id || "");
       ids.projectSelect.value = preferred;
@@ -1364,6 +1380,7 @@
       state.serverApiVersion = 0;
       state.projects = [];
       state.activeProjectKey = "";
+      state.activeProjectIdentity = "";
       ids.projectCount.textContent = "需要重启";
       ids.projectSelect.disabled = true;
       ids.projectSelect.replaceChildren(new Option("本地服务版本过旧", ""));

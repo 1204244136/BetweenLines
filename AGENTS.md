@@ -200,6 +200,7 @@ index-X 结构与命名规范契约：
 - input-files.js 管理本机文件选择、扫描和翻译输入选择；speaker-runtime.js 封装说话人输入持久化及独立任务状态，并允许注入构建与写入函数进行隔离测试。
 - picker-paths.js 拥有各导入入口（jp/cn/tw）的默认目录与 ClientGuid：起始目录按「当前卡片路径 → 该入口记忆 → 已登记选择」推导，记忆写在 `out/runtime/picker-paths.json`，三个入口互不共用。系统窗口用 `IFileDialog::SetFolder` 强制定位，**不得改回 `SetDefaultFolder`**（它只在没有系统记忆时才生效，达不到分入口的目的）。控制台不显示这个默认目录（曾把提示塞进「选择导入方式」标题行，长路径在 flex 下把标题挤成竖排，已整体移除，回归见 scripts/setup-import.test.js），因此服务端也不再回报 `defaultDir`/`pickDefaults`。`scripts/windows-path-picker.ps1` 必须保持 UTF-8 BOM，否则 Windows PowerShell 5.1 会按 ANSI 读中文标题并编译失败（回归见 scripts/picker-paths.test.js）。
 - routes/ 按输入、状态、项目、生成、写回和 AI 划分。处理函数命中后返回 true，未命中返回 false；未命中不得读取请求体或发送响应。鉴权必须在路由分派之前完成，路由不得反向依赖服务入口。createInputRoutes 的 `pickPath` 可注入，让系统选择窗口在路由测试里被替掉。
+- `public/setup.html` 的「已生成项目」下拉框按**活动项目身份**（`projectKey` + `snapshotId`）决定选中项：身份变了（生成完成发布新项目、手动切换、删除活动项目后改指、同一份输入重新生成只换了快照）必须跟随服务端，身份没变才保留用户自己的选择。判据不能简化成「`activeProjectKey` 变了才跟随」——同一份输入重新生成时 key 不变，只比 key 会让新工作台不自动选中；也不能去掉「身份没变就保留用户选择」这一半，否则 700ms 一次的状态轮询会把正在浏览的项目一直顶回活动项目。回归见 scripts/setup-projects.test.js。
 - 修改这些边界需运行 node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts/writeback-export.test.js；接口路径、响应形状、错误状态码和写回定位参数必须兼容。
 
 ## 正文过滤原则
