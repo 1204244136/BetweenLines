@@ -73,7 +73,8 @@ function createStageMetrics(value = {}) {
   const finalNeedsEdit = Math.max(0, Number(value.finalNeedsEdit) || 0);
   const finalUnchanged = Math.max(0, Number(value.finalUnchanged) || 0);
   const finalNeedsCheck = Math.max(0, Number(value.finalNeedsCheck) || 0);
-  const totalAudited = Math.max(stage1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck, Number(value.totalAudited) || 0);
+  const finalPendingArbiter = Math.max(0, Number(value.finalPendingArbiter) || 0);
+  const totalAudited = Math.max(stage1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck + finalPendingArbiter, Number(value.totalAudited) || 0);
 
   return {
     stage1Passed,
@@ -103,6 +104,7 @@ function createStageMetrics(value = {}) {
     finalNeedsEdit,
     finalUnchanged,
     finalNeedsCheck,
+    finalPendingArbiter,
     totalAudited,
   };
 }
@@ -162,7 +164,15 @@ const ARBITRATION_WINNER_METRIC = {
   original: "arbitrationOriginal",
 };
 
+// 「待终审」是流水线还没走到终审的中间态：既不是终审分发的「待人工确认」，也不是终局结论。
+function isPendingArbiterResult(result = {}) {
+  return String(result.note || "").includes("是否需要修改：待终审");
+}
+
 function isExplicitNeedsCheckResult(result = {}) {
+  // 必须先排除「待终审」：下面两条按 stageResult 的判据会把没经过终审的存疑行也算成待确认，
+  // 那正是「待人工确认只能由终审分发」要挡住的情况。
+  if (isPendingArbiterResult(result)) return false;
   return String(result.note || "").includes("是否需要修改：待人工确认")
     || result.stageResult?.decision === "unclear"
     || result.stageResult?.needsContext === true;
@@ -237,6 +247,7 @@ function computeResultMetricsDelta(result = {}, { prefilterKind = "" } = {}) {
   // 最终结论
   if (result.done === true) add("finalUnchanged");
   else if (needsCheck) add("finalNeedsCheck");
+  else if (isPendingArbiterResult(result)) add("finalPendingArbiter");
   else if (result.status === "suggestion" && needsEdit) add("finalNeedsEdit");
   else if (result.status !== "error") add("finalNeedsCheck");
 

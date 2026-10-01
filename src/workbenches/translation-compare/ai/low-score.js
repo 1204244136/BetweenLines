@@ -49,7 +49,7 @@ const CAUSE_LABELS = Object.freeze({
   wording: "表达层（翻译腔、成分残缺、指代不明，未伤及核心语义）",
   "source-style": "原文风格化写法，不构成缺陷",
   none: "复核后认为无需修改",
-  unclear: "归因不了，转人工确认",
+  unclear: "归因不了，转终审确认",
 });
 
 /** 一类取值对应一组可接受的写法（中英文与口语说法都收），未经归一的值一律丢弃。 */
@@ -157,7 +157,7 @@ function lowScoreNote({ checked = false, cause = "", neighbors = 0 } = {}) {
     return `低分归因：已按低分复核口径核对相邻行${windowText}，模型未给出明确归因（结论见上方分析）`;
   }
   if (cause === "context" || cause === "unclear") {
-    return `低分归因：${label}${windowText}，转人工确认`;
+    return `低分归因：${label}${windowText}，转终审确认`;
   }
   return `低分归因：${label}${windowText}`;
 }

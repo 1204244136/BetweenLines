@@ -2233,27 +2233,31 @@
       const hasStageTraces = Boolean(note.stage1 || note.stage2 || note.stage3);
       if (hasStageTraces) {
         const isNeedsCheck = note.modify === "待人工确认" || note.modify === "人工确认";
-        const s2Attitude = note.stage2?.attitude || (isNeedsCheck && !note.stage2 ? "待定" : "复审");
+        // 「待终审」是还没走到终审的存疑行：同样需要展开审阅，但不能显示成「终审定案为待人工确认」——
+        // 终审是唯一能分发「待人工确认」的阶段。
+        const isPendingArbiter = note.modify === "待终审";
+        const isUnresolved = isNeedsCheck || isPendingArbiter;
+        const s2Attitude = note.stage2?.attitude || (isUnresolved && !note.stage2 ? "待定" : "复审");
         let attCls = "is-stylist";
         if (s2Attitude.includes("采纳") || s2Attitude === "accept") attCls = "is-accept";
         else if (s2Attitude.includes("调整") || s2Attitude === "modify") attCls = "is-modify";
         else if (s2Attitude.includes("驳回") || s2Attitude === "reject") attCls = "is-reject";
         else if (s2Attitude.includes("仲裁") || s2Attitude.includes("escalate")) attCls = "is-arbiter";
 
-        const rawWinner = note.stage3?.winner || (isNeedsCheck && note.stage3 ? "存疑待定" : "仲裁");
+        const rawWinner = note.stage3?.winner || (isUnresolved && note.stage3 ? "存疑待定" : "仲裁");
         const s3Winner = formatWinnerLabel(rawWinner);
 
         // 核心体验契约：待判行是需要人工定夺的焦点，各阶段审查记录默认直接展开呈现！
         // 去重契约：阶段卡片只承载「审查意见」，各阶段改案全文只在左侧差异辅助（修改结果对比 +
         // 分步演进明细）与「修改结果」区呈现一次；卡片里再打印一遍是纯粹的重复噪音。
         // 用户手动开合过这一行就以他的选择为准，否则沿用"待判行默认展开"。
-        const defaultOpen = pipelineDefaultOpen(id, isNeedsCheck);
+        const defaultOpen = pipelineDefaultOpen(id, isUnresolved);
         const expandHintText = defaultOpen ? "审核轨迹 ▴" : "审核轨迹 ▾";
 
         let stepsHtml = '<span class="pipeline-step is-gk">初审</span>';
         if (note.stage2) {
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step ' + attCls + '">复审·' + escapeHtml(s2Attitude) + '</span>';
-        } else if (isNeedsCheck && !note.stage3) {
+        } else if (isUnresolved && !note.stage3) {
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-pending-step" title="初审存疑，等待文学复审接力">待复审</span>';
         }
         if (note.stage3) {
@@ -2261,6 +2265,9 @@
         }
         if (isNeedsCheck) {
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-final-check" title="经审查仍难以断定，终审定案为待人工确认">待人工确认</span>';
+        } else if (isPendingArbiter && note.stage2) {
+          // 没走复审的行上面已经标了「待复审」——它还没到终审那一步，不必再叠一个「待终审」。
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-pending-step" title="流水线还没走到终审仲裁，这一行等着终审定案；当前未启用终审仲裁，或它没被送进终审">待终审</span>';
         }
 
         pipelineHtml = '<div class="stage-pipeline-badge" data-pipeline-toggle="' + escapeHtml(id || "") + '" role="button" tabindex="0" aria-expanded="' + (defaultOpen ? "true" : "false") + '" title="点击展开/收起多阶段审核轨迹（回车或空格同样有效）">' +
@@ -2268,7 +2275,7 @@
           '<span class="pipeline-expand-hint">' + expandHintText + '</span>' +
         '</div>' +
         '<div class="stage-pipeline-details" id="pipelineDetails_' + escapeHtml(id || "") + '"' + (defaultOpen ? '' : ' hidden') + '>' +
-          (note.stage1 ? ('<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span>' + (note.stage1Revision ? '<span class="stage-report-tag is-modify">提改</span>' : (isNeedsCheck && !note.stage2 ? '<span class="stage-report-tag is-unclear">存疑</span>' : '')) + '</div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>') : '') +
+          (note.stage1 ? ('<div class="stage-report-card is-gk"><div class="stage-report-header"><span>🛡️ 阶段一：事实初审</span>' + (note.stage1Revision ? '<span class="stage-report-tag is-modify">提改</span>' : (isUnresolved && !note.stage2 ? '<span class="stage-report-tag is-unclear">存疑</span>' : '')) + '</div><div class="stage-report-body">' + escapeHtml(note.stage1) + '</div></div>') : '') +
           (note.stage2 ? ('<div class="stage-report-card is-stylist"><div class="stage-report-header"><span>✍️ 阶段二：文学复审</span><span class="stage-report-tag ' + attCls + '">' + escapeHtml(s2Attitude) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage2.text) + '</div></div>') : '') +
           (note.stage3 ? ('<div class="stage-report-card is-arbiter"><div class="stage-report-header"><span>⚖️ 阶段三：终审仲裁</span><span class="stage-report-tag is-arbiter">' + escapeHtml(s3Winner) + '</span></div><div class="stage-report-body">' + escapeHtml(note.stage3.text) + '</div></div>') : '') +
         '</div>';
@@ -2796,6 +2803,13 @@
       return "unclear";
     }
 
+    // 「待终审」与「待人工确认」在「自动分析结果」里都算未定案（都进「待判」），
+    // 但顶部徽章的筛选必须分开：前者还没等到终审，后者才是终审分发的判决。
+    function isPendingArbiterRow(row) {
+      const note = parseAutomatedNote(notes[String(row.index)]?.note || "");
+      return note?.modify === "待终审";
+    }
+
     function issueSeverityState(row) {
       const note = parseAutomatedNote(notes[String(row.index)]?.note || "");
       if (!note) return "unrated";
@@ -2884,7 +2898,8 @@
       const matchesSummary = !activeSummaryFilter ||
         (activeSummaryFilter === "needsEdit" && aiResultState(row) === "modify") ||
         (activeSummaryFilter === "unchanged" && aiResultState(row) === "same") ||
-        (activeSummaryFilter === "needsCheck" && aiResultState(row) === "unclear") ||
+        (activeSummaryFilter === "needsCheck" && aiResultState(row) === "unclear" && !isPendingArbiterRow(row)) ||
+        (activeSummaryFilter === "pendingArbiter" && isPendingArbiterRow(row)) ||
         (activeSummaryFilter === "stage1Unclear" && isStage1UnclearRow(row)) ||
         (activeSummaryFilter === "stage2Pending" && isStage2PendingRow(row)) ||
         (activeSummaryFilter === "stage3Pending" && isStage3PendingRow(row));
@@ -3175,6 +3190,7 @@
         { id: "aiStageSummaryNeedsEdit", filter: "needsEdit", name: "最终建议修改" },
         { id: "aiStageSummaryUnchanged", filter: "unchanged", name: "无需修改" },
         { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "待人工确认" },
+        { id: "aiStageSummaryPendingArbiter", filter: "pendingArbiter", name: "待终审" },
         { id: "stage1UnclearPill", filter: "stage1Unclear", name: "初审存疑" },
         { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审" },
         { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁" },
@@ -3931,7 +3947,8 @@
       const finalNeedsEdit = Math.max(0, Number(stageMetrics.finalNeedsEdit) || 0);
       const finalUnchanged = Math.max(0, Number(stageMetrics.finalUnchanged) || 0);
       const finalNeedsCheck = Math.max(0, Number(stageMetrics.finalNeedsCheck) || 0);
-      const totalAudited = Math.max(s1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck, Number(stageMetrics.totalAudited) || 0);
+      const finalPendingArbiter = Math.max(0, Number(stageMetrics.finalPendingArbiter) || 0);
+      const totalAudited = Math.max(s1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck + finalPendingArbiter, Number(stageMetrics.totalAudited) || 0);
 
       // 全局最终修改结论摘要
       const elFinalNeedsEdit = document.getElementById("metricFinalNeedsEdit");
@@ -3942,6 +3959,11 @@
       if (elFinalNeedsCheck) elFinalNeedsCheck.textContent = finalNeedsCheck;
       const badgeNeedsCheck = document.getElementById("aiStageSummaryNeedsCheck");
       if (badgeNeedsCheck) badgeNeedsCheck.hidden = finalNeedsCheck === 0;
+      // 「待终审」单独一个徽章：这些行还没等到终审仲裁，既不该混进「待人工确认」，也不能就这么消失。
+      const elFinalPendingArbiter = document.getElementById("metricFinalPendingArbiter");
+      if (elFinalPendingArbiter) elFinalPendingArbiter.textContent = finalPendingArbiter;
+      const badgePendingArbiter = document.getElementById("aiStageSummaryPendingArbiter");
+      if (badgePendingArbiter) badgePendingArbiter.hidden = finalPendingArbiter === 0;
 
       // 阶段一
       const elS1 = document.getElementById("metricStage1Passed");
@@ -4207,6 +4229,7 @@
       let finalNeedsEdit = 0;
       let finalUnchanged = 0;
       let finalNeedsCheck = 0;
+      let finalPendingArbiter = 0;
       let totalAudited = 0;
       let lowScoreHits = 0;
       let webLookupHits = 0;
@@ -4247,6 +4270,9 @@
           finalNeedsEdit += 1;
         } else if (parsed.modify === "否") {
           finalUnchanged += 1;
+        } else if (parsed.modify === "待终审") {
+          // 「待人工确认」只能由终审分发：还没走到终审的存疑行单独计，不混进待确认指标。
+          finalPendingArbiter += 1;
         } else {
           finalNeedsCheck += 1;
         }
@@ -4380,6 +4406,7 @@
         finalNeedsEdit,
         finalUnchanged,
         finalNeedsCheck,
+        finalPendingArbiter,
         totalAudited,
         lowScoreHits,
         webLookupHits,
@@ -4423,6 +4450,8 @@
       const stageMetricsSummary = [
         ["finalNeedsEdit", "最终建议修改"],
         ["finalUnchanged", "无需修改"],
+        ["finalNeedsCheck", "待人工确认"],
+        ["finalPendingArbiter", "待终审"],
         ["stage1Passed", "初审通过"],
         ["stage1NeedsEdit", "初审提改"],
         ["stage1Unclear", "初审存疑"],

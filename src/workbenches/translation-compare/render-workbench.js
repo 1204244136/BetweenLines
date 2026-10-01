@@ -276,6 +276,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
                 <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
                 <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="需要人工确认的存疑行数" role="button" tabindex="0" hidden>待确认: <strong id="metricFinalNeedsCheck">0</strong></span>
+                <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="流水线尚未走到终审仲裁的存疑行数——「待人工确认」只能由终审分发，这些行还等着终审定案（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
                 <span id="aiStageFastPassRate" class="ai-stage-badge" title="高置信度快速直通率 (Fast Pass)">快速直通: 0%</span>
               </div>
             </div>

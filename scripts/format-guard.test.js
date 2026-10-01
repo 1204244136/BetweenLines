@@ -335,8 +335,8 @@ test("端到端：目标列的 noteref 标记丢失时作废转人工，不留�
   const target = status.results.find((item) => item.index === 2);
   const lines = noteLines(target);
   assert.equal(target.status, "suggestion");
-  assert.equal(target.done, false, "作废的行转人工确认，不算已处理完");
-  assert.equal(lines.includes("是否需要修改：待人工确认"), true);
+  assert.equal(target.done, false, "作废的行未定案，不算已处理完");
+  assert.equal(lines.includes("是否需要修改：待终审"), true);
   assert.equal(lines.some((line) => line.startsWith("修改结果：")), false, "作废时不得留修改结果");
   assert.equal(lines.some((line) => /丢失了目标列的 EPUB noteref 注释标记/.test(line)), true);
   assert.equal(status.formatVoids, 1);

@@ -98,13 +98,13 @@ function formatVoidReason(reason, detail = {}) {
   const target = Number(detail.target || 0);
   const revised = Number(detail.revised || 0);
   if (reason === "paragraph-structure") {
-    return `模型给出的修改结果段落结构与目标列不一致（目标列 ${target} 段、修改结果 ${revised} 段），写回按段一一对应，已作废并转人工确认。`;
+    return `模型给出的修改结果段落结构与目标列不一致（目标列 ${target} 段、修改结果 ${revised} 段），写回按段一一对应，已作废，等待终审裁决。`;
   }
   if (reason === "noteref-lost") {
-    return `模型给出的修改结果丢失了目标列的 EPUB noteref 注释标记（目标列 ${target} 个、修改结果 ${revised} 个），已作废并转人工确认。`;
+    return `模型给出的修改结果丢失了目标列的 EPUB noteref 注释标记（目标列 ${target} 个、修改结果 ${revised} 个），已作废，等待终审裁决。`;
   }
   if (reason === "noteref-added") {
-    return `模型给出的修改结果补入了目标列没有的 EPUB noteref 注释标记（目标列 ${target} 个、修改结果 ${revised} 个），已作废并转人工确认。`;
+    return `模型给出的修改结果补入了目标列没有的 EPUB noteref 注释标记（目标列 ${target} 个、修改结果 ${revised} 个），已作废，等待终审裁决。`;
   }
   return "";
 }

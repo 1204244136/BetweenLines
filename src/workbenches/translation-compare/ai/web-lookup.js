@@ -137,8 +137,8 @@ function webLookupNote({ concluded = false, siteLabel = "", triedLabels = [] } =
   }
   const tried = (triedLabels || []).filter(Boolean);
   return tried.length
-    ? `线上查证：已依次尝试 ${tried.join(" → ")}${siteLabel ? ` → ${siteLabel}` : ""}，均未获得有效内容，转人工确认`
-    : "线上查证：未获得有效内容，转人工确认";
+    ? `线上查证：已依次尝试 ${tried.join(" → ")}${siteLabel ? ` → ${siteLabel}` : ""}，均未获得有效内容，转终审确认`
+    : "线上查证：未获得有效内容，转终审确认";
 }
 
 module.exports = {

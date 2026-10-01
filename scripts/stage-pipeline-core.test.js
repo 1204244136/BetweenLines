@@ -309,6 +309,22 @@ test("仲裁触发：shouldTriggerArbitration 准确检测主动升级与立场�
     stylistReview: { critique: { attitude: "accept" }, revisedText: "方案A" },
   });
   assert.equal(agree.triggered, false);
+
+  // 初审存疑（模型结论自相矛盾时 normalizeDecision 的保守归类）、复审只表态采纳却拿不出改案：
+  // 存疑并没有被解除，必须升级终审——「待人工确认」是终审的判决，不能由复审直接甩给人工。
+  const unclearAcceptWithoutRevision = shouldTriggerArbitration({
+    gatekeeperDecision: { needsEdit: true, better: "unclear", revisedText: "" },
+    stylistReview: { critique: { attitude: "accept" }, revisedText: "" },
+  });
+  assert.equal(unclearAcceptWithoutRevision.triggered, true, "存疑未解除必须升级终审");
+  assert.match(unclearAcceptWithoutRevision.reason, /初审存疑/);
+
+  // 复审采纳了初审改案 → 存疑被解除，复审自己就能定案，不必再走终审。
+  const unclearAcceptWithRevision = shouldTriggerArbitration({
+    gatekeeperDecision: { needsEdit: true, better: "unclear", revisedText: "初审改案" },
+    stylistReview: { critique: { attitude: "accept" }, revisedText: "" },
+  });
+  assert.equal(unclearAcceptWithRevision.triggered, false, "复审采纳初审改案即解除存疑");
 });
 
 test("确定性一致判定：resolveDeterministicAgreement 捕获方案完全一致情况", () => {

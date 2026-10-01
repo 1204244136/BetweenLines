@@ -113,8 +113,8 @@ test("归因备注：每一类原因都写清“为什么低分”，错位额�
   );
   assert.match(lowScoreNote({ checked: true, cause: "source-style" }), /不构成缺陷/);
   assert.match(lowScoreNote({ checked: true, cause: "none" }), /复核后认为无需修改/);
-  assert.match(lowScoreNote({ checked: true, cause: "context", neighbors: 2 }), /转人工确认/);
-  assert.match(lowScoreNote({ checked: true, cause: "unclear" }), /转人工确认/);
+  assert.match(lowScoreNote({ checked: true, cause: "context", neighbors: 2 }), /转终审确认/);
+  assert.match(lowScoreNote({ checked: true, cause: "unclear" }), /转终审确认/);
   assert.match(lowScoreNote({ checked: true }), /模型未给出明确归因/, "进了这一层但没填原因也要如实写");
   // 邻行数按**实际**核对到的行数写：窗口受数据集边界限制时，不能拿配置值冒充。
   assert.equal(/（已核对相邻/.test(lowScoreNote({ checked: true, cause: "meaning" })), false);
@@ -333,8 +333,8 @@ test("归因轮要上下文时继续补行：窗口一轮比一轮宽，仍判�
   assert.equal(targetCalls.at(-1).system.includes(LOW_SCORE_PREFIX), true, "补上下文轮次仍带归因段，口径不跳");
 
   const result = status.results.find((item) => item.index === 4);
-  assert.match(result.note, /是否需要修改：待人工确认/);
-  assert.match(result.note, /低分归因：依据不足（需要更多相邻行才能定论）（已核对相邻 6 行），转人工确认/);
+  assert.match(result.note, /是否需要修改：待终审/);
+  assert.match(result.note, /低分归因：依据不足（需要更多相邻行才能定论）（已核对相邻 6 行），转终审确认/);
   assert.equal(result.done, false);
   assert.equal(status.lowScoreChecks, 1);
 });

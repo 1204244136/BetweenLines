@@ -1329,6 +1329,55 @@ test("顶部审核结论指标筛选：点击建议修改/无需修改筛选对�
   assert.equal(ui.run("filteredRows.length"), 4);
 });
 
+test("「待终审」独立成账：没走到终审的存疑行不混进「待人工确认」", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: {
+        // 初审存疑、复审采纳却没给出可用改案：没经过终审，按口径落「待终审」。
+        note: "[AI校对]\n语义是否相同：不同\n是否需要修改：待终审\nGatekeeper初审：初审存疑，复审没能给出可用结论\nStylist复审[采纳]：同意初审判断，但手里没有可用改案\n分析：存疑未解除，等待终审定案。",
+        aiDone: false,
+      },
+      2: {
+        // 走到终审、终审仍定不了 → 才是「待人工确认」。
+        note: "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\nGatekeeper初审：存疑待定\nStylist复审[提交仲裁]：依据不足\nArbiter仲裁[存疑待定]：终审也无法定案\n分析：终审定案为待人工确认。",
+        aiDone: false,
+      },
+    }),
+  });
+
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "JP1", cn: "CN1", tw: "TW1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "JP2", cn: "CN2", tw: "TW2", relation: "1:1", score: 0.85, signature: "sig-2" },
+    ],
+  });
+
+  assert.equal(ui.element("metricFinalPendingArbiter").textContent, 1, "行1没走到终审，计入待终审");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "只有终审定案的行2算待人工确认");
+  assert.equal(ui.element("aiStageSummaryPendingArbiter").hidden, false, "待终审徽章在有行时展示");
+
+  // 轨迹：行1显示「待终审」，不能再声称「终审定案为待人工确认」。
+  const html1 = ui.run('renderNoteSummary(notes["1"], "1")');
+  assert.match(html1, /待终审/);
+  assert.doesNotMatch(html1, /待人工确认/);
+  const html2 = ui.run('renderNoteSummary(notes["2"], "2")');
+  assert.match(html2, /待人工确认/);
+  assert.doesNotMatch(html2, /待终审/);
+
+  // 两个徽章各筛各的，不互相吞并。
+  await ui.element("aiStageSummaryPendingArbiter").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "pendingArbiter");
+  assert.equal(ui.run("filteredRows.length"), 1);
+  assert.equal(ui.run("filteredRows[0].index"), 1);
+  await ui.element("aiStageSummaryPendingArbiter").dispatch("click");
+
+  await ui.element("aiStageSummaryNeedsCheck").dispatch("click");
+  assert.equal(ui.run("activeSummaryFilter"), "needsCheck");
+  assert.equal(ui.run("filteredRows.length"), 1);
+  assert.equal(ui.run("filteredRows[0].index"), 2);
+});
+
 test("三语语境校对：认知审核阶段指标严格闭环且初审存疑行顺利流入复审排队", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({

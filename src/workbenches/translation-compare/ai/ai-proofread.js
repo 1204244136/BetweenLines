@@ -240,7 +240,7 @@ const status = {
   // termRubyDemoted ＝ 同样没有双侧注音，但译文确实用了该译名，因而降级为「只作一致性证据」的候选条数。
   termRubySkipped: 0,
   termRubyDemoted: 0,
-  // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、转人工确认的行数（见 guardTargetScript）。
+  // 输出侧护栏：revisedText 混入原文（日文）文字而被作废、等待终审裁决的行数（见 guardTargetScript）。
   scriptLeaks: 0,
   // 成品格式门禁：多少行的修订结果被确定性修正过格式（换行/多余段落/首尾空白），各多少处；
   // 以及多少行因格式无法确定性还原（段结构不一致、noteref 标记增减）被作废转人工（见 format-guard.js）。
@@ -383,10 +383,10 @@ function clientStatus(options = {}) {
     peakConcurrency: status.peakConcurrency,
     termRubySkipped: status.termRubySkipped,
     termRubyDemoted: status.termRubyDemoted,
-    // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们已转人工确认，不是失败）。
+    // 输出侧护栏：多少行的修订结果因混入原文文字被作废（它们未定案、等待终审，不是失败）。
     scriptLeaks: status.scriptLeaks,
     // 成品格式门禁：这一层是否启用、多少行的修订结果被修正过格式（换行/多余段落/说明字段各多少处）、
-    // 多少行因格式无法确定性还原被作废（作废行同样已转人工确认）。
+    // 多少行因格式无法确定性还原被作废（作废行同样未定案、等待终审）。
     formatEnabled: status.formatEnabled,
     formatFixes: status.formatFixes,
     formatLineBreaks: status.formatLineBreaks,
@@ -909,6 +909,7 @@ async function startProofread(input) {
       memoryResult?.stageResult?.better === "unclear" ||
       memoryResult?.stageResult?.needsContext === true ||
       noteText.includes("是否需要修改：待人工确认") ||
+      noteText.includes("是否需要修改：待终审") ||
       noteText.includes("存疑转人工") ||
       noteText.includes("初审存疑")
     );
@@ -1714,7 +1715,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.modelRefusals += 1;
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
-          pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待人工确认。`);
+          pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待终审。`);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
           const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row, requestStartedAt);
@@ -1919,16 +1920,16 @@ function finish() {
     const lookup = webLookupSummary();
     if (lookup) pushLog(lookup);
     if (status.modelRefusals) {
-      pushLog(`模型拒答防护：${status.modelRefusals} 行因触发内容安全审查被拒答，已自动跳过并转人工确认。`);
+      pushLog(`模型拒答防护：${status.modelRefusals} 行因触发内容安全审查被拒答，已自动跳过并标记待终审。`);
     }
     if (status.scriptLeaks) {
-      pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废并转人工确认。`);
+      pushLog(`输出语言护栏：${status.scriptLeaks} 行的修改结果混入了原文（日文）文字，已作废，等待终审裁决。`);
     }
     if (status.formatFixes) {
       pushLog(`成品格式门禁：${status.formatFixes} 行的修改结果按成品结构修正了格式（删除换行 ${status.formatLineBreaks} 处、并回段落 ${status.formatParagraphs} 处、说明字段换行 ${status.formatNoteFields} 处）。`);
     }
     if (status.formatVoids) {
-      pushLog(`成品格式门禁：${status.formatVoids} 行的修改结果因格式无法确定性还原（段落结构不一致或内联标记增减）被作废并转人工确认。`);
+      pushLog(`成品格式门禁：${status.formatVoids} 行的修改结果因格式无法确定性还原（段落结构不一致或内联标记增减）被作废，等待终审裁决。`);
     }
     if (!status.formatFixes && !status.formatVoids && status.formatEnabled === false) {
       pushLog("成品格式门禁：已关闭。");
@@ -1940,7 +1941,7 @@ function finish() {
       pushLog(`标点规范化：把 ${status.punctQuotes} 处中文语境的双引号统一成直角引号「」。`);
     }
     if (status.punctQuoteVoids) {
-      pushLog(`标点规范化：${status.punctQuoteVoids} 行的修改结果含无法确定性配对的弯引号，已作废并转人工确认。`);
+      pushLog(`标点规范化：${status.punctQuoteVoids} 行的修改结果含无法确定性配对的弯引号，已作废，等待终审裁决。`);
     }
     if (status.punctRestored) {
       pushLog(`标点规范化：补回 ${status.punctRestored} 处被删掉的句末点号（引号/括号内侧的句末点号是中文规范写法，原文省略不等于译文该省）。`);
@@ -2012,9 +2013,9 @@ function makeRefusalResult(row, error, targetKey = "") {
     done: false,
     note: [
       "[AI校对]",
-      "语义是否相同：待人工确认",
-      "是否需要修改：待人工确认",
-      `分析：模型拒答（触发内容安全审查策略）。本行原文或译文可能包含敏感词，模型拒绝回答，已自动转由人工核验。 拒答详情：${reason}`,
+      "语义是否相同：待终审",
+      "是否需要修改：待终审",
+      `分析：模型拒答（触发内容安全审查策略）。本行原文或译文可能包含敏感词，模型拒绝回答，本行未定案，等待终审裁决。 拒答详情：${reason}`,
     ].join("\n"),
   };
 }
@@ -2163,7 +2164,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
     const isPureFragment = isPureSymmetricFragmentRow(row, targetKey);
     const hasGivenContext = contextState.items.length > 0;
     if (isPureFragment || (isAlignFragmentRow(row, targetKey) && hasGivenContext)) {
-      pushLog(`第 ${row.index} 行：判定为对齐片段行，不再扩展上下文，直接转人工确认。`);
+      pushLog(`第 ${row.index} 行：判定为对齐片段行，不再扩展上下文，直接转终审确认。`);
       break;
     }
     const added = expandContextRing(contextState);
@@ -2221,7 +2222,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
         triedLabels.push(label);
         decision = { ...next, webLookup: { concluded: false, triedLabels: [...triedLabels] } };
         if (status.stopRequested) break;
-        pushLog(`第 ${row.index} 行：${label} 未获得有效信息，${round < lastRound ? "换下一个来源" : "转人工确认"}。`);
+        pushLog(`第 ${row.index} 行：${label} 未获得有效信息，${round < lastRound ? "换下一个来源" : "转终审确认"}。`);
       }
     }
   }
@@ -2467,8 +2468,12 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
           decision.better = config.proofreadMode === "bilingual" ? "keep" : "target";
         }
       } else if (stylistReview.critique.attitude === "accept" && decision.stage1RevisedText) {
+        // 复审明确认可初审改案 = 定案。这里必须把 better 一并改成定案值：初审判「存疑」时
+        // （模型结论自相矛盾，normalizeDecision 保守归类为 unclear）只清 needsContext 会留下
+        // better=unclear，decisionToResult 会把它写成「终审定案为待人工确认」——而这一行根本没走到终审。
         decision.needsEdit = true;
         decision.needsContext = false;
+        decision.better = config.proofreadMode === "bilingual" ? "neither" : "counterpart";
       }
       decision.stage = "stylist";
     }
@@ -2588,7 +2593,7 @@ function finalizeRowResult(stageResult, config) {
   const guarded = guardTargetScript(decision, targetText);
   if (guarded !== decision) {
     status.scriptLeaks += 1;
-    pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废并转人工确认。`);
+    pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废，等待终审裁决。`);
   }
   const result = decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
   result.stageSignals = {
@@ -3200,7 +3205,7 @@ function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
   const width = normalizeTargetPunctuation(decision.revisedText);
   if (width.unresolvedQuotes) {
     status.punctQuoteVoids += 1;
-    pushLog(`第 ${row.index} 行：修改结果含无法确定性配对的弯引号，已作废并转人工确认。`);
+    pushLog(`第 ${row.index} 行：修改结果含无法确定性配对的弯引号，已作废，等待终审裁决。`);
     return {
       ...decision,
       revisedText: "",
@@ -3212,7 +3217,7 @@ function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
       severity: "none",
       summary: [
         String(decision.summary || "").trim(),
-        "模型给出的修改结果含无法确定性转换为「」的弯引号（可能未配对或处在英文语境），已作废并转人工确认——成品引号必须使用「」/『』。",
+        "模型给出的修改结果含无法确定性转换为「」的弯引号（可能未配对或处在英文语境），已作废，等待终审裁决——成品引号必须使用「」/『』。",
       ].filter(Boolean).join(" "),
     };
   }
@@ -3323,7 +3328,7 @@ function guardTargetScript(decision, targetText) {
     scriptLeak: true,
     summary: [
       String(decision.summary || "").trim(),
-      "模型给出的修改结果混入了原文（日文）文字，已作废并转人工确认——成品不得写入原文文字。",
+      "模型给出的修改结果混入了原文（日文）文字，已作废，等待终审裁决——成品不得写入原文文字。",
     ].filter(Boolean).join(" "),
   };
 }
@@ -3917,6 +3922,10 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
 
   const effectiveStage = decision.stage || (decision.arbitration ? "arbiter" : (decision.stylistReview ? "stylist" : "gatekeeper"));
   const effectiveModelId = (effectiveStage === "arbiter" ? decision.arbitrationModelId : (effectiveStage === "stylist" ? decision.stylistModelId : status.model)) || status.model;
+  // 「待人工确认」是终审的判决：只有真正走到终审的行才配这个结论。没经过终审的存疑行标成
+  // 「待终审」——它还等着终审仲裁定案（当前没配终审，或者这条流水线没把它送进终审）。
+  const arbitratedRow = Boolean(decision.arbitration) || effectiveStage === "arbiter";
+  const unclearLabel = arbitratedRow ? "待人工确认" : "待终审";
 
   if (decision.needsContext || better === "unclear") {
     return {
@@ -3942,7 +3951,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
       note: [
         "[AI校对]",
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
-        "是否需要修改：待人工确认",
+        `是否需要修改：${unclearLabel}`,
         speakerLine(decision),
         ...multiStageLines,
         ...analysisLines(decision),
@@ -4005,7 +4014,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
     lines.push(...analysisLines(decision, decision.revisedText ? "" : decision.suggestion || "按原文重新整理译文。"));
     if (decision.revisedText) lines.push(`修改结果：${decision.revisedText}`);
   } else {
-    lines.push("是否需要修改：待人工确认");
+    lines.push(`是否需要修改：${unclearLabel}`);
     lines.push(...multiStageLines);
     lines.push(...analysisLines(decision));
   }

@@ -203,6 +203,20 @@
 
 阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。三个阶段各有独立的并发控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`，各自的并发上限来自各自的预设）、独立的退避窗口与并发上探（自适应调度强制开启，详见 [workbench-notes-spaces.md](workbench-notes-spaces.md)「并发上限与内部自适应调度」，与熔断的联动也在那里）；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
 
+### 「待人工确认」只能由终审分发
+
+`decisionToResult` 里 `needsContext || better === "unclear"` 的出口**区分两种结论**，判据是这一行有没有走到终审（`decision.arbitration` 存在，或 `decision.stage === "arbiter"`）：
+
+- **走过终审** → `是否需要修改：待人工确认`。终审是唯一有资格把一行判给人工的阶段。
+- **没走到终审** → `是否需要修改：待终审`。它既不是终局结论，也不该冒充终审的判决。前端把它单独计成 `finalPendingArbiter`（徽章「待终审」），**不混进** `finalNeedsCheck`（徽章「待确认」）；行内审核轨迹显示「待终审」，不再说「终审定案为待人工确认」。服务端同一口径见 `ai/stage-results.js` 的 `isPendingArbiterResult` / `computeResultMetricsDelta`。
+
+配套两条纪律，缺一条这个口径就会被绕过：
+
+1. **复审「采纳」必须定案**：`runStage2Stylist` 在 `attitude === "accept" && decision.stage1RevisedText` 时要把 `better` 一并改成定案值（双语 `neither`、三语 `counterpart`）。初审判「存疑」时 `better` 是 `unclear`（`normalizeDecision` 对「结论说不用改、分析里却说要改」的保守归类），只清 `needsContext` 会让这个残留值把已经定案的行写成「待人工确认」——而它根本没走到终审。
+2. **存疑未解除必须升级终审**：`shouldTriggerArbitration` 的第 5 条判据是「初审存疑（`needsContext` / `better === "unclear"`）且复审没能解除它」。复审「采纳初审改案 / 给出自己的改案 / 驳回」都算解除；只表态采纳、手里却没有任何可用改案的行不算——那种行既没有定案依据，也不该由复审直接甩给人工。
+
+**措辞纪律**：程序写进备注分析栏的兜底文案（格式门禁作废、语言护栏作废、标点作废、模型拒答、低分归因与线上查证兜底）一律说「转终审确认」「已作废，等待终审裁决」「已自动跳过并标记待终审」，不再说「转人工确认」——后者只属于终审自己的 unclear 判决（`ai/arbiter.js` 里终审判定 unclear 的说明文案，以及终审提示词里 `finalDecision=unclear` 的定义）。
+
 ### 独立阶段二/三的队列来源
 
 `stage2`/`stage3` 起点的队列在 `startProofread` 里按行筛选（`isStage2Candidate` / `isStage3DisputeRow`），行的上一阶段结论有两个来源，**优先内存**：

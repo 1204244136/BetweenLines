@@ -123,7 +123,7 @@ test("查证段：只给站点入口与词条，写明“拿到关键信息就�
   assert.match(webLookupNote({ concluded: true, siteLabel: "" }), /模型自行检索后得出结论/);
   assert.match(
     webLookupNote({ concluded: false, triedLabels: ["中文（灰机）", "日文（atwiki）", "英文（Fandom）", "自行检索"] }),
-    /已依次尝试 中文（灰机） → 日文（atwiki） → 英文（Fandom） → 自行检索，均未获得有效内容，转人工确认/,
+    /已依次尝试 中文（灰机） → 日文（atwiki） → 英文（Fandom） → 自行检索，均未获得有效内容，转终审确认/,
   );
 });
 
@@ -305,8 +305,8 @@ test("三个站点都不行 → 让模型自行检索；还不行 → 备注写�
   });
   assert.equal(stuck.captured.length, 5, "这一层最多 4 轮查证，不会无限循环");
   const stuckResult = stuck.status.results.find((item) => item.index === 219);
-  assert.match(stuckResult.note, /是否需要修改：待人工确认/);
-  assert.match(stuckResult.note, /线上查证：已依次尝试 中文（灰机） → 日文（atwiki） → 英文（Fandom） → 自行检索，均未获得有效内容，转人工确认/);
+  assert.match(stuckResult.note, /是否需要修改：待终审/);
+  assert.match(stuckResult.note, /线上查证：已依次尝试 中文（灰机） → 日文（atwiki） → 英文（Fandom） → 自行检索，均未获得有效内容，转终审确认/);
   assert.equal(stuckResult.done, false);
   assert.equal(stuck.status.webLookupResolved, 0);
   assert.equal(stuck.status.webLookupAttempts, 4);

@@ -88,16 +88,24 @@ function shouldTriggerArbitration({
     };
   }
 
-  // 5. Gatekeeper unclear / pending escalation
+  // 5. 初审存疑、复审又没能解除它 → 必须升级终审。
+  // 复审「采纳初审改案 / 给出自己的改案 / 驳回」都算解除存疑；只表态采纳、手里却没有任何
+  // 可用改案的行不算解除——那种行既没有定案依据，也不该由复审直接甩给人工：
+  // 「待人工确认」是终审的判决，得先让终审看过这一行。
   const isGkUnclear = Boolean(
     gatekeeperDecision.needsContext === true ||
     gatekeeperDecision.better === "unclear" ||
     gatekeeperDecision.decision === "unclear"
   );
-  if (isGkUnclear && (attitude === "escalate" || (attitude === "modify" && !styText))) {
+  const stylistResolvedUnclear = Boolean(
+    (attitude === "accept" && gkText) ||
+    (attitude === "modify" && styText) ||
+    attitude === "reject"
+  );
+  if (isGkUnclear && !stylistResolvedUnclear) {
     return {
       triggered: true,
-      reason: "事实初审存疑且复审无法直接定论，升级至终审仲裁（escalate）。",
+      reason: "事实初审存疑，复审未能给出可用结论，升级至终审仲裁。",
     };
   }
 

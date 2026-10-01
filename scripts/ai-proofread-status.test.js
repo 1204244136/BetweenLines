@@ -725,14 +725,14 @@ test("对齐片段行在模型索要上下文后直接终局，不再扩展相�
     }
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    // 片段行（しかし、/可是。）只问一次：判定为对齐片段后直接转人工确认，不再补上下文。
+    // 片段行（しかし、/可是。）只问一次：判定为对齐片段后直接转终审确认，不再补上下文。
     assert.equal(callsPerRow.get(1), 1);
     // 完整行仍会补充相邻行（本样例只有一行邻居可用，所以总计两次调用）。
     assert.equal(callsPerRow.get(2), 2);
-    assert.match(finished.logs.join("\n"), /第 1 行：判定为对齐片段行，不再扩展上下文，直接转人工确认。/);
+    assert.match(finished.logs.join("\n"), /第 1 行：判定为对齐片段行，不再扩展上下文，直接转终审确认。/);
     const fragmentResult = finished.results.find((result) => result.index === 1);
     assert.equal(fragmentResult.done, false);
-    assert.match(fragmentResult.note, /是否需要修改：待人工确认/);
+    assert.match(fragmentResult.note, /是否需要修改：待终审/);
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
@@ -741,7 +741,7 @@ test("对齐片段行在模型索要上下文后直接终局，不再扩展相�
   }
 });
 
-test("修订结果混入原文（日文）文字时作废并转人工，不允许写回成品", async () => {
+test("修订结果混入原文（日文）文字时作废并转终审，不允许写回成品", async () => {
   const leakedDecision = JSON.stringify({
     semanticSame: false,
     needsEdit: true,
@@ -770,7 +770,8 @@ test("修订结果混入原文（日文）文字时作废并转人工，不允�
   for (const result of results) {
     assert.equal(result.status, "suggestion");
     assert.equal(result.done, false);
-    assert.match(result.note, /是否需要修改：待人工确认/);
+    // 作废的行没有走到终审：按「待人工确认只能由终审分发」的口径，它们落「待终审」而不是「待人工确认」。
+    assert.match(result.note, /是否需要修改：待终审/);
     assert.equal(
       result.note.includes("修改结果："),
       false,
@@ -842,7 +843,7 @@ test("修订结果的标点按语境自动规范化：中文全角、英文半�
   assert.equal(/标点自动规范化/.test(english.note), false, "没改动就不留痕");
 });
 
-test("修订结果的弯引号转成直角引号；无法配对的弯引号作废转人工", async () => {
+test("修订结果的弯引号转成直角引号；无法配对的弯引号作废转终审", async () => {
   const decide = (revisedText) => JSON.stringify({
     semanticSame: false,
     needsEdit: true,
@@ -881,7 +882,7 @@ test("修订结果的弯引号转成直角引号；无法配对的弯引号作�
   assert.equal(finished.punctQuoteVoids, 1, "未配对的弯引号不能进入写回候选");
   assert.match(finished.logs.join("\n"), /第 1 行：修改结果的标点已按成品写法统一（双引号→直角引号 1 处）/);
   assert.match(finished.logs.join("\n"), /标点规范化：把 1 处中文语境的双引号统一成直角引号「」。/);
-  assert.match(finished.logs.join("\n"), /标点规范化：1 行的修改结果含无法确定性配对的弯引号，已作废并转人工确认。/);
+  assert.match(finished.logs.join("\n"), /标点规范化：1 行的修改结果含无法确定性配对的弯引号，已作废，等待终审裁决。/);
 
   const results = clientStatus().results.filter((item) => item.status !== "error");
   assert.equal(results.length, rows.length);
@@ -984,7 +985,7 @@ test("isModelRefusalError 准确识别各类内容安全拒答并排除普通请
   assert.equal(isModelRefusalError(null), false);
 });
 
-test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不中断任务，平滑转人工确认且不计入熔断失败", async () => {
+test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不中断任务，平滑转终审且不计入熔断失败", async () => {
   const { finished, rows } = await runProofreadAgainst({
     label: "model-refusal",
     rowCount: 6,
@@ -1019,7 +1020,7 @@ test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不�
   assert.equal(finished.errors, 0, "拒答行不应被计入系统调用错误");
   assert.equal(finished.modelRefusals, 2, "成功统计 2 行模型拒答");
   assert.equal(finished.processed, rows.length, "所有行均被处理完毕");
-  assert.match(finished.logs.join("\n"), /模型拒答防护：2 行因触发内容安全审查被拒答，已自动跳过并转人工确认。/);
+  assert.match(finished.logs.join("\n"), /模型拒答防护：2 行因触发内容安全审查被拒答，已自动跳过并标记待终审。/);
 
   const statusWithResults = clientStatus();
   const refusedRow2 = statusWithResults.results.find((item) => item.index === 2);
@@ -1027,7 +1028,7 @@ test("遇到模型安全拒答（HTTP 400 The model declined to answer）时不�
   assert.equal(refusedRow2.status, "suggestion");
   assert.equal(refusedRow2.done, false);
   assert.match(refusedRow2.note, /\[AI校对\]/);
-  assert.match(refusedRow2.note, /是否需要修改：待人工确认/);
+  assert.match(refusedRow2.note, /是否需要修改：待终审/);
   assert.match(refusedRow2.note, /模型拒答（触发内容安全审查策略）/);
   assert.match(refusedRow2.note, /The model declined to answer/);
 
