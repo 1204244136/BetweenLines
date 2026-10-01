@@ -136,3 +136,63 @@ test("路由只处理匹配的方法和路径，未命中不消费请求", async
   assert.deepEqual(saved, { files: { source: "sample.txt" } });
   assert.deepEqual(response, { ok: true, selection: saved });
 });
+
+test("选择窗口按导入入口分别取起始目录，并把落点记回该入口", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "between-lines-pick-route-"));
+  const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+  const previousSelectionFile = process.env.TRANSCOMPARATOR_SELECTION_FILE;
+  process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
+  // 起始目录会参考已登记选择：指到临时目录的空文件上，测试才不受本机真实选择影响。
+  process.env.TRANSCOMPARATOR_SELECTION_FILE = path.join(dataDir, "input-selection.json");
+  t.after(() => {
+    if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
+    else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+    if (previousSelectionFile === undefined) delete process.env.TRANSCOMPARATOR_SELECTION_FILE;
+    else process.env.TRANSCOMPARATOR_SELECTION_FILE = previousSelectionFile;
+  });
+
+  const jpFolder = path.join(dataDir, "原文");
+  fs.mkdirSync(jpFolder);
+  const pickedFile = path.join(jpFolder, "original.txt");
+  fs.writeFileSync(pickedFile, "正文");
+
+  const calls = [];
+  let nextPick = pickedFile;
+  const route = createInputRoutes({
+    speaker: { saveSelection: () => ({}) },
+    pickPath: async (mode, options) => { calls.push({ mode, options }); return nextPick; },
+  });
+  const post = async (payload) => {
+    const req = jsonStream();
+    req.method = "POST";
+    let response;
+    const res = { writeHead(code) { assert.equal(code, 200); }, end(text) { response = JSON.parse(text); } };
+    const pending = route(req, res, "/api/pick-path");
+    req.end(JSON.stringify(payload));
+    assert.equal(await pending, true);
+    return response;
+  };
+
+  // 首次没有默认目录：起始位置交给系统记忆，落点目录记回该入口。
+  const first = await post({ mode: "file", role: "jp", currentPath: "" });
+  assert.equal(first.file.path, pickedFile);
+  assert.deepEqual(calls[0], { mode: "file", options: { role: "jp", initialDir: "" } });
+  const memoryFile = path.join(dataDir, "runtime", "picker-paths.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(memoryFile, "utf8")), { jp: jpFolder });
+
+  // 另一个入口带自己的卡片路径来：用它的目录，不受 jp 记忆影响。
+  const cnFolder = path.join(dataDir, "主文本");
+  fs.mkdirSync(cnFolder);
+  const cnFile = path.join(cnFolder, "cn.txt");
+  fs.writeFileSync(cnFile, "正文");
+  nextPick = cnFile;
+  await post({ mode: "file", role: "cn", currentPath: path.join(cnFolder, "cn.epub") });
+  assert.deepEqual(calls[1], { mode: "file", options: { role: "cn", initialDir: cnFolder } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(memoryFile, "utf8")), { jp: jpFolder, cn: cnFolder });
+
+  // 取消不写记忆：这次没选中任何东西，默认目录保持原样。
+  nextPick = "";
+  const canceled = await post({ mode: "file", role: "jp", currentPath: "" });
+  assert.equal(canceled.canceled, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(memoryFile, "utf8")), { jp: jpFolder, cn: cnFolder });
+});

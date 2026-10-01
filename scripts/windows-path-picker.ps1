@@ -1,6 +1,10 @@
 ﻿param(
   [ValidateSet("file", "folder")]
   [string]$Mode = "file",
+  # 起始目录：调用方按导入入口（原文 / 主文本 / 参考文本）各自推导，空值表示沿用系统记忆。
+  [string]$InitialDir = "",
+  # 每个导入入口一个稳定 GUID，让 Windows 自身记住的「上次位置」也按入口分开。
+  [string]$ClientGuid = "2B25D048-9026-4C30-A916-E559C747E4C3",
   [switch]$Check
 )
 
@@ -93,12 +97,42 @@ namespace BetweenLines.NativePathPicker
     public static class Picker
     {
         private const int Canceled = unchecked((int)0x800704C7);
-        private static readonly Guid ClientGuid = new Guid("2B25D048-9026-4C30-A916-E559C747E4C3");
+        private static readonly Guid DefaultClientGuid = new Guid("2B25D048-9026-4C30-A916-E559C747E4C3");
+        private static readonly Guid ShellItemGuid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
-        public static string Pick(string mode, bool check)
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        private static extern void SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string parsingName,
+            IntPtr bindingContext,
+            ref Guid interfaceId,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItem shellItem);
+
+        // SetFolder 会覆盖系统记住的上次位置；SetDefaultFolder 只在没有记忆时才生效，
+        // 因此各入口的默认目录必须走 SetFolder。
+        private static void ApplyInitialDir(IFileDialog dialog, string initialDir)
+        {
+            if (String.IsNullOrEmpty(initialDir) || !System.IO.Directory.Exists(initialDir)) return;
+            IShellItem folder = null;
+            try
+            {
+                Guid shellItemGuid = ShellItemGuid;
+                SHCreateItemFromParsingName(initialDir, IntPtr.Zero, ref shellItemGuid, out folder);
+                if (folder != null) dialog.SetFolder(folder);
+            }
+            catch (Exception)
+            {
+                // 起始目录不可用时退回系统记忆位置，不阻断选择。
+            }
+            finally
+            {
+                if (folder != null) Marshal.FinalReleaseComObject(folder);
+            }
+        }
+
+        public static string Pick(string mode, string initialDir, string clientGuid, bool check)
         {
             IFileDialog dialog = (IFileDialog)new FileOpenDialog();
             IShellItem result = null;
@@ -111,10 +145,13 @@ namespace BetweenLines.NativePathPicker
                 options |= pickFolder ? DialogOptions.PickFolders : DialogOptions.FileMustExist;
                 dialog.SetOptions(options);
 
-                Guid clientGuid = ClientGuid;
-                dialog.SetClientGuid(ref clientGuid);
+                Guid parsedClientGuid;
+                if (!Guid.TryParse(clientGuid, out parsedClientGuid)) parsedClientGuid = DefaultClientGuid;
+                dialog.SetClientGuid(ref parsedClientGuid);
                 dialog.SetTitle(pickFolder ? "选择解压的 EPUB 文件夹" : "选择单个文件");
                 dialog.SetOkButtonLabel(pickFolder ? "选择文件夹" : "选择文件");
+
+                ApplyInitialDir(dialog, initialDir);
 
                 if (!pickFolder)
                 {
@@ -163,7 +200,7 @@ namespace BetweenLines.NativePathPicker
 # Windows PowerShell 5.1 needs this file saved as UTF-8 with BOM for localized labels.
 Add-Type -TypeDefinition $source -Language CSharp
 
-$selectedPath = [BetweenLines.NativePathPicker.Picker]::Pick($Mode, $Check.IsPresent)
+$selectedPath = [BetweenLines.NativePathPicker.Picker]::Pick($Mode, $InitialDir, $ClientGuid, $Check.IsPresent)
 if ($selectedPath) {
   [Console]::Out.Write($selectedPath)
 }

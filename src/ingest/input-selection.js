@@ -114,9 +114,11 @@ function normalizeInlineMarkup(value = {}) {
   };
 }
 
-function loadSavedSelection() {
-  if (!fs.existsSync(selectionFile)) return null;
-  return validateSelection(JSON.parse(fs.readFileSync(selectionFile, "utf8")));
+// file 可覆盖：调用方按当前 env 实时解析（TRANSCOMPARATOR_SELECTION_FILE），
+// 而不是沿用本模块加载时捕获的常量，隔离测试与多数据目录场景才不会串。
+function loadSavedSelection(file = selectionFile) {
+  if (!fs.existsSync(file)) return null;
+  return validateSelection(JSON.parse(fs.readFileSync(file, "utf8")));
 }
 
 function saveSelection(selection) {
@@ -431,6 +433,7 @@ module.exports = {
   guessLangOrder,
   inferInputMode,
   isSupportedInput,
+  loadSavedSelection,
   normalizePath,
   roleLabels,
   selectionFile,

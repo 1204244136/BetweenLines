@@ -13,6 +13,8 @@ function storageLayout(dataDir = resolveDataDir()) {
     root,
     runtimeDir,
     runtimeSelectionFile: path.join(runtimeDir, "input-selection.json"),
+    // 各导入入口各自的默认目录（系统选择窗口的起始位置），与选择本身解耦。
+    pickerPathsFile: path.join(runtimeDir, "picker-paths.json"),
     importedInputsDir: path.join(runtimeDir, "imported-inputs"),
     workDir: path.join(runtimeDir, "work"),
     projectsDir: path.join(root, "projects"),

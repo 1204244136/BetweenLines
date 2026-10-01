@@ -102,3 +102,27 @@ test("按下 Escape 关闭导入选项菜单并将焦点返还所属卡片", () 
   assert.equal(ui.element("jpDropzone").getAttribute("aria-expanded"), "false");
   assert.equal(ui.element("jpDropzone").focused, true);
 });
+
+test("选择窗口请求带上所属导入入口与该卡片当前路径", async () => {
+  const ui = createConsole();
+  ui.run('registerLocalFile("cn", { path: "/samples/main/book.epub", name: "book.epub", ext: "epub", size: 10 })');
+  let body;
+  ui.context.fetch = async (url, options) => {
+    assert.equal(url, "/api/pick-path");
+    body = JSON.parse(options.body);
+    return { json: async () => ({ ok: true,
+      file: { path: "/samples/main/next.epub", name: "next.epub", ext: "epub", size: 10 } }) };
+  };
+  await ui.run('applyNativePick("cn", "file")');
+  // 服务端据此为每个入口分别推导起始目录，而不是三个入口共用一份「上次位置」。
+  assert.equal(body.role, "cn");
+  assert.equal(body.currentPath, "/samples/main/book.epub");
+  assert.equal(ui.run("state.roleFiles.cn.path"), "/samples/main/next.epub");
+});
+
+test("导入选项菜单只保留标题，不再显示默认目录提示", () => {
+  // 提示与标题同行时，长路径会把「选择导入方式」挤成竖排；该提示已整体移除。
+  assert.doesNotMatch(html, /PickDefault/);
+  assert.doesNotMatch(html, /pick-menu-hint/);
+  assert.doesNotMatch(html, /默认打开/);
+});

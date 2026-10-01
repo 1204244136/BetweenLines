@@ -1563,7 +1563,7 @@
         const response = await apiFetch("/api/pick-path", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode }),
+          body: JSON.stringify({ mode, role, currentPath: state.roleFiles[role]?.path || "" }),
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
@@ -1606,7 +1606,7 @@
         const response = await apiFetch("/api/validate-input", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: rawPath }),
+          body: JSON.stringify({ path: rawPath, role }),
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
