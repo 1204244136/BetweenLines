@@ -3890,24 +3890,29 @@
 
     // 阶段进度条：done 是该阶段已完成行数，total 是本轮该阶段总量（已完成 + 待办 + 处理中）。
     // 原来右上角那条全局进度条按「模型实际调用数 / 总调用数」走，级联流水线在它上面看不出卡在哪个阶段。
-    // 阶段卡片底部那行「处理中: …」的并发后缀。这里必须把「实际在飞」和「允许并发」分开写：
+    // 阶段卡片底部那行「处理中: …」的并发后缀：默认只给「当前并发数/当前并发上限」——
+    // 分子是实际在飞（真的在跑几个请求），分母是面板上预设的并发上限。
     // stagePipelines.stageN.concurrency 是并发控制器上探出来的**许可值**，队列不足时它不会回落
-    // （控制器只在频控、过载或熔断时下调），所以队列只剩 1 行时会出现「1 处理中 · 并发 3/32」
-    // 这种看着自相矛盾的画面。分子给实际在飞，分母给许可值，上限单列，细节进 tooltip。
+    // （控制器只在频控、过载或熔断时下调），拿它当分子会写出「1 处理中 · 并发 32/32」这种自相矛盾的
+    // 画面，所以它只进 tooltip。实际在飞真的顶到预设上限时才额外标「触顶」。
     function stageConcurrencyText(pipeline, activeInfoEl = null) {
       const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
       const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
       const cap = Math.max(0, Number(pipeline?.concurrencyMax) || 0);
       const pending = Math.max(0, Number(pipeline?.pending) || 0);
-      if (!allowed) {
+      // 分母就是预设上限；旧服务端只回报许可值时退回用它，此时没有预设边界可比，不判触顶。
+      const ceiling = cap || allowed;
+      if (!ceiling) {
         if (activeInfoEl) activeInfoEl.removeAttribute("title");
         return "";
       }
+      const topped = cap > 0 && inFlight >= cap;
       if (activeInfoEl) {
-        activeInfoEl.title = "实际在飞 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，上限 " + cap : "")
-          + "；队列待派发 " + pending + " 行。允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
+        activeInfoEl.title = "实际在飞 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
+          + "；队列待派发 " + pending + " 行。" + (topped ? "实际在飞已达预设并发上限（触顶）。" : "")
+          + "允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
       }
-      return "（并发 " + inFlight + "/" + allowed + (cap ? "，上限 " + cap : "") + "）";
+      return "（并发 " + inFlight + "/" + ceiling + (topped ? " · 触顶" : "") + "）";
     }
 
     function renderStageProgress(stageKey, done, total, { enabled = true, label = "" } = {}) {

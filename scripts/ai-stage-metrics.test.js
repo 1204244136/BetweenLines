@@ -179,14 +179,15 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   assert.equal(pill3.dataset.state, "disabled");
   assert.equal(pill3.textContent, "未启用");
 
-  // Check active rows text：并发后缀必须把「实际在飞」与「允许并发」分开写。控制器上探出来的
-  // 许可值不会因为队列空了而回落，只写一个「并发 3/32」就会出现「1 处理中 · 并发 3/32」这种
-  // 看着自相矛盾的画面。
+  // Check active rows text：并发后缀默认只给「实际在飞 / 预设上限」。分子是实际在飞，
+  // 分母是面板上的并发上限；控制器上探出来的许可值不进行内（它不会因为队列空了而回落，
+  // 拿它当分子就会出现「1 处理中 · 并发 32/32」这种看着自相矛盾的画面），只在悬停里说明。
+  // 这里正是「队列不足、实际在飞小于许可值」的场景：2/32 而不是 2/4。
   const active1Text = ui.element("stage1ActiveRowsText");
-  assert.equal(active1Text.textContent, "70, 71 · （并发 2/4，上限 32）");
-  assert.match(ui.element("stage1ActiveInfo").title, /实际在飞 2 行；当前允许并发 4，上限 32；队列待派发 150 行/);
+  assert.equal(active1Text.textContent, "70, 71 · （并发 2/32）");
+  assert.match(ui.element("stage1ActiveInfo").title, /实际在飞 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
   const active2Text = ui.element("stage2ActiveRowsText");
-  assert.equal(active2Text.textContent, "68 · （并发 1/3，上限 32）");
+  assert.equal(active2Text.textContent, "68 · （并发 1/32）");
 
   // 跑完后的流水线汇总同样不在状态行重复：阶段卡片上已经有同一组数字。
   // 放在阶段徽标断言之后，避免这一轮渲染把运行态徽标覆盖成 done。
