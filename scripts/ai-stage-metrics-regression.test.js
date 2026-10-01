@@ -139,3 +139,44 @@ test("前端：失败备注文案带阶段关键字也一律记为阶段一异�
   assert.equal(ui.run("cachedStageMetrics.stage1Errors"), 1);
   assert.equal(ui.run("cachedStageMetrics.stage3Errors"), 0);
 });
+
+test("初审队列耗尽但仍有异常：运行中和结束后均提示待重试，进度包含失败行", () => {
+  const ui = createWorkbench();
+  for (const running of [true, false]) {
+    ui.run(`renderAiStatus({ running: ${running},
+      stageCascade: { toStylist: true },
+      stageMetrics: { stage1Passed: 1971, stage1NeedsEdit: 1042, stage1Total: 3013, stage1Errors: 65 },
+      stagePipelines: { stage1: { pending: 0, inFlight: 0 }, stage2: { inFlight: 1 } }, results: [] });`);
+    assert.equal(ui.element("stage1StatusPill").textContent, "65 行异常待重试");
+    assert.equal(ui.element("stage1StatusPill").dataset.state, "queued");
+    assert.match(ui.element("stage1StatusPill").title, /继续剩下的/);
+    assert.equal(ui.element("stage1Progress").style.width, "98%");
+    assert.match(ui.element("stage1ProgressWrap").title, /已完成 3013 \/ 共 3078 行.*异常待重试 65 行/);
+    assert.equal(ui.element("metricStage1Errors").textContent, 65);
+  }
+});
+
+test("初审全失败仍显示零进度；少量失败不能被四舍五入为满进度", () => {
+  const ui = createWorkbench();
+  ui.run("updateStageMetricsDashboard({ stage1Errors: 3 }, {}, false)");
+  assert.equal(ui.element("stage1ProgressWrap").hidden, false);
+  assert.equal(ui.element("stage1Progress").style.width, "0%");
+  assert.match(ui.element("stage1ProgressWrap").title, /已完成 0 \/ 共 3 行/);
+  ui.run("updateStageMetricsDashboard({ stage1Passed: 3013, stage1Errors: 1 }, {}, false)");
+  assert.equal(ui.element("stage1Progress").style.width, "99%");
+});
+
+test("初审异常续跑显示处理中，成功后的最新备注消除异常和重试提示", () => {
+  const key = "translation-compare-notes-v7:project:rows";
+  const failure = "[AI校对]\n调用失败：请求超时";
+  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) }));
+  assert.equal(ui.element("stage1StatusPill").textContent, "1 行异常待重试");
+  ui.run("updateStageMetricsDashboard(null, { stage1: { inFlight: 1, activeRows: [1] } }, true)");
+  assert.equal(ui.element("stage1StatusPill").textContent, "1处理中");
+  ui.run(`notes[1].note += "\\n\\n[AI校对]\\n是否需要修改：否\\nGatekeeper初审：无需修改";
+    markNotesDirtyForMetrics(); updateStageMetricsDashboard(null, {}, true);`);
+  assert.equal(ui.element("metricStage1Errors").textContent, 0);
+  assert.equal(ui.element("stage1StatusPill").textContent, "初审完毕");
+  assert.equal(ui.element("stage1Progress").style.width, "100%");
+  assert.equal(ui.element("stage1StatusPill").title || "", "");
+});

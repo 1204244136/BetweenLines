@@ -3915,7 +3915,7 @@
       return "（并发 " + inFlight + "/" + ceiling + (topped ? " · 触顶" : "") + "）";
     }
 
-    function renderStageProgress(stageKey, done, total, { enabled = true, label = "" } = {}) {
+    function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0 } = {}) {
       const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
       const bar = document.getElementById("stage" + stageKey + "Progress");
       if (!wrap || !bar) return;
@@ -3927,10 +3927,12 @@
         wrap.removeAttribute("title");
         return;
       }
-      const percent = Math.min(100, Math.round((safeDone / safeTotal) * 100));
+      // 仍有未完成行时，四舍五入也不能把进度画成 100%。
+      const percent = Math.min(safeDone < safeTotal ? 99 : 100, Math.round((safeDone / safeTotal) * 100));
       wrap.hidden = false;
       bar.style.width = percent + "%";
-      wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）";
+      wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
+        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "");
     }
 
     function resetStageProgressBars() {
@@ -4104,20 +4106,26 @@
       const active1 = document.getElementById("stage1ActiveInfo");
       const activeText1 = document.getElementById("stage1ActiveRowsText");
       if (pill1) {
-        if (aiRunning) {
+        pill1.title = "";
+        if (aiRunning && (p1.inFlight > 0 || p1.pending > 0)) {
           if (p1.inFlight > 0) {
             pill1.dataset.state = "running";
             pill1.textContent = p1.inFlight + "处理中" + (p1.pending > 0 ? " · " + p1.pending + "待审" : "");
-          } else if (p1.pending > 0) {
+          } else {
             pill1.dataset.state = "queued";
             pill1.textContent = p1.pending + "排队";
-          } else {
-            pill1.dataset.state = "idle";
-            pill1.textContent = "初审完毕";
           }
+        } else if (s1Errors > 0) {
+          // 队列耗尽只代表本轮尝试结束，调用失败的行没有初审结论，仍需续跑。
+          pill1.dataset.state = "queued";
+          pill1.textContent = s1Errors + " 行异常待重试";
+          pill1.title = "初审仍有 " + s1Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段一「开始」→「继续剩下的」重试。";
+        } else if (aiRunning) {
+          pill1.dataset.state = "idle";
+          pill1.textContent = "初审完毕";
         } else {
-          pill1.dataset.state = (s1Passed > 0 || s1Errors > 0) ? "done" : "idle";
-          pill1.textContent = (s1Passed > 0 || s1Errors > 0) ? "就绪" : "待命";
+          pill1.dataset.state = s1Total > 0 ? "done" : "idle";
+          pill1.textContent = s1Total > 0 ? "就绪" : "待命";
         }
       }
       if (active1 && activeText1) {
@@ -4219,12 +4227,13 @@
       }
 
       // 每阶段一条独立进度条。分母取「本轮该阶段总量」= 已完成 + 待办 + 处理中；
-      // 阶段一优先用服务端总检数（本轮要初审的全部行），本地口径拿不到总检数时退化为已完成 + 队列。
+      // stage1Total 是有结论的总检数，不含失败行；失败未完成，必须另计入分母。
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
       const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
-      renderStageProgress("1", s1Done, Math.max(s1Total, s1Done + s1Queue), {
-        enabled: aiRunning || s1Total > 0,
+      renderStageProgress("1", s1Done, Math.max(s1Total, s1Done + s1Queue + s1Errors), {
+        enabled: aiRunning || s1Total > 0 || s1Errors > 0,
         label: "阶段一 事实初审",
+        errors: s1Errors,
       });
       const s2Queue = Math.max(0, Number(p2.pending) || 0) + Math.max(0, Number(p2.inFlight) || 0);
       renderStageProgress("2", s2Reviewed, Math.max(s2Reviewed + s2Pending, s2Reviewed + s2Queue), {
@@ -5726,6 +5735,12 @@
             continue;
           }
           const noteText = latestAiNotePart(item.note).trim();
+          // 初审续跑必须先有可用结论才可跳过。失败/终止/空备注不属于复审候选，
+          // 但不能因此被下面的「无需复审」分支误判为整行已经完成。
+          if (stage === "stage1" && !hasAutomatedDecisionNote(noteText)) {
+            completedSet.delete(num);
+            continue;
+          }
           const p = parseAutomatedNote(noteText);
           if (cascadeToStylist || cascadeToArbiter) {
             // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。

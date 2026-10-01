@@ -39,6 +39,33 @@ function fixture(records) {
   });
 }
 
+test("从初审继续剩下的：失败、终止及空备注行在单阶段和级联时都必须重试", async () => {
+  for (const cascade of [false, true]) {
+    const records = {
+      1: { note: arbitrated + "\n\n[AI校对]\n调用失败：请求超时" },
+      2: { note: "[AI校对]\n校对已终止。" },
+      3: { note: "人工备注" },
+      4: { note: "[AI校对]\n是否需要修改：否\nGatekeeper初审：无需修改" },
+      5: { note: arbitrated },
+      6: { note: initial, manualDone: true },
+      7: { note: "" },
+    };
+    const ui = fixture(records);
+    if (cascade) {
+      ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+        { id: "retry-stylist", name: "复审", protocol: "compatible", model: "test-stylist", baseUrl: "http://localhost:1234/v1" },
+      ]));
+      ui.run('aiIds.stage2Preset.value = "retry-stylist"');
+    }
+    await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');
+    const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
+    assert.ok(post);
+    assert.equal(Boolean(post.body.stylistConfig), cascade);
+    assert.deepEqual(post.body.completedIndexes.sort(), [4, 5, 6], "只能跳过有可用结论或人工确认的行");
+    assert.equal(post.body.rowNotes[1], records[1].note, "保留原失败证据与历史记录");
+  }
+});
+
 test("待复审统计、点击筛选、启动弹窗及请求跳过列表同源，历史备注保持原样", async () => {
   const records = {
     1: { note: arbitrated + "\n\n" + initial },
