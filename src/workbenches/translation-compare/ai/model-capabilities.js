@@ -2,9 +2,10 @@
  * 模型能力与思考强度检测模块（参考 dsh-model-detector 架构设计）。
  *
  * 核心原则：
- * 1. 四级优先级检测（manifest 人工档位优先，与 dsh-model-detector 的
+ * 1. 分层优先级检测（manifest 人工档位优先，与 dsh-model-detector 的
  *    thinkingLevelMap 优先原则一致；models.dev 只为清单未收录的模型富化）：
  *    - 命中内置薄覆盖清单 manifest（针对重点模型与国产模型的人工调优档位与兼容协议）
+ *    - 采用端点明确声明的模型能力及档位列表
  *    - 尝试 models.dev（社区维护的权威元数据源：reasoning、reasoning_options）
  *    - 基于模型名称的启发式规则（正则等效判定，覆盖 o1/o3/DeepSeek-R1/QwQ/Claude-3.7/Kimi-K3 等）
  *    - 保守默认（非推理模型，支持 temperature）
@@ -50,6 +51,14 @@ const CLAUDE_THINKING_BUDGETS = {
  * 覆盖 models.dev 尚未收录、端点未透出，或有特殊协议要求的重点模型。
  */
 const MANIFEST = {
+  // 当前工作台使用的 Gemini 3.8 Flash 路由；网关档位后缀只参与能力匹配，不改请求 ID。
+  "gemini-3.8-flash": {
+    name: "Gemini 3.8 Flash",
+    reasoning: true,
+    reasoningEfforts: ["low", "medium", "high"],
+    supportsTemperature: true,
+    thinkingFormat: "openai",
+  },
   // DeepSeek 家族
   "deepseek-reasoner": {
     name: "DeepSeek R1 (Reasoner)",
@@ -266,8 +275,13 @@ function getModelsDevStatus() {
 /** 归一化模型 ID */
 function normalizeModelId(id) {
   return String(id || "")
+    .trim()
     .toLowerCase()
+    .replace(/^(?:(?:cn|global|intl|us|eu|jp|sg|hk|uk|ams|hf)[:/]|[a-z0-9_.-]+\/)+/, "")
+    .replace(/[-_.@](?:intl|global|cn|us|eu|jp|sg|hk|uk|ams)$/, "")
+    .replace(/[-_.:](?:extra[-_.])?(?:xhigh|minimal|low|medium|high|tiered|thinking|nothinking|agent)(?=[-_.]|$)/g, "")
     .replace(/(?:[-_.])?(?:[12]\d{7}|\d{6})\s*$/g, "")
+    .replace(/[-_.]expires(?:[-_.]on)?[-_.]?\d{0,8}$/, "")
     .replace(/[-_.](?:latest|beta|rc|dev|preview|ga|stable)\b(?:[-_.]|\b)/g, "")
     .replace(/[-_.]+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -291,6 +305,10 @@ function findEntryByName(dict, id) {
   if (!dict) return undefined;
   if (dict[id]) return dict[id];
   const target = normalizeModelId(id);
+  // 先匹配归一化后的完整名字，避免先遇到短名字时吞掉更精确的条目；保留 max 等模型档。
+  for (const key of Object.keys(dict)) {
+    if (normalizeModelId(key) === target) return dict[key];
+  }
   for (const key of Object.keys(dict)) {
     if (modelNameEquivalent(key, target)) {
       return dict[key];
@@ -304,6 +322,15 @@ function findInModelsDev(modelsDev, id, provider) {
   if (!modelsDev || typeof modelsDev !== "object") return undefined;
   if (provider && modelsDev[provider]?.models) {
     const hit = findEntryByName(modelsDev[provider].models, id);
+    if (hit) return hit;
+  }
+  // 自定义网关名称不一定是 models.dev 的提供方 ID，优先查真实厂商，避免任取另一网关。
+  const normalized = normalizeModelId(id);
+  const upstream = normalized.startsWith("gemini-") ? "google"
+    : normalized.startsWith("claude-") ? "anthropic"
+    : normalized.startsWith("deepseek-") ? "deepseek" : "";
+  if (upstream) {
+    const hit = findEntryByName(modelsDev[upstream]?.models, id);
     if (hit) return hit;
   }
   for (const provKey of Object.keys(modelsDev)) {
@@ -335,7 +362,7 @@ function extractEffortsFromModelsDev(md) {
  * 启发式规则检测模型能力（当 models.dev 与清单均未明确定义时）
  */
 function heuristicCapabilities(modelId) {
-  const name = String(modelId || "").trim().toLowerCase();
+  const name = normalizeModelId(modelId);
 
   // 1. OpenAI o 系列推理模型：o1, o1-mini, o3, o3-mini, o4 等
   if (/(?:^|\/)(?:o1|o3|o4)(?:-|$)/i.test(name)) {
@@ -415,7 +442,7 @@ function heuristicCapabilities(modelId) {
   }
 
   // 8. 名字包含明确 thinking / reasoner / reasoning 的模型
-  if (/(?:^|\/|-|_|\b)(?:thinking|reasoner|reasoning)\b/i.test(name)) {
+  if (/(?:^|\/|-|_|\b)(?:thinking|reasoner|reasoning)\b/i.test(String(modelId || ""))) {
     return {
       reasoning: true,
       reasoningEfforts: ["low", "medium", "high"],
@@ -436,14 +463,15 @@ function heuristicCapabilities(modelId) {
 }
 
 /**
- * 检测并富化一个模型的完整能力元数据（四级优先级：models.dev -> manifest -> heuristic -> default）
+ * 检测模型能力：manifest -> 端点声明 -> models.dev -> heuristic -> default。
  *
  * @param {string} modelId
  * @param {string} [provider]
  * @param {object} [modelsDevData] 可选注入已拉取的 models.dev 数据
+ * @param {object} [declared] 该模型的端点声明或已保存的能力白名单
  * @returns {object} { id, name, reasoning, reasoningEfforts, supportsTemperature, thinkingFormat, source }
  */
-function detectModelCapabilities(modelId, provider = "", modelsDevData = null) {
+function detectModelCapabilities(modelId, provider = "", modelsDevData = null, declared = null) {
   const id = String(modelId || "").trim();
   if (!id) {
     return {
@@ -471,7 +499,27 @@ function detectModelCapabilities(modelId, provider = "", modelsDevData = null) {
     };
   }
 
-  // 2. models.dev 匹配（清单未收录的模型从这里富化）
+  // 2. 端点自声明（参考 dsh-model-detector），不把普通模型目录的 id/name 当能力声明。
+  const raw = declared && typeof declared === "object" ? declared : {};
+  const effortValues = raw.reasoning_supported_efforts ?? raw.reasoningSupportedEfforts
+    ?? raw.reasoning_efforts ?? raw.reasoningEfforts;
+  const declaredEfforts = Array.isArray(effortValues)
+    ? extractEffortsFromModelsDev({ reasoning_options: { type: "effort", values: effortValues } })
+    : extractEffortsFromModelsDev(raw);
+  const declaredReasoning = raw.supports_reasoning ?? raw.supportsReasoning ?? raw.reasoning;
+  if (declaredEfforts || typeof declaredReasoning === "boolean") {
+    const reasoning = declaredEfforts ? true : declaredReasoning;
+    return {
+      id, name: typeof raw.name === "string" ? raw.name : id,
+      reasoning,
+      reasoningEfforts: reasoning ? (declaredEfforts || []) : [],
+      supportsTemperature: typeof raw.supportsTemperature === "boolean" ? raw.supportsTemperature : !reasoning,
+      thinkingFormat: id.toLowerCase().includes("claude") ? "claude" : "openai",
+      source: ["manifest", "provider", "models-dev", "heuristic", "default"].includes(raw.source) ? raw.source : "provider",
+    };
+  }
+
+  // 3. models.dev 匹配（清单未收录的模型从这里富化）
   const md = findInModelsDev(modelsDevData || cachedModelsDev, id, provider);
   if (md) {
     const mdEfforts = extractEffortsFromModelsDev(md);
@@ -480,20 +528,33 @@ function detectModelCapabilities(modelId, provider = "", modelsDevData = null) {
       id,
       name: md.name || id,
       reasoning,
-      reasoningEfforts: mdEfforts || (reasoning ? ["low", "medium", "high"] : []),
+      reasoningEfforts: mdEfforts || [],
       supportsTemperature: md.supportsTemperature !== false && !reasoning,
       thinkingFormat: md.thinkingFormat || (id.toLowerCase().includes("claude") ? "claude" : "openai"),
       source: "models-dev",
     };
   }
 
-  // 3. 启发式命名规则与默认回退
+  // 4. 启发式命名规则与默认回退
   const heuristic = heuristicCapabilities(id);
   return {
     id,
     name: id,
     ...heuristic,
   };
+}
+
+// 把同一组纯函数及其显式依赖注入两个工作台；不带 fetch、Node 依赖或服务器缓存。
+function browserModelCapabilitiesSource() {
+  return [
+    "const resolveClientModelCapabilities = (() => {",
+    "const ALL_THINKING_LEVELS = " + JSON.stringify(ALL_THINKING_LEVELS) + ";",
+    "const MANIFEST = " + JSON.stringify(MANIFEST).replace(/</g, "\\u003c") + ";",
+    "const cachedModelsDev = null;",
+    ...[normalizeModelId, modelNameEquivalent, findEntryByName, findInModelsDev,
+      extractEffortsFromModelsDev, heuristicCapabilities, detectModelCapabilities].map((fn) => fn.toString()),
+    "return detectModelCapabilities; })();",
+  ].join("\n");
 }
 
 /**
@@ -535,6 +596,8 @@ module.exports = {
   MODELS_DEV_URL,
   THINKING_LEVEL_LABELS,
   detectModelCapabilities,
+  browserModelCapabilitiesSource,
+  normalizeModelId,
   getModelsDevStatus,
   isReasoningModel,
   loadModelsDev,

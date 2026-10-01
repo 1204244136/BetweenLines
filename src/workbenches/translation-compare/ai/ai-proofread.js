@@ -134,13 +134,9 @@ const knownModelFallbacks = [
 ];
 
 
-const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
 // isGptModel 与共享传输层 (src/ai/llm-client.js) 同源，那里是唯一事实来源。
 
 function normalizeReasoningEffort(value, model, modelMeta = null) {
-  const effort = String(value || "").trim().toLowerCase();
-  if (isGptModel(model) && reasoningEfforts.has(effort)) return effort;
   return normalizeModelReasoningEffort(value, model, modelMeta);
 }
 
@@ -493,6 +489,8 @@ function cleanConfig(input = {}) {
   const concurrency = resolveConcurrencyCap(input);
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
   const model = String(input.model || defaults.model).trim();
+  const modelMeta = detectModelCapabilities(model, provider, null,
+    input.modelMeta?.id === model ? input.modelMeta : (Array.isArray(input.modelMetadata) ? input.modelMetadata.find((item) => item?.id === model) : null));
   // 特化侧档案：未知 id 一律回落到默认档案，避免旧客户端或手填值把提示词打空。
   // 档案决定默认提示词与两类辅助数据表，这里只解析一次。
   const profile = resolveProfile(input.profileId);
@@ -551,8 +549,9 @@ function cleanConfig(input = {}) {
     rowsSignature: String(input.rowsSignature || "").trim(),
     baseUrl: String(input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, ""),
     model,
-    reasoningEffort: (isGptModel(model) || isReasoningModel(model))
-      ? normalizeReasoningEffort(input.reasoningEffort, model)
+    modelMeta,
+    reasoningEffort: modelMeta.reasoning
+      ? normalizeReasoningEffort(input.reasoningEffort, model, modelMeta)
       : normalizeNonGptIntensity(input.reasoningEffort),
     apiKey: String(input.apiKey || "").trim(),
     systemPrompt: String(input.systemPrompt || "").trim() || proofreadPromptFor(proofreadMode, profileId).system,
@@ -584,10 +583,12 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
   const defaults = protocolDefaults[protocol] || fallbackDefaults;
   const model = String(input.model || defaults.model || "").trim();
   if (!model) return null;
+  const modelMeta = detectModelCapabilities(model, provider, null,
+    input.modelMeta?.id === model ? input.modelMeta : (Array.isArray(input.modelMetadata) ? input.modelMetadata.find((item) => item?.id === model) : null));
   const baseUrl = String(input.baseUrl || defaults.baseUrl || "").trim().replace(/\/+$/, "");
   const apiKey = String(input.apiKey || "").trim();
-  const reasoningEffort = (isGptModel(model) || isReasoningModel(model))
-    ? normalizeReasoningEffort(input.reasoningEffort, model)
+  const reasoningEffort = modelMeta.reasoning
+    ? normalizeReasoningEffort(input.reasoningEffort, model, modelMeta)
     : normalizeNonGptIntensity(input.reasoningEffort);
 
   // 各阶段各自的并发上限（预设里的 concurrency）；旧预设的 smartConcurrency + concurrencyMax 同样折算。
@@ -599,6 +600,7 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
     baseUrl,
     model,
     apiKey,
+    modelMeta,
     reasoningEffort,
     concurrency,
   };
@@ -1176,7 +1178,7 @@ function normalizeModelList(items, provider, modelsDevData = null) {
     const id = String(item.id || item.name || item.model || "").trim();
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const caps = detectModelCapabilities(id, provider, modelsDevData);
+    const caps = detectModelCapabilities(id, provider, modelsDevData, item);
     models.push({
       id,
       name: String(item.name || item.id || item.model || id),

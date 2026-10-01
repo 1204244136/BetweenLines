@@ -1,4 +1,5 @@
 const { normalizeConnectionConfig } = require("../../ai/connection-config");
+const { sanitizeModelMetadata } = require("./model-options");
 
 // Pure helpers shared by the generated browser page and Node regression tests.
 // 浏览器先注入共享 normalizeConnectionConfig，再注入本工厂。
@@ -108,6 +109,7 @@ function createPresetTools() {
       apiKey,
       model,
       modelOptions,
+      modelMetadata: sanitizeModelMetadata(item.modelMetadata),
       reasoningEffort,
       gptReasoningEffort,
       nonGptIntensity,

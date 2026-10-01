@@ -10,6 +10,15 @@
 
 ---
 
+## 模型能力与思考档位
+
+- `ai/model-capabilities.js` 是两端能力识别的唯一实现；`browserModelCapabilitiesSource()` 将清单与纯解析函数、显式依赖注入翻译比较和说话人工作台，不带网络调用或服务端缓存。`workbench-shared.js` 不得另写一套模型正则。
+- 能力优先级为内置人工清单、端点声明、models.dev、名称启发式、保守默认。端点读取 `reasoning_supported_efforts` / `reasoningSupportedEfforts` / `reasoning_efforts` / `reasoningEfforts` 及 `reasoning_options` 中 effort 类型的 values；没有声明档位的推理模型只允许模型默认，不臆造 low/medium/high。
+- 名字匹配可剥显式区域前缀、vendor 前缀及档位变体后缀，但请求与显示 ID 不变。`max` 模型档和 Ollama 冒号标签不得误剥。网关在 models.dev 未注册时先查可识别的上游厂商，再跨提供方查找。
+- Gemini 3.8 Flash 路由清单限定 low/medium/high；客户端、配置清洗、子阶段、角色上下文及请求体均遵守该档位集，思考参数不能错误映射成 temperature。
+- 预设与全局/项目配置通过 `modelMetadata` 保存能力白名单；浏览器恢复时继续核对模型列表的接口地址，并在切换连接后清除旧能力。请求携带的 `modelMeta` 必须与当前模型 ID 完全相同才参与解析；各阶段从自己的预设选择能力，禁止借用主配置的同名模型能力。
+- 回归：`node --test scripts/ai-model-capabilities.test.js scripts/ai-provider-config.test.js scripts/translation-module-boundaries.test.js`，修改共享浏览器规则后还须运行 `npm test`。
+
 ## 提示词五层组装体系
 
 提示词按**五层**组装，权威定义写在 `proofread-contract.js` 顶部（改分层前先读那段），任何模块都不得另立一套口径：

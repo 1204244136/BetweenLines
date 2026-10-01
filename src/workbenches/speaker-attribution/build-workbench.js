@@ -25,6 +25,7 @@ const {
   speakerPrompt,
 } = require("./attention");
 const { inferSpeakerBatch } = require("./ai/speaker-inference");
+const { browserModelCapabilitiesSource } = require("../translation-compare/ai/model-capabilities");
 
 const outputDir = path.resolve(
   process.env.BETWEENLINES_SPEAKER_OUTPUT_DIR
@@ -466,6 +467,7 @@ function renderHtml(model) {
 <script id="rowData" type="application/json">${rowsJson}</script><script>
 window.speakerStorageKey = ${safeJson(`between-lines:speaker-attribution:${model.analysisKey}:v2`)};
 window.speakerPageMeta = ${safeJson(pageMeta)};
+${browserModelCapabilitiesSource()}
 ${assets.workbenchShared}
 ${assets.workbenchClient}
 </script></body></html>`;

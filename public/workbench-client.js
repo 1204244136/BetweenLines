@@ -906,7 +906,7 @@
       const mode = isReasoning ? "reasoning" : "temperature";
       const reasoningEfforts = Array.isArray(caps.reasoningEfforts) && caps.reasoningEfforts.length > 0
         ? caps.reasoningEfforts
-        : ["low", "medium", "high"];
+        : [];
 
       const reasoningOptions = buildReasoningOptions(caps);
 
@@ -1030,7 +1030,8 @@
         aiIds.apiKey.value = preset.apiKey;
       }
       const options = [...new Set([...(preset.modelOptions || []), preset.model].filter(Boolean))];
-      setModelOptions(options, { selected: preset.model || "" });
+      const metadata = new Map((preset.modelMetadata || []).map((item) => [item.id, item]));
+      setModelOptions(options.map((id) => metadata.get(id) || id), { selected: preset.model || "" });
       aiIds.model.dataset.touched = "1";
 
       const validGptValues = gptReasoningOptions.map(([value]) => value);
@@ -1038,7 +1039,9 @@
       savedGptReasoningEffort = validGptValues.includes(preset.gptReasoningEffort) ? preset.gptReasoningEffort : "";
       savedNonGptIntensity = validIntensityValues.includes(preset.nonGptIntensity) ? preset.nonGptIntensity : "";
       updateInferenceSettingOptions();
-      aiIds.reasoningEffort.value = preset.reasoningEffort || "";
+      const caps = getClientModelCapabilities(preset.model);
+      const allowed = caps.reasoning ? buildReasoningOptions(caps) : nonGptIntensityOptions;
+      aiIds.reasoningEffort.value = allowed.some(([value]) => value === preset.reasoningEffort) ? preset.reasoningEffort : "";
       rememberInferenceSetting();
       syncEnhancedSelect(aiIds.reasoningEffort);
       if (preset.concurrency != null) {
@@ -1064,6 +1067,7 @@
         gptReasoningEffort: savedGptReasoningEffort,
         nonGptIntensity: savedNonGptIntensity,
         modelOptions: aiModelOptions,
+        modelMetadata: sanitizeModelMetadata([...aiModelMetadataMap.values()]),
         modelOptionsBaseUrl: aiModelOptions.length && aiIds.baseUrl ? normalizeApiBaseUrl(aiIds.baseUrl.value) : (prevSaved.modelOptionsBaseUrl || ""),
         apiKey: aiIds.apiKey ? aiIds.apiKey.value : (prevSaved.apiKey || ""),
         proofreadMode: aiIds.proofreadMode ? aiIds.proofreadMode.value : (prevSaved.proofreadMode || ""),
@@ -3722,6 +3726,7 @@
       let mainProvider = aiIds.provider.value.trim();
       let mainBaseUrl = aiIds.baseUrl.value;
       let mainModel = aiIds.model.value;
+      let mainModelMeta = aiModelMetadataMap.get(mainModel);
       let mainReasoningEffort = aiIds.reasoningEffort.value;
       let mainApiKey = aiIds.apiKey.value;
 
@@ -3734,6 +3739,7 @@
           mainProvider = s1Preset.provider;
           mainBaseUrl = s1Preset.baseUrl;
           mainModel = s1Preset.model;
+          mainModelMeta = s1Preset.modelMetadata?.find((item) => item.id === mainModel);
           mainReasoningEffort = s1Preset.reasoningEffort;
           mainApiKey = s1Preset.apiKey;
           if (s1Preset.concurrency != null) mainConcurrency = Number(s1Preset.concurrency);
@@ -3752,6 +3758,7 @@
         provider: mainProvider,
         baseUrl: mainBaseUrl,
         model: mainModel,
+        modelMeta: mainModelMeta,
         reasoningEffort: mainReasoningEffort,
         apiKey: mainApiKey,
         proofreadMode: aiIds.proofreadMode.value,
@@ -4997,6 +5004,7 @@
           apiKey: aiIds.apiKey.value,
           model: aiIds.model.value,
           modelOptions: aiModelOptions,
+          modelMetadata: sanitizeModelMetadata([...aiModelMetadataMap.values()]),
           reasoningEffort: aiIds.reasoningEffort.value,
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,
@@ -5037,6 +5045,7 @@
           apiKey: aiIds.apiKey.value,
           model: aiIds.model.value,
           modelOptions: aiModelOptions.length ? aiModelOptions : current.modelOptions,
+          modelMetadata: sanitizeModelMetadata([...aiModelMetadataMap.values()]),
           reasoningEffort: aiIds.reasoningEffort.value,
           gptReasoningEffort: savedGptReasoningEffort,
           nonGptIntensity: savedNonGptIntensity,

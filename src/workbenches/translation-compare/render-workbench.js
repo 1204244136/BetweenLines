@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
 const { protocolDefaults } = require("./ai/proofread-defaults");
+const { browserModelCapabilitiesSource } = require("./ai/model-capabilities");
 const { proofreadPromptFor, listProfiles } = require("./ai/proofread-contract");
 const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
@@ -11,7 +12,7 @@ const { normalizeConnectionConfig } = require("../../ai/connection-config");
 const { createStageNoteTools } = require("./ai/stage-note-state");
 const { AI_CONCURRENCY_LIMITS: concurrencyLimits } = require("./ai/concurrency-limits");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
-const { resolveModelOptions, normalizeApiBaseUrl, restorableModelOptions } = require("./model-options");
+const { resolveModelOptions, normalizeApiBaseUrl, restorableModelOptions, sanitizeModelMetadata } = require("./model-options");
 const { alignLegacyNotes, alignNotesByIndex } = require("./notes-recovery");
 const { loadJpPivotLang } = require("./alignment-artifact");
 const { workbenchClientRows } = require("./row-output");
@@ -547,6 +548,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${alignNotesByIndex.toString()}
     ${createNotesTools.toString()}
     ${normalizeConnectionConfig.toString()}
+    ${sanitizeModelMetadata.toString()}
     ${createPresetTools.toString()}
     ${createStageNoteTools.toString()}
     const { latestAiNotePart, stageNoteState } = createStageNoteTools();
@@ -564,6 +566,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 
     const storageKey = ${JSON.stringify(storageKey)};
     const pageMeta = ${safeJson(clientMeta)};
+${browserModelCapabilitiesSource()}
 ${assets.workbenchShared}
 ${assets.workbenchDiff}
 ${assets.workbenchClient}</script>

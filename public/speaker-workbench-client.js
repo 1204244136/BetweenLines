@@ -761,9 +761,10 @@
     const isReasoning = Boolean(caps.reasoning);
     const mode = isReasoning ? "reasoning" : "temperature";
     const reasoningOptions = buildReasoningOptions(caps);
+    const previousEffort = aiReasoningEffort.value;
     const reasoningEfforts = Array.isArray(caps.reasoningEfforts) && caps.reasoningEfforts.length > 0
       ? caps.reasoningEfforts
-      : ["low", "medium", "high"];
+      : [];
 
     const currentEffortsKey = isReasoning ? reasoningEfforts.join(",") : "text-intensity";
     if (aiReasoningEffort.dataset.effortsKey !== currentEffortsKey) {
@@ -772,6 +773,8 @@
       aiReasoningEffort.dataset.mode = mode;
       aiReasoningEffort.dataset.effortsKey = currentEffortsKey;
     }
+    const allowed = isReasoning ? reasoningOptions : nonReasoningIntensityOptions;
+    aiReasoningEffort.value = allowed.some(([value]) => value === previousEffort) ? previousEffort : "";
 
     aiReasoningEffort.title = isReasoning
       ? ("该推理模型专属的推理强度档位（数据源：" + (caps.source || "检测") + "，绝不套用统一档位）")
@@ -958,6 +961,7 @@
       baseUrl: aiBaseUrl?.value || "",
       apiKey: aiApiKey?.value || "",
       model: aiModel?.value || "qwen2.5:14b-instruct",
+      modelMeta: aiModelMetadataMap.get(aiModel?.value),
       reasoningEffort: aiReasoningEffort?.value || "",
       concurrency: Math.max(1, Math.min(8, Number(aiConcurrency?.value || 3))),
     };
@@ -1137,7 +1141,7 @@
     if (!aiModel) return;
     const list = Array.isArray(models) ? models : [];
     const currentVal = selectedModel || aiModel.value;
-
+    aiModelMetadataMap.clear();
     for (const item of list) {
       if (item && typeof item === "object" && item.id) {
         aiModelMetadataMap.set(item.id, item);

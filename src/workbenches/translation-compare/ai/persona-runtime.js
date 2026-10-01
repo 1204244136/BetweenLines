@@ -449,7 +449,8 @@ function parseArbiterResponse(content) {
 function createPersonaContext(persona, baseConfig = {}, options = {}) {
   const validPersona = PERSONAS.includes(persona) ? persona : "gatekeeper";
   const def = PERSONA_DEFINITIONS[validPersona];
-  const caps = detectModelCapabilities(baseConfig.model, baseConfig.provider);
+  const caps = detectModelCapabilities(baseConfig.model, baseConfig.provider, null,
+    baseConfig.modelMeta?.id === baseConfig.model ? baseConfig.modelMeta : null);
   const reasoningEffort = adaptPersonaReasoningEffort(validPersona, baseConfig.reasoningEffort, caps);
 
   return {

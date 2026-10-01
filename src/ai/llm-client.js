@@ -145,17 +145,18 @@ function normalizeNonGptTemperature(value) {
 
 /**
  * 构造请求体。`options.effortNormalizer(value, model, caps)` 允许领域层替换推理档位归一化
- * （AI 校对对 GPT 系列放行任意合法档位）；不传时用模型元数据表的口径。
+ * ；不传时用模型元数据表的口径，仅允许该模型明确支持的档位。
  */
 function buildChatCompletionBody(messages, config = {}, modelMeta = null, options = {}) {
-  const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
+  const caps = modelMeta || detectModelCapabilities(config.model, config.provider, null,
+    config.modelMeta?.id === config.model ? config.modelMeta : null);
   const normalizeEffort = options.effortNormalizer || normalizeModelReasoningEffort;
   const body = {
     model: config.model,
     messages,
     stream: false,
   };
-  if (caps.reasoning || isGptModel(config.model)) {
+  if (caps.reasoning) {
     const effort = normalizeEffort(config.reasoningEffort, config.model, caps);
     if (effort && effort !== "off" && effort !== "none") {
       body.reasoning_effort = effort;
@@ -170,7 +171,8 @@ function buildChatCompletionBody(messages, config = {}, modelMeta = null, option
 }
 
 function buildClaudeMessageBody(messages, config = {}, modelMeta = null) {
-  const caps = modelMeta || detectModelCapabilities(config.model, config.provider);
+  const caps = modelMeta || detectModelCapabilities(config.model, config.provider, null,
+    config.modelMeta?.id === config.model ? config.modelMeta : null);
   const system = messages
     .filter((message) => message.role === "system")
     .map((message) => String(message.content || ""))
@@ -370,7 +372,7 @@ async function listProviderModels(config = {}, options = {}) {
     const id = String(item.id || item.name || item.model || "").trim();
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const caps = detectModelCapabilities(id, provider);
+    const caps = detectModelCapabilities(id, provider, null, item);
     models.push({
       id,
       name: String(item.name || item.id || id),

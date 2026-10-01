@@ -158,38 +158,16 @@ const aiModelMetadataMap = new Map();
 
 function getClientModelCapabilities(modelName) {
   const id = String(modelName || "").trim();
-  if (aiModelMetadataMap.has(id)) {
-    return aiModelMetadataMap.get(id);
-  }
-  const lower = id.toLowerCase();
-  if (/(?:^|\/)(?:o1|o3|o4)(?:-|$)/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["low", "medium", "high"], supportsTemperature: false, source: "heuristic" };
-  }
-  if (/(?:^|\/)(?:deepseek-(?:r1|reasoner|v4)|r1\b)/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["high", "max"], supportsTemperature: false, source: "heuristic" };
-  }
-  if (/(?:^|\/)(?:qwq|qvq)\b/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["low", "medium", "high", "xhigh"], supportsTemperature: false, source: "heuristic" };
-  }
-  if (/(?:^|\/)kimi-k3\b/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["max"], supportsTemperature: false, source: "heuristic" };
-  }
-  if (/(?:^|\/)claude-(?:3-7|sonnet-4|sonnet-5|opus-4)/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["low", "medium", "high", "max"], supportsTemperature: true, source: "heuristic" };
-  }
-  if (/(?:^|\/)gpt(?:-|$)/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], supportsTemperature: true, source: "heuristic" };
-  }
-  if (/(?:^|\/|-|_|\b)(?:thinking|reasoner|reasoning)\b/i.test(lower)) {
-    return { reasoning: true, reasoningEfforts: ["low", "medium", "high"], supportsTemperature: false, source: "heuristic" };
-  }
-  return { reasoning: false, reasoningEfforts: [], supportsTemperature: true, source: "default" };
+  const resolve = typeof resolveClientModelCapabilities === "function"
+    ? resolveClientModelCapabilities
+    : require("../src/workbenches/translation-compare/ai/model-capabilities").detectModelCapabilities;
+  return resolve(id, "", {}, aiModelMetadataMap.get(id));
 }
 
 function buildReasoningOptions(caps) {
   const reasoningEfforts = Array.isArray(caps?.reasoningEfforts) && caps.reasoningEfforts.length > 0
     ? caps.reasoningEfforts
-    : ["low", "medium", "high"];
+    : [];
   return [
     ["", "模型默认"],
     ...reasoningEfforts.map((effort) => [effort, thinkingLevelLabels[effort] || effort]),
