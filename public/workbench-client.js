@@ -542,7 +542,7 @@
       banner.hidden = !failed;
       banner.textContent = notesStorageBlocked
         ? "本页空间无法解析或已被其他页面修改，已暂停保存。请先导出本页记录，再刷新页面核对；本地原始数据仍保留。"
-        : "本地存储写入失败，本次修改仅在页面内存中。请先导出本页记录，清理已备份的历史空间后点击「重试保存」。";
+        : "本地存储写入失败：这些修改只在当前页面内存里，刷新或关闭本页就会丢失。请先导出本页记录，清理已备份的历史空间后点击「重试保存」。";
       const retry = document.getElementById("retryNotesSave");
       if (retry) retry.hidden = !notesPersistFailed || notesStorageBlocked;
     }
@@ -5259,6 +5259,13 @@
       }, 200);
     });
     window.addEventListener("pagehide", flushNotes);
+    // 保存没成功时，这批备注只活在当前页面内存里：刷新、关闭标签页或浏览器回收都会让它们消失。
+    // 浏览器只在用户与页面交互过之后才显示这个原生确认框，正常浏览时不会被打扰。
+    window.addEventListener("beforeunload", (event) => {
+      if (!notesPersistFailed && !notesStorageBlocked) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) flushNotes();
     });
@@ -6156,7 +6163,18 @@
     document.getElementById("retryNotesSave").addEventListener("click", () => {
       saveNotes({ immediate: true });
       renderNotesSpaces();
-      if (!notesPersistFailed && !notesStorageBlocked) notesPanelStatus("本页记录已保存。", { tone: "success" });
+      if (!notesPersistFailed && !notesStorageBlocked) {
+        notesPanelStatus("本页记录已保存。", { tone: "success" });
+        return;
+      }
+      // 重试仍然失败时必须明说：原来只在成功时给回执，失败时横幅虽然还在，但用户点完按钮
+      // 看不出「这次到底成没成」，很容易以为已经存好、转头去刷新页面——那会把只存在内存里的
+      // 这批 AI 结果直接丢掉。
+      notesPanelStatus(
+        notesStorageBlocked
+          ? "仍然无法保存：本页空间已被其他页面修改或无法解析。请先导出本页记录，再刷新页面核对。"
+          : "仍然保存失败：浏览器本地存储已满。请先导出本页记录，再清理更多历史空间后重试；在保存成功前不要刷新本页。",
+        { tone: "error" });
     });
     notesPanelIds.panel.addEventListener("toggle", () => {
       if (notesPanelIds.panel.open) renderNotesSpaces();

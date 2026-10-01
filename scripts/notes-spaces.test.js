@@ -114,6 +114,31 @@ test("第二页面更改活动空间不会被延迟保存或重试覆盖", async
   assert.equal(ui.element("notesSaveWarning").hidden, false);
 });
 
+test("本地存储写满：警告要写明刷新会丢，「重试保存」重试失败也必须明说", async () => {
+  const ui = createWorkbench(storageFixture({ [key]: "{}" }));
+  // 让当前空间的写入一直抛配额异常，模拟浏览器本地存储写满。
+  const originalSet = ui.storage.setItem.bind(ui.storage);
+  ui.storage.setItem = (k, v) => { if (k === key) throw Error("QuotaExceededError"); originalSet(k, v); };
+
+  ui.run('notes["1"] = { note: "复审结论" }; persistNotes();');
+  assert.equal(ui.run("notesPersistFailed"), true);
+  assert.equal(ui.element("notesSaveWarning").hidden, false);
+  assert.match(ui.element("notesSaveWarning").textContent, /刷新或关闭本页就会丢失/);
+  assert.equal(ui.element("retryNotesSave").hidden, false, "写满时要露出「重试保存」");
+
+  // 重试仍然失败：必须给出「仍然失败」的回执。原来只在成功时给回执，用户点完按钮看不出
+  // 这次到底成没成，很容易以为已经存好、转头去刷新页面，把只在内存里的这批结果丢掉。
+  await ui.element("retryNotesSave").dispatch("click");
+  assert.match(ui.element("notesPanelStatus").textContent, /仍然保存失败/);
+  assert.equal(ui.run('notes["1"].note'), "复审结论", "保存失败不影响内存里的记录");
+
+  // 放开配额后重试成功：回执转为成功，内容落盘。
+  ui.storage.setItem = originalSet;
+  await ui.element("retryNotesSave").dispatch("click");
+  assert.match(ui.element("notesPanelStatus").textContent, /本页记录已保存/);
+  assert.equal(JSON.parse(ui.storage.getItem(key))[1].note, "复审结论");
+});
+
 test("找回排除歧义签名并将文本推断标记为未核验", () => {
   const rows = [{ index: 1, signature: "same" }, { index: 2, signature: "same" }];
   assert.equal(helpers.plan({ 3: { note: "note", rowSig: "same" } }, rows, {}).pairs.length, 0);
