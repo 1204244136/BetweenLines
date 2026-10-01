@@ -543,7 +543,7 @@ test("客户端看板：各阶段调用异常与错误能够对应到对应阶�
   assert.equal(ui.element("stage3ErrorItem").classList.contains("has-errors"), false);
 });
 
-test("客户端看板：异常悬停提示按类别展开问题、行号与代表性错误", () => {
+test("客户端看板：异常悬停提示只给类别与数量，不列行号", () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -565,10 +565,11 @@ test("客户端看板：异常悬停提示按类别展开问题、行号与代�
 
   assert.equal(ui.element("metricStage1Errors").textContent, 3);
   const title = ui.element("stage1ErrorItem").title;
-  assert.match(title, /^阶段一 事实初审 · 异常 3 行/, "悬停标题先给总数");
-  assert.match(title, /· 请求超时：2 行（第 1 行、第 2 行）/, "同类问题合并计数并列出出错行号");
-  assert.match(title, /· 频控限流：1 行（第 3 行）/);
-  assert.match(title, /请求超时，网络连接超时或模型响应过慢。/, "带出该类问题的代表性错误消息");
+  assert.deepEqual(title.split("\n"), [
+    "阶段一 事实初审 · 异常 3 行",
+    "· 频控限流：1 行",
+    "· 请求超时：2 行",
+  ], "同类问题合并计数、按固定展示顺序排列，但不列行号、不带代表性错误消息");
 });
 
 test("客户端看板：服务端回报的异常分类明细并入悬停提示", () => {
@@ -592,7 +593,7 @@ test("客户端看板：服务端回报的异常分类明细并入悬停提示",
   assert.equal(ui.element("metricStage3Errors").textContent, 2);
   assert.equal(item.classList.contains("has-errors"), true);
   assert.match(item.title, /^阶段三 终审仲裁 · 异常 2 行/);
-  assert.match(item.title, /· 服务端错误：2 行（第 7 行、第 9 行）/);
+  assert.deepEqual(item.title.split("\n"), ["阶段三 终审仲裁 · 异常 2 行", "· 服务端错误：2 行"]);
 });
 
 test("客户端看板：异常清零后悬停提示恢复构建器写入的静态说明", () => {

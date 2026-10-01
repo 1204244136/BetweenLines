@@ -39,11 +39,9 @@ const AI_ERROR_KIND_LABELS = {
   unknown: "其他错误",
 };
 
-/** 每类异常最多留多少个行号样本：明细用于定位，不承担完整台账。 */
+/** 每类异常最多留多少个行号样本：行号是两端口径合并时的去重键，不是给人看的台账。 */
 const AI_ERROR_ROW_SAMPLE_LIMIT = 200;
-/** 悬停文本里每类最多列几个行号，其余折叠成「另有 N 行」。 */
-const AI_ERROR_ROW_DISPLAY_LIMIT = 12;
-/** 悬停文本里样本错误消息的截断长度。 */
+/** 明细里样本错误消息的截断长度：样本随状态接口回报，不进入悬停文本。 */
 const AI_ERROR_SAMPLE_DISPLAY_LIMIT = 120;
 
 /**
@@ -190,19 +188,9 @@ function sortAiErrorKinds(kinds) {
 }
 
 /**
- * total 是这一类的真实行数：行号样本有上限（AI_ERROR_ROW_SAMPLE_LIMIT），超出的行只有计数、没有行号，
- * 「另有 N 行」必须按总数算，否则出错行数超过样本上限时会少报。
- */
-function formatAiErrorRowList(rows, limit = AI_ERROR_ROW_DISPLAY_LIMIT, total = 0) {
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) return "";
-  const shown = list.slice(0, limit).map((row) => `第 ${row} 行`);
-  const rest = Math.max(list.length, Number(total) || 0) - shown.length;
-  return `（${shown.join("、")}${rest > 0 ? `，另有 ${rest} 行` : ""}）`;
-}
-
-/**
- * 生成「异常」指标的悬停文本：一行总数 + 每类一行明细（含行号样本与该类的代表性错误消息）。
+ * 生成「异常」指标的悬停文本：一行总数 + 每类一行「类别：N 行」。
+ * 只回答「出了哪几类问题、各多少行」——行号与代表性消息都不进悬停文本：
+ * 异常定位靠失败备注与 AI 日志，把行号列进提示只会把它撑成一份台账。
  * 只有类别数、没有行号时（旧服务端未回报明细）也要给出可读提示，不能空着。
  */
 function formatAiErrorHoverTitle(stageLabel, total, kinds) {
@@ -215,24 +203,17 @@ function formatAiErrorHoverTitle(stageLabel, total, kinds) {
       ? `${head}\n（暂无可分类的失败明细：失败记录只保留在运行中的服务端，可对照 AI 日志逐条核对）`
       : head;
   }
-  const lines = [head];
-  for (const entry of entries) {
-    lines.push(`· ${entry.label}：${entry.count} 行${formatAiErrorRowList(entry.rows, AI_ERROR_ROW_DISPLAY_LIMIT, entry.count)}`);
-    if (entry.sample) lines.push(`    ${entry.sample}`);
-  }
-  return lines.join("\n");
+  return [head, ...entries.map((entry) => `· ${entry.label}：${entry.count} 行`)].join("\n");
 }
 
 module.exports = {
   AI_ERROR_KIND_ORDER,
   AI_ERROR_KIND_LABELS,
   AI_ERROR_ROW_SAMPLE_LIMIT,
-  AI_ERROR_ROW_DISPLAY_LIMIT,
   AI_ERROR_SAMPLE_DISPLAY_LIMIT,
   classifyAiError,
   recordAiErrorKind,
   mergeAiErrorKinds,
   sortAiErrorKinds,
-  formatAiErrorRowList,
   formatAiErrorHoverTitle,
 };
