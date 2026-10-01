@@ -62,9 +62,15 @@
 
 ## 特化档案与按行裁剪（Row Features & Entity Gating）
 
+### 规范来源与同步义务
+
+第 ③ 层的规范正文**不在本仓库**：上游 index-X 的 `docs/translation-spec.md` 是成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），`tools/check_translation_spec.py` 的 `P1`–`P15` 是同一规范的机器检查实现；`translation-name-selection-spec.md` 管译名在候选之间怎么取舍，`translation-name-rulings.md` 是已生效裁定的总表，`x-translation-differences.md` 是与维基译名表的人为固有差异（属取舍，不得按表回改）。
+
+`profiles/novel.js`（通用成品规范）与 `profiles/demo.js`（作品取值）是同一规范在 AI 校对层的实现，属上游声明的「规范正文 → 机器检查 → AI 档案」三处同步之一：上游改规范要同步这里的条目，这里补条目也要回头校准 `translation-spec.md` §七 的「AI 档案」列。三处口径不一致时以上游规范正文为准。逐条对应关系见 `translation-spec.md` §七；其中 `P12`（单个省略号）与 `P15`（异形词）有意不在 AI 档案里单列。
+
 第 ③ 层分**三种**条目形态（写法与选择标准写在 `profiles/novel.js` 文件头）：
 1. **字符串**＝常驻（语义判断类：遗漏信息、否定时态、译名一致性、作品专有写法、证据边界）。
-2. **`{ text, features: [...] }`**＝按行条目（离开特定版式/文字现象就无从谈起的规范：注音、傍点加粗、译注标记、分页图片、空行、省略号、「！？」、引号用途、括号与成对标记内侧的句末点号、连接词衔接、拟声词语气词、数字单位）。拿不准就写常驻。
+2. **`{ text, features: [...] }`**＝按行条目（离开特定版式/文字现象就无从谈起的规范：注音、傍点加粗、译注标记、分页图片、空行、省略号、「！？」、引号用途、括号与成对标记内侧的句末点号、间隔号与西文缩写、连接词衔接、拟声词语气词、数字单位）。拿不准就写常驻。
 3. **`{ text, characters: [...] }`**＝第三形态（实体条目），只在「这条规则离开那个名字就无从谈起」时使用。
 
 ### 裁剪规则与纪律
@@ -80,12 +86,14 @@
   - `fragment` 是保守现象探测：缺句末标点、以接续词/助词或逗号收尾均算命中。
   - `outOfScope` 只在目标文本出现特典、后记、译注、制作信息等类别词时命中。
   - `directionalSymbol` 负责通信标识等方向敏感符号（如 `∨` 与 `＞`）。
+  - `middleDot` 只探测**目标列**的间隔号与西文缩写（中文间隔号 `·`、日文点号 `・`、字母后的下脚点）：原文（日文）里的 `・` 本来就是日文点号，拿它触发会把整卷人名行都算进来，而这条规范管的是中文成品怎么写。
 - **实体闸门**（`ai/name-entities.js`）：档案用 `characters: ["甲野一郎"]` 声明适用范围，`detectRowEntities({ source, target, entities })` 命中才注入。
   - 声明名单只能由档案给出；
   - 探测不出按命中；
   - 长别名优先；
   - 必须能审计（走 `profileLineStats().entityGated/entitySkipped`、`promptLayerReport().entities` 与 `promptTrimSummary()`）。
 - `profiles/index.js` 的 `normalizeLine` 必须保留对象形态；声明了未注册特征的条目按常驻处理并告警一次。页面预填和审计用全量（`proofreadPromptFor(...).system`）；只有发请求时才按行裁剪，`TRANSCOMPARATOR_FULL_PROMPT=1` 可退回全量。
+- **常驻条目直接抬高每一行的成本**：`scripts/proofread-prompt-layers.test.js` 的「真实行样本保持压缩后的请求预算」用实测最坏行（带成对标记的 demo 行）锁定 system ≤ 4400、单行请求 ≤ 5300。新增规范时优先挂到按行特征上；确实要常驻的按实测值同步改基线，并在测试注释里写明本次新增了哪几条。
 
 ---
 
