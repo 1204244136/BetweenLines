@@ -226,88 +226,136 @@ function displayRequestUrl(value) {
   }
 }
 
-async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}) {
-  const controller = new AbortController();
-  let timedOut = false;
-  let abortedByCaller = false;
-  let requestStarted = false;
+function isRetryableStreamInterruption(error) {
+  if (!error || error.name === "AbortError") return false;
+  const text = [error.message, error.cause?.message].filter(Boolean).join(" ").toLowerCase();
+  const code = String(error.code || error.cause?.code || "").toUpperCase();
+  return error.code === "STREAM_INTERRUPTED"
+    || code === "UND_ERR_SOCKET"
+    || /terminated|socket hang up|error reading a body from connection|connection reset|other side closed|body.*(?:closed|aborted)/.test(text);
+}
 
-  const onCallerAbort = () => {
-    abortedByCaller = true;
-    controller.abort();
-  };
-  if (signal) {
-    if (signal.aborted) {
-      const err = new Error("操作已被取消");
-      err.name = "AbortError";
-      throw err;
-    }
-    signal.addEventListener("abort", onCallerAbort, { once: true });
+function waitForStreamRetry(delayMs, signal) {
+  if (signal?.aborted) {
+    const error = new Error("操作已被取消");
+    error.name = "AbortError";
+    error.code = "ABORTED";
+    return Promise.reject(error);
   }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      const error = new Error("操作已被取消");
+      error.name = "AbortError";
+      error.code = "ABORTED";
+      reject(error);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
-  let timeout = null;
+async function fetchJson(url, options, {
+  timeoutMs = 90000,
+  signal = null,
+  // 流中断发生在 HTTP 200 之后，通常是代理/上游连接短暂断开；只重发完整请求，
+  // 不把它交给阶段并发调度器下调并发。调用方仍可通过 signal 立即取消。
+  maxStreamRetries = 2,
+  streamRetryDelayMs = 250,
+} = {}) {
+  // 出站地址安全校验可能包含 DNS 解析，只做一次，且不占用每次请求的响应超时预算。
+  const safeUrl = await assertSafeOutboundUrl(url);
+  let streamRetry = 0;
 
-  try {
-    // 出站地址安全校验可能包含 DNS 解析。它发生在真正发起 HTTP 请求之前，
-    // 因此不能占用“请求响应超时”预算；否则 DNS/安全校验先耗尽预算后，
-    // fetch 看到的是已中止的 signal，调用方会误以为模型端请求超时，
-    // 而提供商端根本没有收到请求。
-    const safeUrl = await assertSafeOutboundUrl(url);
-    if (abortedByCaller || signal?.aborted) {
-      const abortError = new Error("请求已被取消");
-      abortError.name = "AbortError";
-      abortError.code = "ABORTED";
-      throw abortError;
-    }
-    timeout = setTimeout(() => {
-      timedOut = true;
+  while (true) {
+    const controller = new AbortController();
+    let timedOut = false;
+    let abortedByCaller = false;
+    let requestStarted = false;
+    let timeout = null;
+    const onCallerAbort = () => {
+      abortedByCaller = true;
       controller.abort();
-    }, timeoutMs);
-    requestStarted = true;
-    const response = await fetch(safeUrl, {
-      ...options,
-      redirect: "manual",
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
-      error.code = "HTTP_ERROR";
-      error.httpStatus = response.status;
-      error.responseBody = text;
-      const retryAfter = response.headers?.get?.("retry-after");
-      if (retryAfter) error.retryAfter = retryAfter;
-      throw error;
-    }
-    if (!text) return {};
-    try {
-      return JSON.parse(text);
-    } catch (cause) {
-      const contentType = response.headers.get("content-type") || "未知类型";
-      const preview = text.replace(/\s+/g, " ").trim().slice(0, 160);
-      const error = new Error(`${displayRequestUrl(url)} 返回了非 JSON 响应（${contentType}）：${preview || "空响应"}`);
-      error.code = "INVALID_JSON_RESPONSE";
-      error.cause = cause;
-      throw error;
-    }
-  } catch (error) {
-    // 调用方主动停止优先于同时到达的本地计时器，避免把用户取消记成超时。
-    if (abortedByCaller && error?.name === "AbortError") {
-      const abortError = new Error("请求已被取消");
-      abortError.name = "AbortError";
-      abortError.code = "ABORTED";
-      throw abortError;
-    }
-    if (timedOut && requestStarted && error?.name === "AbortError") {
-      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
-      timeoutError.code = "REQUEST_TIMEOUT";
-      throw timeoutError;
-    }
-    throw error;
-  } finally {
-    if (timeout) clearTimeout(timeout);
+    };
     if (signal) {
-      signal.removeEventListener("abort", onCallerAbort);
+      if (signal.aborted) {
+        const error = new Error("操作已被取消");
+        error.name = "AbortError";
+        error.code = "ABORTED";
+        throw error;
+      }
+      signal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+
+    try {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      requestStarted = true;
+      const response = await fetch(safeUrl, {
+        ...options,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      let text;
+      try {
+        text = await response.text();
+      } catch (cause) {
+        if (!abortedByCaller && !timedOut && isRetryableStreamInterruption(cause)) {
+          const error = new Error(`${displayRequestUrl(url)} 响应流中断：${cause.message || String(cause)}`);
+          error.code = "STREAM_INTERRUPTED";
+          error.retryable = true;
+          error.cause = cause;
+          throw error;
+        }
+        throw cause;
+      }
+      if (!response.ok) {
+        const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
+        error.code = "HTTP_ERROR";
+        error.httpStatus = response.status;
+        error.responseBody = text;
+        const retryAfter = response.headers?.get?.("retry-after");
+        if (retryAfter) error.retryAfter = retryAfter;
+        throw error;
+      }
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch (cause) {
+        const contentType = response.headers.get("content-type") || "未知类型";
+        const preview = text.replace(/\s+/g, " ").trim().slice(0, 160);
+        const error = new Error(`${displayRequestUrl(url)} 返回了非 JSON 响应（${contentType}）：${preview || "空响应"}`);
+        error.code = "INVALID_JSON_RESPONSE";
+        error.cause = cause;
+        throw error;
+      }
+    } catch (error) {
+      if (abortedByCaller && error?.name === "AbortError") {
+        const abortError = new Error("请求已被取消");
+        abortError.name = "AbortError";
+        abortError.code = "ABORTED";
+        throw abortError;
+      }
+      if (timedOut && requestStarted && error?.name === "AbortError") {
+        const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
+        timeoutError.code = "REQUEST_TIMEOUT";
+        throw timeoutError;
+      }
+      if (isRetryableStreamInterruption(error) && streamRetry < maxStreamRetries && !signal?.aborted) {
+        streamRetry += 1;
+        await waitForStreamRetry(streamRetryDelayMs * streamRetry, signal);
+        continue;
+      }
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener("abort", onCallerAbort);
     }
   }
 }

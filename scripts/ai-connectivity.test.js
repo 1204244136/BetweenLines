@@ -392,6 +392,61 @@ test("共享 LLM 传输层：调用方取消优先于本地请求超时，且不
   }
 });
 
+test("共享 LLM 传输层：HTTP 200 后响应流中断时有限重试并恢复，不把瞬时断流交给并发降级", async () => {
+  let calls = 0;
+  const server = http.createServer((request, response) => {
+    calls += 1;
+    if (calls === 1) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"choices":[');
+      // 模拟网关已发送响应头、代理/上游随后断开连接。
+      response.socket.destroy();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"choices":[{"message":{"content":"ok"}}]}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const data = await fetchJson(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method: "POST",
+      body: "{}",
+    }, { streamRetryDelayMs: 1 });
+    assert.equal(data.choices[0].message.content, "ok");
+    assert.equal(calls, 2, "只重试流中断，不应重复多次请求");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("共享 LLM 传输层：响应流中断重试期间调用方取消会立即结束，不继续重发", async () => {
+  let calls = 0;
+  const server = http.createServer((request, response) => {
+    calls += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"choices":[');
+    response.socket.destroy();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const controller = new AbortController();
+  try {
+    const address = server.address();
+    const pending = fetchJson(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method: "POST",
+      body: "{}",
+    }, { signal: controller.signal, streamRetryDelayMs: 1000 });
+    setTimeout(() => controller.abort(), 10);
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.code, "ABORTED");
+      return true;
+    });
+    assert.equal(calls, 1, "取消后不得发起下一次流重试");
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("共享 LLM 传输层：buildProtocolHeaders 与 cleanJsonPayload", () => {
   const claudeHeaders = buildProtocolHeaders({ protocol: "claude", apiKey: "sk-ant-test" });
   assert.equal(claudeHeaders["x-api-key"], "sk-ant-test");

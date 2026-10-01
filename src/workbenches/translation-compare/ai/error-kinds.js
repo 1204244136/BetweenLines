@@ -88,7 +88,8 @@ function classifyAiError(input) {
   if (status >= 500) return "server_error";
   if (/server_error|服务端异常|服务端错误|内部发生错误|internal server error|http 5\d\d/.test(haystack)) return "server_error";
   // 9. 网络层
-  if (/econnrefused|enotfound|econnreset|eai_again|ehostunreach|fetch failed|socket hang up|连接被拒|域名解析|无法连接|网络|network error/.test(haystack)) {
+  if (code === "STREAM_INTERRUPTED"
+    || /stream interrupted|响应流中断|econnrefused|enotfound|econnreset|eai_again|ehostunreach|fetch failed|socket hang up|连接被拒|域名解析|无法连接|网络|network error/.test(haystack)) {
     return "network";
   }
   // 10. 配置缺失
