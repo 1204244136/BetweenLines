@@ -33,11 +33,11 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   const ui = createWorkbench();
 
   // Seed two presets
-  ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
     {
       id: "preset_claude",
       name: "Claude 文学润色",
-      provider: "claude",
+      protocol: "claude",
       baseUrl: "https://api.anthropic.com",
       model: "claude-3-7-sonnet",
       apiKey: "sk-claude",
@@ -45,7 +45,7 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
     {
       id: "preset_r1",
       name: "DeepSeek 推理仲裁",
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-reasoner",
       apiKey: "sk-deepseek",

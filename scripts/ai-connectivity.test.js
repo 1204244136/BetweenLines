@@ -7,7 +7,7 @@ const {
   diagnoseConnectivityError,
   assertSafeOutboundUrl,
   buildApiUrl,
-  buildProviderHeaders,
+  buildProtocolHeaders,
   buildChatCompletionBody,
   cleanJsonPayload,
   fetchJson,
@@ -60,14 +60,14 @@ test("testModelConnectivity: 针对 OpenAI 兼容协议正常响应返回连通�
   const port = await listen(mockServer);
   try {
     const result = await testModelConnectivity({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://${host}:${port}/v1`,
       apiKey: "sk-mock-key",
       model: "qwen2.5:7b",
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.provider, "compatible");
+    assert.equal(result.protocol, "compatible");
     assert.equal(result.model, "qwen2.5:7b");
     assert.ok(result.latencyMs >= 0);
     assert.equal(result.replyPreview, "Hello there!");
@@ -111,14 +111,14 @@ test("testModelConnectivity: 针对 Claude 原生 Messages 协议返回连通成
   const port = await listen(mockServer);
   try {
     const result = await testModelConnectivity({
-      provider: "claude",
+      protocol: "claude",
       baseUrl: `http://${host}:${port}`,
       apiKey: "sk-ant-test-key",
       model: "claude-3-5-sonnet",
     });
 
     assert.equal(result.ok, true);
-    assert.equal(result.provider, "claude");
+    assert.equal(result.protocol, "claude");
     assert.equal(result.model, "claude-3-5-sonnet");
     assert.ok(result.latencyMs >= 0);
     assert.equal(result.replyPreview, "Hi! How can I help?");
@@ -163,7 +163,7 @@ test("testModelConnectivity: 自适应处理推理模型 max_completion_tokens �
   const port = await listen(mockServer);
   try {
     const result = await testModelConnectivity({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://${host}:${port}/v1`,
       model: "my-custom-llm",
     });
@@ -221,7 +221,7 @@ test("testModelConnectivity: 参数校验与各种错误诊断诊断清晰", asy
 test("testModelConnectivity: 遇到服务拒绝连接 (ECONNREFUSED) 时返回诊断信息", async () => {
   // 请求一个确定没有服务的端口
   const result = await testModelConnectivity({
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "http://127.0.0.1:49999/v1",
     model: "qwen",
     timeoutMs: 2000,
@@ -368,12 +368,12 @@ test("共享 LLM 传输层：不自动跟随可能转向内网的重定向", asy
   }
 });
 
-test("共享 LLM 传输层：buildProviderHeaders 与 cleanJsonPayload", () => {
-  const claudeHeaders = buildProviderHeaders({ provider: "claude", apiKey: "sk-ant-test" });
+test("共享 LLM 传输层：buildProtocolHeaders 与 cleanJsonPayload", () => {
+  const claudeHeaders = buildProtocolHeaders({ protocol: "claude", apiKey: "sk-ant-test" });
   assert.equal(claudeHeaders["x-api-key"], "sk-ant-test");
   assert.equal(claudeHeaders["anthropic-version"], "2023-06-01");
 
-  const openaiHeaders = buildProviderHeaders({ provider: "compatible", apiKey: "sk-test" });
+  const openaiHeaders = buildProtocolHeaders({ protocol: "compatible", apiKey: "sk-test" });
   assert.equal(openaiHeaders.authorization, "Bearer sk-test");
 
   const parsed1 = cleanJsonPayload('```json\n{"speaker": "山田太郎", "confidence": 0.95}\n```');

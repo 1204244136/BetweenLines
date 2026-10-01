@@ -78,9 +78,13 @@
 
 ## AI 模型预设管理（`ai-presets.js`）
 
-- 存储键：`translation-compare-ai-presets-v1`。
-- 包含完整连接与模型参数（`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
-- 当前预设 ID 保存在 `translation-compare-ai-config-v1` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。
+- 存储键：`translation-compare-ai-presets-v2`。
+- 包含完整连接与模型参数（`protocol`、`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。`protocol` 只表示接口类型（`local` / `claude` / `compatible`）；`provider` 是可选的供应商名称，不参与传输协议选择。缺少 `protocol` 却携带 `provider` 的请求直接拒绝，运行路径不得将旧 `provider` 当接口类型。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
+- 当前预设 ID 保存在 `translation-compare-ai-config-v2` 与 `translation-compare-ai-project-config-v2:<projectKey>` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。共享传输层、模型列表、连通性测试、任务状态和子阶段配置均使用新字段，接口默认配置统一名为 `protocolDefaults`。
+- 预设按「供应商身份 + 名称」判重：有名称时 trim 后忽略大小写；未命名时使用协议与规范化地址。展示地址不包含 URL 凭证、查询串或片段。不同供应商同名预设保持独立 ID；按 ID 修改供应商时遇到同名冲突必须拒绝，不得合并 ID 或改变已有阶段引用。
+- 主预设与三个阶段使用同一分组及标签函数；增强下拉必须保留原生 `optgroup` 分组提示。阶段一读取预设时完整使用预设连接参数，空 API Key 与默认推理强度也不能借用主配置。切换预设时清空旧模型能力缓存，异步模型列表与测试回包须核对协议、供应商、地址和 Key，避免同名模型跨连接污染。
+- 提供商名称使用可输入 combobox，复用工作台的 `select-menu` / `select-option` 与箭头样式；不得使用浏览器原生 `datalist` 弹层。支持输入筛选、鼠标选择、方向键和 Enter 确认、Escape/Tab/失焦关闭；公共下拉关闭逻辑须同步清理 `aria-expanded` 与 `aria-activedescendant`。
+- 回归：`node --test scripts/ai-model-presets.test.js scripts/ai-provider-config.test.js scripts/stage-preset-binding.test.js scripts/ai-connectivity.test.js`。
 - 支持下拉切换、覆盖保存、另存为和删除预设，操作回执均通过 Toast 提示。
 
 ---

@@ -119,13 +119,13 @@ test("智能并发：错误检测准确识别速率限制、过载与并发信�
 test("并发上限：预设只保存一个并发上限，旧预设的智能并发字段折算后丢弃", () => {
   const tools = createPresetTools();
 
-  const cleanedDefault = tools.sanitizePreset({ name: "默认预设", provider: "local" });
+  const cleanedDefault = tools.sanitizePreset({ name: "默认预设", protocol: "local" });
   assert.equal(cleanedDefault.concurrency, 3);
   assert.equal("smartConcurrency" in cleanedDefault, false);
   assert.equal("concurrencyMax" in cleanedDefault, false);
 
   // 旧预设：开启智能并发时有效上限是 max(concurrency, concurrencyMax)。
-  const legacySmart = tools.sanitizePreset({ name: "自适应预设", provider: "compatible", smartConcurrency: true, concurrency: 5, concurrencyMax: 15 });
+  const legacySmart = tools.sanitizePreset({ name: "自适应预设", protocol: "compatible", smartConcurrency: true, concurrency: 5, concurrencyMax: 15 });
   assert.equal(legacySmart.concurrency, 15);
   assert.equal("smartConcurrency" in legacySmart, false);
   assert.equal("concurrencyMax" in legacySmart, false);
@@ -200,7 +200,7 @@ test("并发上限界面：页面只有一个「并发上限」输入，没有�
   const input = ui.element("aiConcurrency");
   input.value = "12";
   await input.dispatch("change");
-  const saved = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
+  const saved = JSON.parse(storage.getItem("translation-compare-ai-config-v2") || "{}");
   assert.equal(saved.concurrency, "12");
   assert.equal("smartConcurrency" in saved, false);
   assert.equal("concurrencyMax" in saved, false);
@@ -232,7 +232,7 @@ test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到�
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -315,7 +315,7 @@ test("并发调度：遭遇 HTTP 429 频控时自动下调并发、退避并在�
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -390,7 +390,7 @@ test("并发上限很小（等于起步并发）时遭遇 429 同样退避重试
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -456,7 +456,7 @@ test("并发调度：超出重试上限的持续 429 记为单行失败且不崩
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -498,9 +498,9 @@ test("并发上限：设置随项目独立持久化，跨项目切换互不污�
   concA.value = "12";
   await concA.dispatch("change");
 
-  const globalA = JSON.parse(storage.getItem("translation-compare-ai-config-v1") || "{}");
+  const globalA = JSON.parse(storage.getItem("translation-compare-ai-config-v2") || "{}");
   assert.equal(globalA.concurrency, "12");
-  const projectAConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-alpha") || "{}");
+  const projectAConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v2:proj-alpha") || "{}");
   assert.equal(projectAConfig.concurrency, "12");
 
   // 2. 打开项目 B：新项目继承全局基线 12，用户改成 2
@@ -509,7 +509,7 @@ test("并发上限：设置随项目独立持久化，跨项目切换互不污�
   assert.equal(concB.value, "12");
   concB.value = "2";
   await concB.dispatch("change");
-  const projectBConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-beta") || "{}");
+  const projectBConfig = JSON.parse(storage.getItem("translation-compare-ai-project-config-v2:proj-beta") || "{}");
   assert.equal(projectBConfig.concurrency, "2");
 
   // 3. 重新加载项目 A / B：各自保持自己的并发上限
@@ -521,10 +521,10 @@ test("并发上限：读取旧存档时折算智能并发字段，且保存后�
   const storage = {
     data: new Map([
       // 全局存档：开启过智能并发，初始 4、上限 15 → 有效上限 15。
-      ["translation-compare-ai-config-v1", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
+      ["translation-compare-ai-config-v2", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
       // 项目存档：关闭智能并发，concurrencyMax 是历史遗留、从不生效。
-      ["translation-compare-ai-project-config-v1:proj-fixed", JSON.stringify({ concurrency: "6", smartConcurrency: false, concurrencyMax: 20 })],
-      ["translation-compare-ai-project-config-v1:proj-smart", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
+      ["translation-compare-ai-project-config-v2:proj-fixed", JSON.stringify({ concurrency: "6", smartConcurrency: false, concurrencyMax: 20 })],
+      ["translation-compare-ai-project-config-v2:proj-smart", JSON.stringify({ concurrency: "4", smartConcurrency: true, concurrencyMax: 15 })],
     ]),
     getItem(k) { return this.data.get(k) ?? null; },
     setItem(k, v) { this.data.set(k, v); },
@@ -540,7 +540,7 @@ test("并发上限：读取旧存档时折算智能并发字段，且保存后�
 
   // 触发一次保存：旧字段不再回写。
   smart.run("saveAiConfig();");
-  const after = JSON.parse(storage.getItem("translation-compare-ai-project-config-v1:proj-smart") || "{}");
+  const after = JSON.parse(storage.getItem("translation-compare-ai-project-config-v2:proj-smart") || "{}");
   assert.equal(after.concurrency, "15");
   assert.equal("smartConcurrency" in after, false);
   assert.equal("concurrencyMax" in after, false);
@@ -549,8 +549,8 @@ test("并发上限：读取旧存档时折算智能并发字段，且保存后�
 test("多阶段独立并发：各子阶段预设的并发上限各自保留，旧字段折算", () => {
   const conf = cleanConfig({
     concurrency: 3,
-    stylistConfig: { provider: "compatible", model: "gemini-3.8-flash", concurrency: 4 },
-    arbiterConfig: { provider: "claude", model: "claude-opus-4.6-thinking", concurrency: 2 },
+    stylistConfig: { protocol: "compatible", model: "gemini-3.8-flash", concurrency: 4 },
+    arbiterConfig: { protocol: "claude", model: "claude-opus-4.6-thinking", concurrency: 2 },
   });
   assert.equal(conf.concurrency, 3);
   assert.equal(conf.stylistConfig.concurrency, 4);
@@ -565,8 +565,8 @@ test("多阶段独立并发：各子阶段预设的并发上限各自保留，�
     concurrency: 3,
     smartConcurrency: true,
     concurrencyMax: 10,
-    stylistConfig: { provider: "compatible", model: "gemini-3.8-flash", concurrency: 4, smartConcurrency: true, concurrencyMax: 8 },
-    arbiterConfig: { provider: "claude", model: "claude-opus-4.6-thinking", concurrency: 2, smartConcurrency: false, concurrencyMax: 3 },
+    stylistConfig: { protocol: "compatible", model: "gemini-3.8-flash", concurrency: 4, smartConcurrency: true, concurrencyMax: 8 },
+    arbiterConfig: { protocol: "claude", model: "claude-opus-4.6-thinking", concurrency: 2, smartConcurrency: false, concurrencyMax: 3 },
   });
   assert.equal(legacy.concurrency, 10);
   assert.equal(legacy.stylistConfig.concurrency, 8);
@@ -580,8 +580,8 @@ test("起点语义：三个「开始」只表示起点，往下走到哪一段�
   assert.equal(cleanConfig({ stage: "stage2" }).targetStage, "stage2");
   assert.equal(cleanConfig({ stage: "stage3" }).targetStage, "stage3");
 
-  const stylist = { provider: "compatible", model: "gemini-3.8-flash" };
-  const arbiter = { provider: "compatible", model: "kimi-k3" };
+  const stylist = { protocol: "compatible", model: "gemini-3.8-flash" };
+  const arbiter = { protocol: "compatible", model: "kimi-k3" };
 
   // 从阶段一起步：配了复审才往下走，配了仲裁才走到仲裁（仲裁只能接在复审后面）。
   const soloStage1 = stagePlan(cleanConfig({ stage: "stage1" }));
@@ -685,14 +685,14 @@ test("起点语义：从阶段一起步且配了复审时，初审提改行立�
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl,
       model: "test-model",
       proofreadMode: "bilingual",
       concurrency: 2,
       // 前端只报起点：配了 stylistConfig 就等于这条流水线有第二阶段，服务端据此级联。
       stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterEnabled: false,
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
@@ -779,7 +779,7 @@ test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的�
 
     // 第一轮：只跑初审，留下内存结论（独立阶段二会复用它们，不必从备注重建）。
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
@@ -793,10 +793,10 @@ test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的�
 
     // 第二轮：从阶段二起步 + 配了仲裁 → 分歧必须继续往下走到仲裁。
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage2",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       rowNotes,
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
@@ -829,7 +829,7 @@ test("独立阶段二复用内存结论：只在同一项目快照上复用，�
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -897,7 +897,7 @@ test("级联续跑：已有初审结论、只差复审的行直接进复审队�
 
     // 第一轮：只跑初审，每行都提改（没配复审，提改行直接定案并写进备注）。
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 3, stage: "stage1",
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
@@ -916,9 +916,9 @@ test("级联续跑：已有初审结论、只差复审的行直接进复审队�
     // 第二轮：从阶段一起步 + 配了复审 + 「继续剩下的」→ 这 6 行应当直接进复审队列。
     // 修之前它们会先被重新初审一遍，复审只能等初审逐行产出，界面上就是「待复审 N 行但只有 1 处理中」。
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 3, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       continueOnly: true,
       rowNotes,
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -972,12 +972,12 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
         rows, projectKey: project.projectKey, rowsSignature: project.rowsSignature,
         apiResponses: { "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "round", results: [] } } },
       });
-      ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
-        { id: "latest-s2", name: "复审", provider: "compatible", baseUrl, model: "stylist-model" },
+      ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+        { id: "latest-s2", name: "复审", protocol: "compatible", baseUrl, model: "stylist-model" },
       ]));
       ui.run(`Object.assign(notes, ${JSON.stringify(records)}); restoreAiConfig();
         aiIds.stage2Preset.value = "latest-s2";
-        aiIds.provider.value = "compatible"; aiIds.baseUrl.value = ${JSON.stringify(baseUrl)};
+        aiIds.protocol.value = "compatible"; aiIds.baseUrl.value = ${JSON.stringify(baseUrl)};
         aiIds.model.value = "test-model"; saveNotes(); updateStageMetricsDashboard();`);
       assert.equal(Number(ui.element("metricStage2Pending").textContent), 20);
       await ui.element("stage2PendingItem").dispatch("click");
@@ -1007,8 +1007,8 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
     }
     const beforeClear = requests.length;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model", stage: "stage2",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      protocol: "compatible", baseUrl, model: "test-model", stage: "stage2",
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
       rowNotes: {}, continueOnly: false,
     });
@@ -1056,10 +1056,10 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1117,10 +1117,10 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1175,10 +1175,10 @@ test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷�
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1225,11 +1225,11 @@ test("复审分歧计数：复审出分歧但没有下游仲裁时，「分歧�
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
       // 只配复审、不配仲裁：复审出的分歧没有下游可去，分歧数依然必须如实统计，
       // 否则「分歧」会退化成「已仲裁数」= 0，与弹窗按备注数出的待仲裁行数打架。
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1253,10 +1253,10 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   const storage = {
     data: new Map([
       [
-        "translation-compare-ai-presets-v1",
+        "translation-compare-ai-presets-v2",
         JSON.stringify([
-          { id: "p1", name: "Gemini初审", provider: "compatible", model: "gemini-flash", concurrency: 8 },
-          { id: "p2", name: "Claude仲裁", provider: "claude", model: "claude-opus", concurrency: 3 },
+          { id: "p1", name: "Gemini初审", protocol: "compatible", model: "gemini-flash", concurrency: 8 },
+          { id: "p2", name: "Claude仲裁", protocol: "claude", model: "claude-opus", concurrency: 3 },
         ]),
       ],
     ]),
@@ -1269,8 +1269,8 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
 
   // 验证预设选项生成时携带了并发提示
   const s2Preset = ui.element("stage2PresetSelect");
-  const options = s2Preset.children || [];
-  const geminiOpt = options.find((o) => o.textContent === "Gemini初审");
+  const options = (s2Preset.children || []).flatMap((node) => node.tagName === "OPTGROUP" ? node.children : [node]);
+  const geminiOpt = options.find((o) => o.value === "p1");
   assert.ok(geminiOpt);
   assert.match(geminiOpt.title, /并发上限 8/);
 
@@ -1351,7 +1351,7 @@ test("限流熔断：上游持续 429 时按冷却阶梯探测，阶梯用尽后
   try {
     await withBreakerTimeScale(0.001, async () => {
       await startProofread({
-        provider: "compatible",
+        protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
         model: "test-model",
         proofreadMode: "bilingual",
@@ -1409,7 +1409,7 @@ test("限流熔断：冷却后探测成功即恢复，被暂缓的行不记失�
   try {
     await withBreakerTimeScale(0.001, async () => {
       await startProofread({
-        provider: "compatible",
+        protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
         model: "test-model",
         proofreadMode: "bilingual",
@@ -1477,7 +1477,7 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
   try {
     await withBreakerTimeScale(0.03, async () => {
       await startProofread({
-        provider: "compatible",
+        protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
         model: "test-model",
         proofreadMode: "bilingual",
@@ -1539,10 +1539,10 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
 
@@ -1601,10 +1601,10 @@ test("异常明细不跨任务残留：上一次运行的失败行，在新任�
 
   const runToEnd = async (baseUrl) => {
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
-      stylistConfig: { provider: "compatible", baseUrl, model: "stylist-model" },
-      arbiterConfig: { provider: "compatible", baseUrl, model: "arbiter-model" },
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
     const deadline = Date.now() + 10000;
@@ -1642,7 +1642,7 @@ test("异常明细：用户停止任务时，被打断的行归为「任务已�
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
     await startProofread({
-      provider: "compatible", baseUrl, model: "test-model",
+      protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 1, stage: "stage1",
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
     });
@@ -1719,7 +1719,7 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
   try {
     await withBreakerTimeScale(0.03, async () => {
       await startProofread({
-        provider: "compatible",
+        protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
         model: "test-model",
         proofreadMode: "bilingual",

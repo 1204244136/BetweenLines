@@ -244,7 +244,7 @@ test("角色运行时：parseArbiterResponse 正确解析打破二选一的结�
 });
 
 test("角色运行时：createPersonaContext 构建相互隔离的运行时上下文", () => {
-  const baseConfig = { model: "o3-mini", provider: "local" };
+  const baseConfig = { model: "o3-mini", protocol: "local" };
   const ctxA = createPersonaContext("gatekeeper", baseConfig);
   const ctxB = createPersonaContext("stylist", baseConfig);
 

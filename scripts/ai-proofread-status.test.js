@@ -63,7 +63,7 @@ test("AI 结果通过有界的修订版本游标无缝连续消费", async () =>
   publishProject(staging.dir, { dataDir });
 
   const started = await startProofread({
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "http://127.0.0.1:1",
     model: "unused",
     proofreadMode: "bilingual",
@@ -145,7 +145,7 @@ test("遭遇致命鉴权失败响应时 AI 队列立即停止", async () => {
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -219,7 +219,7 @@ test("端点返回 HTML 页面而非 JSON 时 AI 队列立即停止", async () =
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -305,7 +305,7 @@ test("近期错误率达到熔断阈值时 AI 队列触发熔断", async () => {
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -393,7 +393,7 @@ async function runProofreadAgainst({ label, rowCount, breaker, respond, rowsFor 
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -710,7 +710,7 @@ test("对齐片段行在模型索要上下文后直接终局，不再扩展相�
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",

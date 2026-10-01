@@ -728,7 +728,7 @@
 
   // --- AI 说话人推断客户端引擎 ---
   const aiPanel = document.getElementById("speakerAiPanel");
-  const aiProvider = document.getElementById("speakerAiProvider");
+  const aiProtocol = document.getElementById("speakerAiProtocol");
   const aiBaseUrl = document.getElementById("speakerAiBaseUrl");
   const aiApiKey = document.getElementById("speakerAiApiKey");
   const aiModel = document.getElementById("speakerAiModel");
@@ -746,7 +746,7 @@
   const aiSummaryBadge = document.getElementById("speakerAiSummaryBadge");
   const aiModelHint = document.getElementById("speakerAiModelHint");
 
-  const AI_CONFIG_KEY = "between-lines:speaker-ai:config";
+  const AI_CONFIG_KEY = "between-lines:speaker-ai:config-v2";
   const AI_PREDICTIONS_KEY = window.speakerStorageKey + ":predictions";
 
   let aiRunning = false;
@@ -781,7 +781,7 @@
   function loadAiConfig() {
     try {
       const saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || "{}");
-      if (saved.provider && aiProvider) aiProvider.value = saved.provider;
+      if (saved.protocol && aiProtocol) aiProtocol.value = saved.protocol;
       if (saved.baseUrl && aiBaseUrl) aiBaseUrl.value = saved.baseUrl;
       if (saved.apiKey && aiApiKey) aiApiKey.value = saved.apiKey;
       if (saved.model && aiModel) aiModel.value = saved.model;
@@ -794,7 +794,7 @@
   function saveAiConfig() {
     try {
       localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({
-        provider: aiProvider?.value || "local",
+        protocol: aiProtocol?.value || "local",
         baseUrl: aiBaseUrl?.value || "",
         apiKey: aiApiKey?.value || "",
         model: aiModel?.value || "",
@@ -954,7 +954,7 @@
     saveAiConfig();
 
     const config = {
-      provider: aiProvider?.value || "local",
+      protocol: aiProtocol?.value || "local",
       baseUrl: aiBaseUrl?.value || "",
       apiKey: aiApiKey?.value || "",
       model: aiModel?.value || "qwen2.5:14b-instruct",
@@ -1203,7 +1203,7 @@
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          provider: aiProvider?.value || "compatible",
+          protocol: aiProtocol?.value || "compatible",
           baseUrl: requestedUrl,
           apiKey: aiApiKey?.value || "",
         }),
@@ -1257,7 +1257,7 @@
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          provider: aiProvider?.value || "compatible",
+          protocol: aiProtocol?.value || "compatible",
           baseUrl: aiBaseUrl.value.trim(),
           apiKey: aiApiKey?.value || "",
           model: requestedModel,
@@ -1297,7 +1297,7 @@
   if (aiStartBtn) aiStartBtn.addEventListener("click", startAiInference);
   if (aiStopBtn) aiStopBtn.addEventListener("click", stopAiInference);
   if (aiClearCacheBtn) aiClearCacheBtn.addEventListener("click", clearAiPredictions);
-  if (aiProvider) aiProvider.addEventListener("change", saveAiConfig);
+  if (aiProtocol) aiProtocol.addEventListener("change", saveAiConfig);
   if (aiBaseUrl) {
     aiBaseUrl.addEventListener("change", () => {
       saveAiConfig();

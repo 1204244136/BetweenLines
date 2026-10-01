@@ -371,7 +371,7 @@ test("校对流水线优先复用构建期结果，表改动后回退重算", as
     clearProofreadCache();
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -479,7 +479,7 @@ test("校对流水线把说话人判断发给模型", async () => {
     try {
       const address = server.address();
       await startProofread({
-        provider: "compatible",
+        protocol: "compatible",
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
         model: "test-model",
         proofreadMode: "bilingual",

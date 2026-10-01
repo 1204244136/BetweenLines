@@ -1,7 +1,7 @@
     const pageLabels = pageMeta.pageLabels;
     const bilingualMode = pageMeta.comparisonMode === "bilingual";
-    const aiConfigStorageKey = "translation-compare-ai-config-v1";
-    const projectAiConfigStorageKey = "translation-compare-ai-project-config-v1:" + (pageMeta.projectKey || "unscoped");
+    const aiConfigStorageKey = "translation-compare-ai-config-v2";
+    const projectAiConfigStorageKey = "translation-compare-ai-project-config-v2:" + (pageMeta.projectKey || "unscoped");
     const aiPromptStorageKey = "translation-compare-ai-prompt-v1:" + (pageMeta.projectKey || "unscoped");
     const writebackBackupStorageKey = "translation-compare-writeback-backup-v1:" + (pageMeta.projectKey || "unscoped");
 
@@ -325,7 +325,9 @@
       presetSave: document.getElementById("aiPresetSave"),
       presetSaveAs: document.getElementById("aiPresetSaveAs"),
       presetDelete: document.getElementById("aiPresetDelete"),
+      protocol: document.getElementById("aiProtocol"),
       provider: document.getElementById("aiProvider"),
+      providerNames: document.getElementById("aiProviderNames"),
       panel: document.getElementById("aiPanel"),
       promptSection: document.getElementById("aiPromptSection"),
       serviceFields: document.getElementById("aiServiceFields"),
@@ -452,7 +454,7 @@
     let issueSeverityFilter = "all";
     let notesOnly = false;
     let doneMode = "all";
-    let providerDefaults = pageMeta.providerDefaults || {};
+    let protocolDefaults = pageMeta.protocolDefaults || {};
     let defaultProofreadPrompt = pageMeta.proofreadPrompt?.system || "";
     // 构建期算好的说话习惯层：本卷命中概览 + 疑似流失行集合（用于行标记与状态行）。
     const speechHabitLayer = pageMeta.speechHabits || null;
@@ -957,82 +959,35 @@
     function renderPresetOptions(selectedId = currentPresetId) {
       if (!aiIds.presetSelect) return;
       const presets = presetTools.listPresets(localStorage);
-      const options = [
-        { id: "", name: "-- 自定义 / 未选择预设 --" },
-        ...presets.map((p) => ({ id: p.id, name: p.name })),
-      ];
-      aiIds.presetSelect.replaceChildren(...options.map((opt) => {
-        const option = document.createElement("option");
-        option.value = opt.id;
-        option.textContent = opt.name;
-        if (opt.id === selectedId) option.selected = true;
-        return option;
-      }));
-      aiIds.presetSelect.value = selectedId || "";
+      const groups = presetTools.groupPresets(presets);
+      function fillSelect(select, emptyLabel, id) {
+        if (!select) return;
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = emptyLabel;
+        select.replaceChildren(empty, ...groups.map((group) => {
+          const optgroup = document.createElement("optgroup");
+          optgroup.label = group.label;
+          optgroup.append(...group.presets.map((preset) => {
+            const option = document.createElement("option");
+            option.value = preset.id;
+            option.textContent = presetTools.presetLabel(preset);
+            option.title = option.textContent + "（并发上限 " + preset.concurrency + "）";
+            return option;
+          }));
+          return optgroup;
+        }));
+        select.value = presets.some((preset) => preset.id === id) ? id : "";
+        syncEnhancedSelect(select);
+      }
+      fillSelect(aiIds.presetSelect, "-- 自定义 / 未选择预设 --", selectedId);
       currentPresetId = aiIds.presetSelect.value;
-      syncEnhancedSelect(aiIds.presetSelect);
       updatePresetActionButtons();
-
-      if (aiIds.stage1Preset) {
-        const currentStage1 = aiIds.stage1Preset.value;
-        const s1Options = [
-          { id: "", name: "使用主配置", title: "使用顶部 AI 服务填写的配置与并发" },
-          ...presets.map((p) => {
-            const concDetail = "并发上限 " + (p.concurrency || 3);
-            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
-          }),
-        ];
-        aiIds.stage1Preset.replaceChildren(...s1Options.map((opt) => {
-          const option = document.createElement("option");
-          option.value = opt.id;
-          option.textContent = opt.name;
-          if (opt.title) option.title = opt.title;
-          if (opt.id === currentStage1) option.selected = true;
-          return option;
-        }));
-        if (currentStage1) aiIds.stage1Preset.value = currentStage1;
-      }
-
-      if (aiIds.stage2Preset) {
-        const currentStage2 = aiIds.stage2Preset.value;
-        const s2Options = [
-          { id: "", name: "未启用", title: "未启用文学复审" },
-          ...presets.map((p) => {
-            const concDetail = "并发上限 " + (p.concurrency || 3);
-            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
-          }),
-        ];
-        aiIds.stage2Preset.replaceChildren(...s2Options.map((opt) => {
-          const option = document.createElement("option");
-          option.value = opt.id;
-          option.textContent = opt.name;
-          if (opt.title) option.title = opt.title;
-          if (opt.id === currentStage2) option.selected = true;
-          return option;
-        }));
-        if (currentStage2) aiIds.stage2Preset.value = currentStage2;
-      }
-
-      if (aiIds.stage3Preset) {
-        const currentStage3 = aiIds.stage3Preset.value;
-        const s3Options = [
-          { id: "", name: "未启用", title: "未启用终审仲裁" },
-          ...presets.map((p) => {
-            const concDetail = "并发上限 " + (p.concurrency || 2);
-            return { id: p.id, name: p.name, title: p.name + "（" + (p.model || p.provider) + "，" + concDetail + "）" };
-          }),
-        ];
-        aiIds.stage3Preset.replaceChildren(...s3Options.map((opt) => {
-          const option = document.createElement("option");
-          option.value = opt.id;
-          option.textContent = opt.name;
-          if (opt.title) option.title = opt.title;
-          if (opt.id === currentStage3) option.selected = true;
-          return option;
-        }));
-        if (currentStage3) aiIds.stage3Preset.value = currentStage3;
-      }
-
+      fillSelect(aiIds.stage1Preset, "使用主配置", aiIds.stage1Preset?.value);
+      fillSelect(aiIds.stage2Preset, "未启用", aiIds.stage2Preset?.value);
+      fillSelect(aiIds.stage3Preset, "未启用", aiIds.stage3Preset?.value);
+      const names = [...new Set(presets.map(presetTools.providerName).filter(Boolean))];
+      aiIds.provider._syncProviderOptions?.(names);
       updateStagePresetDependencies();
     }
 
@@ -1065,9 +1020,10 @@
 
     function applyPreset(preset) {
       if (!preset) return;
-      if (preset.provider && ["local", "claude", "compatible"].includes(preset.provider)) {
-        aiIds.provider.value = preset.provider;
-        syncEnhancedSelect(aiIds.provider);
+      aiIds.provider.value = presetTools.providerName(preset);
+      if (preset.protocol && ["local", "claude", "compatible"].includes(preset.protocol)) {
+        aiIds.protocol.value = preset.protocol;
+        syncEnhancedSelect(aiIds.protocol);
       }
       if (typeof preset.baseUrl === "string") {
         aiIds.baseUrl.value = preset.baseUrl;
@@ -1076,26 +1032,18 @@
       if (typeof preset.apiKey === "string") {
         aiIds.apiKey.value = preset.apiKey;
       }
-      const options = Array.isArray(preset.modelOptions) && preset.modelOptions.length
-        ? preset.modelOptions
-        : (preset.model ? [preset.model] : []);
+      const options = [...new Set([...(preset.modelOptions || []), preset.model].filter(Boolean))];
       setModelOptions(options, { selected: preset.model || "" });
       aiIds.model.dataset.touched = "1";
 
       const validGptValues = gptReasoningOptions.map(([value]) => value);
       const validIntensityValues = nonGptIntensityOptions.map(([value]) => value);
-      if (preset.gptReasoningEffort && validGptValues.includes(preset.gptReasoningEffort)) {
-        savedGptReasoningEffort = preset.gptReasoningEffort;
-      }
-      if (preset.nonGptIntensity && validIntensityValues.includes(preset.nonGptIntensity)) {
-        savedNonGptIntensity = preset.nonGptIntensity;
-      }
+      savedGptReasoningEffort = validGptValues.includes(preset.gptReasoningEffort) ? preset.gptReasoningEffort : "";
+      savedNonGptIntensity = validIntensityValues.includes(preset.nonGptIntensity) ? preset.nonGptIntensity : "";
       updateInferenceSettingOptions();
-      if (preset.reasoningEffort) {
-        aiIds.reasoningEffort.value = preset.reasoningEffort;
-        rememberInferenceSetting();
-        syncEnhancedSelect(aiIds.reasoningEffort);
-      }
+      aiIds.reasoningEffort.value = preset.reasoningEffort || "";
+      rememberInferenceSetting();
+      syncEnhancedSelect(aiIds.reasoningEffort);
       if (preset.concurrency != null) {
         aiIds.concurrency.value = preset.concurrency;
       }
@@ -1110,7 +1058,8 @@
       rememberInferenceSetting();
       const prevSaved = loadSavedAiConfig();
       const config = {
-        provider: aiIds.provider ? aiIds.provider.value : (prevSaved.provider || ""),
+        protocol: aiIds.protocol ? aiIds.protocol.value : (prevSaved.protocol || ""),
+        provider: String(aiIds.provider?.value || "").trim(),
         baseUrl: aiIds.baseUrl ? aiIds.baseUrl.value : (prevSaved.baseUrl || ""),
         model: aiIds.model ? aiIds.model.value : (prevSaved.model || ""),
         reasoningEffort: aiIds.reasoningEffort ? aiIds.reasoningEffort.value : (prevSaved.reasoningEffort || ""),
@@ -1156,7 +1105,8 @@
         updatePresetActionButtons();
       }
       if (!saved || typeof saved !== "object") return;
-      if (saved.provider && providerDefaults[saved.provider]) aiIds.provider.value = saved.provider;
+      if (saved.protocol && protocolDefaults[saved.protocol]) aiIds.protocol.value = saved.protocol;
+      aiIds.provider.value = presetTools.providerName(saved);
       if (typeof saved.baseUrl === "string") {
         aiIds.baseUrl.value = saved.baseUrl;
         aiIds.baseUrl.dataset.touched = "1";
@@ -1475,6 +1425,113 @@
       applyFilters({ reset: false });
     }
 
+    function initProviderCombobox() {
+      const input = aiIds.provider;
+      const wrapper = document.getElementById("aiProviderCombobox");
+      const toggle = document.getElementById("aiProviderToggle");
+      const menu = aiIds.providerNames;
+      if (!input || !wrapper || !toggle || !menu) return;
+      let names = [];
+      let items = [];
+      let activeIndex = -1;
+
+      function close() {
+        menu.hidden = true;
+        wrapper.classList.remove("is-open", "drop-up");
+        input.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-expanded", "false");
+        input.removeAttribute("aria-activedescendant");
+        activeIndex = -1;
+      }
+      function render(filter = false) {
+        const query = filter ? input.value.trim().toLocaleLowerCase() : "";
+        items = names.filter((name) => name.toLocaleLowerCase().includes(query)).map((name, index) => {
+          const option = document.createElement("button");
+          option.type = "button";
+          option.tabIndex = -1;
+          option.id = "aiProviderOption-" + index;
+          option.className = "select-option";
+          option.value = name;
+          option.textContent = name;
+          option.setAttribute("role", "option");
+          const selected = name === input.value.trim();
+          option.classList.toggle("is-selected", selected);
+          option.setAttribute("aria-selected", String(selected));
+          option.addEventListener("click", () => {
+            input.value = name;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            close();
+            input.focus();
+          });
+          return option;
+        });
+        menu.replaceChildren(...items);
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.className = "provider-menu-empty";
+          empty.textContent = query ? "无匹配项，可直接使用输入的名称。" : "尚无已保存的提供商，可直接输入名称。";
+          menu.append(empty);
+        }
+        activeIndex = -1;
+        input.removeAttribute("aria-activedescendant");
+      }
+      function open(filter = false) {
+        if (input.disabled) return;
+        closeAllSelects(wrapper);
+        render(filter);
+        const rect = input.getBoundingClientRect();
+        wrapper.classList.toggle("drop-up", window.innerHeight - rect.bottom < 160 && rect.top > window.innerHeight - rect.bottom);
+        wrapper.classList.add("is-open");
+        menu.hidden = false;
+        input.setAttribute("aria-expanded", "true");
+        toggle.setAttribute("aria-expanded", "true");
+      }
+      function activate(index) {
+        if (!items.length) return;
+        activeIndex = Math.max(0, Math.min(items.length - 1, index));
+        items.forEach((item, i) => item.classList.toggle("is-active", i === activeIndex));
+        const active = items[activeIndex];
+        input.setAttribute("aria-activedescendant", active.id);
+        if (active.offsetTop < menu.scrollTop) menu.scrollTop = active.offsetTop;
+        const bottom = active.offsetTop + active.offsetHeight;
+        if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
+      }
+      input._syncProviderOptions = (values) => {
+        names = values;
+        render(!menu.hidden);
+      };
+      wrapper._closeSelect = close;
+      toggle.addEventListener("click", () => {
+        if (menu.hidden) open();
+        else close();
+        input.focus();
+      });
+      menu.addEventListener("mousedown", (event) => event.preventDefault());
+      input.addEventListener("input", (event) => { if (!event.isComposing) open(true); });
+      input.addEventListener("keydown", (event) => {
+        if (event.isComposing) return;
+        if (event.key === "Escape" || event.key === "Tab") {
+          close();
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          if (menu.hidden) open();
+          activate(activeIndex < 0 ? (event.key === "ArrowDown" ? 0 : items.length - 1)
+            : activeIndex + (event.key === "ArrowDown" ? 1 : -1));
+        } else if (event.key === "Enter" && !menu.hidden) {
+          event.preventDefault();
+          if (activeIndex >= 0) items[activeIndex].click();
+          else close();
+        }
+      });
+      wrapper.addEventListener("focusout", (event) => {
+        if (!wrapper.contains(event.relatedTarget)) close();
+      });
+      close();
+    }
+
     function enhanceSelect(select) {
       if (!select || select.dataset.enhanced) return;
       select.dataset.enhanced = "1";
@@ -1530,21 +1587,33 @@
         value.textContent = selected?.textContent || "";
         trigger.title = selected?.textContent || "";
         trigger.disabled = Boolean(select.disabled);
-        menu.replaceChildren(...Array.from(select.options).map((option) => {
+        let previousGroup = null;
+        menu.replaceChildren(...Array.from(select.options).flatMap((option) => {
+          const nodes = [];
+          const group = option.parentNode?.tagName === "OPTGROUP" ? option.parentNode : null;
+          if (group && group !== previousGroup) {
+            const heading = document.createElement("div");
+            heading.className = "select-option-group";
+            heading.textContent = group.label;
+            heading.setAttribute("role", "presentation");
+            nodes.push(heading);
+          }
+          previousGroup = group;
           const item = document.createElement("button");
           item.type = "button";
           item.className = "select-option";
           item.setAttribute("role", "option");
           item.dataset.value = option.value;
           item.textContent = option.textContent;
+          item.title = option.title || option.textContent;
           if (option.value === select.value) {
             item.classList.add("is-selected");
             item.setAttribute("aria-selected", "true");
           } else {
             item.setAttribute("aria-selected", "false");
           }
-          item.disabled = option.disabled;
-          return item;
+          item.disabled = option.disabled || Boolean(group?.disabled);
+          return [...nodes, item];
         }));
       }
 
@@ -1626,6 +1695,7 @@
     function closeAllSelects(except) {
       for (const wrapper of document.querySelectorAll(".select-combobox")) {
         if (wrapper === except) continue;
+        if (wrapper._closeSelect) { wrapper._closeSelect(); continue; }
         wrapper.classList.remove("is-open", "drop-up");
         const menu = wrapper.querySelector(".select-menu");
         const trigger = wrapper.querySelector(".select-trigger");
@@ -3633,7 +3703,8 @@
       const s2PresetId = aiIds.stage2Preset?.value || "";
       const s3PresetId = aiIds.stage3Preset?.value || "";
 
-      let mainProvider = aiIds.provider.value;
+      let mainProtocol = aiIds.protocol.value;
+      let mainProvider = aiIds.provider.value.trim();
       let mainBaseUrl = aiIds.baseUrl.value;
       let mainModel = aiIds.model.value;
       let mainReasoningEffort = aiIds.reasoningEffort.value;
@@ -3644,11 +3715,12 @@
       if (s1PresetId) {
         const s1Preset = presetTools.getPreset(localStorage, s1PresetId);
         if (s1Preset) {
-          mainProvider = s1Preset.provider || mainProvider;
-          mainBaseUrl = s1Preset.baseUrl || mainBaseUrl;
-          mainModel = s1Preset.model || mainModel;
-          mainReasoningEffort = s1Preset.reasoningEffort || mainReasoningEffort;
-          mainApiKey = s1Preset.apiKey || mainApiKey;
+          mainProtocol = s1Preset.protocol;
+          mainProvider = s1Preset.provider;
+          mainBaseUrl = s1Preset.baseUrl;
+          mainModel = s1Preset.model;
+          mainReasoningEffort = s1Preset.reasoningEffort;
+          mainApiKey = s1Preset.apiKey;
           if (s1Preset.concurrency != null) mainConcurrency = Number(s1Preset.concurrency);
         }
       }
@@ -3661,6 +3733,7 @@
       const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
 
       return {
+        protocol: mainProtocol,
         provider: mainProvider,
         baseUrl: mainBaseUrl,
         model: mainModel,
@@ -3689,17 +3762,17 @@
       };
     }
 
-    function setProviderHint(defaults) {
+    function setProtocolHint(defaults) {
       if (!defaults) return;
       aiIds.apiKey.placeholder = defaults.apiKeyPlaceholder || "";
-      aiIds.provider.title = defaults.note || "";
+      aiIds.protocol.title = defaults.note || "";
       if (!aiIds.status.dataset.runtimeMessage) {
         aiIds.status.textContent = "就绪";
         aiIds.status.title = defaults.note || "就绪";
       }
     }
 
-    function applyProviderDefaults(defaults, { force = false } = {}) {
+    function applyProtocolDefaults(defaults, { force = false } = {}) {
       if (!defaults) return;
       if (force || !aiIds.baseUrl.dataset.touched) {
         aiIds.baseUrl.value = defaults.baseUrl || "";
@@ -3707,7 +3780,7 @@
       if ((force || !aiIds.model.dataset.touched) && !aiModelOptions.length) {
         setModelOptions([defaults.model], { selected: defaults.model || "" });
       }
-      setProviderHint(defaults);
+      setProtocolHint(defaults);
     }
 
     // 说话习惯层：按章/按卷命中人名后启用该角色的说话特色规则，防止刻意口癖被判成翻译错误。
@@ -4424,9 +4497,9 @@
       if (ai.running) {
         aiIds.status.dataset.cacheCleared = "";
       }
-      if (ai.providerDefaults) {
-        providerDefaults = ai.providerDefaults;
-        applyProviderDefaults(providerDefaults[aiIds.provider.value]);
+      if (ai.protocolDefaults) {
+        protocolDefaults = ai.protocolDefaults;
+        applyProtocolDefaults(protocolDefaults[aiIds.protocol.value]);
       }
       if (sameAiScope && ai.proofreadPrompt?.system && (!ai.profileId || ai.profileId === aiIds.profile.value)) {
         const previousDefault = defaultProofreadPrompt;
@@ -4650,6 +4723,7 @@
     function setModelOptions(models, { selected = aiIds.model.value } = {}) {
       const resolved = resolveModelOptions(models, selected);
       aiModelOptions = resolved.models;
+      aiModelMetadataMap.clear();
       if (Array.isArray(models)) {
         for (const item of models) {
           if (item && typeof item === "object" && item.id) {
@@ -4672,7 +4746,9 @@
       if (!aiIds.testModel) return;
       aiIds.testModel.disabled = true;
       const modelVal = String(aiIds.model?.value || "").trim();
-      const requestedProvider = aiIds.provider?.value || "";
+      const requestedProtocol = aiIds.protocol?.value || "";
+      const requestedProvider = aiIds.provider.value;
+      const requestedApiKey = aiIds.apiKey.value;
       const requestedBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl?.value || "");
       const pendingToast = showToast("正在测试模型连通性...", { durationMs: 0 });
       const finishTestHint = (message, options) => {
@@ -4684,7 +4760,8 @@
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            provider: aiIds.provider?.value || "local",
+            protocol: aiIds.protocol?.value || "local",
+            provider: aiIds.provider.value.trim(),
             baseUrl: aiIds.baseUrl?.value || "",
             apiKey: aiIds.apiKey?.value || "",
             model: modelVal,
@@ -4693,7 +4770,8 @@
         });
         const data = await response.json();
         const currentBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl?.value || "");
-        if (aiIds.provider?.value !== requestedProvider || currentBaseUrl !== requestedBaseUrl) {
+        if (aiIds.protocol?.value !== requestedProtocol || currentBaseUrl !== requestedBaseUrl
+          || aiIds.provider.value !== requestedProvider || aiIds.apiKey.value !== requestedApiKey || aiIds.model.value !== modelVal) {
           finishTestHint("接口配置已变更，已忽略旧配置的连通性测试结果。", { tone: "watch", durationMs: 8000 });
           return;
         }
@@ -4719,7 +4797,9 @@
 
     async function refreshAiModels() {
       aiIds.refreshModels.disabled = true;
+      const requestedProtocol = aiIds.protocol.value;
       const requestedProvider = aiIds.provider.value;
+      const requestedApiKey = aiIds.apiKey.value;
       const requestedBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl.value);
       // 「正在获取」占住一条不自动消失的提示，结果回来时换成结论：整场只留一条回执。
       const pendingToast = showToast("正在获取可用模型...", { durationMs: 0 });
@@ -4732,7 +4812,8 @@
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            provider: aiIds.provider.value,
+            protocol: aiIds.protocol.value,
+            provider: aiIds.provider.value.trim(),
             baseUrl: aiIds.baseUrl.value,
             apiKey: aiIds.apiKey.value,
           }),
@@ -4740,12 +4821,13 @@
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
         const currentBaseUrl = normalizeApiBaseUrl(aiIds.baseUrl.value);
-        if (aiIds.provider.value !== requestedProvider || currentBaseUrl !== requestedBaseUrl) {
+        if (aiIds.protocol.value !== requestedProtocol || currentBaseUrl !== requestedBaseUrl
+          || aiIds.provider.value !== requestedProvider || aiIds.apiKey.value !== requestedApiKey) {
           finishModelHint("接口地址已变更，已忽略旧地址返回的模型列表。", { tone: "watch", durationMs: 9000 });
           return;
         }
         const models = data.models?.models || data.models || [];
-        const defaultModel = providerDefaults[aiIds.provider.value]?.model || "";
+        const defaultModel = protocolDefaults[aiIds.protocol.value]?.model || "";
         const wasDefault = !aiIds.model.dataset.touched || aiIds.model.value === defaultModel;
         const selectedModel = wasDefault && models[0]?.id ? models[0].id : aiIds.model.value;
         setModelOptions(models, { selected: selectedModel });
@@ -4765,23 +4847,23 @@
       }
     }
 
-    aiIds.provider.addEventListener("change", async () => {
+    aiIds.protocol.addEventListener("change", async () => {
       aiIds.baseUrl.dataset.touched = "";
       aiIds.model.dataset.touched = "";
       aiModelOptions = [];
       aiIds.status.dataset.runtimeMessage = "";
-      if (providerDefaults[aiIds.provider.value]) {
-        applyProviderDefaults(providerDefaults[aiIds.provider.value], { force: true });
+      if (protocolDefaults[aiIds.protocol.value]) {
+        applyProtocolDefaults(protocolDefaults[aiIds.protocol.value], { force: true });
         saveAiConfig();
         return;
       }
       try {
         const response = await apiFetch("/api/ai-proofread/status");
         const data = await response.json();
-        providerDefaults = data.ai?.providerDefaults || providerDefaults;
-        applyProviderDefaults(providerDefaults[aiIds.provider.value], { force: true });
+        protocolDefaults = data.ai?.protocolDefaults || protocolDefaults;
+        applyProtocolDefaults(protocolDefaults[aiIds.protocol.value], { force: true });
       } catch {
-        setProviderHint(null);
+        setProtocolHint(null);
       }
       saveAiConfig();
     });
@@ -4826,13 +4908,13 @@
         const preset = presetTools.getPreset(localStorage, selectedId);
         if (preset) {
           applyPreset(preset);
-          showToast("已应用模型预设「" + preset.name + "」", { tone: "success", durationMs: 4000 });
+          showToast("已应用模型预设「" + presetTools.presetLabel(preset) + "」", { tone: "success", durationMs: 4000 });
         }
       });
     }
     if (aiIds.presetSaveAs) {
       aiIds.presetSaveAs.addEventListener("click", () => {
-        const defaultName = (aiIds.model.value || aiIds.provider.value || "新模型预设").trim();
+        const defaultName = (aiIds.model.value || aiIds.protocol.value || "新模型预设").trim();
         const promptFn = typeof window !== "undefined" && typeof window.prompt === "function"
           ? window.prompt.bind(window)
           : (typeof prompt === "function" ? prompt : null);
@@ -4844,9 +4926,11 @@
         if (!name) return;
 
         const presets = presetTools.listPresets(localStorage);
-        const existing = presets.find((p) => p.name === name);
+        const existing = presetTools.findPresetByName(presets, {
+          name, protocol: aiIds.protocol.value, provider: aiIds.provider.value, baseUrl: aiIds.baseUrl.value,
+        });
         if (existing) {
-          if (!confirmFn("已存在名为「" + name + "」的预设，是否覆盖更新？")) {
+          if (!confirmFn("已存在预设「" + presetTools.presetLabel(existing) + "」，是否覆盖更新？")) {
             return;
           }
         }
@@ -4854,7 +4938,8 @@
         const presetData = {
           id: existing ? existing.id : undefined,
           name,
-          provider: aiIds.provider.value,
+          protocol: aiIds.protocol.value,
+          provider: aiIds.provider.value.trim(),
           baseUrl: aiIds.baseUrl.value,
           apiKey: aiIds.apiKey.value,
           model: aiIds.model.value,
@@ -4870,7 +4955,7 @@
           currentPresetId = saved.id;
           renderPresetOptions(saved.id);
           saveAiConfig();
-          showToast("已保存模型预设「" + saved.name + "」", { tone: "success", durationMs: 5000 });
+          showToast("已保存模型预设「" + presetTools.presetLabel(saved) + "」", { tone: "success", durationMs: 5000 });
         } else {
           showToast("保存模型预设失败", { tone: "error", durationMs: 5000 });
         }
@@ -4886,14 +4971,15 @@
           ? window.confirm.bind(window)
           : (typeof confirm === "function" ? confirm : () => true);
 
-        if (!confirmFn("确定要将当前修改保存到预设「" + current.name + "」吗？")) {
+        if (!confirmFn("确定要将当前修改保存到预设「" + presetTools.presetLabel(current) + "」吗？")) {
           return;
         }
 
         const presetData = {
           id: current.id,
           name: current.name,
-          provider: aiIds.provider.value,
+          protocol: aiIds.protocol.value,
+          provider: aiIds.provider.value.trim(),
           baseUrl: aiIds.baseUrl.value,
           apiKey: aiIds.apiKey.value,
           model: aiIds.model.value,
@@ -4904,12 +4990,18 @@
           concurrency: aiIds.concurrency.value,
         };
 
+        const collision = presetTools.findPresetByName(presetTools.listPresets(localStorage), presetData);
+        if (collision && collision.id !== current.id) {
+          showToast("该提供商已有同名预设，请另存为其他名称。", { tone: "watch" });
+          return;
+        }
         const saved = presetTools.savePreset(localStorage, presetData);
         if (saved) {
           // 覆盖保存后必须重渲染下拉：阶段卡片的选项 title 里带着模型名与并发提示，
           // 不重建就会一直显示旧值，与 localStorage 里已生效的新预设不一致。
           renderPresetOptions(saved.id);
-          showToast("已更新模型预设「" + saved.name + "」", { tone: "success", durationMs: 5000 });
+          saveAiConfig();
+          showToast("已更新模型预设「" + presetTools.presetLabel(saved) + "」", { tone: "success", durationMs: 5000 });
         } else {
           showToast("更新模型预设失败", { tone: "error", durationMs: 5000 });
         }
@@ -4925,13 +5017,13 @@
           ? window.confirm.bind(window)
           : (typeof confirm === "function" ? confirm : () => true);
 
-        if (!confirmFn("确定要删除模型预设「" + current.name + "」吗？")) {
+        if (!confirmFn("确定要删除模型预设「" + presetTools.presetLabel(current) + "」吗？")) {
           return;
         }
 
         const deleted = presetTools.deletePreset(localStorage, current.id);
         if (deleted) {
-          const deletedName = current.name;
+          const deletedName = presetTools.presetLabel(current);
           currentPresetId = "";
           renderPresetOptions("");
           saveAiConfig();
@@ -4941,9 +5033,19 @@
         }
       });
     }
-    [aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].filter(Boolean).forEach((input) => {
-      input.addEventListener("input", saveAiConfig);
+    [aiIds.provider, aiIds.apiKey, aiIds.target, aiIds.concurrency, aiIds.proofreadMode, aiIds.reasoningEffort].filter(Boolean).forEach((input) => {
+      function invalidateConnectionMetadata() {
+        if (input === aiIds.provider || input === aiIds.apiKey) {
+          aiModelMetadataMap.clear();
+          updateInferenceSettingOptions();
+        }
+      }
+      input.addEventListener("input", () => {
+        invalidateConnectionMetadata();
+        saveAiConfig();
+      });
       input.addEventListener("change", () => {
+        invalidateConnectionMetadata();
         saveAiConfig();
         // 目标列/校对模式决定对照表的哪个变体生效：重取构建期判定并重绘徽标。
         if (input === aiIds.target || input === aiIds.proofreadMode) {
@@ -6026,6 +6128,7 @@
     bindPanelGroups();
     initWorkbenchTabs();
     document.querySelectorAll("select").forEach(enhanceSelect);
+    initProviderCombobox();
     restoreAiConfig();
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
     // 特化规范 / 目标列都恢复后才有确定的对照表变体：这时再取构建期判定。

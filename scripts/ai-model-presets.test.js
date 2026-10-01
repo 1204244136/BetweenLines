@@ -29,7 +29,7 @@ test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回�
 
   const cleaned = tools.sanitizePreset({
     name: " DeepSeek-V3 ",
-    provider: "unknown-provider",
+    protocol: "unknown-provider",
     baseUrl: "  https://api.example.com/v1  ",
     apiKey: "sk-secret-key",
     model: "  deepseek-chat ",
@@ -43,7 +43,7 @@ test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回�
   });
 
   assert.equal(cleaned.name, "DeepSeek-V3");
-  assert.equal(cleaned.provider, "local"); // 非法 provider 回退为 local
+  assert.equal(cleaned.protocol, "local"); // 非法 provider 回退为 local
   assert.equal(cleaned.baseUrl, "https://api.example.com/v1");
   assert.equal(cleaned.apiKey, "sk-secret-key");
   assert.equal(cleaned.model, "deepseek-chat");
@@ -63,7 +63,7 @@ test("模型预设：savePreset 保存新预设并支持按 ID 查询", () => {
 
   const preset1 = tools.savePreset(storage, {
     name: "本地 Qwen2.5",
-    provider: "local",
+    protocol: "local",
     baseUrl: "http://127.0.0.1:11434/v1",
     model: "qwen2.5:32b",
     concurrency: 1,
@@ -87,7 +87,7 @@ test("模型预设：savePreset 更新已有预设并保留原始创建时间", 
 
   const original = tools.savePreset(storage, {
     name: "SiliconFlow R1",
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-R1",
     concurrency: 4,
@@ -97,7 +97,7 @@ test("模型预设：savePreset 更新已有预设并保留原始创建时间", 
   const updated = tools.savePreset(storage, {
     id: original.id,
     name: "SiliconFlow R1 (更新)",
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-R1",
     concurrency: 6,
@@ -120,7 +120,7 @@ test("模型预设：savePreset 在名称相同时覆盖已有预设", () => {
 
   const first = tools.savePreset(storage, {
     name: "Claude 3.7",
-    provider: "claude",
+    protocol: "claude",
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-3-7-sonnet-20250219",
     concurrency: 2,
@@ -128,7 +128,7 @@ test("模型预设：savePreset 在名称相同时覆盖已有预设", () => {
 
   const second = tools.savePreset(storage, {
     name: "Claude 3.7",
-    provider: "claude",
+    protocol: "claude",
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-3-7-sonnet-20250219",
     concurrency: 5,
@@ -175,7 +175,7 @@ test("模型预设界面：渲染预设控件并在下拉框中呈现已存预�
   const storage = storageFixture();
   tools.savePreset(storage, {
     name: "DeepSeek V3 (测试)",
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
     concurrency: 5,
@@ -201,7 +201,7 @@ test("模型预设界面：渲染预设控件并在下拉框中呈现已存预�
   // 下拉列表包含默认选项和存储的预设
   assert.equal(select.children.length, 2);
   assert.equal(select.children[0].textContent, "-- 自定义 / 未选择预设 --");
-  assert.equal(select.children[1].textContent, "DeepSeek V3 (测试)");
+  assert.equal(select.children[1].children[0].textContent, "https://api.deepseek.com/v1 / DeepSeek V3 (测试) · deepseek-chat");
 });
 
 test("模型预设界面：选择预设时更新表单字段、启用操作按钮并弹出提示", async () => {
@@ -209,7 +209,7 @@ test("模型预设界面：选择预设时更新表单字段、启用操作按�
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
     name: "Claude 3.7",
-    provider: "claude",
+    protocol: "claude",
     baseUrl: "https://api.anthropic.com/v1",
     apiKey: "sk-ant-123",
     model: "claude-3-7-sonnet-20250219",
@@ -225,7 +225,7 @@ test("模型预设界面：选择预设时更新表单字段、启用操作按�
   await select.dispatch("change");
 
   // 检查字段被正确填充
-  assert.equal(ui.element("aiProvider").value, "claude");
+  assert.equal(ui.element("aiProtocol").value, "claude");
   assert.equal(ui.element("aiBaseUrl").value, "https://api.anthropic.com/v1");
   assert.equal(ui.element("aiApiKey").value, "sk-ant-123");
   assert.equal(ui.element("aiModel").value, "claude-3-7-sonnet-20250219");
@@ -237,7 +237,7 @@ test("模型预设界面：选择预设时更新表单字段、启用操作按�
 
   // Toast 提示已应用预设
   const toasts = toastMessages(ui);
-  assert.ok(toasts.some((msg) => msg.includes("已应用模型预设「Claude 3.7」")));
+  assert.ok(toasts.some((msg) => msg.includes("已应用模型预设「https://api.anthropic.com/v1 / Claude 3.7 · claude-3-7-sonnet-20250219」")));
 });
 
 test("模型预设界面：另存为预设创建新预设并自动选中", async () => {
@@ -246,7 +246,7 @@ test("模型预设界面：另存为预设创建新预设并自动选中", async
     prompt: () => "我的新模型预设",
   });
 
-  ui.element("aiProvider").value = "compatible";
+  ui.element("aiProtocol").value = "compatible";
   ui.element("aiBaseUrl").value = "https://api.my-service.com/v1";
   ui.element("aiApiKey").value = "my-key-456";
   ui.element("aiModel").value = "custom-model";
@@ -270,7 +270,7 @@ test("模型预设界面：另存为预设创建新预设并自动选中", async
   assert.equal(presets[0].concurrency, 4);
 
   const toasts = toastMessages(ui);
-  assert.ok(toasts.some((msg) => msg.includes("已保存模型预设「我的新模型预设」")));
+  assert.ok(toasts.some((msg) => msg.includes("已保存模型预设「https://api.my-service.com/v1 / 我的新模型预设 · custom-model」")));
 });
 
 test("模型预设界面：修改预设更新存储中的已有配置", async () => {
@@ -278,7 +278,7 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
     name: "本地 Ollama",
-    provider: "local",
+    protocol: "local",
     baseUrl: "http://127.0.0.1:11434/v1",
     model: "qwen2.5:14b",
     concurrency: 2,
@@ -294,9 +294,9 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
 
   // 覆盖保存前：阶段预设下拉的提示文字还是旧值
   const stage1Select = ui.element("stage1PresetSelect");
-  const optionBefore = stage1Select.children.find((child) => child.value === p.id);
+  const optionBefore = stage1Select.children.flatMap((child) => child.children || []).find((child) => child.value === p.id);
   assert.ok(optionBefore, "阶段一下拉包含该预设");
-  assert.equal(optionBefore.title, "本地 Ollama（qwen2.5:14b，并发上限 2）");
+  assert.equal(optionBefore.title, "http://127.0.0.1:11434/v1 / 本地 Ollama · qwen2.5:14b（并发上限 2）");
 
   // 用户调整了模型和并发
   ui.element("aiModel").value = "qwen2.5:32b";
@@ -311,12 +311,12 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
   assert.equal(updated.concurrency, 1);
 
   // 覆盖保存后：下拉提示必须同步到最新模型与并发，不能残留旧值（否则显示与实际生效配置不一致）
-  const optionAfter = stage1Select.children.find((child) => child.value === p.id);
+  const optionAfter = stage1Select.children.flatMap((child) => child.children || []).find((child) => child.value === p.id);
   assert.ok(optionAfter, "覆盖保存后该预设仍在下拉中");
-  assert.equal(optionAfter.title, "本地 Ollama（qwen2.5:32b，并发上限 1）");
+  assert.equal(optionAfter.title, "http://127.0.0.1:11434/v1 / 本地 Ollama · qwen2.5:32b（并发上限 1）");
 
   const toasts = toastMessages(ui);
-  assert.ok(toasts.some((msg) => msg.includes("已更新模型预设「本地 Ollama」")));
+  assert.ok(toasts.some((msg) => msg.includes("已更新模型预设「http://127.0.0.1:11434/v1 / 本地 Ollama · qwen2.5:32b」")));
 });
 
 test("模型预设界面：删除预设从存储中移除并重置下拉选择", async () => {
@@ -345,7 +345,7 @@ test("模型预设界面：删除预设从存储中移除并重置下拉选择",
   assert.equal(ui.element("aiPresetDelete").disabled, true);
 
   const toasts = toastMessages(ui);
-  assert.ok(toasts.some((msg) => msg.includes("已删除模型预设「待删预设」")));
+  assert.ok(toasts.some((msg) => msg.includes("已删除模型预设「本地服务 / 待删预设 · temp」")));
 });
 
 test("模型预设界面：页面初始化时自动恢复先前激活的预设", async () => {
@@ -353,16 +353,16 @@ test("模型预设界面：页面初始化时自动恢复先前激活的预设",
   const storage = storageFixture();
   const p = tools.savePreset(storage, {
     name: "默认预设",
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o",
     concurrency: 3,
   });
 
   // 存入 aiConfigStorageKey 中已选中的 currentPresetId
-  storage.setItem("translation-compare-ai-config-v1", JSON.stringify({
+  storage.setItem("translation-compare-ai-config-v2", JSON.stringify({
     currentPresetId: p.id,
-    provider: "compatible",
+    protocol: "compatible",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o",
   }));

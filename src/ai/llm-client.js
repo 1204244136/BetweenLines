@@ -1,3 +1,4 @@
+const { normalizeConnectionConfig } = require("./connection-config");
 /**
  * 共享底层 LLM 客户端与传输层 (src/ai/llm-client.js)
  *
@@ -104,9 +105,10 @@ function buildApiUrl(baseUrl, endpoint) {
   }
 }
 
-function buildProviderHeaders(config = {}) {
+function buildProtocolHeaders(config = {}) {
+  const { protocol } = normalizeConnectionConfig(config, "compatible");
   const headers = { "content-type": "application/json" };
-  if (config.provider === "claude") {
+  if (protocol === "claude") {
     headers["anthropic-version"] = "2023-06-01";
     if (config.apiKey) headers["x-api-key"] = config.apiKey;
   } else if (config.apiKey) {
@@ -295,13 +297,13 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
 }
 
 async function callChatCompletions(messages, config = {}, options = {}) {
-  const provider = config.provider === "claude" ? "claude" : "compatible";
+  const { protocol } = normalizeConnectionConfig(config, "compatible");
   const timeoutMs = options.timeoutMs || config.timeoutMs || 90000;
   const signal = options.signal || config.signal || null;
 
-  if (provider === "claude") {
+  if (protocol === "claude") {
     const endpoint = buildApiUrl(config.baseUrl || "https://api.anthropic.com", "/v1/messages");
-    const headers = buildProviderHeaders({ provider: "claude", apiKey: config.apiKey });
+    const headers = buildProtocolHeaders({ protocol: "claude", apiKey: config.apiKey });
     const body = buildClaudeMessageBody(messages, config);
     const data = await fetchJson(endpoint, {
       method: "POST",
@@ -312,7 +314,7 @@ async function callChatCompletions(messages, config = {}, options = {}) {
   }
 
   const endpoint = buildApiUrl(config.baseUrl || "http://127.0.0.1:11434/v1", "/v1/chat/completions");
-  const headers = buildProviderHeaders({ provider: "compatible", apiKey: config.apiKey });
+  const headers = buildProtocolHeaders({ protocol: "compatible", apiKey: config.apiKey });
   const body = buildChatCompletionBody(messages, config);
   const data = await fetchJson(endpoint, {
     method: "POST",
@@ -347,13 +349,13 @@ function cleanJsonPayload(rawText) {
 }
 
 async function listProviderModels(config = {}, options = {}) {
-  const provider = config.provider === "claude" ? "claude" : "compatible";
+  const { protocol, provider } = normalizeConnectionConfig(config, "compatible");
   const timeoutMs = options.timeoutMs || config.timeoutMs || 20000;
   const signal = options.signal || config.signal || null;
-  const baseUrl = config.baseUrl || (provider === "claude" ? "https://api.anthropic.com" : "http://127.0.0.1:11434/v1");
+  const baseUrl = config.baseUrl || (protocol === "claude" ? "https://api.anthropic.com" : "http://127.0.0.1:11434/v1");
 
   const endpoint = buildApiUrl(baseUrl, "/v1/models");
-  const headers = buildProviderHeaders({ provider, apiKey: config.apiKey });
+  const headers = buildProtocolHeaders({ protocol, apiKey: config.apiKey });
 
   const data = await fetchJson(endpoint, {
     method: "GET",
@@ -461,7 +463,7 @@ function diagnoseConnectivityError(error, context = {}) {
 }
 
 async function testModelConnectivity(config = {}, options = {}) {
-  const provider = config.provider === "claude" ? "claude" : "compatible";
+  const { protocol, provider } = normalizeConnectionConfig(config, "compatible");
   const baseUrl = String(config.baseUrl || "").trim().replace(/\/+$/, "");
   const model = String(config.model || "").trim();
   const apiKey = String(config.apiKey || "").trim();
@@ -471,6 +473,7 @@ async function testModelConnectivity(config = {}, options = {}) {
   if (!baseUrl) {
     return {
       ok: false,
+      protocol,
       provider,
       model,
       latencyMs: 0,
@@ -484,6 +487,7 @@ async function testModelConnectivity(config = {}, options = {}) {
   if (!model) {
     return {
       ok: false,
+      protocol,
       provider,
       model,
       latencyMs: 0,
@@ -498,9 +502,9 @@ async function testModelConnectivity(config = {}, options = {}) {
   const probeMessages = [{ role: "user", content: "Hi" }];
 
   try {
-    if (provider === "claude") {
+    if (protocol === "claude") {
       const endpoint = buildApiUrl(baseUrl || "https://api.anthropic.com", "/v1/messages");
-      const headers = buildProviderHeaders({ provider: "claude", apiKey });
+      const headers = buildProtocolHeaders({ protocol: "claude", apiKey });
       const body = {
         model,
         max_tokens: 5,
@@ -522,7 +526,8 @@ async function testModelConnectivity(config = {}, options = {}) {
 
       return {
         ok: true,
-        provider: "claude",
+        protocol,
+        provider,
         model,
         latencyMs,
         replyPreview,
@@ -532,7 +537,7 @@ async function testModelConnectivity(config = {}, options = {}) {
     }
 
     const endpoint = buildApiUrl(baseUrl || "http://127.0.0.1:11434/v1", "/v1/chat/completions");
-    const headers = buildProviderHeaders({ provider: "compatible", apiKey });
+    const headers = buildProtocolHeaders({ protocol: "compatible", apiKey });
     const caps = detectModelCapabilities(model, provider);
 
     const makeProbeBody = (useCompletionTokens) => {
@@ -582,7 +587,8 @@ async function testModelConnectivity(config = {}, options = {}) {
 
     return {
       ok: true,
-      provider: "compatible",
+      protocol,
+      provider,
       model,
       latencyMs,
       replyPreview,
@@ -591,9 +597,10 @@ async function testModelConnectivity(config = {}, options = {}) {
     };
   } catch (error) {
     const latencyMs = Date.now() - startTime;
-    const diag = diagnoseConnectivityError(error, { model, baseUrl, provider });
+    const diag = diagnoseConnectivityError(error, { model, baseUrl, protocol });
     return {
       ok: false,
+      protocol,
       provider,
       model,
       latencyMs,
@@ -609,7 +616,7 @@ async function testModelConnectivity(config = {}, options = {}) {
 module.exports = {
   assertSafeOutboundUrl,
   buildApiUrl,
-  buildProviderHeaders,
+  buildProtocolHeaders,
   buildChatCompletionBody,
   buildClaudeMessageBody,
   extractClaudeText,

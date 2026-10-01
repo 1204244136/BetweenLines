@@ -182,7 +182,7 @@ test("模型列表发现会富化推理能力与思考档位", async () => {
   try {
     const address = server.address();
     const result = await listModels({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}`,
     });
 

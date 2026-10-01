@@ -371,8 +371,8 @@ function renderHtml(model) {
           <div id="speakerAiServiceLabel" class="ai-config-label">AI 服务</div>
           <div class="ai-service-fields has-reasoning">
             <div class="ai-field">
-              <label for="speakerAiProvider">接口服务</label>
-              <select id="speakerAiProvider">
+              <label for="speakerAiProtocol">接口服务</label>
+              <select id="speakerAiProtocol">
                 <option value="local">本地默认 (Ollama/vLLM)</option>
                 <option value="compatible">第三方兼容 (OpenAI 协议)</option>
                 <option value="claude">Claude 原生</option>

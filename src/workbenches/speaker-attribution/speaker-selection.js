@@ -89,7 +89,8 @@ function selectionFromArgs(argv = process.argv.slice(2)) {
   if (args.ai) {
     selection.ai = {
       enabled: true,
-      provider: args.provider || process.env.BETWEENLINES_AI_PROVIDER || "compatible",
+      protocol: args.protocol || process.env.BETWEENLINES_AI_PROTOCOL || "compatible",
+      provider: args.provider || process.env.BETWEENLINES_AI_PROVIDER || "",
       model: args.model || process.env.BETWEENLINES_AI_MODEL || "default",
       baseUrl: args["base-url"] || process.env.BETWEENLINES_AI_BASE_URL || "",
       apiKey: args["api-key"] || process.env.BETWEENLINES_AI_API_KEY || "",

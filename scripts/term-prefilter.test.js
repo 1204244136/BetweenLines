@@ -109,7 +109,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
@@ -220,7 +220,7 @@ test("运行期把本次判定与构建期落盘结论对照：一致时明说�
 
   const run = async (label) => {
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: "http://127.0.0.1:1/v1",
       model: "test-model",
       proofreadMode: "bilingual",
@@ -274,7 +274,7 @@ test("没有对照表时行为与之前一致，全部交给模型", async () =>
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",

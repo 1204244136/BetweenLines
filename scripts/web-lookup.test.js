@@ -195,7 +195,7 @@ async function runProofread({ rows, label, termTables, sites = SITES, webLookup 
   try {
     const address = server.address();
     await startProofread({
-      provider: "compatible",
+      protocol: "compatible",
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",

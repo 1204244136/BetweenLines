@@ -1,5 +1,5 @@
 // 页面与运行服务共享的配置；导入时不创建任务或加载服务状态。
-const providerDefaults = {
+const protocolDefaults = {
   claude: {
     name: "Claude",
     baseUrl: "https://api.anthropic.com",
@@ -23,4 +23,4 @@ const providerDefaults = {
   },
 };
 
-module.exports = { providerDefaults };
+module.exports = { protocolDefaults };

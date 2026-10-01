@@ -136,8 +136,8 @@ function setupCascadeDialogWorkbench() {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-dialog-cascade", stageMode: "stage1", stageCascade: { toStylist: true, toArbiter: false }, results: [] } },
     },
   });
-  ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
-    { id: "preset_s2", name: "Gemini 复审", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "preset_s2", name: "Gemini 复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
   ]));
   ui.run("restoreAiConfig()");
   ui.run('aiIds.stage2Preset.value = "preset_s2";');

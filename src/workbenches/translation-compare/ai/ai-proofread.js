@@ -1,4 +1,5 @@
-const { providerDefaults } = require("./proofread-defaults");
+const { normalizeConnectionConfig } = require("../../../ai/connection-config");
+const { protocolDefaults } = require("./proofread-defaults");
 const { createStageBreaker, describeTrip, describePolicy, formatDuration } = require("./circuit-breaker");
 const {
   CONCURRENCY_POLICY,
@@ -49,7 +50,7 @@ const {
 const {
   TEXT_INTENSITY_TEMPERATURE_MAP,
   buildApiUrl,
-  buildProviderHeaders,
+  buildProtocolHeaders,
   buildChatCompletionBody: buildSharedChatCompletionBody,
   buildClaudeMessageBody,
   extractClaudeText,
@@ -126,8 +127,8 @@ const knownModelFallbacks = [
   {
     pattern: /(?:^|\.)xiaomimimo\.com(?:\/|$)|(?:^|\/\/)token-plan-cn\.xiaomimimo\.com(?:\/|$)/i,
     models: [
-      { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", provider: "compatible", fallback: true },
-      { id: "mimo-v2.5", name: "MiMo V2.5", provider: "compatible", fallback: true },
+      { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", protocol: "compatible", fallback: true },
+      { id: "mimo-v2.5", name: "MiMo V2.5", protocol: "compatible", fallback: true },
     ],
   },
 ];
@@ -213,7 +214,8 @@ const status = {
   target: "cn",
   proofreadMode: "bilingual",
   profileId: DEFAULT_PROFILE_ID,
-  provider: "local",
+  protocol: "local",
+  provider: "",
   model: "",
   reasoningEffort: "",
   projectKey: "",
@@ -353,6 +355,7 @@ function clientStatus(options = {}) {
     proofreadMode: status.proofreadMode,
     profileId: status.profileId,
     profiles: listProfiles(),
+    protocol: status.protocol,
     provider: status.provider,
     model: status.model,
     reasoningEffort: status.reasoningEffort,
@@ -433,7 +436,7 @@ function clientStatus(options = {}) {
     resultRevision: deliveredRevision,
     latestResultRevision: status.resultRevision,
     hasMoreResults: deliveredRevision < status.resultRevision,
-    providerDefaults,
+    protocolDefaults,
     proofreadPrompt: proofreadPromptFor(status.proofreadMode, status.profileId),
   };
 }
@@ -481,8 +484,8 @@ function reusePreviousResults(config = {}) {
 }
 
 function cleanConfig(input = {}) {
-  const provider = providerDefaults[input.provider] ? input.provider : "local";
-  const defaults = providerDefaults[provider];
+  const { protocol, provider } = normalizeConnectionConfig(input);
+  const defaults = protocolDefaults[protocol];
   const target = input.target === "tw" ? "tw" : "cn";
   const proofreadMode = input.proofreadMode === "trilingual" ? "trilingual" : "bilingual";
   // 并发上限：调度器在 1~上限 之间自动升降（见 concurrency-controller.js），没有「智能并发」开关。
@@ -499,6 +502,7 @@ function cleanConfig(input = {}) {
   const inputSites = Array.isArray(input.wikiSites) ? input.wikiSites : toPathList(input.wikiSites);
   const envSites = toPathList(process.env.TRANSCOMPARATOR_WIKI_SITES);
   return {
+    protocol,
     provider,
     target,
     proofreadMode,
@@ -576,8 +580,8 @@ function cleanConfig(input = {}) {
 
 function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurrency = 3) {
   if (!input || typeof input !== "object") return null;
-  const provider = providerDefaults[input.provider] ? input.provider : "local";
-  const defaults = providerDefaults[provider] || fallbackDefaults;
+  const { protocol, provider } = normalizeConnectionConfig(input);
+  const defaults = protocolDefaults[protocol] || fallbackDefaults;
   const model = String(input.model || defaults.model || "").trim();
   if (!model) return null;
   const baseUrl = String(input.baseUrl || defaults.baseUrl || "").trim().replace(/\/+$/, "");
@@ -590,6 +594,7 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
   const concurrency = resolveConcurrencyCap(input, defaultConcurrency);
 
   return {
+    protocol,
     provider,
     baseUrl,
     model,
@@ -629,6 +634,7 @@ function resetStatus(config, rowsLength) {
   status.target = config.target;
   status.proofreadMode = config.proofreadMode;
   status.profileId = resolveProfile(config.profileId).id;
+  status.protocol = config.protocol;
   status.provider = config.provider;
   status.model = config.model;
   status.reasoningEffort = config.reasoningEffort;
@@ -1107,7 +1113,7 @@ async function listModels(input = {}) {
   }
 
   try {
-    const headers = buildProviderHeaders(config);
+    const headers = buildProtocolHeaders(config);
     const candidates = buildModelUrlCandidates(config.baseUrl);
     const errors = [];
     for (const url of candidates) {
@@ -1142,6 +1148,7 @@ async function testModel(input = {}) {
   if (!model) {
     return {
       ok: false,
+      protocol: config.protocol,
       provider: config.provider,
       model: "",
       latencyMs: 0,
@@ -1152,6 +1159,7 @@ async function testModel(input = {}) {
     };
   }
   return testModelConnectivity({
+    protocol: config.protocol,
     provider: config.provider,
     baseUrl: config.baseUrl,
     apiKey: config.apiKey,
@@ -1189,7 +1197,7 @@ function buildModelUrlCandidates(baseUrl) {
   return [buildApiUrl(trimmed, "/v1/models")];
 }
 
-// buildApiUrl / buildProviderHeaders 与共享传输层 (src/ai/llm-client.js) 同源。
+// buildApiUrl / buildProtocolHeaders 与共享传输层 (src/ai/llm-client.js) 同源。
 
 function modelFallbackForBaseUrl(baseUrl) {
   const value = String(baseUrl || "");
@@ -3673,13 +3681,13 @@ function buildMessages(payload, config = {}) {
 }
 
 async function callModel(messages, config) {
-  if (config.provider === "claude") return callClaude(messages, config);
+  if (config.protocol === "claude") return callClaude(messages, config);
   return callOpenAiCompatible(messages, config);
 }
 
 async function callOpenAiCompatible(messages, config) {
   const startTime = Date.now();
-  const headers = buildProviderHeaders(config);
+  const headers = buildProtocolHeaders(config);
   const body = buildChatCompletionBody(messages, config);
   const data = await fetchJson(buildApiUrl(config.baseUrl, "/v1/chat/completions"), {
     method: "POST",
@@ -3711,7 +3719,7 @@ async function callClaude(messages, config) {
   const startTime = Date.now();
   const data = await fetchJson(buildApiUrl(config.baseUrl, "/v1/messages"), {
     method: "POST",
-    headers: buildProviderHeaders(config),
+    headers: buildProtocolHeaders(config),
     body: JSON.stringify(buildClaudeMessageBody(messages, config)),
   });
   const latencyMs = Date.now() - startTime;
@@ -4128,7 +4136,7 @@ module.exports = {
   buildChatCompletionBody,
   buildClaudeMessageBody,
   buildMessages,
-  buildProviderHeaders,
+  buildProtocolHeaders,
   callModel,
   clearProofreadCache,
   clientStatus,
@@ -4157,7 +4165,7 @@ module.exports = {
   normalizeGrade,
   normalizeSeverity,
   parseDecision,
-  providerDefaults,
+  protocolDefaults,
   proofreadPromptFor,
   proofreadPrompts,
   promptTrimSummary,

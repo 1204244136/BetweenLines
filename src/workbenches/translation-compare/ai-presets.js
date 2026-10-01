@@ -1,7 +1,9 @@
+const { normalizeConnectionConfig } = require("../../ai/connection-config");
+
 // Pure helpers shared by the generated browser page and Node regression tests.
+// 浏览器先注入共享 normalizeConnectionConfig，再注入本工厂。
 function createPresetTools() {
-  const PRESETS_STORAGE_KEY = "translation-compare-ai-presets-v1";
-  const VALID_PROVIDERS = ["local", "claude", "compatible"];
+  const PRESETS_STORAGE_KEY = "translation-compare-ai-presets-v2";
 
   // 并发边界必须与 Node 侧 ai/concurrency-limits.js 保持一致。本函数会被 toString()
   // 注入浏览器页面、不能引用模块作用域，因此自带一份同值字面量；两边的边界行为由
@@ -9,6 +11,54 @@ function createPresetTools() {
   const CONCURRENCY_MIN = 1;
   const CONCURRENCY_MAX = 32;
   const DEFAULT_CONCURRENCY = 3;
+
+  function providerName(item) {
+    return normalizeConnectionConfig(item || {}).provider;
+  }
+
+  // 旧预设不猜测厂商：地址仅用于未命名连接的身份与展示，永不展示凭证、查询串或片段。
+  function providerEndpoint(item) {
+    try {
+      const url = new URL(item?.baseUrl || "");
+      if (!["http:", "https:"].includes(url.protocol)) return "";
+      return url.origin + url.pathname.replace(/\/+$/, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function providerKey(item) {
+    const name = providerName(item);
+    return name ? JSON.stringify(["name", name.toLowerCase()])
+      : JSON.stringify(["endpoint", normalizeConnectionConfig(item || {}).protocol, providerEndpoint(item)]);
+  }
+
+  function providerLabel(item) {
+    return providerName(item) || providerEndpoint(item)
+      || ({ local: "本地服务", claude: "Claude 接口", compatible: "兼容接口" }[normalizeConnectionConfig(item || {}).protocol]);
+  }
+
+  function presetLabel(item) {
+    const name = String(item?.name || "");
+    const model = String(item?.model || "");
+    return providerLabel(item) + " / " + name + (model && model !== name ? " · " + model : "");
+  }
+
+  function groupPresets(presets) {
+    const groups = new Map();
+    for (const preset of presets || []) {
+      const key = providerKey(preset);
+      if (!groups.has(key)) groups.set(key, { key, label: providerLabel(preset), presets: [] });
+      groups.get(key).presets.push(preset);
+    }
+    return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+  }
+
+  function findPresetByName(presets, item) {
+    const key = providerKey(item);
+    const name = String(item?.name || "").trim();
+    return presets.find((preset) => preset.name === name && providerKey(preset) === key) || null;
+  }
 
   // 越界一律截断到边界，而不是回落到默认值：旧实现把 20 直接换成 3，
   // 用户在预设里选了 20 却静默跑成 3，且没有任何提示。
@@ -23,7 +73,7 @@ function createPresetTools() {
     if (!name) return null;
 
     const id = String(item.id || "").trim() || ("preset_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
-    const provider = VALID_PROVIDERS.includes(item.provider) ? item.provider : "local";
+    const { protocol, provider } = normalizeConnectionConfig(item);
     const baseUrl = typeof item.baseUrl === "string" ? item.baseUrl.trim() : "";
     const apiKey = typeof item.apiKey === "string" ? item.apiKey : "";
     const model = typeof item.model === "string" ? item.model.trim() : "";
@@ -52,6 +102,7 @@ function createPresetTools() {
     return {
       id,
       name,
+      protocol,
       provider,
       baseUrl,
       apiKey,
@@ -103,8 +154,11 @@ function createPresetTools() {
     if (presetData && presetData.id) {
       existingIndex = list.findIndex((item) => item.id === String(presetData.id));
     }
-    if (existingIndex < 0 && sanitized.name) {
-      existingIndex = list.findIndex((item) => item.name === sanitized.name);
+    const sameName = findPresetByName(list, sanitized);
+    // 改名/改提供商不能把两个既有 ID 合并，阶段引用必须保持稳定。
+    if (existingIndex >= 0 && sameName && sameName.id !== list[existingIndex].id) return null;
+    if (existingIndex < 0 && sameName) {
+      existingIndex = list.findIndex((item) => item.id === sameName.id);
     }
 
     const now = Date.now();
@@ -143,6 +197,12 @@ function createPresetTools() {
 
   return {
     storageKey: PRESETS_STORAGE_KEY,
+    providerName,
+    providerKey,
+    providerLabel,
+    presetLabel,
+    groupPresets,
+    findPresetByName,
     sanitizePreset,
     parsePresets,
     listPresets,

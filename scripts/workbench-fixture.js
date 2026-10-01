@@ -67,7 +67,18 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           if (index >= 0) list.splice(index, 1);
         },
         async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
-        setAttribute() {}, removeAttribute() {}, getAttribute() { return null; },
+        attributes: new Map(),
+        setAttribute(name, value) { this.attributes.set(name, String(value)); },
+        removeAttribute(name) { this.attributes.delete(name); },
+        getAttribute(name) { return this.attributes.get(name) ?? null; },
+        dispatchEvent(event) {
+          for (const fn of listeners.get(event.type) || []) fn(event);
+          return true;
+        },
+        contains(node) {
+          for (let current = node; current; current = current.parentNode) if (current === this) return true;
+          return false;
+        },
         querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; },
         // 子节点要真的记下来：浮动提示的断言看的就是「页面上留下了哪几条提示」。
         append(...nodes) {
@@ -84,7 +95,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           const parent = this.parentNode;
           if (parent) parent.children = parent.children.filter((item) => item !== this);
         },
-        focus() {}, click() {},
+        focus() {}, click() { if (!this.disabled) this.dispatchEvent({ type: "click", target: this }); },
         showModal() {
           this.open = true;
           // 页内确认弹窗（workbench-client.js 的 askConfirm）在测试里默认按 fixture 的
@@ -118,7 +129,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       createElementNS: () => element("ns-" + (++createdSeq)),
       documentElement: element("html"), addEventListener() {},
     },
-    localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob,
+    localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob, Event,
     window: {
       addEventListener() {}, requestAnimationFrame() {},
       setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout,

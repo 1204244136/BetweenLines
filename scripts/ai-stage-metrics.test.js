@@ -807,9 +807,9 @@ test("旧版常驻服务：提示一轮只发一次，不刷屏", () => {
 // 不算「配了阶段二」，取不到预设就等于那一段没启用。
 function createCascadeWorkbench(options = {}) {
   const ui = createWorkbench(storageFixture({}), options);
-  ui.storage.setItem("translation-compare-ai-presets-v1", JSON.stringify([
-    { id: "preset-s2", name: "Gemini 复审", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
-    { id: "preset-s3", name: "Kimi 仲裁", provider: "compatible", baseUrl: "https://example.invalid/v1", model: "kimi-k3" },
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "preset-s2", name: "Gemini 复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
+    { id: "preset-s3", name: "Kimi 仲裁", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "kimi-k3" },
   ]));
   ui.run("restoreAiConfig()");
   return ui;

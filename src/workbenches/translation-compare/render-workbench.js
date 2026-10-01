@@ -1,12 +1,13 @@
 const fs = require("fs");
 const path = require("path");
 const { activeLangs, defaultDisplayLabels } = require("../../ingest/input-selection");
-const { providerDefaults } = require("./ai/proofread-defaults");
+const { protocolDefaults } = require("./ai/proofread-defaults");
 const { proofreadPromptFor, listProfiles } = require("./ai/proofread-contract");
 const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createPresetTools } = require("./ai-presets");
+const { normalizeConnectionConfig } = require("../../ai/connection-config");
 const { createStageNoteTools } = require("./ai/stage-note-state");
 const { AI_CONCURRENCY_LIMITS: concurrencyLimits } = require("./ai/concurrency-limits");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
@@ -80,7 +81,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     pageLabels: labels,
     similarityLabel,
     semanticLabel,
-    providerDefaults,
+    protocolDefaults,
     proofreadPrompt,
     // 每个特化档案自带默认提示词，客户端切换下拉时无需等状态轮询即可替换未手改的提示词。
     profiles: profileOptions.map((profile) => ({
@@ -179,9 +180,19 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                         </div>
                       </div>
                     </div>
-                    <div class="ai-field ai-provider-field">
-                      <label for="aiProvider">接口</label>
-                      <select id="aiProvider">
+                    <div class="ai-field ai-provider-name-field">
+                      <label for="aiProvider">提供商名称</label>
+                      <div id="aiProviderCombobox" class="select-combobox provider-combobox">
+                        <input id="aiProvider" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="aiProviderNames" autocomplete="off" placeholder="填写或选择提供商名称" title="留空时按接口地址区分；可为不同账号单独命名。">
+                        <button id="aiProviderToggle" class="select-trigger provider-toggle" type="button" tabindex="-1" aria-label="选择已保存的提供商" aria-controls="aiProviderNames" aria-expanded="false">
+                          <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        <div id="aiProviderNames" class="select-menu" role="listbox" aria-label="已保存的提供商" hidden></div>
+                      </div>
+                    </div>
+                    <div class="ai-field ai-protocol-field">
+                      <label for="aiProtocol">接口类型</label>
+                      <select id="aiProtocol">
                         <option value="local">本地默认</option>
                         <option value="claude">Claude</option>
                         <option value="compatible">第三方兼容服务</option>
@@ -189,13 +200,13 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                     <div class="ai-field ai-url-field">
                       <label for="aiBaseUrl">地址</label>
-                      <input id="aiBaseUrl" type="url" value="${escapeHtml(providerDefaults.local.baseUrl)}">
+                      <input id="aiBaseUrl" type="url" value="${escapeHtml(protocolDefaults.local.baseUrl)}">
                     </div>
                   </div>
                   <div class="ai-service-row">
                     <div class="ai-field ai-apikey-field">
                       <label for="aiApiKey">API Key</label>
-                      <input id="aiApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(providerDefaults.local.apiKeyPlaceholder || "")}">
+                      <input id="aiApiKey" type="password" autocomplete="off" placeholder="${escapeHtml(protocolDefaults.local.apiKeyPlaceholder || "")}">
                     </div>
                     <div class="ai-field ai-model-field">
                       <div class="ai-field-head">
@@ -203,7 +214,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       </div>
                       <div class="ai-model-row">
                         <select id="aiModel">
-                          <option value="${escapeHtml(providerDefaults.local.model)}">${escapeHtml(providerDefaults.local.model)}</option>
+                          <option value="${escapeHtml(protocolDefaults.local.model)}">${escapeHtml(protocolDefaults.local.model)}</option>
                         </select>
                         <div class="ai-model-actions">
                           <button id="aiRefreshModels" type="button" title="从接口获取可用模型列表">刷新</button>
@@ -537,6 +548,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${alignLegacyNotes.toString()}
     ${alignNotesByIndex.toString()}
     ${createNotesTools.toString()}
+    ${normalizeConnectionConfig.toString()}
     ${createPresetTools.toString()}
     ${createStageNoteTools.toString()}
     const { latestAiNotePart, stageNoteState } = createStageNoteTools();
