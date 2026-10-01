@@ -151,7 +151,11 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
 
   const statusText = ui.element("aiStatus").textContent;
   assert.match(statusText, /AI 校对中（动态并发 2\/10）：实际调用 69\/273，建议 17，错误 1/);
-  assert.match(statusText, /S1初审 2处理中 ➔ S2复审 1处理中\(2排队\) ➔ S3仲裁 空闲/);
+  assert.doesNotMatch(
+    statusText,
+    /S1初审|S2复审|S3仲裁/,
+    "阶段流水线进度只由阶段卡片的状态 pill 承载，固定状态行不再重复播报"
+  );
 
   // Check stage pills
   const pill1 = ui.element("stage1StatusPill");
@@ -171,6 +175,37 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   assert.equal(active1Text.textContent, "70, 71");
   const active2Text = ui.element("stage2ActiveRowsText");
   assert.equal(active2Text.textContent, "68");
+
+  // 跑完后的流水线汇总同样不在状态行重复：阶段卡片上已经有同一组数字。
+  // 放在阶段徽标断言之后，避免这一轮渲染把运行态徽标覆盖成 done。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: false,
+      finishedAt: "2026-01-01T00:00:00.000Z",
+      queued: 273,
+      modelProcessed: 273,
+      total: 273,
+      suggested: 17,
+      errors: 1,
+      stageMetrics: {
+        stage1Passed: 51,
+        fastPassHits: 51,
+        stage1NeedsEdit: 17,
+        stage2Reviewed: 17,
+        stage3Arbitrated: 0,
+      },
+      stagePipelines: {
+        stage1: { inFlight: 0, pending: 0, activeRows: [] },
+        stage2: { inFlight: 0, pending: 0, activeRows: [] },
+        stage3: { inFlight: 0, pending: 0, activeRows: [] },
+      },
+      results: [],
+    });
+  `);
+  const finishedText = ui.element("aiStatus").textContent;
+  assert.match(finishedText, /AI 校对完成：实际调用 273\/273，建议 17，错误 1/);
+  assert.doesNotMatch(finishedText, /初审 .*复审|复审 .*仲裁/, "完成态的流水线汇总也只由阶段卡片呈现");
 });
 
 test("客户端重新载入时直接从备注中恢复阶段指标，无需等待 AI 状态轮询", () => {

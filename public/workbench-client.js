@@ -4546,41 +4546,18 @@
         ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || ai.currentConcurrency) + "）"
         : "";
 
-      let pipelineText = "";
-      if (isMultiStage && ai.stagePipelines) {
-        const p1 = ai.stagePipelines.stage1 || {};
-        const p2 = ai.stagePipelines.stage2 || {};
-        const p3 = ai.stagePipelines.stage3 || {};
-        const s1Part = "S1初审 " + (p1.inFlight > 0 ? p1.inFlight + "处理中" : (p1.pending > 0 ? p1.pending + "排队" : "完毕"));
-        const s2Part = "S2复审 " + (p2.inFlight > 0 ? p2.inFlight + "处理中" + (p2.pending > 0 ? "(" + p2.pending + "排队)" : "") : (p2.pending > 0 ? p2.pending + "排队" : "空闲"));
-        const s3Part = "S3仲裁 " + (p3.inFlight > 0 ? p3.inFlight + "处理中" : (p3.pending > 0 ? p3.pending + "排队" : "空闲"));
-        pipelineText = " ｜ " + s1Part + " ➔ " + s2Part + " ➔ " + s3Part;
-      }
-
-      let pipelineDoneText = "";
-      if (isMultiStage && stageMetrics) {
-        const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
-        const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
-        const fpHits = Math.max(0, Number(stageMetrics.fastPassHits) || 0);
-        const s2Reviewed = Math.max(0, Number(stageMetrics.stage2Reviewed) || 0);
-        const s2Diverged = Math.max(0, Number(stageMetrics.stage2Diverged) || Number(stageMetrics.stage3Arbitrated) || 0);
-        const s3Arbitrated = Math.max(0, Number(stageMetrics.stage3Arbitrated) || 0);
-        const s1Part = "初审 " + s1Passed + (fpHits ? "(直通 " + fpHits + ")" : "") + (s1NeedsEdit ? "➔提改 " + s1NeedsEdit : "");
-        const s2Part = "复审 " + s2Reviewed + (s2Diverged ? "(分歧 " + s2Diverged + ")" : "");
-        const s3Part = "仲裁 " + s3Arbitrated;
-        pipelineDoneText = " ｜ " + s1Part + " ➔ " + s2Part + " ➔ " + s3Part;
-      }
-
+      // 阶段流水线进度不在这里重复播报：同一份「2处理中 · 353排队」由下方三张阶段卡片的
+      // 状态 pill 与指标唯一承载，固定状态行再抄一遍只会让运行中的状态行挤满两处同源数字。
       const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
         (isMultiStage
-          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0) + pipelineText
+          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
           : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
 
       const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
         (isMultiStage
-          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0) + pipelineDoneText
+          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
           : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
 
       if (aiIds.status) {
