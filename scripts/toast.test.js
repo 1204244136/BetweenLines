@@ -14,13 +14,12 @@ function aiStatus({ runId = "run-1", running = false, finishedAt = "", stopReque
   };
 }
 
-test("按钮的一次性回执落在浮动提示上，不再覆盖 AI 固定状态行", async () => {
+test("按钮的一次性回执落在浮动提示上，不再写进任何固定状态行", async () => {
   const ui = createWorkbench();
-  ui.run('setRuntimeStatus("AI 校对中：实际调用 1/4")');
   await ui.element("prefilterConfirm").dispatch("click");
   assert.deepEqual(toastMessages(ui), ["当前筛选结果中没有待确认的预筛通过行。"]);
   assert.equal(ui.run("toasts[0].tone"), "watch");
-  assert.equal(ui.element("aiStatus").textContent, "AI 校对中：实际调用 1/4", "固定状态行留给机器任务的持续状态");
+  assert.equal(ui.element("aiStatus").textContent, "", "右上角固定状态行已移除，回执只走浮动提示");
 });
 
 test("备注面板按钮既写就地状态行，也弹浮动提示", async () => {
@@ -73,7 +72,6 @@ test("一轮跑完后补一次提示，同一轮不重复，也不提示打开�
   const finished = aiStatus({ finishedAt: "2026-01-01T00:00:00.000Z" });
   const ui = createWorkbench(storageFixture(), { statusQueue: [aiStatus({ running: true }), finished, finished] });
   await ui.refresh();
-  assert.match(ui.element("aiStatus").textContent, /AI 校对中/);
   assert.deepEqual(toastMessages(ui), [], "运行中不弹提示");
   await ui.refresh();
   assert.equal(toastMessages(ui).length, 1);
@@ -84,7 +82,6 @@ test("一轮跑完后补一次提示，同一轮不重复，也不提示打开�
 
   const late = createWorkbench(storageFixture(), { statusQueue: [finished] });
   await late.refresh();
-  assert.match(late.element("aiStatus").textContent, /AI 校对完成/);
   assert.deepEqual(toastMessages(late), [], "打开页面时认领到的历史轮次不弹提示");
 });
 

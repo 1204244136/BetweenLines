@@ -149,13 +149,22 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
     });
   `);
 
-  const statusText = ui.element("aiStatus").textContent;
-  assert.match(statusText, /AI 校对中（动态并发 2\/10）：实际调用 69\/273，建议 17，错误 1/);
-  assert.doesNotMatch(
-    statusText,
-    /S1初审|S2复审|S3仲裁/,
-    "阶段流水线进度只由阶段卡片的状态 pill 承载，固定状态行不再重复播报"
+  // 右上角固定状态行与全局进度条已移除：阶段进度改由每张阶段卡片自己的进度条承载。
+  assert.equal(ui.element("aiStatus").textContent, "", "固定状态行已不再被写入");
+  assert.equal(ui.element("stage1ProgressWrap").hidden, false, "阶段一进度条可见");
+  assert.equal(
+    ui.element("stage1ProgressWrap").title,
+    "阶段一 事实初审进度：已完成 51 / 共 203 行（25%）",
+    "阶段一进度 = 已完成 51 /（已完成 51 + 队列 150待审 + 2处理中）"
   );
+  assert.equal(ui.element("stage1Progress").style.width, "25%");
+  assert.equal(ui.element("stage2ProgressWrap").hidden, false, "阶段二进度条可见");
+  assert.equal(
+    ui.element("stage2ProgressWrap").title,
+    "阶段二 文学复审进度：已完成 17 / 共 20 行（85%）",
+    "阶段二进度 = 已复审 17 /（已完成 17 + 队列 2排队 + 1处理中）"
+  );
+  assert.equal(ui.element("stage3ProgressWrap").hidden, true, "阶段三未启用时不显示进度条");
 
   // Check stage pills
   const pill1 = ui.element("stage1StatusPill");
@@ -203,9 +212,10 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
       results: [],
     });
   `);
-  const finishedText = ui.element("aiStatus").textContent;
-  assert.match(finishedText, /AI 校对完成：实际调用 273\/273，建议 17，错误 1/);
-  assert.doesNotMatch(finishedText, /初审 .*复审|复审 .*仲裁/, "完成态的流水线汇总也只由阶段卡片呈现");
+  // 跑完后阶段卡片自己收口：进度条按各阶段最终总量走满，状态行依旧不被写入。
+  assert.equal(ui.element("aiStatus").textContent, "", "固定状态行在任何状态下都不再被写入");
+  assert.equal(ui.element("stage1ProgressWrap").title, "阶段一 事实初审进度：已完成 68 / 共 68 行（100%）");
+  assert.equal(ui.element("stage2ProgressWrap").title, "阶段二 文学复审进度：已完成 17 / 共 17 行（100%）");
 });
 
 test("客户端重新载入时直接从备注中恢复阶段指标，无需等待 AI 状态轮询", () => {

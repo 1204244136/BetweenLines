@@ -127,7 +127,7 @@ index-X 结构与命名规范契约：
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`。裁剪只删字段，不改变 `signature`/`rowsSignature` 取值。
    - 输出 HTML、CSV、JSON。
    - 生成页面的控制栈是四个 `<details class="panel-details">` 抽屉：预筛选、AI 辅助校对、筛选与批处理、备注空间与找回；按数据流方向自上而下排列。统一置于父抽屉 `#controlStackPanel`（`.panel-group`）内。
-   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由固定状态行承载；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与并发上限（内部自适应调度、与熔断联动）完整集成。
+   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由阶段卡片的进度条与状态胶囊承载（右上角固定状态行与全局进度条已移除）；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与并发上限（内部自适应调度、与熔断联动）完整集成。
    - 验证执行 `node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js`。
    - **详细规范**：前端控制栈结构、多历史空间合并算法（`mergeNotes`）、确定性匹配证据通道、载入自愈、Toast 提示设计、预设管理与并发调度契约详见 **[docs/contracts/workbench-notes-spaces.md](docs/contracts/workbench-notes-spaces.md)**。
 

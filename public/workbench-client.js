@@ -360,10 +360,7 @@
       stage3Start: document.getElementById("stage3Start"),
       stage3Stop: document.getElementById("stage3Stop"),
       clearCache: document.getElementById("clearAiLog"),
-      status: document.getElementById("aiStatus"),
       panelState: document.getElementById("aiPanelState"),
-      progressWrap: document.getElementById("aiProgressWrap"),
-      progress: document.getElementById("aiProgress"),
       prompt: document.getElementById("aiPrompt"),
       promptReset: document.getElementById("aiPromptReset"),
     };
@@ -1365,17 +1362,21 @@
       updateTabsActiveState();
     }
 
-    function setRuntimeStatus(message) {
-      aiIds.status.dataset.runtimeMessage = "1";
-      aiIds.status.textContent = message;
-      aiIds.status.title = message;
+    // 右上角的固定状态行已移除（连同那条全局进度条）：机器任务的持续状态改由阶段卡片承载——
+    // 每阶段一条进度条 + 状态胶囊 + 指标行，按阶段推进的流水线在哪一环卡住一眼能看出来。
+    // 这里只报「用户不知道的异常与副产物」（未连接服务、被跳过/忽略的结果）。用户自己刚点的动作
+    // （正在启动/终止/清除）不播报——它们完成时都有结果提示；每轮都在变的运行统计也不播报——
+    // 调用数一直在涨，走 Toast 会持续刷屏，而阶段卡片已经完整表达了同一件事。
+    let aiCacheCleared = false;
+
+    function reportRuntimeNotice(message) {
+      showToast(message);
     }
 
     // ---- 浮动提示（Toast）----
     // 按钮与控件的一次性回执走这里。这类消息原先写进 AI 抽屉里的固定状态行，而五个抽屉默认全部折叠，
-    // 用户在「筛选与批处理」里点批量按钮、在行内点「写回」时，回执被写进一个看不见的位置。固定状态行只留
-    // 「机器任务的持续状态」（正在跑什么、跑完的统计、未连接本地服务、被跳过/忽略的结果汇总），
-    // 一次性回执一律浮动提示。
+    // 用户在「筛选与批处理」里点批量按钮、在行内点「写回」时，回执被写进一个看不见的位置。
+    // 一次性回执与异常说明一律浮动提示；持续状态由阶段卡片承载。
     // 实现抽到共享的 public/workbench-shared.js：说话人归属工作台用同一份，行为不会再各自漂移。
     const toastCenter = createToastCenter();
     const showToast = toastCenter.showToast;
@@ -1392,8 +1393,7 @@
       activeRowId = "";
       lastAiRunId = "";
       lastAiResultRevision = 0;
-      aiIds.progress.style.width = "0%";
-      aiIds.progressWrap.hidden = true;
+      resetStageProgressBars();
       updateRenderedAiActive();
     }
 
@@ -1409,10 +1409,9 @@
         aiIds.panelState.textContent = "就绪";
         aiIds.panelState.className = "ai-status-badge";
       }
-      aiIds.status.dataset.cacheCleared = "1";
-      setRuntimeStatus(message);
-      aiIds.progress.style.width = "0%";
-      aiIds.progressWrap.hidden = true;
+      aiCacheCleared = true;
+      reportRuntimeNotice(message);
+      resetStageProgressBars();
       aiActiveIds.clear();
       prefilterResultIds.clear();
       prefilterRunId = "";
@@ -3766,10 +3765,6 @@
       if (!defaults) return;
       aiIds.apiKey.placeholder = defaults.apiKeyPlaceholder || "";
       aiIds.protocol.title = defaults.note || "";
-      if (!aiIds.status.dataset.runtimeMessage) {
-        aiIds.status.textContent = "就绪";
-        aiIds.status.title = defaults.note || "就绪";
-      }
     }
 
     function applyProtocolDefaults(defaults, { force = false } = {}) {
@@ -3866,6 +3861,38 @@
         item.title = formatAiErrorHoverTitle(stageLabel, Math.max(count, kindsTotal), kinds);
       } else {
         item.title = item.dataset.defaultTitle;
+      }
+    }
+
+    // 阶段进度条：done 是该阶段已完成行数，total 是本轮该阶段总量（已完成 + 待办 + 处理中）。
+    // 原来右上角那条全局进度条按「模型实际调用数 / 总调用数」走，级联流水线在它上面看不出卡在哪个阶段。
+    function renderStageProgress(stageKey, done, total, { enabled = true, label = "" } = {}) {
+      const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
+      const bar = document.getElementById("stage" + stageKey + "Progress");
+      if (!wrap || !bar) return;
+      const safeDone = Math.max(0, Number(done) || 0);
+      const safeTotal = Math.max(safeDone, Number(total) || 0);
+      if (!enabled || safeTotal <= 0) {
+        wrap.hidden = true;
+        bar.style.width = "0%";
+        wrap.removeAttribute("title");
+        return;
+      }
+      const percent = Math.min(100, Math.round((safeDone / safeTotal) * 100));
+      wrap.hidden = false;
+      bar.style.width = percent + "%";
+      wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）";
+    }
+
+    function resetStageProgressBars() {
+      for (const stageKey of ["1", "2", "3"]) {
+        const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
+        const bar = document.getElementById("stage" + stageKey + "Progress");
+        if (wrap) {
+          wrap.hidden = true;
+          wrap.removeAttribute("title");
+        }
+        if (bar) bar.style.width = "0%";
       }
     }
 
@@ -4132,6 +4159,25 @@
           activeText3.textContent = "";
         }
       }
+
+      // 每阶段一条独立进度条。分母取「本轮该阶段总量」= 已完成 + 待办 + 处理中；
+      // 阶段一优先用服务端总检数（本轮要初审的全部行），本地口径拿不到总检数时退化为已完成 + 队列。
+      const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
+      const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
+      renderStageProgress("1", s1Done, Math.max(s1Total, s1Done + s1Queue), {
+        enabled: aiRunning || s1Total > 0,
+        label: "阶段一 事实初审",
+      });
+      const s2Queue = Math.max(0, Number(p2.pending) || 0) + Math.max(0, Number(p2.inFlight) || 0);
+      renderStageProgress("2", s2Reviewed, Math.max(s2Reviewed + s2Pending, s2Reviewed + s2Queue), {
+        enabled: s2Enabled,
+        label: "阶段二 文学复审",
+      });
+      const s3Queue = Math.max(0, Number(p3.pending) || 0) + Math.max(0, Number(p3.inFlight) || 0);
+      renderStageProgress("3", s3Arbitrated, Math.max(s3Arbitrated + s3Pending, s3Arbitrated + s3Queue), {
+        enabled: s3Enabled,
+        label: "阶段三 终审仲裁",
+      });
     }
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
@@ -4347,6 +4393,10 @@
       return resultMetrics;
     }
 
+    // updateStageMetricsDashboard 与 renderAiStatus 共享的阶段指标摘要。原先借 #aiStatus 的
+    // dataset 中转，右上角状态行移除后改成本地变量。
+    let stageMetricsSummaryCache = "";
+
     function updateStageMetricsDashboard(overrideMetrics = null, stagePipelines = {}, aiRunning = false, serverStageErrors = null) {
       const localMetrics = computeStageMetricsFromNotes(notes);
       let stageMetrics = localMetrics;
@@ -4389,7 +4439,7 @@
         ["webLookupHits", "线上查证"],
       ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
 
-      if (aiIds.status) aiIds.status.dataset.stageMetrics = stageMetricsSummary;
+      stageMetricsSummaryCache = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
 
       // 异常分类明细：本地备注口径（历史遗留 + 本次）与服务端本次运行的记录合并，
@@ -4469,7 +4519,7 @@
       }
 
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
-      const stageMetricsSummary = aiIds.status?.dataset.stageMetrics || "";
+      const stageMetricsSummary = stageMetricsSummaryCache;
       const aiRunId = ai.runId || "";
       if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
         appliedAiResults.clear();
@@ -4495,7 +4545,7 @@
         return;
       }
       if (ai.running) {
-        aiIds.status.dataset.cacheCleared = "";
+        aiCacheCleared = false;
       }
       if (ai.protocolDefaults) {
         protocolDefaults = ai.protocolDefaults;
@@ -4515,17 +4565,13 @@
       prefilterIds.stop.disabled = !ai.running;
       const aiTotal = Math.max(0, ai.queued || 0);
       const done = ai.modelProcessed || 0;
-      const total = Math.max(1, aiTotal);
       const rowTotal = Math.max(0, ai.total || 0);
       const skippedDone = Math.min(rowTotal || Infinity, Math.max(0, ai.skippedDone || 0));
-      const prefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.prefiltered || 0));
       const rulePrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.rulePrefiltered || 0));
       const similarityPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.similarityPrefiltered || 0));
       const structuredConflicts = Math.min(rowTotal || Infinity, Math.max(0, ai.structuredConflicts || 0));
       const termPrefiltered = Math.min(rowTotal || Infinity, Math.max(0, ai.termPrefiltered || 0));
       const termInjected = Math.min(rowTotal || Infinity, Math.max(0, ai.termInjected || 0));
-      aiIds.progress.style.width = Math.min(100, Math.round((done / total) * 100)) + "%";
-      aiIds.progressWrap.hidden = !ai.running && done === 0 && !prefiltered;
       const isPrefilter = ai.kind === "prefilter";
       const queueText = done + "/" + aiTotal;
       const skipText = "人工确认跳过 " + skippedDone;
@@ -4542,34 +4588,12 @@
         (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
         aiIds.stage2Preset?.value
       );
-      const concurrencyInfo = ai.currentConcurrency
-        ? "（动态并发 " + ai.currentConcurrency + "/" + (ai.concurrencyMax || ai.currentConcurrency) + "）"
-        : "";
-
-      // 阶段流水线进度不在这里重复播报：同一份「2处理中 · 353排队」由下方三张阶段卡片的
-      // 状态 pill 与指标唯一承载，固定状态行再抄一遍只会让运行中的状态行挤满两处同源数字。
-      const runningStatus = (isPrefilter ? "预筛选中：" : "AI 校对中" + concurrencyInfo + "：实际调用 " + queueText + "，") +
-        (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
-        (isMultiStage
-          ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
-          : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
-
       const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
         (isMultiStage
           ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
           : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
 
-      if (aiIds.status) {
-        aiIds.status.title = "调用进度 " + queueText + "；" + skipText + "；" + prefilterText + (stageMetricsSummary ? "\n阶段指标：" + stageMetricsSummary : "");
-      }
-      if (ai.running) {
-        setRuntimeStatus(runningStatus);
-      } else if (ai.finishedAt) {
-        setRuntimeStatus(finishedStatus);
-      } else if (ai.error) {
-        setRuntimeStatus(ai.error);
-      }
       if (aiIds.panelState) {
         aiIds.panelState.title = stageMetricsSummary;
         if (ai.running) {
@@ -4650,10 +4674,10 @@
           updateDoneCount();
         }
         if (skippedStaleResults) {
-          setRuntimeStatus("已跳过 " + skippedStaleResults + " 条与当前工作台行内容不匹配的自动结果。");
+          reportRuntimeNotice("已跳过 " + skippedStaleResults + " 条与当前工作台行内容不匹配的自动结果。");
         }
       } else if ((ai.results || []).length && !ai.running) {
-        setRuntimeStatus("已忽略非当前项目快照的自动结果；当前项目备注保持独立。");
+        reportRuntimeNotice("已忽略非当前项目快照的自动结果；当前项目备注保持独立。");
       }
       lastAiResultRevision = Math.max(lastAiResultRevision, Number(ai.resultRevision) || 0);
       if (appliedResult && (prefilterResultFilterActive || query.value.trim() || notesOnly || doneMode !== "all" || aiResultFilter !== "all" || issueSeverityFilter !== "all")) {
@@ -4684,8 +4708,8 @@
           hasMoreResults = Boolean(data.ai?.hasMoreResults);
         }
       } catch {
-        if (aiIds.status.dataset.cacheCleared) return;
-        setRuntimeStatus("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
+        if (aiCacheCleared) return;
+        reportRuntimeNotice("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
       } finally {
         aiStatusRefreshInFlight = false;
         if (hasMoreResults && !aiCatchupTimer) {
@@ -4828,7 +4852,6 @@
       aiIds.baseUrl.dataset.touched = "";
       aiIds.model.dataset.touched = "";
       aiModelOptions = [];
-      aiIds.status.dataset.runtimeMessage = "";
       if (protocolDefaults[aiIds.protocol.value]) {
         applyProtocolDefaults(protocolDefaults[aiIds.protocol.value], { force: true });
         saveAiConfig();
@@ -5125,7 +5148,6 @@
       prefilterIds.start.disabled = true;
       prefilterIds.confirm.disabled = true;
       prefilterIds.panel.open = true;
-      setRuntimeStatus("正在运行预筛选...");
       try {
         const response = await apiFetch("/api/prefilter/start", {
           method: "POST",
@@ -5161,7 +5183,6 @@
     });
     prefilterIds.stop.addEventListener("click", async () => {
       prefilterIds.stop.disabled = true;
-      setRuntimeStatus("正在终止预筛选...");
       try {
         const response = await apiFetch("/api/prefilter/stop", { method: "POST" });
         const data = await response.json();
@@ -5600,10 +5621,8 @@
     async function startAiProofread({ continueOnly = false, stage = "stage1" } = {}) {
       runningAiStage = stage;
       setAllStageButtonsRunning(true);
-      if (aiIds.status) aiIds.status.dataset.cacheCleared = "";
+      aiCacheCleared = false;
       if (aiIds.panel) aiIds.panel.open = true;
-      const stageNames = { stage1: "阶段一 事实初审", stage2: "阶段二 文学复审", stage3: "阶段三 终审仲裁" };
-      setRuntimeStatus("正在启动 " + (stageNames[stage] || "AI 校对") + "...");
 
       const baseConfig = aiConfig();
       baseConfig.stage = stage;
@@ -5714,7 +5733,6 @@
         aiIds.stop,
       ].filter(Boolean);
       stopButtons.forEach((btn) => { btn.disabled = true; });
-      setRuntimeStatus("正在终止 AI 校对...");
       try {
         const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
         const data = await response.json();
@@ -5816,7 +5834,6 @@
         }
         if (!confirm("清除 AI 运行记录？备注与人工确认不会被清除。")) return;
         aiIds.clearCache.disabled = true;
-        setRuntimeStatus("正在清除 AI 记录...");
         if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
         clearLocalAiCache();
         renderClearedAiStatus();

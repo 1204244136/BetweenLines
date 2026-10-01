@@ -37,9 +37,9 @@ test("同一行在多份历史空间记录不同时逐字段合并，不再把�
   const saved = JSON.parse(storage.getItem(currentKey));
   assert.equal(saved[1].manualDone, true);
   assert.equal(saved[1].rowSig, "sig-1");
-  // 找回回执走浮动提示，不再占用 AI 抽屉里那条默认折叠的固定状态行。
+  // 找回回执走浮动提示；右上角那条固定状态行已整体移除，不再承载任何回执。
   assert.match(toastMessages(ui).join("|"), /合并了多个历史版本的记录/);
-  assert.doesNotMatch(ui.element("aiStatus").textContent, /合并了多个历史版本的记录/);
+  assert.equal(ui.element("aiStatus").textContent, "", "固定状态行已移除");
 });
 
 test("只在非基准历史空间里出现的确认记录也要找回（候选集取全部历史空间的并集）", () => {

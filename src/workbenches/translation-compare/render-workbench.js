@@ -278,10 +278,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="需要人工确认的存疑行数" role="button" tabindex="0" hidden>待确认: <strong id="metricFinalNeedsCheck">0</strong></span>
                 <span id="aiStageFastPassRate" class="ai-stage-badge" title="高置信度快速直通率 (Fast Pass)">快速直通: 0%</span>
               </div>
-              <div class="ai-stage-dashboard-status-bar">
-                <div id="aiStatus" class="ai-status-text" title="就绪">就绪</div>
-                <div id="aiProgressWrap" class="ai-progress" aria-hidden="true" hidden><span id="aiProgress"></span></div>
-              </div>
             </div>
             <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" data-filter-stage="1" title="阶段一 事实初审：事实性硬伤审查与直接通过">
@@ -316,6 +312,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage1ErrorItem" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></span>
                     </div>
                   </div>
+                  <div id="stage1ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage1Progress"></span></div>
                   <div id="stage1ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>处理中: <span id="stage1ActiveRowsText"></span></div>
                 </div>
               </div>
@@ -356,6 +353,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage2ErrorItem" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></span>
                     </div>
                   </div>
+                  <div id="stage2ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage2Progress"></span></div>
                   <div id="stage2ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>处理中: <span id="stage2ActiveRowsText"></span></div>
                 </div>
               </div>
@@ -396,6 +394,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <span class="ai-stage-sub-item ai-stage-sub-item--error" id="stage3ErrorItem" title="阶段三仲裁异常行数">异常: <span id="metricStage3Errors">0</span></span>
                     </div>
                   </div>
+                  <div id="stage3ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage3Progress"></span></div>
                   <div id="stage3ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>处理中: <span id="stage3ActiveRowsText"></span></div>
                 </div>
               </div>

@@ -250,6 +250,19 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.doesNotMatch(html, /id="aiMonitorSection"/);
   assert.doesNotMatch(html, /id="aiMonitorEnabled"/);
   assert.doesNotMatch(html, /AI 对话监控/);
+  // 右上角固定状态行与全局进度条已移除：阶段进度改由每张阶段卡片自己的进度条承载。
+  assert.doesNotMatch(html, /id="aiStatus"/);
+  assert.doesNotMatch(html, /id="aiProgressWrap"/);
+  assert.doesNotMatch(html, /ai-stage-dashboard-status-bar/);
+  assert.doesNotMatch(script, /aiIds\.status/);
+  assert.doesNotMatch(script, /aiIds\.progress/);
+  assert.match(html, /id="stage1ProgressWrap"[\s\S]*?id="stage2ProgressWrap"[\s\S]*?id="stage3ProgressWrap"/);
+  // 进度条必须排在「处理中: …」明细行之前：那行只在运行中出现，排在前面会把这一张卡片的
+  // 进度条顶下去，三张卡片就不在同一水平线了。
+  assert.match(html, /id="stage1ProgressWrap"[\s\S]*?id="stage1ActiveInfo"/);
+  assert.match(html, /id="stage2ProgressWrap"[\s\S]*?id="stage2ActiveInfo"/);
+  assert.match(html, /id="stage3ProgressWrap"[\s\S]*?id="stage3ActiveInfo"/);
+  assert.match(script, /function renderStageProgress\(stageKey, done, total/);
   assert.match(script, /pendingResults\.length[\s\S]*?saveNotes\(\)[\s\S]*?updateDoneCount\(\)/);
   assert.match(script, /function writeNote\([^)]*\{ deferCommit = false \}/);
   assert.match(script, /function revisionTextFor\(item\)/);
