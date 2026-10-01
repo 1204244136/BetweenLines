@@ -72,6 +72,7 @@ const FEATURE_SAMPLES = {
   interrobang: { source: "本当に！？", target: "真的？！" },
   quote: { source: "「そうか」と彼は言った。", target: "「是吗」他说。" },
   parenthesis: { source: "（ふうん。……）", target: "（嗯。……）" },
+  middleDot: { source: "ブラッシャ＝Ｐ＝マールハイスク", target: "布拉沙·P.马尔哈伊斯克" },
   directionalSymbol: { source: "『半蔵∨浜面、聞こえるか？』", target: "「半藏＞滨面，听得到吗？」" },
   conjunction: { source: "しかし、", target: "然而——" },
   repeat: { source: "あああ、そうか。", target: "啊啊啊，是吗。" },
@@ -126,6 +127,7 @@ const ROW_LINE_MARKERS = {
   quote: "引号用途：背景音与非人声",
   // 括号与引号共用那条「成对标记内侧的句末点号」规范，所以这里的辨识短语与 quote 的不同。
   parenthesis: PAIR_PUNCT_MARKER,
+  middleDot: "中文间隔号写作「·」（U+00B7）",
   directionalSymbol: "通信标识符、箭头与方向标记会随版式方向改变朝向",
   conjunction: "连接词独立成段",
   repeat: "重复出现的字或符号",
@@ -603,9 +605,13 @@ test("真实行样本保持压缩后的请求预算", () => {
   }, { proofreadMode: "bilingual", profileId: "demo" });
   // 预算按实测最坏行（带成对标记的 demo 行）定基线。第 1683 行的两处证据边界（引号有无不算缺陷、
   // 成对标记内的点号规范只对完整引述/整行括注生效）让这一行 +148 字符；每行常驻的只有证据边界枚举 +6。
-  assert.ok(messages[0].content.length <= 4200, `system 前缀仍过长：${messages[0].content.length}`);
+  // 2026-10 对齐 index-X `docs/translation-spec.md` 时新增两条常驻口径（二.3 行末点号不逐行比对日文、
+  // 五.7 外国人名与外文专名按原语还原，最坏行 +106）与六条按行条目（一.3 间隔号与西文缩写、
+  // 一.5 省略号后不跟点号、一.6 赛事项目名写「公里」、一.7 招呼语与否定拟声不音译、
+  // 三.1 不得凭空创建注音与其证据边界），基线相应上调；再增条目时同样按实测值改这里。
+  assert.ok(messages[0].content.length <= 4400, `system 前缀仍过长：${messages[0].content.length}`);
   assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
-  assert.ok(messages[0].content.length + messages[1].content.length <= 5100, "单行请求总长度超过预算");
+  assert.ok(messages[0].content.length + messages[1].content.length <= 5300, "单行请求总长度超过预算");
 });
 
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {

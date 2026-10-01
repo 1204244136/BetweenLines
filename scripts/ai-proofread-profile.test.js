@@ -178,6 +178,21 @@ test("规范要点确实进入了特化侧提示词", () => {
   // 作品专有信息：通用档案只描述形态，具体作品名留在本机档案里
   assert.match(novel, /角色口癖、固定语尾与人物专属书写方式以译名表\/口癖表为准/);
   assert.match(novel, /咒语、咏唱与仪式台词允许为了美感和中文语感调整句式/);
+  // 与 index-X `docs/translation-spec.md`（成品层规范正文）逐条对齐的条款：规范正文改动时按
+  // 「规范正文 → 机器检查 → BetweenLines 的 novel.js/demo.js」三处同步，这里锁住 AI 校对层这一侧，
+  // 避免上游新增口径后提示词档案悄悄落后（2026-09/10 的招呼语、否定拟声、赛事项目名、凭空创建注音、
+  // 间隔号与西文缩写、行末点号裁定、原语还原都属这一批）。
+  assert.match(novel, /招呼语（やっほー 一类/);
+  assert.match(novel, /不得音译成「呀吼」/);
+  assert.match(novel, /非人声的纯音效（游戏机失败音、喇叭与引擎声）保持既有写法/);
+  assert.match(novel, /路跑赛事等项目名按中文体育惯例写「公里」/);
+  assert.match(novel, /省略号后面不再跟句号或点号/);
+  assert.match(novel, /不得凭空创建注音/);
+  assert.match(novel, /A 看不到注音不等于原文从未注音/);
+  assert.match(novel, /中文间隔号写作「·」（U\+00B7）/);
+  assert.match(novel, /外国人名的西文缩写按「中文·字母\.」写/);
+  assert.match(novel, /行末点号按中文断句习惯写，不要求与日文同行一致/);
+  assert.match(novel, /外国人名与外文专名按原语还原/);
 });
 
 test("仓库自带的示范档案展示作品专有档案的写法", () => {
