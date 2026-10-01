@@ -775,15 +775,6 @@
       padding: 0 var(--space-4);
       justify-content: center;
     }
-    .task-actions {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 120px 120px;
-      gap: 8px;
-      align-items: center;
-    }
-    .task-actions .btn {
-      width: 100%;
-    }
     .confirm-dialog {
       width: min(520px, calc(100vw - 32px));
       max-height: calc(100vh - 48px);
@@ -856,7 +847,7 @@
 <body>
   <header>
     <h1>BetweenLines 控制台</h1>
-    <div class="subtle">管理输入文件、生成流程和后台任务；逐行校对与说话人确认在工作台中完成。</div>
+    <div class="subtle">管理输入文件与生成流程；逐行校对、AI 校对与说话人确认都在工作台中完成。</div>
   </header>
   <main>
     <section class="stack">
@@ -1023,7 +1014,7 @@
     <section class="stack">
       <div class="col-head">
         <h2>生成与运行</h2>
-        <span class="col-hint">查看文件、生成工作台、监控后台任务</span>
+        <span class="col-hint">查看文件、生成工作台</span>
       </div>
 
       <div class="panel stack" id="projectsPanel">
@@ -1083,15 +1074,6 @@
         </div>
         <div class="log-head"><span class="subtle">生成日志</span><button type="button" id="copyLog" class="btn btn--ghost btn--small" title="复制全部日志">复制日志</button></div>
         <div id="log" class="status mono log" tabindex="0">生成日志会显示在这里。</div>
-      </div>
-      <div class="panel stack" id="aiPanel">
-        <h2>后台任务</h2>
-        <div class="subtle">AI 校对的配置和启动在工作台中完成；修改列和参考范围由当前比较模式决定。控制台只显示运行状态并提供紧急终止。</div>
-        <div class="task-actions">
-          <div id="aiStatus" class="status">没有后台 AI 任务。</div>
-          <a id="openOutputForAi" class="btn btn--ghost disabled" href="#" target="_blank" rel="noreferrer">打开工作台</a>
-          <button id="aiStopButton" class="btn btn--danger" type="button" disabled>终止任务</button>
-        </div>
       </div>
     </section>
   </main>
@@ -1174,7 +1156,6 @@
       generateHint: document.getElementById("generateHint"),
       translationMarkupPanel: document.getElementById("translationMarkupPanel"),
       projectsPanel: document.getElementById("projectsPanel"),
-      aiPanel: document.getElementById("aiPanel"),
       projectCount: document.getElementById("projectCount"),
       projectSelect: document.getElementById("projectSelect"),
       switchProjectButton: document.getElementById("switchProjectButton"),
@@ -1184,7 +1165,6 @@
       fileRows: document.getElementById("fileRows"),
       runButton: document.getElementById("runButton"),
       openOutput: document.getElementById("openOutput"),
-      openOutputForAi: document.getElementById("openOutputForAi"),
       runStatus: document.getElementById("runStatus"),
       progressLabel: document.getElementById("progressLabel"),
       progressPercent: document.getElementById("progressPercent"),
@@ -1192,8 +1172,6 @@
       progressBar: document.getElementById("progressBar"),
       log: document.getElementById("log"),
       copyLog: document.getElementById("copyLog"),
-      aiStatus: document.getElementById("aiStatus"),
-      aiStopButton: document.getElementById("aiStopButton"),
       jpDropzone: document.getElementById("jpDropzone"),
       cnDropzone: document.getElementById("cnDropzone"),
       twDropzone: document.getElementById("twDropzone"),
@@ -1393,10 +1371,8 @@
     }
 
     function setOutputUrl(url) {
-      for (const link of [ids.openOutput, ids.openOutputForAi]) {
-        link.href = url || "#";
-        link.classList.toggle("disabled", !url);
-      }
+      ids.openOutput.href = url || "#";
+      ids.openOutput.classList.toggle("disabled", !url);
     }
 
     function isSpeakerMode() {
@@ -1854,46 +1830,6 @@
       }
     }
 
-    function renderAiStatus(ai) {
-      if (!ai) return;
-      ids.aiStopButton.disabled = !ai.running;
-      const modeLabel = ai.proofreadMode === "bilingual" ? "双语" : "三语";
-      if (ai.running) {
-        ids.aiStatus.className = "status warn";
-        ids.aiStatus.textContent = `${modeLabel} AI 运行中：${ai.processed}/${ai.total}，已处理 ${ai.handled}，建议 ${ai.suggested}，错误 ${ai.errors}`;
-      } else if (ai.finishedAt) {
-        ids.aiStatus.className = ai.errors ? "status warn" : "status ok";
-        ids.aiStatus.textContent = `${modeLabel} AI ${ai.stopRequested ? "已终止" : "已完成"}：${ai.processed}/${ai.total}，已处理 ${ai.handled}，建议 ${ai.suggested}，错误 ${ai.errors}`;
-      } else {
-        ids.aiStatus.className = "status";
-        ids.aiStatus.textContent = "没有后台 AI 任务。";
-      }
-    }
-
-    async function refreshAiStatus() {
-      try {
-        const response = await apiFetch("/api/ai-proofread/status");
-        const data = await response.json();
-        if (data.ok) renderAiStatus(data.ai);
-      } catch {
-      }
-    }
-
-    async function stopAiProofread() {
-      ids.aiStopButton.disabled = true;
-      ids.aiStatus.className = "status warn";
-      ids.aiStatus.textContent = "正在终止后台 AI 任务...";
-      try {
-        const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
-        const data = await response.json();
-        if (!data.ok) throw new Error(data.error);
-        renderAiStatus(data.ai);
-      } catch (error) {
-        ids.aiStatus.className = "status error";
-        ids.aiStatus.textContent = error.message;
-      }
-    }
-
     async function runPipeline() {
       if (!validateUnique()) {
         setRunStatus("请先导入所需文件。", "warn");
@@ -2053,7 +1989,6 @@
     ids.switchProjectButton.addEventListener("click", switchProject);
     ids.applyLayoutButton.addEventListener("click", applyProjectLayout);
     ids.deleteProjectButton.addEventListener("click", deleteSelectedProject);
-    ids.aiStopButton.addEventListener("click", stopAiProofread);
     for (const role of ["jp", "cn", "tw"]) {
       const dropzone = ids[`${role}Dropzone`];
       dropzone.addEventListener("click", () => {
@@ -2192,9 +2127,7 @@
     });
     validateUnique();
     refreshPipeline();
-    refreshAiStatus();
     setInterval(refreshPipeline, 700);
-    setInterval(refreshAiStatus, 1500);
   </script>
 </body>
 </html>
