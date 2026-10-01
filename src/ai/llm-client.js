@@ -230,6 +230,7 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
   const controller = new AbortController();
   let timedOut = false;
   let abortedByCaller = false;
+  let requestStarted = false;
 
   const onCallerAbort = () => {
     abortedByCaller = true;
@@ -244,13 +245,25 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
     signal.addEventListener("abort", onCallerAbort, { once: true });
   }
 
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  let timeout = null;
 
   try {
+    // 出站地址安全校验可能包含 DNS 解析。它发生在真正发起 HTTP 请求之前，
+    // 因此不能占用“请求响应超时”预算；否则 DNS/安全校验先耗尽预算后，
+    // fetch 看到的是已中止的 signal，调用方会误以为模型端请求超时，
+    // 而提供商端根本没有收到请求。
     const safeUrl = await assertSafeOutboundUrl(url);
+    if (abortedByCaller || signal?.aborted) {
+      const abortError = new Error("请求已被取消");
+      abortError.name = "AbortError";
+      abortError.code = "ABORTED";
+      throw abortError;
+    }
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    requestStarted = true;
     const response = await fetch(safeUrl, {
       ...options,
       redirect: "manual",
@@ -278,20 +291,21 @@ async function fetchJson(url, options, { timeoutMs = 90000, signal = null } = {}
       throw error;
     }
   } catch (error) {
-    if (timedOut && error?.name === "AbortError") {
-      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
-      timeoutError.code = "REQUEST_TIMEOUT";
-      throw timeoutError;
-    }
+    // 调用方主动停止优先于同时到达的本地计时器，避免把用户取消记成超时。
     if (abortedByCaller && error?.name === "AbortError") {
       const abortError = new Error("请求已被取消");
       abortError.name = "AbortError";
       abortError.code = "ABORTED";
       throw abortError;
     }
+    if (timedOut && requestStarted && error?.name === "AbortError") {
+      const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
+      timeoutError.code = "REQUEST_TIMEOUT";
+      throw timeoutError;
+    }
     throw error;
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
     if (signal) {
       signal.removeEventListener("abort", onCallerAbort);
     }

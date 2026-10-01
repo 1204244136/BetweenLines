@@ -368,6 +368,30 @@ test("共享 LLM 传输层：不自动跟随可能转向内网的重定向", asy
   }
 });
 
+test("共享 LLM 传输层：调用方取消优先于本地请求超时，且不会误报 REQUEST_TIMEOUT", async () => {
+  const server = http.createServer((request, response) => {
+    // 保持请求打开，模拟模型仍在生成响应；本测试由调用方主动取消。
+    request.resume();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const controller = new AbortController();
+  try {
+    const address = server.address();
+    const pending = fetchJson(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method: "POST",
+      body: "{}",
+    }, { timeoutMs: 1000, signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.code, "ABORTED");
+      assert.notEqual(error.code, "REQUEST_TIMEOUT");
+      return true;
+    });
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("共享 LLM 传输层：buildProtocolHeaders 与 cleanJsonPayload", () => {
   const claudeHeaders = buildProtocolHeaders({ protocol: "claude", apiKey: "sk-ant-test" });
   assert.equal(claudeHeaders["x-api-key"], "sk-ant-test");
