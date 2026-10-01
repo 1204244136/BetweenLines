@@ -1299,14 +1299,16 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   const activeText2 = ui.element("stage2ActiveRowsText").textContent;
   const activeText3 = ui.element("stage3ActiveRowsText").textContent;
 
+  // 并发后缀写成「实际在飞 / 允许并发，上限 N」：这里三段的队列都够，实际在飞正好等于许可值。
+  // 「队列不足、实际在飞小于许可值」的场景由 ai-stage-metrics.test.js 覆盖。
   assert.match(activeText1, /1, 2, 3/);
-  assert.match(activeText1, /并发 3\/10/);
+  assert.match(activeText1, /并发 3\/3，上限 10/);
 
   assert.match(activeText2, /4, 5, 6\.\.\./);
-  assert.match(activeText2, /并发 4\/8/);
+  assert.match(activeText2, /并发 4\/4，上限 8/);
 
   assert.match(activeText3, /8, 9/);
-  assert.match(activeText3, /并发 2\/3/);
+  assert.match(activeText3, /并发 2\/2，上限 3/);
 });
 
 function passingBody() {

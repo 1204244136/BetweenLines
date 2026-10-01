@@ -3882,6 +3882,26 @@
 
     // 阶段进度条：done 是该阶段已完成行数，total 是本轮该阶段总量（已完成 + 待办 + 处理中）。
     // 原来右上角那条全局进度条按「模型实际调用数 / 总调用数」走，级联流水线在它上面看不出卡在哪个阶段。
+    // 阶段卡片底部那行「处理中: …」的并发后缀。这里必须把「实际在飞」和「允许并发」分开写：
+    // stagePipelines.stageN.concurrency 是并发控制器上探出来的**许可值**，队列不足时它不会回落
+    // （控制器只在频控、过载或熔断时下调），所以队列只剩 1 行时会出现「1 处理中 · 并发 3/32」
+    // 这种看着自相矛盾的画面。分子给实际在飞，分母给许可值，上限单列，细节进 tooltip。
+    function stageConcurrencyText(pipeline, activeInfoEl = null) {
+      const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
+      const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
+      const cap = Math.max(0, Number(pipeline?.concurrencyMax) || 0);
+      const pending = Math.max(0, Number(pipeline?.pending) || 0);
+      if (!allowed) {
+        if (activeInfoEl) activeInfoEl.removeAttribute("title");
+        return "";
+      }
+      if (activeInfoEl) {
+        activeInfoEl.title = "实际在飞 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，上限 " + cap : "")
+          + "；队列待派发 " + pending + " 行。允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
+      }
+      return "（并发 " + inFlight + "/" + allowed + (cap ? "，上限 " + cap : "") + "）";
+    }
+
     function renderStageProgress(stageKey, done, total, { enabled = true, label = "" } = {}) {
       const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
       const bar = document.getElementById("stage" + stageKey + "Progress");
@@ -4090,11 +4110,12 @@
       if (active1 && activeText1) {
         if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
           active1.hidden = false;
-          const concText = p1.concurrency ? "（并发 " + p1.concurrency + (p1.concurrencyMax ? "/" + p1.concurrencyMax : "") + "）" : "";
+          const concText = stageConcurrencyText(p1, active1);
           activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active1.hidden = true;
           activeText1.textContent = "";
+          active1.removeAttribute("title");
         }
       }
 
@@ -4129,11 +4150,12 @@
       if (active2 && activeText2) {
         if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
           active2.hidden = false;
-          const concText = p2.concurrency ? "（并发 " + p2.concurrency + (p2.concurrencyMax ? "/" + p2.concurrencyMax : "") + "）" : "";
+          const concText = stageConcurrencyText(p2, active2);
           activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active2.hidden = true;
           activeText2.textContent = "";
+          active2.removeAttribute("title");
         }
       }
 
@@ -4174,11 +4196,12 @@
       if (active3 && activeText3) {
         if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
           active3.hidden = false;
-          const concText = p3.concurrency ? "（并发 " + p3.concurrency + (p3.concurrencyMax ? "/" + p3.concurrencyMax : "") + "）" : "";
+          const concText = stageConcurrencyText(p3, active3);
           activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
         } else {
           active3.hidden = true;
           activeText3.textContent = "";
+          active3.removeAttribute("title");
         }
       }
 
