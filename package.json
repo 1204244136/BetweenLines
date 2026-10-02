@@ -9,6 +9,7 @@
     "setup": "node src/runtime/input-server.js",
     "detect:accelerator": "node scripts/detect-accelerator.js",
     "check:pandoc": "node scripts/check-pandoc.js",
+    "check:docs": "node scripts/check-docs.js",
     "export:paragraphs": "node scripts/export-paragraphs.js",
     "check:accelerator": ".\\.venv\\Scripts\\python.exe scripts\\check-accelerator.py",
     "check:gpu": "npm run check:accelerator",

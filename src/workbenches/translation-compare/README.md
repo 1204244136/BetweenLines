@@ -1,15 +1,14 @@
 # 翻译比较工作台
 
-该工作台包含当前的 TransComparator 工作流：EPUB/Pandoc 输入、段落过滤、跨语言对齐（`align_jp.py`）、同级译文比较以及校对输出。其 `ai/` 目录拥有翻译专属的预筛选规则、提示词、目标列语义以及备注格式。
+本目录拥有 TransComparator 的翻译比较模型、跨语言对齐、页面构建及翻译专属 AI 校对。输入转换与正文提取复用 `src/ingest/`，连接和模型传输复用 `src/ai/`。
 
-输入材料约定与 index-X 项目深度对齐：
-- 简中与日文源文件优先适配 `index-X` 项目规范（EPUB 统一固定行模板 L1-L6、`heading-lines` 多层标题、`<ruby>` 注音、`<a epub:type="noteref"><sup>㊟</sup></a>` 译注标记）。
-- 台版作为同级非原文对照材料，不作为权威主导。
-- 正文准入规则：后记（`Afterwords`）排除在比较之外；但后记之后故事叙述性质的尾声（`After_the_Epilogue`）以及序章之前的引子（`Before_the_Prologue`）完整纳入正文比较。
+| 范围 | 职责 |
+|---|---|
+| `align_jp.py`、`row-alignment.js`、`alignment-artifact.js` | 跨语言对齐、比较行组装及对齐产物兼容与校验 |
+| `build-compare.js`、`row-output.js`、`render-workbench.js` | 构建入口、模式输出与页面渲染 |
+| `notes-recovery.js`、`notes-spaces.js` | 翻译备注的匹配、恢复与空间管理 |
+| `ai/`、`ai-presets.js` | 翻译提示词、三阶段任务、输出门禁、预设与结果语义 |
 
-翻译规范约定与 index-X 项目深度对齐：
-- **规范正文在上游**：译文该写成什么样以 `index-X/docs/translation-spec.md` 为准（`tools/check_translation_spec.py` 的 `P1`–`P15` 是同一规范的机器检查实现）；译名在候选之间怎么取舍见 `translation-name-selection-spec.md`，已生效的裁定见 `translation-name-rulings.md`，与维基译名表的人为固有差异见 `x-translation-differences.md`（属取舍，不得按表回改）。
-- `ai/profiles/novel.js`（通用成品规范）与 `demo.js`（作品取值）是同一套规范在 AI 校对层的实现，属上游声明的「规范正文 → 机器检查 → AI 档案」三处同步之一：两边改动要互相同步，口径不一致时以上游规范正文为准。
-- 日文原文取自 `index-X/.cache/epub-work/japanese-text/`，那是 `bw_preprocess.py` 的预处理产物：普通读音与部分版式信息已被丢弃，「原文没写某标记」不能当作「原版没有」的证据（判注音要回上游的 BookWalker 分页源）。
+翻译行不作为说话人或其他分析的通用容器。原文准入、段落完整性、模式裁剪、签名和模块依赖方向由 [AGENTS.md](../../../AGENTS.md) 维护。
 
-它的行属于翻译比较模型。它们不是说话人归属、角色元数据或其他未来分析的通用容器。原文段落的准入边界和完整原文段落不变量在此处始终具有最高约束力。
+使用和命令见根 [README.md](../../../README.md)。AI 提示词及阶段规则见 [AI 校对契约](../../../docs/contracts/ai-proofread-contract.md)，备注和客户端状态见 [工作台契约](../../../docs/contracts/workbench-notes-spaces.md)。上游 index-X 的输入/翻译规范来源与同步义务也由 AGENTS 及 AI 契约维护，本文件不复制上游规范。

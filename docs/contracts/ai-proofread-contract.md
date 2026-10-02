@@ -4,7 +4,7 @@
 
 ## 模块定位与职责划分
 
-- `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；未来共享 AI 传输能力放在 `src/ai/`，不要反向污染领域模型。
+- `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；共享 AI 传输、连接配置、任务队列与基础 JSON 提示契约已位于 `src/ai/`。目录所有权与跨工作台依赖见 [module-boundaries.md](module-boundaries.md)，共享层不得引入领域 rows、notes 或任务运行状态。
 - 共享 LLM 传输层只能请求 `http:`/`https:`，不得接受带用户名/密码的 URL，必须拒绝云元数据、link-local、多播和未指定地址，并禁止自动跟随重定向；本机 Ollama 的回环地址仍属于允许范围。HTTP 200 后读取响应体若发生 `terminated`、`socket hang up`、`UND_ERR_SOCKET` 等流中断，只在传输层对完整请求做最多两次短退避重试；HTTP 错误、超时、JSON 格式错误和调用方取消不得走这条重试。重试成功的断流不进入阶段错误、熔断或并发下调；重试耗尽才交给既有网络异常与并发调度口径。
 - 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。
 
@@ -30,7 +30,7 @@
 
 ## 提示词五层组装体系
 
-提示词按**五层**组装，权威定义写在 `proofread-contract.js` 顶部（改分层前先读那段），任何模块都不得另立一套口径：
+本文规定提示词的**五层**组装契约，`proofread-contract.js` 顶部保留与实现同步的摘要，任何模块都不得另立一套口径：
 
 1. **① 通用侧**（`sharedInstructions`，标 `【通用校对规则】`）＝与作品/模式无关的任务契约；其中片段、noteref 语义与原文外内容分别按 `fragment`/`noteref`/`outOfScope` 现象命中，其余核心契约每行常驻。
 2. **② 模式层**（`modeContracts`）＝当前模式的列语义与结论字段。
@@ -49,19 +49,19 @@
   → 低分归因与修复（极低分行按相邻行解释原因再修）
   → 线上查证（按站点顺序 + 自行检索）
   → 输出侧确定性工序（成品格式门禁 → 标点规范化 → 语言护栏）
-  → 待人工。
+  → 阶段结论分发（尚未终审的存疑行待终审；终审仍存疑才待人工）。
 - **两者的对应关系**：
   - 对照表对应第 ④ 层的术语段；
   - 模型基础轮与上下文轮对应第 ①②③⑤ 层加相邻行；
   - 极低分复核对应第 ④ 层的低分归因段；
   - 线上查证对应第 ④ 层的线上查证段；
   - 输出侧三步（成品格式门禁、标点规范化、语言护栏）都是结论产出**之后**的确定性工序、不读提示词，不对应任何一层；终局为待人工时不注入任何新层。
-- 新增任何一层/一段时，必须同时更新三处（代码顶部注释、`AGENTS.md`、README 的分层说明），避免两套顺序混淆。
+- 新增任何一层/一段时，更新本文及代码顶部摘要；`AGENTS.md` 只维护契约入口，用户可观察行为改变时才更新 README 的功能说明，避免复制一套分层细则。
 
 ### 分层纪律与前缀表
 
 - 第 ④ 层的段一律经 `proofread-contract.js` 的 `dynamicBlockPrefixes` 剥离后再注入，段首标记由各自的注入层定义并导出（`TERM_BLOCK_PREFIX`、`speechHabitPrefix`、`【说话人判断（`、`LOW_SCORE_PREFIX`、`WEB_LOOKUP_PREFIX`），**新增动态段必须同时登记到那张前缀表**，否则自定义提示词里的旧段会残留成两份。
-- 段内顺序按“由内到外补充资料”排列：术语命中 → 说话习惯 → 低分归因（相邻行）→ 线上查证。
+- 段内顺序按“由内到外补充资料”排列：术语命中 → 说话习惯 → 说话人判断 → 低分归因（相邻行）→ 线上查证。实现将说话习惯与说话人判断合成一个 `speechHabitBlock` 参数，二者仍是独立的动态段。
 - **同一条判据只写一层**：字段默认值、档位定义、needsContext 口径、片段处理只写在通用侧；`modeSchemas` 只负责“键名 + 类型/枚举”（不重复定义档位，也不用分数区间描述 grade）；特化档案不复述任务契约；说话人判断口径只由动态段 `speakerCheckBlock` 自己带。
 - **不要在别的层里复述固定尾巴的段首标记**：`硬性格式约束`、JSON 约定行这些字面量在最终提示词里必须唯一。
 - **不要引用动态段**：`【说话习惯】`/`【说话人判断】` 这两段只在命中该章/该行时才存在，档案里不要写“判断依据见【说话习惯】段落”。
@@ -117,9 +117,9 @@
 - 一行就是一个成品段落，段数由目标列当前行给定（按 `\n{2,}` 切出的片段）。
 - **三档处置**：
   1. 能确定性还原就修：并回模型插入的换行/空行/`<br>`、去掉首尾空白；目标列单段时段落分隔一并并回（中日文之间不加分隔符、两侧 ASCII 补空格）。
-  2. 结构性事实对不上就作废转人工：目标列 ≥2 段而段数不一致，或 noteref 标记增减，作废 `revisedText`、置 `needsContext=true`，原因并入 `summary`。
+  2. 结构性事实对不上就作废转终审：目标列 ≥2 段而段数不一致，或 noteref 标记增减，作废 `revisedText`、置 `needsContext=true`，原因并入 `summary`；最终状态按「待人工确认只能由终审分发」一节决定。
   3. 防呆：`summary`/`suggestion` 里的换行折叠成空格，防止破坏按行解析层。
-- **三条纪律**：只动结构与内联标记不动文字；修不了就转人工不猜；改动必须留痕（备注分析栏写「格式自动规范化：…」）。
+- **三条纪律**：只动结构与内联标记不动文字；修不了就转终审不猜；改动必须留痕（备注分析栏写「格式自动规范化：…」）。
 - 计数走 `status.formatFixes`/`formatLineBreaks`/`formatParagraphs`/`formatNoteFields`/`formatVoids`，开关为 `formatGuard:false` / `TRANSCOMPARATOR_FORMAT=0`。
 
 ### 2. 输出侧标点规范化（`ai/punctuation.js`，`normalizeDecisionPunctuation`）
@@ -127,7 +127,7 @@
 - **宽度与体例**：
   - 中文语境（标点最近的左右非空白字符里有中日文）的半角标点转全角（`，。？！；：（）`，省略号统一成 `……`）。
   - **英文句子保持半角**：反向还原要求**正向 ASCII 证据**（标点紧邻的左右字符都是字母/数字，或一侧是、另一侧是行边界且整段无汉字/假名）。纯标点行或拟声行不会被误判为英文。
-  - 中文语境可配对双引号转直角引号：`“…”` 与 `"…"` → `「…」`；无法配对或英文语境弯引号作废整条修订转人工（`status.punctQuoteVoids`）。
+  - 中文语境可配对双引号转直角引号：`“…”` 与 `"…"` → `「…」`；无法配对或英文语境弯引号作废整条修订转终审（`status.punctQuoteVoids`）。
   - 紧贴 ASCII 字母/数字的点豁免（`3.5`、`e.g.`、`S1_01`）。
   - 内联标记（`<ruby>`/`<rt>`/`<a epub:type="noteref">`）先摘后还原。
 - **成对标记内侧句末点号还原**（`restoreTerminalPunctuation`）：
@@ -137,7 +137,7 @@
 
 ### 3. 输出侧语言护栏（`ai/ai-proofread.js`，`guardTargetScript`）
 
-- 目标列当前行**本来不含假名**而 `revisedText` 含假名时，作废修订结果、置 `needsContext=true`（待人工确认）、备注写明原因。
+- 目标列当前行**本来不含假名**而 `revisedText` 含假名时，作废修订结果、置 `needsContext=true`、备注写明原因；最终状态按终审是否已执行分流。
 - 拦截诱因：原文有注音而目标列没有时模型照抄读音，或上下文轮把相邻行原文当成可复制文本。
 - 计数走 `status.scriptLeaks`。
 
@@ -172,7 +172,7 @@
 
 ## 低分归因层（`ai/low-score.js`）
 
-排在模型轮之后、线上查证之前：对照表 → 模型 → **低分归因与修复** → 线上查证 → 待人工。
+排在模型轮之后、线上查证之前：对照表 → 模型 → **低分归因与修复** → 线上查证 → 输出门禁与阶段结论分发。
 - 解决极低分在逐行视角下原因不同的问题（整行错位、互换、残片、代词省略等）。
 - **触发条件**：`needsEdit=true`、非 `needsContext`/`unclear`、扣分达 `lowScorePenalty`（默认 60，score ≤ 40）、前后至少有一行可供复核。不用档位兜底。
 - **纪律**：错位必查（核对相邻行配对）；**原文行序不动**（禁止建议对调两行译文）；上下文优先（归因不了继续补行）。
@@ -182,7 +182,7 @@
 
 ## 线上查证层（`ai/web-lookup.js`）
 
-排在低分归因之后、转人工之前：
+排在低分归因之后、输出门禁与阶段结论分发之前：
 - 档案声明 `wikiSites`（有序：声明顺序即查询顺序）。
 - **触发条件**：本行有 `advisory` 命中（假名写法存疑），且模型返回 `needsContext`/`unclear` 且已补过相邻行。
 - **执行方式**：程序分轮驱动，一轮只给一个站点，最后一轮为自行检索，最多 4 轮。模型定论后立即 break。
@@ -247,14 +247,22 @@
 
 `stage2`/`stage3` 起点的队列在 `startProofread` 里按行筛选（`isStage2Candidate` / `isStage3DisputeRow`），行的上一阶段结论有两个来源，**优先内存**：
 
-1. **复用上一轮的内存结论**（`reusePreviousResults`）：要求 `targetStage` 是 stage2/stage3、`status.results` 非空、且上一轮的 `projectKey` 与 `rowsSignature` 与本次完全相同。跨项目或重新对齐后行号对不上，绝不复用。
-2. **从备注文本反推**（`reconstructStage1Result`/`reconstructStage2Result`）：有损路径——`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠「参考/对照」字样反推。服务重启、切换项目、重新对齐后只能走这条。
+1. **复用上一轮的内存结论**（`reusePreviousResults`）：要求 `targetStage` 是 stage2/stage3、`status.results` 非空、且上一轮的 `projectKey` 与 `rowsSignature` 与本次完全相同；项目或真实行集变化后不得复用，重新发布相同行集不因此失效。逐行还须满足下节的备注快照约束。
+2. **从备注文本反推**（`reconstructStage1Result`/`reconstructStage2Result`）：有损路径——`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠「参考/对照」字样反推。服务重启或缺少满足作用域与备注约束的内存结论时走这条。
+
+### 当前轮次备注与待办的唯一判据
+
+- `ai/stage-note-state.js` 是当前轮次备注与阶段待办判定的共享实现，由构建器序列化到页面。统计、点击筛选、启动弹窗、续跑跳过和服务端队列都读取最新 `[AI校对]` 块，历史块不参与本轮完成判断；人工确认行不计待办。
+- 请求携带备注快照时，内存结论还须与该行最新块一致才可复用；已清空或不在备注快照里的行不得借旧内存重新入队。
+- 阶段二/三清空重跑只修改最新块，保留历史块与人工备注。复审完成读 `.reviewed`，仲裁完成读 `.arbitrated`；阶段名、调用异常行或历史结论都不是本轮完成证据。
+
+验证：`node --test scripts/stage-note-state.test.js scripts/ai-smart-concurrency.test.js`。
 
 ### 级联续跑（`collectResumedStage2`）
 
 从阶段一起步、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
 
-- 判据是 `isStage2Candidate(noteText, memoryResult)` 成立、且**没有**复审结论（`noteText.includes("Stylist复审") || memoryResult?.stylistReview` 为假）。
+- 判据是 `isStage2Candidate(noteText, memoryResult)` 成立、且 `stageNoteState(noteText).reviewed`、`.arbitrated` 与 `memoryResult?.stylistReview` 均不成立；不能用 `includes("Stylist复审")` 把异常留证或历史块当成已完成。
 - 这些行从初审队列里摘掉（`resumedStage2.indexes`），与初审刚产出的行走**同一个** `stage2Pending`、同一套并发控制器与退避窗口。
 - 对照表已经直接定案的行（`resolvedByTermTable`）不续跑，否则会白花一次调用。
 - **没有这一步**，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来（现象：并发 20、实际只有 1 处理中，一行一行慢慢审）。
@@ -312,7 +320,7 @@
 - **限流轨的解除条件是「拿到非限流的答复」**，不只是成功：探测得到普通失败（进失败窗口）或拒答（`recordNotLimited`，不进窗口）同样解除，否则半开会停在并发 1 上。恢复时经 `clearCooldownIf` 撤销 `backoffUntil` 并清零 `consecutiveLimits`（固定并发下它原本只增不减，恢复后的下一次 429 仍按最长退避）。
 - 冷却期内到达的迟到结果（发出时断路器还没打开）只回队，不推进阶梯；冷却期内的迟到成功说明上游已放行，提前恢复并撤销 `backoffUntil`。
 - 阶梯用尽时 `onStageRateLimit` 返回 false，让这一行沿用原有「记失败 / 回退上一阶段方案」的收尾，再由 `stopForBreakerTrip` 终止任务。
-- 拒答与致命配置错误不进失败窗口：前者是上游的正常应答，后者当场终止。三个阶段一致：拒答走 `recordStageNotLimited`（只解除限流轨，不计成败）。阶段一转人工确认；阶段二/三回退到上一阶段方案，且仍如实计入 `stageNErrors`（指标口径不变，只是不再喂熔断——此前阶段二/三的拒答会被当成失败样本，一批敏感内容就能把整条流水线熔断掉）。
+- 拒答与致命配置错误不进失败窗口：前者是上游的正常应答，后者当场终止。三个阶段一致：拒答走 `recordStageNotLimited`（只解除限流轨，不计成败）。阶段一标记待终审；阶段二/三回退到上一阶段方案，且仍如实计入 `stageNErrors`（指标口径不变，只是不再喂熔断——此前阶段二/三的拒答会被当成失败样本，一批敏感内容就能把整条流水线熔断掉）。
 - `TRANSCOMPARATOR_BREAKER_TIME_SCALE` 只缩放冷却时长，供回归测试把分钟级冷却压到毫秒级，不是运行时开关。
 - **冷却阶梯的取值依据**（`BREAKER_POLICY.limit.cooldownsMs`，只在这一处定义，测试与文案均从它推算）：被限流的请求由上游直接拒掉、不计费，等待只花时间不花钱，而过早放弃要人工点「继续剩下的」，所以整体宁长勿短。30s：单行退避重试用尽时已过去约 10~20 秒，再等 30 秒正好盖过常见的 1 分钟速率窗口；90s：覆盖一个完整分钟窗口再加抖动；4min、10min：中转渠道自动熔断与上游过载（503/529）常按分钟级恢复。累计约 16 分钟仍被限流，基本是额度耗尽或长时间故障，继续等没有意义。档间比约 3，探测频率随时间指数衰减。约束由 `scripts/circuit-breaker.test.js` 锁住：逐档变长、首档不低于 30s、末档不超过 10 分钟、累计不超过 20 分钟。
 - 冷却时长文案统一走 `formatDuration`（不足 1 分钟按秒，整分钟按分钟，其余分秒并列），日志、终止原因与策略摘要口径一致。

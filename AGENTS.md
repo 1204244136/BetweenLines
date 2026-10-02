@@ -6,11 +6,13 @@
 
 `README.md` 是对外文档，面向使用者、协作者和首次运行项目的人，说明产品意义、当前工作台、环境安装、命令和输出位置。它不规定内部实现，也不替代本文件的验证清单。
 
-`AGENTS.md` 是仓库内的实现契约，面向需要修改代码的 agent 和维护者，规定模块归属、数据不变量、生成物边界、修改纪律和验证方式。它不是用户手册；用户操作说明、功能介绍和公开限制应写在 `README.md`。
+`AGENTS.md` 是仓库内的实现契约，面向需要修改代码的 agent 和维护者，规定跨工作台模块归属、数据不变量、生成物边界、修改纪律和验证方式；领域细则由下文链接的契约各自拥有。它不是用户手册；用户操作说明、功能介绍和公开限制应写在 `README.md`。
 
-两份文档都描述同一个项目，但职责不同：公共行为变化需要同步更新 README，内部路径或验证规则变化只更新 AGENTS；如果一个改动同时影响两者，应分别从各自读者的角度记录一次，不要整段复制。
+两份文档都描述同一个项目，但职责不同：公共行为变化需要同步更新 README，内部路径或验证规则变化只更新其所属契约（本文件或对应 `docs/contracts/`）；如果一个改动同时影响两者，应分别从各自读者的角度记录一次，不要整段复制。
 
-判断一条信息该放哪里：读者需要据此操作或评估项目，放 README；只有改代码的人需要据此保证正确性（字段键名、模式裁剪、存储边界、定位规则、验证命令、故障根因），放 AGENTS。产物字段清单、快照保留策略、写回定位规则和内部故障处置都属于后者，README 只描述用户可观察到的结果。
+判断一条信息该放哪里：读者需要据此操作或评估项目，放 README；只有改代码的人需要据此保证正确性（字段键名、模式裁剪、存储边界、定位规则、验证命令、故障根因），放 AGENTS。产物字段清单、快照保留策略、写回定位规则和内部故障处置都属于本文件及其领域契约，README 只描述用户可观察到的结果。
+
+完整文档与工具登记见 [docs/contracts/documentation-tools.md](docs/contracts/documentation-tools.md)。当前实现概览归 `CURRENT_SYSTEM.md`，领域规范归 `docs/contracts/`；架构入口和模块 README 只导航，历史方案不得作为现行配置或实施依据。新增文档先确定独立职责，已有职责通过链接复用；新增工具登记调用入口、实现来源与副作用，兼容桥不得复制实现。
 
 ## 修改纪律与任务完成定义（Definition of Done）
 
@@ -34,11 +36,15 @@
   | 改了什么 | 最小必要操作 |
   |---|---|
   | `public/setup.html` | 控制台 F5（静态文件按 `no-store` 每次重读） |
-  | `public/*.js`、`public/*.css`、`src/workbenches/translation-compare/**`（`ai/**` 见下行）、`src/core/**`（除下行列出的三个） | 控制台点「应用新布局」（或 `npm run layout`）→ F5；**不用重启** |
-  | `src/workbenches/translation-compare/ai/**`（AI 校对与预筛任务的执行体，被 `src/runtime/routes/ai.js` 顶层 require） | **重启控制台服务**（`start-setup.bat` / `npm run setup`）；同时改了构建器或 `public/*.js` 时，重启后仍要点一次「应用新布局」 |
-  | `src/runtime/**`、`src/storage/**`、`src/core/{atomic-fs,storage-layout,progress}.js` | **重启控制台服务**（`start-setup.bat` / `npm run setup`） |
-  | `src/workbenches/speaker-attribution/**` | **重启服务 + 重新生成说话人工作台**：它的页面输出到 `out/runtime/speaker-attribution/`、不在项目快照里，「应用新布局」碰不到它 |
-  | `src/ingest/**`、`align_jp.py`（行集与对齐口径） | **重新生成**（控制台「开始生成」，或 `npm run align:jp && npm run build`）；生成走 npm 子进程，读到的都是最新代码，**不用重启** |
+  | 翻译页面的 `public/workbench-client.js`、`workbench-style.css` 与翻译渲染/纯计算模块 | 「应用新布局」（或 `npm run layout`）→ F5 |
+  | 说话人页面的 `public/speaker-workbench-*.js` / `*.css` | 重新生成说话人工作台 → F5 |
+  | 跨工作台共享浏览器资源（`workbench-shared.js`、`workbench-diff.js`、`toast.css`、`ai-panel.css`） | 翻译页面：应用新布局 → F5；说话人页面：重新生成 → F5 |
+  | 翻译 `ai/**`、`src/ai/**`、`src/runtime/**`、`src/storage/**`、`src/core/{atomic-fs,storage-layout,progress}.js` | 重启控制台服务（`start-setup.bat` / `npm run setup`）；若同时改变页面注入的规则，另按所属工作台重新渲染或生成 |
+  | `src/workbenches/speaker-attribution/**` | 重启服务 + 重新生成说话人工作台；其输出不在翻译项目快照中 |
+  | 仅由翻译生成子进程读取的正文提取代码、`align_jp.py`，或行集/签名算法 | 重新生成（控制台「开始生成」，或 `npm run align:jp && npm run build`） |
+  | 由常驻服务导入的 `src/ingest/**`（输入登记、EPUB 容器、写回等） | 重启服务；若还改变正文提取/派生行，再重新生成受影响工作台 |
+
+  路径不能代替调用链：共享模块同时被子进程与常驻服务使用时，两种生效操作分别必要；签名或行数据变化不能靠应用布局修复。
 
   - 重启只换常驻进程的代码，**不会**重渲染已发布的快照：同时改了服务端与 `public/*.js` 时，重启后仍要点一次「应用新布局」，F5 才看得到新客户端脚本（脚本是内联在快照 HTML 里的）。同样严禁把「下一次请求会自动生效」当作常驻进程代码的生效方式。
   - **重新生成包含「应用新布局」的效果**（都会重渲染并发布新快照）——这是唯一的包含关系，重跑对齐时不必再点布局按钮。
@@ -136,85 +142,46 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
    - 读取跨语言 `groups`（`pivotStart`/`pivotEnd`）。旧快照里的同数量多段原文组拆成 `1:1`；原文段数多于目标段数时拒绝构建并提示重新运行 `npm run align:jp`。
    - 行字段、`counts`、CSV 列、页面标签和内嵌行数据都由 `rowFieldsFor(mode)` 决定：双语行不携带 `tw`/`twCn`/`twChars`/`refinedScore`。裁剪只删字段，不改变 `signature`/`rowsSignature` 取值。
    - 输出 HTML、CSV、JSON。
-   - 生成页面的控制栈是四个 `<details class="panel-details">` 抽屉：预筛选、AI 辅助校对、筛选与批处理、备注空间与找回；按数据流方向自上而下排列。统一置于父抽屉 `#controlStackPanel`（`.panel-group`）内。
-   - 备注空间辅助模块为 `notes-spaces.js`，支持备份、找回、多历史空间合并与载入自愈；一次性回执由 Toast 弹出（实现与样式为两个工作台共享：`public/workbench-shared.js` 的 `createToastCenter()` + `public/toast.css`），持续状态由阶段卡片的进度条与状态胶囊承载（右上角固定状态行与全局进度条已移除）；不可逆操作（写回原文件、清空/删除备注空间、从备份登记）一律经页内确认弹窗 `askConfirm()`；AI 预设管理与并发上限（内部自适应调度、与熔断联动）完整集成。
-   - 验证执行 `node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js`。
-   - **详细规范**：前端控制栈结构、多历史空间合并算法（`mergeNotes`）、确定性匹配证据通道、载入自愈、Toast 提示设计、预设管理与并发调度契约详见 **[docs/contracts/workbench-notes-spaces.md](docs/contracts/workbench-notes-spaces.md)**。
+   - 页面、备注恢复与客户端状态细则及定向测试见 [工作台与备注契约](docs/contracts/workbench-notes-spaces.md)。
 
 7. `src/core/storage-layout.js`、`src/storage/project-store.js`、`src/runtime/generation-pipeline.js`
    - 将运行时输入、隔离 staging 和不可变项目快照划分到不同目录。
    - 控制台生成成功后以目录 rename 发布快照，再原子更新 `out/active-project.json`。
    - 项目切换只更新活动指针和小型输入选择，不复制大型生成物。
+   - 发布后默认保留最新两个快照，并额外保护当前活动快照；活动快照不能因清理历史而被删除。
    - `out/projects/<projectKey>/snapshots/<snapshotId>/` 是已发布生成物的唯一事实来源。
    - `rebuildProjectHtml` 不得原地覆盖已发布快照：必须复制到 staging、重新渲染后发布新快照并切换活动指针。
    - `active-project.json` 原子写失败时保留旧副本。服务端入口校验 Host/Origin/Sec-Fetch-Site 与 CSRF token。
 
-8. `src/ingest/line-units.js`、`src/workbenches/`
-   - 完整段落是共享的稳定源索引；句子/对话行只能作为带 `parentParagraphId` 的派生单元。
-   - 说话人归属待判断行只抽取完整发话（`「…」`、`『…』`），不按引号内部标点拆行；叙述句仅用于上下文。
-   - 翻译比较与说话人推断使用独立的工作台数据模型、结果和备注空间。
-   - 共享 LLM 传输层只请求 `http:`/`https:`，拒绝云元数据、link-local、多播与自动重定向。
-   - 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪。
-   - 熔断（`ai/circuit-breaker.js`）由服务端内部决策，页面、预设与请求体都不得再携带熔断开关或阈值；失败轨终止任务，限流轨先冷却探测再终止。
-   - 提示词按五层组装（①通用侧 ②模式层 ③特化侧 ④动态上下文 ⑤固定尾巴），合并顺序固定。
-   - 输出侧三大确定性门禁漏斗：`ensureRevisedText` → 成品格式门禁（`format-guard.js`）→ 标点规范化（`punctuation.js`）→ 语言护栏（`guardTargetScript`）→ `decisionToResult`。
-   - 验证执行 `node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/ai-smart-concurrency.test.js scripts/ai-error-kinds.test.js scripts/ai-stage-metrics.test.js scripts/circuit-breaker.test.js`。
-   - **详细规范**：五层提示词规范、判定链流程、按行特征裁剪、实体闸门、输出格式门禁/标点规范化/语言护栏、译名对照表与注音口径、低分归因、线上查证与说话习惯契约详见 **[docs/contracts/ai-proofread-contract.md](docs/contracts/ai-proofread-contract.md)**。
+8. `src/ingest/line-units.js`、`src/workbenches/`、`src/ai/`
+   - 完整段落是共享稳定源索引；派生句子/完整发话必须带 `parentParagraphId`，不得替换段落索引。
+   - 两个工作台独立持有结果模型、缓存与备注空间；共享传输与纯能力规则不得引入领域结果字段。
+   - AI 提示词、输出门禁、阶段编排与异常状态细则及验证见 [AI 校对契约](docs/contracts/ai-proofread-contract.md)。
 
 9. `src/workbenches/speaker-attribution/`
    - `speaker-selection.js` 支持单语 `--source` 和双语 `--source` + `--parallel` 输入。
    - 双语 TXT/文档模式使用 `prealign.js` 的整篇单调预对齐；双 EPUB 模式先按 XHTML 文件名完整表头分段再预对齐。
    - `build-workbench.js` 只生成说话人专属产物，不复用翻译比较的 rows 或 notes；双语对比以原文为准入边界。
    - 持久化的 `alignment` 只保留摘要，预对齐中间行不落盘。
-   - `attention.js` 为确定性证据注意力层，按邻近度、动作词、疑似称谓和对齐信号压缩 prompt 输入。
+   - `attention.js` 为确定性证据注意力层，按邻近度、动作词、疑似称谓和对齐信号压缩 prompt 输入。完整发话与生产预对齐边界见 [模块边界](docs/contracts/module-boundaries.md#说话人工作台边界)。
 
 ## 文件归属与扩展规则
 
-- `src/core/`、`src/storage/`、`src/ingest/`：共享能力。修改时必须检查所有工作台和项目快照调用方。
-- `src/workbenches/<name>/`：领域工作台。工作台拥有自己的结果模型、构建器、提示词、缓存和备注空间，不得复用另一工作台的 rows 或 notes 作为数据模型。
-- `src/workbenches/<name>/client/` 或 `public/`：浏览器端交互逻辑与表现层代码。
-- `public/` 下跨工作台共享的浏览器资源（`workbench-shared.js`、`toast.css`、`workbench-diff.js`）由两个构建器各自读取并内联注入页面：改一处必须同时核对翻译比较与说话人归属两个工作台，并跑 `npm test`。**不要把它们复制成各工作台自己的副本**——两份实现会各自漂移（说话人工作台原先就是各写一套 `window.alert`，与翻译比较的 Toast 体系长期不一致）。
-- `docs/contracts/`：面向代理与维护者的详细领域契约、算法规格与故障排查手册。
-- 新增通用格式转换优先扩展 `pandoc-utils.js`；新增特定格式的业务准入与提取逻辑在 `src/ingest/` 中独立实现。
+共享层、工作台、浏览器资源与兼容入口的所有权和依赖方向统一维护在 [模块边界](docs/contracts/module-boundaries.md)。共享能力变更必须检查全部工作台调用方；具体格式转换与正文准入分别扩展对应 ingest 模块。
 
-## 翻译构建模块边界
+## 领域契约入口
 
-- src/workbenches/translation-compare/build-compare.js 是 CLI、构建流程与快照重渲染入口，保留原有导出供兼容调用。
-- row-alignment.js 负责比较行组装与非原文对齐；alignment-artifact.js 负责读取已有对齐产物、兼容旧区间字段和校验单原文段落。算法与阈值保持原口径。
-- row-output.js 统一模式字段裁剪、CSV、导出行及客户端行，必须保持原有签名。
-- render-workbench.js 负责 HTML 与实时读取静态资源；model-options.js、notes-recovery.js 是不依赖 DOM、文件系统和任务状态的纯函数模块。序列化到浏览器的函数不得捕获模块私有依赖。
-- ai/proofread-defaults.js 与 ai/decision-score.js 分别拥有共享默认配置和纯评分规则；渲染器从这些模块及 proofread-contract.js 读取契约，不得为了配置加载 ai-proofread.js 的运行状态。边界由 scripts/translation-module-boundaries.test.js 验证。
-- 这些模块不得反向依赖 build-compare.js。新增领域调用优先直接引用职责模块，兼容入口只服务现有调用方。
-- 修改边界需运行 npm test，覆盖模式裁剪、备注恢复、快照重渲染与布局缓存回归。纯结构移动不要求重新运行语义对齐。
+下表是细则的唯一维护位置。本文件保留跨工作台不变量与修改纪律，各领域的字段、算法、状态转换和定向验证命令不再复制维护。
 
-## 客户端与 AI 调度边界
+| 领域 | 契约与验证入口 |
+|---|---|
+| 控制台、共享模块、翻译构建依赖方向 | [模块边界](docs/contracts/module-boundaries.md) |
+| AI 提示词、门禁、共享传输、阶段编排、最新备注状态与异常生命周期 | [AI 校对契约](docs/contracts/ai-proofread-contract.md) |
+| 备注恢复、预设、Toast、布局缓存、客户端展示与并发策略 | [工作台与备注契约](docs/contracts/workbench-notes-spaces.md) |
+| 故障定位与历史回归证据 | [排查手册](docs/contracts/troubleshooting.md) |
+| 文档职责、工具输入/副作用、兼容入口与结构覆盖验证 | [文档与工具覆盖](docs/contracts/documentation-tools.md) |
 
-- `public/workbench-diff.js` 只负责纯文本差异算法和 HTML 转义回调，不读取 DOM、备注、筛选或任务状态。`public/workbench-client.js` 只持有缓存并决定差异插槽的展示。
-- `ai/error-kinds.js` 是异常分类的唯一实现（服务端直接 require，构建器把常量与纯函数 `.toString()` 注入页面）。服务端 `clientStatus().stageErrors` 回报本次运行的失败明细，客户端从失败备注得到本地明细后与之合并；**两端不得各写一套分类规则**，否则「异常」悬停提示的分类口径会分叉。
-- AI 连接字段严格区分 `protocol`（`local` / `claude` / `compatible` 接口类型）与 `provider`（供应商名称），由 `src/ai/connection-config.js` 统一规范化；禁止把供应商名用于传输分支。预设及全局/项目 AI 配置使用 v2 存储键，按供应商身份与预设名判重，详细契约见 `docs/contracts/workbench-notes-spaces.md`。共享传输层变动需要重启控制台；说话人工作台的请求与 CLI `--protocol` / `BETWEENLINES_AI_PROTOCOL` 同步使用新协议字段。
-- AI 调度的 `concurrency-controller.js` 只负责并发策略（起步、慢启动与加法上探、频控/过载下调、熔断塌缩与恢复）、退避时间和重试判定，并发上限只有一个输入（`concurrency`），**不得重新引入前端「智能并发」开关**——自适应由服务端强制开启，页面与请求体都不携带调度参数；与熔断的联动只读 `circuit-breaker.js` 的 `state`/`pressure`，两边互不读写对方状态；队列顺序、阶段业务和结果写入仍归 `ai-proofread.js`。
-- 阶段编排只有两个输入，都由 `stagePlan` 归一：**起点**（`targetStage`；`all` 是旧客户端的兼容别名，等同 `stage1`）与**这条流水线有几段**（下游配没配模型）。行为统一为「从起点一路推进到已启用的尽头」：配了 `stylistConfig` 才从初审接到复审，配了 `arbiterConfig` 才从复审接到仲裁（仲裁只能接在复审后面，所以从阶段一起步时必须先有复审）。**不要重新引入「级联 / 不级联」的模式开关**——那会让「阶段一 开始」一个按钮同时表示两件事，而且状态会被持久化。
-- **「待人工确认」只能由终审分发**：`decisionToResult` 的 `needsContext || better === "unclear"` 出口按「有没有走到终审」分流——走过终审写 `待人工确认`，没走到写 `待终审`（前端单独计 `finalPendingArbiter`，徽章「待终审」，不混进 `finalNeedsCheck`）。配套两条缺一不可：`runStage2Stylist` 的「采纳」分支必须把 `better` 一并改成定案值（只清 `needsContext` 会留下初审的 `unclear`，把已定案的行写成「待人工确认」）；`shouldTriggerArbitration` 必须让「初审存疑、复审没能解除」的行升级终审。兜底文案（格式/语言/标点作废、模型拒答、低分归因与线上查证）一律说「转终审确认」，不再说「转人工确认」。
-- 客户端三个「开始」按钮**只报起点**，级联范围由服务端算并在 `clientStatus().stageCascade` 里如实回报（`stageMode` 报起点）。刷新页面后本地状态会丢，按钮态一律以这两个字段为准；级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
-- 服务端同一时刻只允许一个 AI 任务（`startProofread` 遇到 `status.running` 直接报 `RUNNING`），所以「阶段二不等阶段一」只能靠同一个任务内的队列级联实现，不能在中途追加阶段。客户端不得恢复成「排队等前一阶段整体结束再起第二个任务」的默认路径。
-- 从阶段一起步且配了复审时，`collectResumedStage2` 会把「已有初审结论、只差复审」的行**直接放进** `stage2Pending`（并从初审队列里摘掉），只在 `continueOnly`（「继续剩下的」）时启用。缺了这一步，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来。
-- `runStage2Stylist` / `runStage3Arbiter` **不得在自己内部吞掉异常**：错误必须挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 throw 后再走「频控重试 → 计入 stageNErrors → 回退上一阶段方案」。内部 catch 后只 pushLog 会让那一行在指标上凭空消失（既不算定案也不算异常）。
-- 客户端在「任务在跑 + 服务端回报了 `stagePipelines` + 没有 `stageCascade`」时判定常驻服务是旧版，提示一次重启并让阶段三卡片显示「未接入」；判据必须同时要求 `stagePipelines`，否则会把精简的状态桩误判成旧服务。
-- 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
-- `ai/stage-note-state.js` 是当前轮次备注与阶段待办判定的共享实现，由构建器序列化到页面。统计、点击筛选、启动弹窗、续跑跳过和服务端队列必须使用最新 `[AI校对]` 块，历史块不得参与本轮完成判断；人工确认行不计待办。请求携带备注快照时，内存结论还须与该行最新块相同才可复用，已清空或不在备注快照里的行不得借旧内存重新入队。阶段二/三清空重跑只修改最新块，保留历史块与人工备注。回归运行 `node --test scripts/stage-note-state.test.js scripts/ai-smart-concurrency.test.js`。
-- 三阶段页面异常统一表示最新备注中仍未解决的失败；服务端计数仍按任务重置。复审/仲裁失败在回退方案中保存独立异常行，置于「修改结果」之前、不得混入成品正文；共享 `stageNoteState().errors` 恢复阶段分类并保留上游结论及对应待办。续跑保留异常直到成功新块覆盖；判断仲裁完成必须读 `.arbitrated`，不得用 `includes("Arbiter仲裁")` 把异常行误当成结论。详细留证格式与生命周期见 `docs/contracts/ai-proofread-contract.md`。
-- 调整客户端资源、构建器或服务端代码后的生效操作，按「改动层级与刷新提示契约」执行；这些调整都不需要重新对齐。
-- 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
-
-## 控制台模块边界
-
-- src/runtime/input-server.js 只组装依赖、执行统一鉴权、分派请求和管理监听生命周期。
-- request-security.js 管理来源校验与会话令牌；http-json.js 负责 JSON 请求/响应；artifact-response.js 负责静态文件与产物响应。
-- input-files.js 管理本机文件选择、扫描和翻译输入选择；speaker-runtime.js 封装说话人输入持久化及独立任务状态，并允许注入构建与写入函数进行隔离测试。
-- picker-paths.js 拥有各导入入口（jp/cn/tw）的默认目录与 ClientGuid：起始目录按「当前卡片路径 → 该入口记忆 → 已登记选择」推导，记忆写在 `out/runtime/picker-paths.json`，三个入口互不共用。系统窗口用 `IFileDialog::SetFolder` 强制定位，**不得改回 `SetDefaultFolder`**（它只在没有系统记忆时才生效，达不到分入口的目的）。控制台不显示这个默认目录（曾把提示塞进「选择导入方式」标题行，长路径在 flex 下把标题挤成竖排，已整体移除，回归见 scripts/setup-import.test.js），因此服务端也不再回报 `defaultDir`/`pickDefaults`。`scripts/windows-path-picker.ps1` 必须保持 UTF-8 BOM，否则 Windows PowerShell 5.1 会按 ANSI 读中文标题并编译失败（回归见 scripts/picker-paths.test.js）。
-- routes/ 按输入、状态、项目、生成、写回和 AI 划分。处理函数命中后返回 true，未命中返回 false；未命中不得读取请求体或发送响应。鉴权必须在路由分派之前完成，路由不得反向依赖服务入口。createInputRoutes 的 `pickPath` 可注入，让系统选择窗口在路由测试里被替掉。
-- `public/setup.html` 的「已生成项目」下拉框按**活动项目身份**（`projectKey` + `snapshotId`）决定选中项：身份变了（生成完成发布新项目、手动切换、删除活动项目后改指、同一份输入重新生成只换了快照）必须跟随服务端，身份没变才保留用户自己的选择。判据不能简化成「`activeProjectKey` 变了才跟随」——同一份输入重新生成时 key 不变，只比 key 会让新工作台不自动选中；也不能去掉「身份没变就保留用户选择」这一半，否则 700ms 一次的状态轮询会把正在浏览的项目一直顶回活动项目。回归见 scripts/setup-projects.test.js。
-- 修改这些边界需运行 node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts/writeback-export.test.js；接口路径、响应形状、错误状态码和写回定位参数必须兼容。
+`public/` 共享资源必须核对两个构建器并运行 `npm test`。纯模块不得反向加载构建入口或任务运行状态；客户端不得复制服务端已有的错误分类、模型能力或最新备注判定。
 
 ## 正文过滤原则
 
@@ -227,8 +194,8 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
 ## 对齐标签
 
 - 对齐质量标签必须来自算法打分或规则推断，严禁人工硬编码。
-- 标签定义与分数阈值必须集中定义在 `align_jp.py` 与 `build-compare.js` 共享常量中。
-- 分数变化时必须保证向前兼容旧版快照中的标签显示。
+- Python 跨语言对齐归 `align_jp.py`，非原文对齐与行组装归 `row-alignment.js`，展示标签归 `row-output.js`；职责与对应验证见 [模块边界](docs/contracts/module-boundaries.md)。
+- 分数或阈值变化时必须检查跨层口径，并保持旧快照的标签显示兼容。
 
 ## 写回契约
 
@@ -263,62 +230,16 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
 
 ## 验证清单
 
-基础导出：
+所有改动在提交前运行 `git diff --check`。文档、工具入口或 npm 命令变更还必须运行 `npm run check:docs`；它只验证登记、路径、链接与命令覆盖，不能证明行为或文字语义正确。
 
-```powershell
-npm run check:pandoc
-npm run export:paragraphs
-```
+代码修改按 [领域契约入口](#领域契约入口) 运行定向测试；共享资源、模块边界、客户端/AI 调度改动必须运行 `npm test`。`scripts/*.test.js` 是自动发现入口，不在多份文档维护全量测试文件清单。
 
-完整生成：
-
-```powershell
-npm run align:jp
-npm run build
-```
-
-自动化测试集：
-
-```powershell
-# 工作台、备注空间与 Toast 回归
-node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js scripts/ai-model-presets.test.js scripts/ai-smart-concurrency.test.js scripts/prefilter-restore.test.js
-
-# AI 提示词分层、门禁、标点与对照表回归
-node --test scripts/proofread-prompt-layers.test.js scripts/format-guard.test.js scripts/punctuation.test.js scripts/term-table.test.js scripts/low-score.test.js scripts/web-lookup.test.js scripts/speech-habit-layer.test.js scripts/speech-habit-source.test.js
-```
-
-验证原则：
-- 表格行数必须与原文段落数严格一致。
-- 同一长原文段落不应意外重复。
-- Pandoc 媒体占位不应成为正文段落。
-- 特典、后记、版权页不应进入最终比较。
-- `bilingualLeakage` 必须为 `false`；双语快照的 `counts`/`rowKeys` 不应出现 `tw`、`twCn`、`twChars`、`refinedScore`。
+涉及输入格式、正文过滤、标题探测、段落切分或对齐时，除相关测试外必须对本机样本执行 `npm run align:jp && npm run build`，说话人受影响时另重新生成。验证：原文段落与表格行严格 1:1、空原文与异常行数被处理、长原文未复用、媒体占位/后记/附录未进入正文；双语产物 `bilingualLeakage` 为 `false`，`counts` / `rowKeys` 不出现第三列字段。
 
 ## 常见故障定位
 
-- **两种语言从不同情节开始**：先比较转换后的完整文本和过滤后的段落，不能仅凭行数或首个空对齐组判定成功。findBodyStart 的简介状态必须在独立彩页/插图标题处结束；图片已被移除时仍须保留随后的无标题引子。回归见 scripts/text-utils.test.js；修复后重新导出、对齐、构建，并核验真实首段对应内容。
+故障现象、证据入口、历史根因与处置只维护在 [排查手册](docs/contracts/troubleshooting.md)。修改现行规则时同时校准对应故障条目，不把旧实现描述当作当前实现。
 
-- **原文重复 / 为空**：检查是否重新引入了无 reuse tracking 的 fallback，或正文过滤是否改变了段落索引。
-- **双语产物出现第三列内容**：确认活动快照是否由旧版本生成（重新运行 `npm run align:jp && npm run build`），若仍存在检查 `validateSelection`、`loadParagraphs`、`rowFieldsFor`、`pageLabels`。
-- **写回定位失败或写错位置**：确认目标类型识别（四种 `TARGET_*` 之一），检查含内联标记段落是否走块级匹配路径；同一卷多处相同段落需携带 `rowTexts` 坐标。
-- **修改结果出现换行/空行**：检查成品格式门禁（`ai/format-guard.js`）是否启用，单段目标列会并回换行，多段不一致会作废转人工。
-- **标点被改坏 / 日文泄露**：检查标点规范化（`ai/punctuation.js`）语境判据与 `restoreTerminalPunctuation`；日文泄露检查注音 HTML 覆盖与输出语言护栏（`guardTargetScript`）。
-- **特化规范未生效 / 提示词突然变短**：检查条目是否误加 `features` 或 `characters`，角色名是否与文本匹配，页面点「恢复默认」前需先重新 `npm run build`。
-- **双击 bat 提示拒绝连接**：控制台页面需在 `server.listen` 回调中动态获取端口并打开，不要用固定 timeout。
-- **开关审核轨迹 / 抽屉 / 拖窗口后鼠标变慢、输入延迟**：这是主线程被强制布局占满，不是渲染卡顿。排查三类源头，回归测试 `scripts/workbench-layout-sync.test.js` 锁住每一条边界：
-  1. 事件处理器对整表逐行调用 `syncRevisionEditorHeight`（读 `scrollHeight` 一次就是一次整表重排），或 `resize` 每次事件都做全量同步。
-  2. **整批量高的读写没分离**：逐行「写 `height:auto` → 读 `scrollHeight` → 写回」交错，每行一次整表重排（实测 500 个输入框 296ms）；必须先整批写 `auto`、再连续读、最后统一写回（实测 15.8ms，18.8×），见 `measureRevisionEditors`。
-  3. **为取可见行数而查 DOM**：`updateResultsMaxHeight` 里 `tbody.querySelectorAll("tr[data-index]").length` 会带动一次整表强制布局（实测 500 行 233ms）。行数必须由 `renderVisibleRows` 传进来，或取自 `renderedRowsById.size`。
-- **审核轨迹展开状态在筛选/翻页后回弹**：重渲染会重建全部行节点，只靠 DOM 的 `hidden` 会被冲回默认态，用户只能反复点击。用户开合选择记在 `pipelineOpenOverrides`（会话内，不落盘），`renderNoteSummary` 渲染时优先取它。
-- **详细排查指引**：完整的常见故障定位手册、历史回归原因与处置方案详见 **[docs/contracts/troubleshooting.md](docs/contracts/troubleshooting.md)**。
+## 限制与客户端约束
 
-## 当前限制
-
-- UI 是静态 HTML table，使用客户端分页切片（翻译比较默认 100 行/页，说话人默认 50 行/页），行数据仍随页面整体内嵌；未实现虚拟滚动，超大文本下页面体积增长仍受行数据量限制。
-- **行内输入框高度必须按缓存同步**：`workbench-client.js` 的 `syncVisibleRowLayout` 读 `scrollHeight` 就是一次整表强制布局，逐行读一遍即 O(行数) 次重排（实测 500 行页面单次全量同步 = 533 次布局、311ms 主线程）。因此它只在四种情况下重量：新节点（整页重渲染）、该行内容被改写（`invalidateRevisionEditorHeight`）、视口高度变化、列宽变化（`remeasureEditors`）。面板/抽屉开合只走 `ifFrameMoved` 的可用高度重算，**开关审核轨迹不做任何布局同步**。新增事件处理器时不要直接写 `for (const editor of ...) syncRevisionEditorHeight(editor)`，也不要让 `resize` 每次事件都做全量同步（会合并到一帧并在尺寸稳定后重量一次）。
-- **真的要量一批时必须批量读写分离**：`measureRevisionEditors` 先整批写 `height:auto`、再连续读 `scrollHeight`、最后统一写回——连续读只会强制布局一次。写成「单行写→单行读→单行写回」的循环会让每行都付一次整表重排（实测 500 个输入框 296ms → 15.8ms）。单次量高仍走 `syncRevisionEditorHeight`。
-- **可用高度不得为数行数而查 DOM**：`updateResultsMaxHeight` 的行数取自 `renderVisibleRows` 传入的切片长度或 `renderedRowsById.size`；`tbody.querySelectorAll("tr[data-index]").length` 在重渲染后是一次整表强制布局（实测 500 行 233ms）。整段同步里 `querySelectorAll(".revision-editor")` 也只允许查一次，失效与量高共用同一份列表。
-- **重渲染残留的固有成本**：500 行/页时，换掉 `tbody.innerHTML` 后的首次布局约 173ms（CDP Tracing 实测 1 次 Layout + 3 次 UpdateLayoutTree），这是新建 500 行 DOM 的固有开销，优化不掉；可优化的是别让它发生第二次。改用 100 行/页（默认）即可大幅降低。
-- 备注按 row index 存储，已核验记录同时带 `rowSig`；新空间只在同一输入项目的历史空间内自动找回有内容证据的记录，其他项目只允许手动预览找回；本页空间挨过旧版损伤时载入自愈一次。只剩行序推断的锚点配对、以及按行号找回，必须逐行核验，不能当作可靠内容匹配。
-- 跨语言 embeddings 只是校对辅助，不是最终权威 alignment。
-- OpenCC 有助于比较中文变体，但无法归一化翻译风格差异。
+公开支持范围与限制归 [README.md](README.md)。行内编辑器缓存、批量量高、可用高度计算和审核轨迹会话状态归 [工作台与备注契约](docs/contracts/workbench-notes-spaces.md)，不在此重复实现细节。

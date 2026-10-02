@@ -1,5 +1,7 @@
 # Architecture Decisions
 
+本文记录架构取舍及其原因。实施顺序属于当时的决策背景，当前实现与后续优先级分别见 [CURRENT_SYSTEM.md](CURRENT_SYSTEM.md) 和 [ROADMAP.md](ROADMAP.md)；实现细则由 [AGENTS.md](../../AGENTS.md) 及领域契约维护。
+
 ## ADR-001
 
 决定：不采用多模型投票。

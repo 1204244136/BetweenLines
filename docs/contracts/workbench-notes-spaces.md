@@ -30,7 +30,7 @@
 ## 多历史空间逐字段合并规则（Recovery Merge）
 
 同一行在多份历史空间里记录不同时**必须逐字段合并，不得整条丢弃**：
-- `rowsSignature` 是整张行集内容的哈希，重新生成工作台就会换键，旧记录只能靠「按内容找回」搬过来。
+- `rowsSignature` 是整张行集内容的哈希，只有源文本或对齐结果真实变化才换键；应用布局、重新发布相同行集和按模式裁剪字段不得改变它。换键后的旧记录通过「按内容找回」搬入新空间。
 - **合并规则**（`mergeNotes`/`mergeRecoveredVariants`）：
   - 基准记录优先取有修改结果（`revisionText` 非空）的那份；
   - `manualDone`/`aiDone` 取任一为真；
@@ -59,7 +59,7 @@
 
 - 服务端 `clientStatus` 返回上一轮预筛结果。
 - `renderAiStatus` 登记结果时以**运行号**（`prefilterRunId`）为准：遇到 `kind === "prefilter"` 且 `runId` 变化就整体替换 `prefilterResultIds`，不再要求必须在本页启动。
-- 作用域限制在 `sameAiScope`（`projectKey` + `rowsSignature`），换快照的预筛结果不认领。
+- 作用域限制在 `sameAiScope`（`projectKey` + `rowsSignature`）；项目或行集签名变化时不认领旧结果，仅重新发布相同行集不改变这一作用域。
 
 ---
 
@@ -74,6 +74,7 @@
 - **`reportRuntimeNotice` 只报用户不知道的事**：它等价于 `showToast`，只承载「未连接到本地控制台服务」「已跳过 N 条与当前工作台行内容不匹配的结果」「已忽略非当前项目快照的结果」这类异常与副产物。用户自己刚点的动作（正在启动/终止/清除）不播报——它们完成时都有结果提示；每轮都在变的运行统计也不播报——调用数一直在涨，走 Toast 会持续刷屏，阶段卡片已经完整表达了同一件事。回归见 `scripts/ai-stage-metrics.test.js`、`scripts/toast.test.js`、`scripts/build-compare.test.js`。
 - 备注面板为唯一双写区域：`notesPanelStatus` 既写面板内就地状态行，也弹浮动提示。
 - **不可逆操作走页内确认弹窗**：写回原文件、清空本页/历史空间、删除历史空间、从备份登记一律经 `askConfirm()`（`#genericConfirmDialog`）二次确认，不再用 `window.confirm`；`askConfirm` 必须把 Esc 关闭（`close` 事件）也当作取消，否则 Promise 不 settle，调用方流程会静默卡住。写回类确认发生在按钮切到「写回中」之前，取消时按钮不会卡在禁用态。
+- **现状差异**：上述页内统一是目标契约。当前翻译与说话人工作台的单行/批量写回仍使用原生 `confirm` / `window.confirm`，保留了二次确认，但尚未接入 `askConfirm`；备注空间清空、删除与备份登记已使用页内弹窗。后续统一确认实现时必须同时覆盖两个工作台，不能把当前差异描述为已落实。
 
 ---
 
@@ -111,8 +112,20 @@
 - **状态接口**：`concurrency` 是起步并发，`concurrencyMax` 是并发上限，`currentConcurrency` 是初审当前放行的并发；`stagePipelines.stageN` 同样只有 `concurrency`（当前）与 `concurrencyMax`（上限）。不再回报 `smartConcurrency`。
 - **并发边界**：并发上限共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
 - **旧数据折算**：旧客户端、旧预设、旧本地存档还带着 `smartConcurrency` + `concurrencyMax`。开启智能并发的旧数据，有效上限是 `max(concurrency, concurrencyMax)`；关闭的，`concurrencyMax` 从不生效，上限就是 `concurrency`。服务端 `resolveConcurrencyCap`、预设 `sanitizePreset`、页面 `foldLegacyConcurrency` 三处按同一口径折算，读到旧数据即折成一个上限，下一次保存不再回写旧字段，无需迁移脚本。页面的折算必须对全局与项目两份存档**各自**折算后再合并；先合并再折算，会让一份旧存档遗留的 `concurrencyMax` 盖掉另一份存档里用户刚改的值。
-- **项目级持久化**：并发上限随项目独立持久化（存储键：`translation-compare-ai-project-config-v1:<projectKey>`），未独立配置的项目平滑继承全局配置基线（`translation-compare-ai-config-v1`），确保跨项目切换时互不污染。
+- **项目级持久化**：并发上限随项目配置独立持久化，使用上节列出的 v2 全局与项目配置键；未独立配置的项目继承全局配置基线，跨项目切换时互不污染。
 - **测试用环境变量**：`TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL` 只缩短「两次上探之间的最短间隔」，供回归测试把秒级等待压到毫秒级；不是运行时开关，页面与请求体都不携带调度参数。
+
+---
+
+## 客户端布局缓存边界
+
+- `workbench-client.js` 的 `syncVisibleRowLayout` 只在四种情况下重新量输入框高度：新节点（整页重渲染）、该行内容改写（`invalidateRevisionEditorHeight`）、视口高度变化、列宽变化（`remeasureEditors`）。面板与抽屉开合只经 `ifFrameMoved` 重算可用高度；开关审核轨迹不触发布局同步。
+- 批量量高由 `measureRevisionEditors` 执行「整批写 `height:auto` → 连续读 `scrollHeight` → 统一写回」。禁止逐行交错读写；单行量高仍走 `syncRevisionEditorHeight`。事件处理器不得逐行调用整批量高，`resize` 要合并到一帧并在尺寸稳定后重新测量。
+- `updateResultsMaxHeight` 的行数来自 `renderVisibleRows` 传入的切片长度或 `renderedRowsById.size`，不能为数行数读取表格 DOM。一次同步只查询一次 `.revision-editor`，失效与量高复用同一份列表。
+- 审核轨迹的用户开合状态由 `pipelineOpenOverrides` 持有：`setPipelineOpen` 写入，`pipelineDefaultOpen` 读取，重渲染时优先使用会话选择；未手动开合过的行仍走默认状态。它属于页面会话，不写入备注或持久化存储。
+- 页面行数据仍整体内嵌，分页只控制本次渲染节点数量；当前未实现虚拟滚动。性能排查与历史测量见 [troubleshooting.md](troubleshooting.md#页面交互卡顿鼠标变慢--输入延迟--开关卡顿)。
+
+验证：`node --test scripts/workbench-layout-sync.test.js scripts/build-compare.test.js`。
 
 ---
 

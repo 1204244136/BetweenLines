@@ -1,10 +1,12 @@
 # 工作台边界
 
-每个工作台拥有独立的分析模型、构建器、UI 状态和导出产物。工作台可以复用 `src/core`、`src/storage`、`src/ingest` 和共享 AI 传输代码，但绝对不能将其他工作台的行或备注当作自己的数据模型。
+每个工作台拥有独立的分析模型、构建器、UI 状态和导出产物。工作台可以复用 `src/core/`、`src/storage/`、`src/ingest/`、`src/ai/` 和公共浏览器资源；不得将其他工作台的行或备注当作自己的数据模型。
 
-当前工作台：
+| 工作台 | 领域职责 |
+|---|---|
+| [translation-compare](translation-compare/README.md) | 一份原文与一到两份同级非原文的比较与翻译校对 |
+| [speaker-attribution](speaker-attribution/README.md) | 单语或双语完整发话的说话人审阅与推断 |
 
-- `translation-compare/`：将一份原文与一到两份同级译本或版本进行比较。
-- `speaker-attribution/`：构建单语或双语的说话人审阅表；双语输入在创建行之前会进行预对齐。
+完整段落身份由 ingest 层维护，句子和发话是可追溯的派生单元。领域工作台分别拥有分析结果，公共浏览器资源仍由 `public/` 维护，不复制为领域副本。
 
-共享的 ingest 层将完整段落作为稳定的源索引。句子或对话单元是带有 `parentParagraphId` 和源文本偏移的派生视图；它们不得替换段落身份，也不得改变翻译对齐的语义。
+产品与操作说明见根 [README.md](../../README.md)，不变量、扩展规则和验证方式见 [AGENTS.md](../../AGENTS.md)。
