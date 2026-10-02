@@ -202,6 +202,7 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
 - 客户端在「任务在跑 + 服务端回报了 `stagePipelines` + 没有 `stageCascade`」时判定常驻服务是旧版，提示一次重启并让阶段三卡片显示「未接入」；判据必须同时要求 `stagePipelines`，否则会把精简的状态桩误判成旧服务。
 - 独立阶段二/三的队列优先复用上一轮留在内存里的结论（`reusePreviousResults`，要求 `projectKey` 与 `rowsSignature` 都相同）；拿不到才退回从备注文本反推（`reconstructStage1Result`，有损：`lowScore` 丢失、`score` 用 80 兜底）。跨项目或重新对齐后一律走重建，绝不串行号。
 - `ai/stage-note-state.js` 是当前轮次备注与阶段待办判定的共享实现，由构建器序列化到页面。统计、点击筛选、启动弹窗、续跑跳过和服务端队列必须使用最新 `[AI校对]` 块，历史块不得参与本轮完成判断；人工确认行不计待办。请求携带备注快照时，内存结论还须与该行最新块相同才可复用，已清空或不在备注快照里的行不得借旧内存重新入队。阶段二/三清空重跑只修改最新块，保留历史块与人工备注。回归运行 `node --test scripts/stage-note-state.test.js scripts/ai-smart-concurrency.test.js`。
+- 三阶段页面异常统一表示最新备注中仍未解决的失败；服务端计数仍按任务重置。复审/仲裁失败在回退方案中保存独立异常行，置于「修改结果」之前、不得混入成品正文；共享 `stageNoteState().errors` 恢复阶段分类并保留上游结论及对应待办。续跑保留异常直到成功新块覆盖；判断仲裁完成必须读 `.arbitrated`，不得用 `includes("Arbiter仲裁")` 把异常行误当成结论。详细留证格式与生命周期见 `docs/contracts/ai-proofread-contract.md`。
 - 调整客户端资源、构建器或服务端代码后的生效操作，按「改动层级与刷新提示契约」执行；这些调整都不需要重新对齐。
 - 运行 `node --test scripts/client-ai-boundaries.test.js scripts/ai-smart-concurrency.test.js scripts/workbench-layout-sync.test.js`，并确认 `npm test` 全量通过。
 

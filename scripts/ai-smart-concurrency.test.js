@@ -849,8 +849,12 @@ test("独立阶段二复用内存结论：只在同一项目快照上复用，�
     // 行集或项目一变，行号就对不上：绝不能复用，宁可退回有损重建。
     assert.equal(reusePreviousResults({ ...sameSnapshot, rowsSignature: "other-rows" }), false);
     assert.equal(reusePreviousResults({ ...sameSnapshot, projectKey: "other-project" }), false);
-    // 从阶段一起步不涉及复用。
+    // 普通初审重跑不复用；级联续跑中的仲裁待办可复用同一快照。
     assert.equal(reusePreviousResults({ ...sameSnapshot, targetStage: "stage1" }), false);
+    assert.equal(reusePreviousResults({
+      ...sameSnapshot, targetStage: "stage1", continueOnly: true,
+      stylistConfig: { model: "stylist-model" }, arbiterConfig: { model: "arbiter-model" },
+    }), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -1588,6 +1592,216 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
     const refusals = finished.stageErrors.stage3.refusal;
     assert.equal(refusals.count, totalRows, "拒答的每一行都要登记为 refusal 类");
     assert.deepEqual(Object.keys(finished.stageErrors.stage3), ["refusal"], "拒答行不能同时落进别的类别");
+    assert.ok(finished.results.every((result) => /Arbiter仲裁调用异常：模型拒答：/.test(result.note)), "拒答类别要保存在备注中，刷新后仍可恢复");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+for (const stage of ["stage2", "stage3"]) {
+  test(`${stage} 异常备注：独立及级联续跑均保留前序方案，仅请求失败阶段`, async () => {
+    clearProofreadCache();
+    const { project } = setupMockProject(1, `failure-note-${stage}`);
+    const marker = stage === "stage2" ? "Stylist复审调用异常：" : "Arbiter仲裁调用异常：";
+    const previousRevision = "初审改案";
+    const stylistRevision = stage === "stage3" ? "风停之后，他终于望见了远处的灯光。" : "复审改案";
+    let healthy = false;
+    const requests = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const payload = JSON.parse(body);
+        const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
+        const requestedStage = userText.includes("stylistReview") ? "stage3" : (userText.includes("gatekeeperReview") ? "stage2" : "stage1");
+        requests.push({ stage: requestedStage, userText });
+        if (requestedStage === stage && !healthy) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "upstream failed\n详细说明" } }));
+          return;
+        }
+        const content = requestedStage === "stage3"
+          ? { winner: "stylist", finalDecision: "replace", revisedText: "终审定案", reason: "仲裁通过" }
+          : requestedStage === "stage2"
+            ? { critique: { attitude: stage === "stage3" ? "modify" : "accept", rationale: "复审完成" }, revisedText: stylistRevision, summary: "复审完成" }
+            : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    const config = {
+      protocol: "compatible", baseUrl, model: "test-model", proofreadMode: "bilingual", concurrency: 1,
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      ...(stage === "stage3" ? { arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" } } : {}),
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    };
+    const runToEnd = async (input) => {
+      await startProofread({ ...config, ...input });
+      const deadline = Date.now() + 5000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const finished = clientStatus();
+      assert.equal(finished.running, false);
+      return finished;
+    };
+    try {
+      const retryStarts = stage === "stage3" ? ["stage3", "stage1", "stage2"] : ["stage2"];
+      const retryCases = retryStarts.flatMap((retryStart) => [true, false].map((useMemory) => ({ retryStart, useMemory })));
+      for (const { retryStart, useMemory } of retryCases) {
+        healthy = false;
+        const failed = await runToEnd({ stage: "stage1" });
+        assert.equal(failed.stageMetrics[`${stage}Errors`], 1);
+        assert.equal(failed.stageErrors[stage].server_error.count, 1);
+        const note = failed.results[0].note;
+        assert.equal(note.split("\n").filter((line) => line.startsWith(marker)).length, 1, "失败留证独占单行");
+        assert.ok(note.indexOf(marker) < note.indexOf("修改结果："), "异常说明不能落入成品修订正文");
+        assert.equal(note.split("修改结果：")[1], previousRevision, "回退方案保持原样");
+        if (stage === "stage3") assert.ok(note.includes(`复审改案：${stylistRevision}`), "复审方案也完整保留在阶段记录中");
+        if (!useMemory) clearProofreadCache();
+        healthy = true;
+        const beforeRetry = requests.length;
+        const retried = await runToEnd({ stage: retryStart, continueOnly: true, rowNotes: { 1: note } });
+        assert.equal(requests.length - beforeRetry, 1, `${useMemory ? "内存" : "备注重建"}续跑只请求失败阶段`);
+        assert.equal(requests.at(-1).stage, stage);
+        assert.ok(requests.at(-1).userText.includes(`"revisedText": "${previousRevision}"`), "上次异常不能混进重建的改案");
+        if (stage === "stage3") {
+          const userText = requests.at(-1).userText;
+          const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
+          const arbiterPayload = JSON.parse(payloadText);
+          assert.equal(arbiterPayload.stylistReview.revisedText, stylistRevision, "摘要内存缺少复审详情时必须从备注补回，不能拿空复审送仲裁");
+          assert.equal(arbiterPayload.stylistReview.rationale, "复审完成");
+          assert.ok(retried.results[0].note.includes(`复审改案：${stylistRevision}`), "仲裁成功后仍完整保留复审轨迹");
+          assert.match(retried.results[0].note, /Stylist复审\[调整\]：复审完成/);
+        }
+        assert.equal(retried.queued, 1, "任务总队列计入从下游直接续跑的行");
+        assert.equal(retried.stageMetrics[`${stage}Errors`], 0, "服务端本轮异常从零计算");
+        assert.deepEqual(retried.stageErrors[stage], {});
+        assert.equal(retried.results.length, 1, "异常备注保留继续候选资格");
+        assert.equal(retried.results[0].note.includes(marker), false, "成功结果自然覆盖同阶段旧异常");
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  test(`${stage} 停止调用：备注保留上一阶段方案，异常类别统一记为任务已终止`, async () => {
+    clearProofreadCache();
+    const { project } = setupMockProject(1, `failure-stop-${stage}`);
+    let receivedStage = false;
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        const payload = JSON.parse(body);
+        const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
+        const requestedStage = userText.includes("stylistReview") ? "stage3" : (userText.includes("gatekeeperReview") ? "stage2" : "stage1");
+        if (requestedStage === stage) {
+          receivedStage = true;
+          return;
+        }
+        const content = requestedStage === "stage2"
+          ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
+          : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+      await startProofread({
+        protocol: "compatible", baseUrl, model: "test-model", proofreadMode: "bilingual", concurrency: 1, stage: "stage1",
+        stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+        ...(stage === "stage3" ? { arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" } } : {}),
+        projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+      });
+      const receivedDeadline = Date.now() + 5000;
+      while (!receivedStage && Date.now() < receivedDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(receivedStage, true);
+      stopProofread();
+      const settleDeadline = Date.now() + 5000;
+      while (!clientStatus({ includeResults: false }).stageErrors[stage].stopped && Date.now() < settleDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const finished = clientStatus();
+      assert.equal(finished.running, false);
+      assert.deepEqual(Object.keys(finished.stageErrors[stage]), ["stopped"]);
+      const marker = stage === "stage2" ? "Stylist复审调用异常：" : "Arbiter仲裁调用异常：";
+      assert.ok(finished.results[0].note.includes(`${marker}校对已终止。`));
+      assert.match(finished.results[0].note, /修改结果：(初审改案|复审改案)$/);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}
+
+test("复审失败续跑：没有初审改案或关键词的待终审备注仍保留存疑语义", async () => {
+  clearProofreadCache();
+  const { project } = setupMockProject(1, "unclear-stage2-retry");
+  const originalNote = "[AI校对]\n语义是否相同：不同\n是否需要修改：待终审\nGatekeeper初审：指代不明，无法确认\n分析：指代不明，无法确认";
+  let healthy = false;
+  const gatekeeperReviews = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const payload = JSON.parse(body);
+      const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
+      const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
+      gatekeeperReviews.push(JSON.parse(payloadText).gatekeeperReview);
+      if (!healthy) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "stylist down" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        critique: { attitude: "reject", rationale: "依据上下文确认原译成立" }, revisedText: "", summary: "复审解除了疑点",
+      }) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  const runToEnd = async (note) => {
+    await startProofread({
+      protocol: "compatible", baseUrl, model: "test-model", proofreadMode: "bilingual", concurrency: 1,
+      stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+      stage: "stage2", continueOnly: true, rowNotes: { 1: note },
+    });
+    const deadline = Date.now() + 5000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    return finished;
+  };
+  try {
+    for (const useMemory of [true, false]) {
+      healthy = false;
+      const failed = await runToEnd(originalNote);
+      assert.equal(failed.stageMetrics.stage2Errors, 1);
+      assert.ok(failed.results[0].note.includes("是否需要修改：待终审"));
+      assert.equal(failed.results[0].note.includes("初审改案："), false);
+      if (!useMemory) clearProofreadCache();
+      healthy = true;
+      const beforeRetry = gatekeeperReviews.length;
+      const retried = await runToEnd(failed.results[0].note);
+      assert.equal(gatekeeperReviews.length - beforeRetry, 1, "没有改案的初审疑点仍是复审候选");
+      assert.equal(gatekeeperReviews.at(-1).better, "unclear", "备注重建不能把待终审疑点当成已通过");
+      assert.equal(gatekeeperReviews.at(-1).needsEdit, false);
+      assert.equal(gatekeeperReviews.at(-1).revisedText, "");
+      assert.equal(retried.stageMetrics.stage2Errors, 0);
+      assert.equal(retried.results[0].note.includes("Stylist复审调用异常："), false);
+      assert.ok(retried.results[0].note.includes("是否需要修改：否"));
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

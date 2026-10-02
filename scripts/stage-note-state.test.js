@@ -134,3 +134,72 @@ test("重跑复审或仲裁只清当前轮次，完整保留历史轮次和人�
     assert.equal(state.reviewed, stage === "stage3");
   }
 });
+
+test("下游失败保留上游结论与待办，异常只属于最新轮次和对应阶段", () => {
+  for (const lineEnding of ["\n", "\r\n"]) {
+    const reviewFailure = initial + "\nStylist复审调用异常：请求超时，Arbiter endpoint 未响应";
+    const arbiterFailure = dispute + "\nArbiter仲裁调用异常：网络连接失败";
+    for (const [note, stage, pendingKey] of [
+      [reviewFailure, "stage2", "pendingReview"],
+      [arbiterFailure, "stage3", "pendingArbitration"],
+    ]) {
+      const state = stageNoteState((arbitrated + "\n\n" + note).replace(/\n/g, lineEnding));
+      assert.equal(state.failed, false, "上游仍有可用结论");
+      assert.equal(state[pendingKey], true);
+      assert.deepEqual(Object.keys(state.errors), [stage]);
+      assert.deepEqual(stageNoteState(note + "\n\n" + arbitrated).errors, {});
+    }
+  }
+  assert.deepEqual(stageNoteState("人工备注\n调用失败：超时").errors, {});
+  assert.deepEqual(stageNoteState(initial + "\n分析：原译出现『调用失败』一词").errors, {});
+});
+
+test("清空复审或仲裁重跑时移除本轮异常，保留上游、历史与人工确认行", () => {
+  for (const [stage, prior, marker] of [
+    ["stage2", initial, "Stylist复审调用异常：请求超时"],
+    ["stage3", dispute, "Arbiter仲裁调用异常：网络连接失败"],
+    ["stage2", initial, "文学复审调用异常：请求超时"],
+    ["stage3", dispute, "终审仲裁调用异常：网络连接失败"],
+  ]) {
+    const prefix = "人工备注\n\n" + arbitrated + "\n\n";
+    const suffix = "\n\n人工补充";
+    const note = prefix + prior + "\n" + marker + suffix;
+    const ui = fixture({ 1: { note }, 2: { note, manualDone: true } });
+    assert.equal(ui.run(`clearUnconfirmedStageNotes(${JSON.stringify(stage)})`), 1);
+    const revision = stage === "stage2" ? "本轮初审方案" : "本轮复审方案";
+    assert.equal(ui.run('notes["1"].note'), prefix + prior + "\n修改结果：" + revision + suffix);
+    assert.equal(ui.run('notes["2"].note'), note);
+    assert.deepEqual(Object.keys(ui.run('stageNoteState(notes["1"].note).errors')), []);
+    assert.equal(ui.run(`computeStageMetricsFromNotes().${stage}Errors`), 1, "人工确认行按原记录保留");
+  }
+});
+
+test("从阶段一或二级联续跑：复审已调整但仲裁失败的行不能被判为整行完成", async () => {
+  const failure = dispute + "\nArbiter仲裁调用异常：请求超时";
+  for (const stage of ["stage1", "stage2"]) {
+    const ui = fixture({ 1: { note: failure }, 2: { note: arbitrated }, 3: { note: failure, manualDone: true } });
+    ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+      { id: "stylist", name: "复审", protocol: "compatible", baseUrl: "http://localhost:1234/v1", model: "stylist" },
+      { id: "arbiter", name: "仲裁", protocol: "compatible", baseUrl: "http://localhost:1234/v1", model: "arbiter" },
+    ]));
+    ui.run('aiIds.stage2Preset.value = "stylist"; aiIds.stage3Preset.value = "arbiter"');
+    await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
+    const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
+    assert.ok(post.body.arbiterConfig);
+    assert.deepEqual(post.body.completedIndexes.sort(), [2, 3]);
+    assert.equal(post.body.rowNotes[1], failure);
+  }
+});
+
+test("初审待终审且没有改案：复审异常仍是待办，继续时不得跳过", async () => {
+  const note = "[AI校对]\n是否需要修改：待终审\nGatekeeper初审：指代不明，无法确认\nStylist复审调用异常：请求超时";
+  const state = stageNoteState(note);
+  assert.equal(state.pendingReview, true);
+  assert.equal(state.failed, false);
+  const ui = fixture({ 1: { note } });
+  assert.equal(ui.element("metricStage2Pending").textContent, 1);
+  assert.equal(ui.element("metricStage2Errors").textContent, 1);
+  await ui.run('startAiProofread({ continueOnly: true, stage: "stage2" })');
+  const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
+  assert.deepEqual(post.body.completedIndexes, []);
+});

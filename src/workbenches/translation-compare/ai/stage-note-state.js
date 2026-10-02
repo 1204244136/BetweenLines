@@ -19,23 +19,32 @@ function createStageNoteTools() {
     const revision = field("修改结果");
     const stage2 = lines.map((line) => line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/)).find(Boolean);
     const stage3 = lines.map((line) => line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/)).find(Boolean);
-    const failed = lines.some((line) => /调用失败|调用异常|^校对已终止[。：]/.test(line));
+    // 下游失败保留上一阶段结论，不能把整行当成没有初审结果的失败行。
+    const errors = {};
+    for (const line of lines[0]?.startsWith("[AI校对]") ? lines.slice(1) : []) {
+      if (/^(Stylist复审|文学复审)调用(?:失败|异常)[：:]/.test(line)) errors.stage2 = line;
+      else if (/^(Arbiter仲裁|终审仲裁)调用(?:失败|异常)[：:]/.test(line)) errors.stage3 = line;
+      else if (/^(调用失败|调用异常|校对已终止[。：])/.test(line)) errors.stage1 = line;
+    }
+    const failed = Boolean(errors.stage1) || (Object.keys(errors).length > 0 &&
+      !Boolean(modify || stage1 || stage1Revision || stage2 || stage3));
+    const decisionText = lines.filter((line) => !Object.values(errors).includes(line)).join("\n");
     const candidate = automated && !failed && Boolean(modify === "是" || stage1Revision ||
       (stage1 && !stage1.includes("无需修改") && /修改|建议/.test(stage1)) ||
-      /存疑/.test(stage1) || modify === "待人工确认" || modify === "人工确认" ||
-      /存疑转人工|初审存疑/.test(text));
+      /存疑/.test(stage1) || modify === "待终审" || modify === "待人工确认" || modify === "人工确认" ||
+      /存疑转人工|初审存疑/.test(decisionText));
     // 单独的阶段名不是完成证据；必须有明确结论或对应阶段的改案。
-    const reviewed = automated && !failed && Boolean(stage2 && (
+    const reviewed = automated && !failed && !errors.stage2 && Boolean(stage2 && (
       /^(采纳|调整|驳回|提交仲裁|升级仲裁|保留原译|复审方案|accept|modify|reject|escalate)$/.test(stage2[1] || "") ||
       stage2Revision || revision || stage3
     ));
-    const arbitrated = automated && !failed && Boolean(stage3);
+    const arbitrated = automated && !failed && !errors.stage2 && !errors.stage3 && Boolean(stage3);
     const diverged = reviewed && Boolean(
       /调整|驳回|仲裁|^(modify|reject|escalate)$/.test(stage2[1] || "") ||
-      /提交仲裁|分歧|escalate/.test(text) ||
+      /提交仲裁|分歧|escalate/.test(decisionText) ||
       (stage1Revision && stage2Revision && stage1Revision !== stage2Revision)
     );
-    return { text, candidate, reviewed, arbitrated, diverged,
+    return { text, candidate, reviewed, arbitrated, diverged, failed, errors,
       pendingReview: candidate && !reviewed && !arbitrated,
       pendingArbitration: diverged && !arbitrated };
   }

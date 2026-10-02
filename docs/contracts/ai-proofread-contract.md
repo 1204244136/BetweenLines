@@ -262,6 +262,8 @@
 
 ### 阶段异常不得静默吞掉
 
+级联续跑时，`collectResumedStage3` 把已有复审结论、仍待仲裁的行直接交给 `stageItems.stage3`，从阶段一或二起步都不得重复上游或跳过它们；初始仲裁队列与其它初始队列一并计入 `status.queued`。仲裁条目优先复用带完整 `decision.stylistReview` 的内存结论；内存只留汇总 `stageResult` 时必须从最新备注重建复审意见与方案，不能把初审方案误当复审稿。`stageNoteState` 的复审候选包括「待终审」，即使初审没有提出改案、摘要也不含「存疑」字样。
+
 `runStage2Stylist` / `runStage3Arbiter` **不在自己内部吞异常**：它们把错误挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 `throw`，再走那两处的标准错误处理——频控时重试、其余计入 `stage2Errors`/`stage3Errors` 并回退到上一阶段的方案。
 
 - 反过来做（内部 `catch` 后只 `pushLog` 就回退）会让这一行**在指标上凭空消失**：既不算复审/仲裁，也不算异常。用户看到的就是「阶段三处理了很多行，定案数却一直不动、异常还是 0」。
@@ -273,10 +275,11 @@
 
 - **服务端**：`status.stageErrors`（阶段 → 行号 → `{ kind, message }`），随 `clientStatus().stageErrors` 回报聚合后的 `{ [kind]: { count, rows, sample } }`。记录点与计数同源：初审在两条失败 `addResult` 之前，复审/仲裁在 `stageNErrors += 1` 的同一处。
 - **重跑要撤旧账**：`executeStage1/2/3` 进入时先 `clearStageError(阶段, 行号)`，成功即不再补记。只在失败处新增而不清除的话，一行重跑成功后旧明细会一直挂在悬停提示里。
+- **三阶段统一保留未解决异常**：初审失败仍写独立失败备注；复审/仲裁失败在回退方案的当前 `[AI校对]` 块内写 `Stylist复审调用异常：…` / `Arbiter仲裁调用异常：…`，消息压成一行、置于「修改结果」之前，保留上游结论与成品正文。`stageNoteState().errors` 为统计与分类提供共享证据；下游失败不等于整行初审失败，继续留在对应待办队列。成功的新块不带失败标记，旧块退出本轮统计；清空重跑移除对应阶段及下游的失败标记，人工确认行与历史块保留。下游取消与初审一致记作 `stopped`，备注包含「校对已终止」。
 - **分类规则只有一份**：`ai/error-kinds.js` 是纯函数模块，服务端直接 `require`，构建器把常量与函数 `.toString()` 注入页面（见 `render-workbench.js`）。判定顺序有语义：拒答不算接口故障、503/529 算频控而非 5xx、非 JSON 响应优先于网络故障；客户端拿不到 `httpStatus`，用消息里的三位状态码兜底（`域名解析失败` 与 `JSON 解析失败` 都含「解析失败」，所以 bad_response 只认限定说法）。
 - **两端口径合并**：`computeStageMetricsFromNotes` 从失败备注得到本地分类（备注口径把「校对已终止。」也算失败行），`updateStageMetricsDashboard` 用 `mergeAiErrorKinds` 与服务端明细合并——**按行号去重、同一行以服务端为准**。两端观察的常是同一批行，但对同一行的归类可能不同（服务端看得到 `code`，备注只有文本），按类别取 max 会让这一行同时出现在两类里。服务端已登记的行号从本地各类里剔除，行号不重叠时取并集；行号样本有上限（`AI_ERROR_ROW_SAMPLE_LIMIT`），超出部分只有计数、无法逐行去重，同类里按 max 处理，宁可低估也不重复累加。
 - **渲染**：`renderStageMetricsDashboard` 把明细写进 `stage{1,2,3}ErrorItem.title`——逐类只给「类别：N 行」，**不列行号、不带代表性消息**：悬停文本是给人看的摘要，异常定位靠失败备注与 AI 日志，把行号列进去只会把它撑成一份台账。无异常时恢复构建器写在 HTML 上的静态 title。明细里的 `rows` 只服务于上面的两端口径合并（去重键），`sample` 只随状态接口回报供排查；两者都不进悬停文本。
-- 已知边界：明细只活在服务端进程内存里，页面每 1.5 秒轮询状态接口带回，所以**刷新页面不会丢**；会丢的是这三种时机——启动任意新任务（`resetStatus` 一并清空，预筛选也算）、点「清除 AI 记录」、重启控制台服务。阶段一的失败有失败备注可从本地反推，不受影响；阶段二/三的失败不写失败备注，丢了就无从重建，此时卡片计数若仍非零，悬停会如实说明「暂无可分类的失败明细」。
+- **生命周期**：服务端 `stageMetrics` / `stageErrors` 仍只表示本次任务，启动新任务、清除运行记录、重启服务时清空；页面的三个阶段均从最新备注恢复仍未解决的异常，计数和分类按本地与服务端行号的并集显示。续跑不提前抹掉旧失败，成功结论到达后才解除；刷新与服务重启也遵守相同口径。旧版阶段二/三未写进备注的失败无法事后重建。
 - 页面里不带服务端明细的 `updateStageMetricsDashboard()` 调用（如手动确认一行后的 `updateDoneCount`）会让数字与悬停最多失效到下一次轮询（≤1.5 秒），**不要为此在客户端另缓存一份服务端明细**：多出的状态要处理切项目、清空、换任务的失效，而收益只是一个自愈的闪动。
 
 验证：`node --test scripts/ai-error-kinds.test.js scripts/ai-stage-metrics.test.js scripts/ai-smart-concurrency.test.js`。

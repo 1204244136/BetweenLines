@@ -652,16 +652,8 @@
     }
 
     function isAiFailureNote(note) {
-      const lines = latestAiNotePart(note).split(/\n+/).map((line) => line.trim()).filter(Boolean);
-      if (!lines[0]?.startsWith("[AI校对]")) return false;
-      return lines.slice(1).some((line) =>
-        line.startsWith("调用失败") ||
-        line.startsWith("调用异常") ||
-        line.includes("调用失败") ||
-        line.includes("调用异常") ||
-        line === "校对已终止。" ||
-        line.startsWith("校对已终止：")
-      );
+      const state = stageNoteState(note);
+      return state.text.startsWith("[AI校对]") && state.failed;
     }
 
     function cleanAiFailureState(item) {
@@ -1923,8 +1915,12 @@
         stage3Revision: "",
       };
       let currentField = "";
+      const failureLines = new Set(Object.values(stageNoteState(note).errors));
       for (const line of lines.slice(1)) {
-        if (line.startsWith("语义是否相同：")) {
+        if (failureLines.has(line)) {
+          data.analysis = [data.analysis, line].filter(Boolean).join("\n");
+          currentField = "";
+        } else if (line.startsWith("语义是否相同：")) {
           data.semantic = line.slice("语义是否相同：".length).trim();
           currentField = "";
         } else if (line.startsWith("是否需要修改：")) {
@@ -3878,7 +3874,7 @@
       const item = document.getElementById(itemId);
       if (!item) return;
       item.classList.toggle("has-errors", count > 0);
-      if (!item.dataset.defaultTitle) item.dataset.defaultTitle = item.title || "";
+      if (item.dataset.defaultTitle === undefined) item.dataset.defaultTitle = item.title || "";
       const entries = sortAiErrorKinds(kinds);
       const kindsTotal = entries.reduce((sum, entry) => sum + entry.count, 0);
       if (count > 0 || kindsTotal > 0) {
@@ -4146,26 +4142,28 @@
       const active2 = document.getElementById("stage2ActiveInfo");
       const activeText2 = document.getElementById("stage2ActiveRowsText");
       if (pill2) {
+        pill2.title = "";
         if (!s2Enabled) {
           pill2.dataset.state = "disabled";
           pill2.textContent = "未启用";
         } else if (stage2WaitingForStage1) {
           pill2.dataset.state = "queued";
           pill2.textContent = "等待阶段一";
-        } else if (aiRunning) {
+        } else if (aiRunning && (p2.inFlight > 0 || p2.pending > 0)) {
           if (p2.inFlight > 0) {
             pill2.dataset.state = "running";
             pill2.textContent = p2.inFlight + "处理中" + (p2.pending > 0 ? " · " + p2.pending + "排队" : "");
-          } else if (p2.pending > 0) {
+          } else {
             pill2.dataset.state = "queued";
             pill2.textContent = p2.pending + "排队";
-          } else {
-            pill2.dataset.state = "idle";
-            pill2.textContent = "待命";
           }
+        } else if (s2Errors > 0) {
+          pill2.dataset.state = "queued";
+          pill2.textContent = s2Errors + " 行异常待重试";
+          pill2.title = "复审仍有 " + s2Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段二「开始」→「继续剩下的」重试。";
         } else {
-          pill2.dataset.state = (s2Reviewed > 0 || s2Errors > 0) ? "done" : "idle";
-          pill2.textContent = (s2Reviewed > 0 || s2Errors > 0) ? "就绪" : "待命";
+          pill2.dataset.state = !aiRunning && s2Reviewed > 0 ? "done" : "idle";
+          pill2.textContent = !aiRunning && s2Reviewed > 0 ? "就绪" : "待命";
         }
       }
       if (active2 && activeText2) {
@@ -4186,6 +4184,7 @@
       const active3 = document.getElementById("stage3ActiveInfo");
       const activeText3 = document.getElementById("stage3ActiveRowsText");
       if (pill3) {
+        pill3.title = "";
         if (!s3Enabled) {
           pill3.dataset.state = "disabled";
           pill3.textContent = "未启用";
@@ -4198,20 +4197,21 @@
           pill3.dataset.state = "queued";
           pill3.textContent = "未接入";
           pill3.title = "本次任务启动时没有接入终审仲裁（启动时阶段三预设未配置，或该预设已失效）。本次不会执行仲裁；要让它生效，请停掉任务、确认阶段三预设后重新启动。";
-        } else if (aiRunning) {
+        } else if (aiRunning && (p3.inFlight > 0 || p3.pending > 0)) {
           if (p3.inFlight > 0) {
             pill3.dataset.state = "running";
             pill3.textContent = p3.inFlight + "处理中" + (p3.pending > 0 ? " · " + p3.pending + "排队" : "");
-          } else if (p3.pending > 0) {
+          } else {
             pill3.dataset.state = "queued";
             pill3.textContent = p3.pending + "排队";
-          } else {
-            pill3.dataset.state = "idle";
-            pill3.textContent = "待命";
           }
+        } else if (s3Errors > 0) {
+          pill3.dataset.state = "queued";
+          pill3.textContent = s3Errors + " 行异常待重试";
+          pill3.title = "仲裁仍有 " + s3Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段三「开始」→「继续剩下的」重试。";
         } else {
-          pill3.dataset.state = (s3Arbitrated > 0 || s3Errors > 0) ? "done" : "idle";
-          pill3.textContent = (s3Arbitrated > 0 || s3Errors > 0) ? "就绪" : "待命";
+          pill3.dataset.state = !aiRunning && s3Arbitrated > 0 ? "done" : "idle";
+          pill3.textContent = !aiRunning && s3Arbitrated > 0 ? "就绪" : "待命";
         }
       }
       if (active3 && activeText3) {
@@ -4236,14 +4236,16 @@
         errors: s1Errors,
       });
       const s2Queue = Math.max(0, Number(p2.pending) || 0) + Math.max(0, Number(p2.inFlight) || 0);
-      renderStageProgress("2", s2Reviewed, Math.max(s2Reviewed + s2Pending, s2Reviewed + s2Queue), {
+      renderStageProgress("2", s2Reviewed, s2Reviewed + Math.max(s2Pending, s2Queue, s2Errors), {
         enabled: s2Enabled,
         label: "阶段二 文学复审",
+        errors: s2Errors,
       });
       const s3Queue = Math.max(0, Number(p3.pending) || 0) + Math.max(0, Number(p3.inFlight) || 0);
-      renderStageProgress("3", s3Arbitrated, Math.max(s3Arbitrated + s3Pending, s3Arbitrated + s3Queue), {
+      renderStageProgress("3", s3Arbitrated, s3Arbitrated + Math.max(s3Pending, s3Queue, s3Errors), {
         enabled: s3Enabled,
         label: "阶段三 终审仲裁",
+        errors: s3Errors,
       });
     }
 
@@ -4286,22 +4288,15 @@
         const noteText = latestAiNotePart(item.note || "").trim();
         if (!noteText) continue;
 
+        const state = stageNoteState(noteText);
+        for (const [stage, failureLine] of Object.entries(state.errors)) {
+          if (stage === "stage1") stage1Errors += 1;
+          else if (stage === "stage2") stage2Errors += 1;
+          else if (stage === "stage3") stage3Errors += 1;
+          recordAiErrorKind(stageErrorKinds[stage], classifyAiError(failureLine), Number(noteRowKey), failureLine);
+        }
         if (isAiFailureNote(noteText)) {
           totalAudited += 1;
-          // 只认失败行「以阶段名开头」（如「Stylist复审调用异常」）；错误正文里恰好带 Arbiter 等词不算，
-          // 否则「调用失败：Arbiter endpoint 404」这类初审报错会被归到别的阶段。
-          const failureLine = noteText.split(/\n+/).map((line) => line.trim()).filter(Boolean)[1] || "";
-          let failureStage = "stage1";
-          if (/^(Arbiter|终审仲裁)/.test(failureLine)) {
-            failureStage = "stage3";
-            stage3Errors += 1;
-          } else if (/^(Stylist|文学复审)/.test(failureLine)) {
-            failureStage = "stage2";
-            stage2Errors += 1;
-          } else {
-            stage1Errors += 1;
-          }
-          recordAiErrorKind(stageErrorKinds[failureStage], classifyAiError(failureLine || noteText), Number(noteRowKey), failureLine);
           continue;
         }
 
@@ -4322,7 +4317,6 @@
           finalNeedsCheck += 1;
         }
 
-        const state = stageNoteState(noteText);
         const hasStage2 = state.reviewed;
         const hasStage3 = state.arbitrated;
         const hasStage1Revision = Boolean(parsed.stage1Revision || (parsed.stage1 && !parsed.stage1.includes("无需修改") && (parsed.stage1.includes("修改") || parsed.stage1.includes("建议"))));
@@ -4492,6 +4486,15 @@
         stageMetrics = localMetrics;
       }
 
+      // 异常按仍失败的行合并；新一轮只重试其中一部分时，计数也要反映两端行号的并集。
+      const stageErrorKinds = {};
+      stageMetrics = { ...stageMetrics };
+      for (const stage of ["stage1", "stage2", "stage3"]) {
+        stageErrorKinds[stage] = mergeAiErrorKinds(localMetrics.stageErrorKinds?.[stage], serverStageErrors?.[stage]);
+        const classifiedCount = Object.values(stageErrorKinds[stage]).reduce((sum, item) => sum + (Number(item.count) || 0), 0);
+        stageMetrics[stage + "Errors"] = Math.max(Number(stageMetrics[stage + "Errors"]) || 0, classifiedCount);
+      }
+
       const stageMetricsSummary = [
         ["finalNeedsEdit", "最终建议修改"],
         ["finalUnchanged", "无需修改"],
@@ -4515,13 +4518,6 @@
 
       stageMetricsSummaryCache = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
-
-      // 异常分类明细：本地备注口径（历史遗留 + 本次）与服务端本次运行的记录合并，
-      // 按行号去重、同一行以服务端为准——两端观察的常是同一批行，但对同一行的归类可能不同。
-      const stageErrorKinds = {};
-      for (const stage of ["stage1", "stage2", "stage3"]) {
-        stageErrorKinds[stage] = mergeAiErrorKinds(localMetrics.stageErrorKinds?.[stage], serverStageErrors?.[stage]);
-      }
 
       renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning, stageErrorKinds);
       return stageMetrics;
@@ -5321,14 +5317,16 @@
         if (!note || !hasAutomatedDecisionNote(note)) continue;
         const p = parseAutomatedNote(note);
         if (!p) continue;
+        const state = stageNoteState(note);
         const noteStart = fullNote.lastIndexOf(note);
         const replaceCurrentNote = (replacement) => fullNote.slice(0, noteStart) + replacement + fullNote.slice(noteStart + note.length);
 
         if (targetStage === "stage2") {
-          if (!p.stage2 && !note.includes("Stylist复审")) continue;
+          if (!p.stage2 && !state.errors.stage2 && !state.errors.stage3) continue;
           // 清理 Stylist 复审及后续仲裁，保留初审改案
           const lines = note.split("\n").filter((line) => {
-            return !line.startsWith("Stylist复审") &&
+            return line !== state.errors.stage2 && line !== state.errors.stage3 &&
+              !line.startsWith("Stylist复审") &&
               !line.startsWith("复审改案：") &&
               !line.startsWith("复审建议：") &&
               !line.startsWith("Arbiter仲裁") &&
@@ -5347,10 +5345,10 @@
           item.note = replaceCurrentNote(lines.join("\n"));
           clearedCount += 1;
         } else if (targetStage === "stage3") {
-          if (!p.stage3 && !note.includes("Arbiter仲裁")) continue;
+          if (!p.stage3 && !state.errors.stage3) continue;
           // 清理 Arbiter 仲裁，保留复审方案
           const lines = note.split("\n").filter((line) => {
-            return !line.startsWith("Arbiter仲裁") &&
+            return line !== state.errors.stage3 && !line.startsWith("Arbiter仲裁") &&
               !line.startsWith("仲裁改案：") &&
               !line.startsWith("仲裁建议：");
           });
@@ -5746,9 +5744,8 @@
             // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。
             // 「提交仲裁/升级仲裁」是复审的中途态不是结论——有分歧却还没仲裁的行必须留在流水线里，
             // 初审提改却还没复审的行同理，都不能被当成已完成跳过。
-            const hasPendingArbitration = /提交仲裁|升级仲裁/.test(String(p?.stage2?.attitude || ""))
-              || /Stylist复审\[(?:提交仲裁|升级仲裁)\]/.test(noteText);
-            const stage3Done = Boolean(p?.stage3 || noteText.includes("Arbiter仲裁"));
+            const hasPendingArbitration = cascadeToArbiter && stageNoteState(noteText).pendingArbitration;
+            const stage3Done = stageNoteState(noteText).arbitrated;
             const stage2Settled = !hasPendingArbitration
               && (hasCompletedStage2Note(p, noteText) || !isStage2CandidateNote(p, noteText));
             const stage1Clear = p?.modify === "否" && !isStage2CandidateNote(p, noteText);
@@ -5763,7 +5760,7 @@
               completedSet.add(num);
             }
           } else if (stage === "stage3") {
-            const hasS3 = Boolean(p?.stage3 || noteText.includes("Arbiter仲裁"));
+            const hasS3 = stageNoteState(noteText).arbitrated;
             if (hasS3) {
               completedSet.add(num);
             }

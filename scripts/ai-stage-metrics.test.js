@@ -604,6 +604,7 @@ test("客户端看板：异常清零后悬停提示恢复构建器写入的静�
 
   const item = ui.element("stage1ErrorItem");
   item.title = "阶段一调用失败/异常行数";
+  delete item.dataset.defaultTitle; // 夹具已完成空页面初始化；模拟构建器在首次渲染前写入的 title。
   ui.run(`
     renderAiStatus({
       running: false,

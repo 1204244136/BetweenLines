@@ -180,3 +180,66 @@ test("初审异常续跑显示处理中，成功后的最新备注消除异常�
   assert.equal(ui.element("stage1Progress").style.width, "100%");
   assert.equal(ui.element("stage1StatusPill").title || "", "");
 });
+
+const initialNote = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：本轮初审方案";
+const disputeNote = initialNote + "\nStylist复审[调整]：语序调整\n复审改案：本轮复审方案";
+
+for (const [stage, failure, success] of [
+  ["stage1", "[AI校对]\n调用失败：请求超时", "[AI校对]\n是否需要修改：否\nGatekeeper初审：无需修改"],
+  ["stage2", initialNote + "\nStylist复审调用异常：请求超时\n修改结果：本轮初审方案",
+    initialNote + "\nStylist复审[采纳]：同意\n复审改案：本轮初审方案\n修改结果：本轮初审方案"],
+  ["stage3", disputeNote + "\nArbiter仲裁调用异常：请求超时\n修改结果：本轮复审方案",
+    disputeNote + "\nArbiter仲裁[复审方案]：采纳复审\n仲裁改案：本轮复审方案\n修改结果：本轮复审方案"],
+]) {
+  test(`${stage}：刷新及新任务保留异常，成功后清除；下游失败不作废上游方案`, async () => {
+    const key = "translation-compare-notes-v7:project:rows";
+    const storage = storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) });
+    const options = { apiResponses: {
+      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "retry-run",
+        stageMode: stage, stageCascade: { toArbiter: stage === "stage3" }, stageMetrics: createStageMetrics(), results: [] } },
+    } };
+    for (let reload = 0; reload < 2; reload += 1) {
+      const ui = createWorkbench(storage, options);
+      const number = stage.slice(-1);
+      assert.equal(ui.element(`metricStage${number}Errors`).textContent, 1);
+      assert.equal(ui.element(`stage${number}StatusPill`).textContent, "1 行异常待重试");
+      assert.match(ui.element(`${stage}ErrorItem`).title, /请求超时：1 行/);
+      if (stage !== "stage1") {
+        assert.equal(ui.run('isAiFailureNote(notes[1].note)'), false);
+        assert.equal(ui.run('parseAutomatedNote(notes[1].note).revision'), stage === "stage2" ? "本轮初审方案" : "本轮复审方案");
+        assert.match(ui.run('parseAutomatedNote(notes[1].note).analysis'), /调用异常/);
+        assert.equal(ui.run('cachedStageMetrics.stage1NeedsEdit'), 1);
+        assert.equal(ui.run('cachedStageMetrics.stage2Reviewed'), stage === "stage3" ? 1 : 0);
+      }
+      await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
+      const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
+      assert.equal(post.body.completedIndexes.includes(1), false);
+      assert.equal(post.body.rowNotes[1], failure);
+      assert.equal(ui.element(`metricStage${number}Errors`).textContent, 1);
+      if (reload === 1) {
+        ui.run(`notes[1].note += ${JSON.stringify("\n\n" + success)}; markNotesDirtyForMetrics(); updateStageMetricsDashboard()`);
+        assert.equal(ui.element(`metricStage${number}Errors`).textContent, 0);
+        assert.doesNotMatch(ui.element(`stage${number}StatusPill`).textContent, /异常/);
+        assert.doesNotMatch(ui.element(`${stage}ErrorItem`).title, /请求超时/);
+        assert.equal(ui.element(`stage${number}Progress`).style.width, "100%");
+      }
+    }
+  });
+}
+
+test("新旧运行的不同失败行按并集统计，同一行异常明细与计数不重复", () => {
+  const key = "translation-compare-notes-v7:project:rows";
+  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({
+    1: { note: initialNote + "\nStylist复审调用异常：请求超时" },
+  }) }));
+  ui.run(`updateStageMetricsDashboard({ stage2Errors: 2 }, {}, false, {
+    stage2: { network: { count: 2, rows: [1, 2], sample: "连接失败" } }
+  })`);
+  assert.equal(ui.element("metricStage2Errors").textContent, 2);
+  ui.run(`updateStageMetricsDashboard({ stage2Errors: 1 }, {}, false, {
+    stage2: { network: { count: 1, rows: [2], sample: "连接失败" } }
+  })`);
+  assert.equal(ui.element("metricStage2Errors").textContent, 2);
+  assert.match(ui.element("stage2ErrorItem").title, /请求超时：1 行/);
+  assert.equal(ui.run("cachedStageMetrics.stage2Errors"), 1);
+});
