@@ -11,6 +11,8 @@ const {
   buildChatCompletionBody,
   cleanJsonPayload,
   fetchJson,
+  callChatCompletions,
+  MODEL_RESPONSE_TIMEOUT_MS,
 } = require("../src/ai/llm-client");
 const { TaskQueue } = require("../src/ai/task-queue");
 const { testModel } = require("../src/workbenches/translation-compare/ai/ai-proofread");
@@ -389,6 +391,182 @@ test("共享 LLM 传输层：调用方取消优先于本地请求超时，且不
     });
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("共享 LLM 传输层：本地等待响应头超时保留时限与传输阶段", async () => {
+  let calls = 0;
+  const server = http.createServer((request) => {
+    calls += 1;
+    request.resume();
+  });
+  const port = await listen(server);
+  const timeoutMs = 500;
+  try {
+    await assert.rejects(
+      fetchJson(`http://${host}:${port}/v1/chat/completions`, {
+        method: "POST", body: "{}",
+      }, { timeoutMs }),
+      (error) => {
+        assert.equal(error.code, "REQUEST_TIMEOUT");
+        assert.equal(error.timeoutPhase, "waiting_response");
+        assert.equal(error.timeoutMs, timeoutMs);
+        assert.ok(error.elapsedMs >= timeoutMs - 10);
+        assert.equal(error.receivedHeaders, false);
+        assert.equal(error.httpStatus ?? null, null);
+        assert.match(error.message, /本地请求超时.*等待响应头/);
+        return true;
+      },
+    );
+    assert.equal(calls, 1, "本地时限终止请求后不应按断流重发");
+  } finally {
+    server.closeAllConnections();
+    await close(server);
+  }
+});
+
+test("共享 LLM 传输层：收到 HTTP 200 后正文超时不丢失已到达的响应证据", async () => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"choices":[');
+  });
+  const port = await listen(server);
+  const timeoutMs = 500;
+  try {
+    await assert.rejects(
+      fetchJson(`http://${host}:${port}/v1/chat/completions`, {
+        method: "POST", body: "{}",
+      }, { timeoutMs }),
+      (error) => {
+        assert.equal(error.code, "REQUEST_TIMEOUT");
+        assert.equal(error.timeoutPhase, "reading_body");
+        assert.equal(error.timeoutMs, timeoutMs);
+        assert.ok(error.elapsedMs >= timeoutMs - 10);
+        assert.equal(error.receivedHeaders, true);
+        assert.equal(error.httpStatus, 200);
+        assert.match(error.message, /本地请求超时.*HTTP 200.*读取响应正文/);
+        return true;
+      },
+    );
+  } finally {
+    server.closeAllConnections();
+    await close(server);
+  }
+});
+
+test("共享 LLM 传输层：HTTP 错误正文超时或断流仍保留状态与 Retry-After", async (t) => {
+  for (const status of [429, 503, 401]) {
+    for (const interruption of ["timeout", "disconnect"]) {
+      await t.test(`HTTP ${status} / ${interruption}`, async () => {
+        let calls = 0;
+        let disconnectTimer = null;
+        const server = http.createServer((request, response) => {
+          calls += 1;
+          request.resume();
+          response.writeHead(status, { "content-type": "application/json", "retry-after": "7" });
+          response.write('{"error":');
+          if (interruption === "disconnect") {
+            // 让客户端先收到响应头，再模拟错误正文传输中断。
+            disconnectTimer = setTimeout(() => response.destroy(), 30);
+          }
+        });
+        const port = await listen(server);
+        try {
+          await assert.rejects(
+            fetchJson(`http://${host}:${port}/v1/chat/completions`, {
+              method: "POST", body: "{}",
+            }, { timeoutMs: 500, streamRetryDelayMs: 1 }),
+            (error) => {
+              assert.equal(error.code, "HTTP_ERROR");
+              assert.equal(error.httpStatus, status);
+              assert.equal(error.retryAfter, "7");
+              assert.match(error.message, new RegExp(`HTTP ${status}`));
+              return true;
+            },
+          );
+          assert.equal(calls, 1, "已知 HTTP 错误不得作为普通断流重发");
+        } finally {
+          if (disconnectTimer) clearTimeout(disconnectTimer);
+          server.closeAllConnections();
+          await close(server);
+        }
+      });
+    }
+  }
+});
+
+test("共享 LLM 传输层：读取 HTTP 错误正文时调用方取消仍优先返回 ABORTED", async (t) => {
+  let receivedHeaders;
+  const responseStarted = new Promise((resolve) => { receivedHeaders = resolve; });
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (...args) => {
+    const response = await realFetch(...args);
+    const readText = response.text.bind(response);
+    response.text = () => {
+      receivedHeaders();
+      return readText();
+    };
+    return response;
+  });
+  const server = http.createServer((request, response) => {
+    request.resume();
+    response.writeHead(429, { "content-type": "application/json", "retry-after": "7" });
+    response.write('{"error":');
+  });
+  const port = await listen(server);
+  const controller = new AbortController();
+  try {
+    const pending = fetchJson(`http://${host}:${port}/v1/chat/completions`, {
+      method: "POST", body: "{}",
+    }, { timeoutMs: 1000, signal: controller.signal });
+    const rejected = assert.rejects(pending, (error) => {
+      assert.equal(error.code, "ABORTED");
+      assert.equal(error.name, "AbortError");
+      return true;
+    });
+    await responseStarted;
+    controller.abort();
+    await rejected;
+  } finally {
+    server.closeAllConnections();
+    await close(server);
+  }
+});
+
+test("共享模型生成：默认等待五分钟，并尊重调用方与配置中的显式时限", async (t) => {
+  assert.equal(MODEL_RESPONSE_TIMEOUT_MS, 300000);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  let onFetch;
+  t.mock.method(globalThis, "fetch", (url, options) => {
+    onFetch(options.signal);
+    return new Promise((resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    });
+  });
+  const config = { protocol: "compatible", baseUrl: "http://127.0.0.1:11434/v1", model: "mock-model" };
+  for (const entry of [
+    { config, options: {}, timeoutMs: 300000, initialTick: 90000 },
+    { config: { ...config, timeoutMs: 800 }, options: {}, timeoutMs: 800, initialTick: 799 },
+    { config: { ...config, timeoutMs: 800 }, options: { timeoutMs: 200 }, timeoutMs: 200, initialTick: 199 },
+  ]) {
+    const fetchStarted = new Promise((resolve) => { onFetch = resolve; });
+    const pending = callChatCompletions([{ role: "user", content: "test" }], entry.config, entry.options);
+    const rejected = assert.rejects(pending, (error) => {
+      assert.equal(error.code, "REQUEST_TIMEOUT");
+      assert.equal(error.timeoutMs, entry.timeoutMs);
+      return true;
+    });
+    const signal = await fetchStarted;
+    t.mock.timers.tick(entry.initialTick);
+    assert.equal(signal.aborted, false, "在各自时限到达前必须保留请求");
+    t.mock.timers.tick(entry.timeoutMs - entry.initialTick);
+    assert.equal(signal.aborted, true);
+    await rejected;
   }
 });
 

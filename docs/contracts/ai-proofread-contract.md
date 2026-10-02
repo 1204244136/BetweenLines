@@ -10,6 +10,15 @@
 
 ---
 
+## 共享传输层的等待预算与错误证据
+
+- 非流式模型生成共用 `src/ai/llm-client.js` 导出的 `MODEL_RESPONSE_TIMEOUT_MS`，默认 5 分钟；翻译校对包装层与其他模型调用方不得各自硬编码另一份默认值。计时从发起 HTTP 请求开始，到响应体完整读完为止，包含等待响应头和读取正文；出站地址安全校验不占这段预算。模型列表与连通性测试继续显式使用各自的短超时。
+- 本机计时器主动截止时，错误码为 `REQUEST_TIMEOUT`，错误对象携带 `timeoutPhase`（`waiting_response` / `reading_body`）、`timeoutMs`、`elapsedMs`、`receivedHeaders` 与 `httpStatus`，诊断文案必须保留所处阶段及已收到的 HTTP 状态。`waiting_response` 只表示本机尚未收到响应头，不能据此断言请求未到达提供商；`reading_body` 表示已收到响应头、完整正文仍未读完。
+- 本地超时与调用方取消必须区分，取消优先按 `ABORTED` 收尾。超时不得走响应流中断重试或阶段自动重试：中止本机等待不能证明上游停止生成，重发可能产生重复计费；失败行由用户选择继续处理。
+- 收到非成功 HTTP 状态后，即使读取错误正文发生超时或断流，也必须保留 `HTTP_ERROR`、`httpStatus` 和响应头中的 `Retry-After`，不得改报 `REQUEST_TIMEOUT` 或进入成功响应的断流重试。尤其是 429/503 的限流证据和 401 的认证证据必须继续交给既有分类、退避及致命错误门禁。
+
+验证：`node --test scripts/ai-connectivity.test.js scripts/ai-model-timeout.test.js scripts/ai-error-kinds.test.js scripts/ai-smart-concurrency.test.js`。
+
 ## 模型能力与思考档位
 
 - `ai/model-capabilities.js` 是两端能力识别的唯一实现；`browserModelCapabilitiesSource()` 将清单与纯解析函数、显式依赖注入翻译比较和说话人工作台，不带网络调用或服务端缓存。`workbench-shared.js` 不得另写一套模型正则。

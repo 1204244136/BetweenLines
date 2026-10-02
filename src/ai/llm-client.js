@@ -10,6 +10,8 @@ const { normalizeConnectionConfig } = require("./connection-config");
 
 const dns = require("node:dns").promises;
 const net = require("node:net");
+// 非流式生成要等完整正文（含推理）才返回，预算与模型列表/连通测试分开。
+const MODEL_RESPONSE_TIMEOUT_MS = 300000;
 const {
   detectModelCapabilities,
   normalizeModelReasoningEffort,
@@ -227,7 +229,7 @@ function displayRequestUrl(value) {
 }
 
 function isRetryableStreamInterruption(error) {
-  if (!error || error.name === "AbortError") return false;
+  if (!error || error.name === "AbortError" || error.code === "HTTP_ERROR") return false;
   const text = [error.message, error.cause?.message].filter(Boolean).join(" ").toLowerCase();
   const code = String(error.code || error.cause?.code || "").toUpperCase();
   return error.code === "STREAM_INTERRUPTED"
@@ -276,6 +278,8 @@ async function fetchJson(url, options, {
     let timedOut = false;
     let abortedByCaller = false;
     let requestStarted = false;
+    let requestStartedAt = 0;
+    let response = null;
     let timeout = null;
     const onCallerAbort = () => {
       abortedByCaller = true;
@@ -292,16 +296,45 @@ async function fetchJson(url, options, {
     }
 
     try {
+      requestStartedAt = Date.now();
       timeout = setTimeout(() => {
         timedOut = true;
         controller.abort();
       }, timeoutMs);
       requestStarted = true;
-      const response = await fetch(safeUrl, {
+      response = await fetch(safeUrl, {
         ...options,
         redirect: "manual",
         signal: controller.signal,
       });
+      if (!response.ok) {
+        // 状态码已足够判定限流/认证/服务端错误，错误正文读不完也不能丢掉它。
+        let text = "";
+        let bodyError = null;
+        try {
+          text = await response.text();
+        } catch (cause) {
+          if (abortedByCaller) throw cause;
+          bodyError = cause;
+        }
+        const detail = bodyError
+          ? (timedOut ? `错误正文未能完整读取（本地等待上限 ${Math.ceil(timeoutMs / 1000)} 秒）` : "错误正文读取中断")
+          : text.slice(0, 500);
+        const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${detail}`);
+        error.code = "HTTP_ERROR";
+        error.httpStatus = response.status;
+        error.responseBody = text;
+        error.receivedHeaders = true;
+        error.elapsedMs = Date.now() - requestStartedAt;
+        if (bodyError) error.cause = bodyError;
+        if (timedOut) {
+          error.timeoutPhase = "reading_body";
+          error.timeoutMs = timeoutMs;
+        }
+        const retryAfter = response.headers?.get?.("retry-after");
+        if (retryAfter) error.retryAfter = retryAfter;
+        throw error;
+      }
       let text;
       try {
         text = await response.text();
@@ -315,15 +348,6 @@ async function fetchJson(url, options, {
         }
         throw cause;
       }
-      if (!response.ok) {
-        const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${text.slice(0, 500)}`);
-        error.code = "HTTP_ERROR";
-        error.httpStatus = response.status;
-        error.responseBody = text;
-        const retryAfter = response.headers?.get?.("retry-after");
-        if (retryAfter) error.retryAfter = retryAfter;
-        throw error;
-      }
       if (!text) return {};
       try {
         return JSON.parse(text);
@@ -336,15 +360,22 @@ async function fetchJson(url, options, {
         throw error;
       }
     } catch (error) {
-      if (abortedByCaller && error?.name === "AbortError") {
+      if (abortedByCaller && controller.signal.aborted) {
         const abortError = new Error("请求已被取消");
         abortError.name = "AbortError";
         abortError.code = "ABORTED";
         throw abortError;
       }
-      if (timedOut && requestStarted && error?.name === "AbortError") {
-        const timeoutError = new Error(`请求超时（${Math.ceil(timeoutMs / 1000)} 秒）`);
+      if (timedOut && requestStarted && controller.signal.aborted && error?.code !== "HTTP_ERROR") {
+        const phase = response ? `已收到 HTTP ${response.status}，读取响应正文` : "等待响应头";
+        const timeoutError = new Error(`本地请求超时（${Math.ceil(timeoutMs / 1000)} 秒；${phase}）`);
         timeoutError.code = "REQUEST_TIMEOUT";
+        timeoutError.timeoutPhase = response ? "reading_body" : "waiting_response";
+        timeoutError.timeoutMs = timeoutMs;
+        timeoutError.elapsedMs = Date.now() - requestStartedAt;
+        timeoutError.receivedHeaders = Boolean(response);
+        timeoutError.httpStatus = response?.status || null;
+        timeoutError.cause = error;
         throw timeoutError;
       }
       if (isRetryableStreamInterruption(error) && streamRetry < maxStreamRetries && !signal?.aborted) {
@@ -362,7 +393,7 @@ async function fetchJson(url, options, {
 
 async function callChatCompletions(messages, config = {}, options = {}) {
   const { protocol } = normalizeConnectionConfig(config, "compatible");
-  const timeoutMs = options.timeoutMs || config.timeoutMs || 90000;
+  const timeoutMs = options.timeoutMs || config.timeoutMs || MODEL_RESPONSE_TIMEOUT_MS;
   const signal = options.signal || config.signal || null;
 
   if (protocol === "claude") {
@@ -471,7 +502,9 @@ function diagnoseConnectivityError(error, context = {}) {
   }
   if (code === "REQUEST_TIMEOUT" || error?.name === "TimeoutError" || /超时/i.test(rawMessage)) {
     return {
-      message: "请求超时，网络连接超时或模型响应过慢。",
+      message: code === "REQUEST_TIMEOUT" && error?.timeoutPhase
+        ? rawMessage
+        : "请求超时，网络连接超时或模型响应过慢。",
       code: "REQUEST_TIMEOUT",
       httpStatus,
     };
@@ -678,6 +711,7 @@ async function testModelConnectivity(config = {}, options = {}) {
 }
 
 module.exports = {
+  MODEL_RESPONSE_TIMEOUT_MS,
   assertSafeOutboundUrl,
   buildApiUrl,
   buildProtocolHeaders,

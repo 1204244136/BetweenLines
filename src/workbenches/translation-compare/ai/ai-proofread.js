@@ -48,6 +48,7 @@ const {
   loadModelsDev,
 } = require("./model-capabilities");
 const {
+  MODEL_RESPONSE_TIMEOUT_MS,
   TEXT_INTENSITY_TEMPERATURE_MAP,
   buildApiUrl,
   buildProtocolHeaders,
@@ -3700,7 +3701,7 @@ async function callOpenAiCompatible(messages, config) {
     method: "POST",
     headers,
     body: JSON.stringify(body),
-  });
+  }, { timeoutMs: MODEL_RESPONSE_TIMEOUT_MS });
   const latencyMs = Date.now() - startTime;
   const usage = {
     promptTokens: Number(data.usage?.prompt_tokens) || 0,
@@ -3728,7 +3729,7 @@ async function callClaude(messages, config) {
     method: "POST",
     headers: buildProtocolHeaders(config),
     body: JSON.stringify(buildClaudeMessageBody(messages, config)),
-  });
+  }, { timeoutMs: MODEL_RESPONSE_TIMEOUT_MS });
   const latencyMs = Date.now() - startTime;
   const usage = {
     promptTokens: Number(data.usage?.input_tokens) || 0,
