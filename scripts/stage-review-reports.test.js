@@ -55,7 +55,7 @@ test("备注摘要渲染：renderNoteSummary 生成紧凑流程胶囊与可折�
   assert.match(html, /完全认同初审发现/);
 });
 
-test("阶段卡片筛选：点击阶段卡片过滤表格行", async () => {
+test("阶段指标筛选：切换指标、再次点击取消，卡片空白处不筛选", async () => {
   const ui = createWorkbench(undefined, {
     rows: [
       { index: 1, relation: "1:1", jp: "A1", cn: "B1", signature: "sig1" },
@@ -71,28 +71,29 @@ test("阶段卡片筛选：点击阶段卡片过滤表格行", async () => {
     notes["3"] = { note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：分歧\\nStylist复审[驳回]：驳回\\nArbiter仲裁[维持原译]：终审\\n修改结果：原译", manualDone: false };
   `);
 
-  // Click Stage 2 card -> filters only row 2 and row 3 (which underwent Stylist review)
+  ui.run("markNotesDirtyForMetrics()");
   const card2 = ui.element("stage2Card");
-  assert.ok(card2);
-  card2.dataset.filterStage = "2";
   await card2.dispatch("click");
+  assert.deepEqual([...ui.run("filteredRows.map(r => r.index)")], [1, 2, 3]);
+  assert.equal(card2.listenerCount("click"), 0);
+  await ui.element("stage2ReviewedItem").dispatch("click");
 
   let visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [2, 3]);
 
-  // Click Stage 3 card -> filters only row 3 (which underwent arbitration)
-  const card3 = ui.element("stage3Card");
-  assert.ok(card3);
-  card3.dataset.filterStage = "3";
+  const card3 = ui.element("stage3ArbitratedItem");
   await card3.dispatch("click");
 
   visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [3]);
+  assert.equal(ui.element("stage2ReviewedItem").getAttribute("aria-pressed"), "false");
+  assert.equal(card3.getAttribute("aria-pressed"), "true");
 
   // Click again to cancel filter -> shows all rows
   await card3.dispatch("click");
   visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [1, 2, 3]);
+  assert.equal(card3.getAttribute("aria-pressed"), "false");
 });
 
 test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛选", async () => {
@@ -114,7 +115,6 @@ test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛�
   const select2 = ui.element("stage2PresetSelect");
   assert.ok(card2);
   assert.ok(select2);
-  card2.dataset.filterStage = "2";
 
   // 1. 用户与下拉选框交互（点击、改变选项）绝不应触发阶段筛选
   await select2.dispatch("mousedown", { target: select2 });
@@ -123,19 +123,16 @@ test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛�
 
   let visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [1, 2, 3], "All rows remain visible after preset select interactions");
-  assert.equal(ui.run("activeStageFilter"), null);
+  assert.equal(ui.run("activeSummaryFilter"), null);
   assert.equal(card2.classList.contains("is-active-filter"), false);
 
-  // 2. 在操作下拉选框后的时间抑制窗口内（<=600ms），即使有穿透合成点击落在卡片主体上，也被拦截
+  // 2. 下拉关闭后的合成点击即使落在卡片空白处，也不会筛选。
   await card2.dispatch("click", { target: card2 });
   visible = ui.run("filteredRows.map(r => r.index)");
-  assert.deepEqual([...visible], [1, 2, 3], "Card click within suppression window is ignored");
-  assert.equal(ui.run("activeStageFilter"), null);
+  assert.deepEqual([...visible], [1, 2, 3], "Card background does not filter");
+  assert.equal(ui.run("activeSummaryFilter"), null);
 
-  // 3. 等待抑制窗口过期（650ms）
-  await new Promise((resolve) => setTimeout(resolve, 650));
-
-  // 4. 点击卡片头部（标题文字、标签区域、或下拉框容器）绝不触发阶段筛选
+  // 3. 点击卡片头部不触发筛选。
   const fakeHeaderElement = {
     closest(selector) {
       if (selector.includes(".ai-stage-card-head")) return true;
@@ -144,24 +141,91 @@ test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛�
   };
   await card2.dispatch("click", { target: fakeHeaderElement });
   visible = ui.run("filteredRows.map(r => r.index)");
-  assert.deepEqual([...visible], [1, 2, 3], "Header click is ignored even after suppression window");
-  assert.equal(ui.run("activeStageFilter"), null);
+  assert.deepEqual([...visible], [1, 2, 3], "Header click does not filter");
+  assert.equal(ui.run("activeSummaryFilter"), null);
 
-  // 5. 用户正常点击卡片主体指标时，正常触发阶段筛选
-  await card2.dispatch("click", { target: card2 });
+  // 4. 具体指标仍能筛选。
+  ui.run("markNotesDirtyForMetrics()");
+  await ui.element("stage2ReviewedItem").dispatch("click");
   visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [2, 3], "Legitimate metric click filters stage rows");
-  assert.equal(ui.run("activeStageFilter"), "2");
-  assert.equal(card2.classList.contains("is-active-filter"), true);
+  assert.equal(ui.run("activeSummaryFilter"), "stage2Reviewed");
+  assert.equal(ui.element("stage2ReviewedItem").classList.contains("is-active"), true);
 
-  // 6. 点击「清筛选」按钮重置所有筛选时，阶段筛选状态与卡片高亮也一并重置
+  // 5. 清筛选同时清除指标高亮与辅助状态。
   const clearFilterBtn = ui.element("clearFilter");
   assert.ok(clearFilterBtn);
   await clearFilterBtn.dispatch("click");
   visible = ui.run("filteredRows.map(r => r.index)");
   assert.deepEqual([...visible], [1, 2, 3], "Clear filter resets stage filter");
-  assert.equal(ui.run("activeStageFilter"), null);
-  assert.equal(card2.classList.contains("is-active-filter"), false);
+  assert.equal(ui.run("activeSummaryFilter"), null);
+  assert.equal(ui.element("stage2ReviewedItem").classList.contains("is-active"), false);
+  assert.equal(ui.element("stage2ReviewedItem").getAttribute("aria-pressed"), "false");
+});
+
+test("所有阶段数字独立筛选最新记录，筛选数量与统计一致", async () => {
+  const initial = (modify = "是") => "[AI校对]\n是否需要修改：" + modify;
+  const reviewed = (attitude) => initial() + "\n初审改案：初审案\nStylist复审[" + attitude + "]：复审结论\n修改结果：复审案";
+  const arbitrated = (winner) => reviewed("调整") + "\nArbiter仲裁[" + winner + "]：终审结论";
+  const noteTexts = [
+    "[规则预筛]\n是否需要修改：否",
+    initial("否"),
+    initial(),
+    initial("待终审") + "\nGatekeeper初审：存疑",
+    reviewed("采纳"), reviewed("modify"), reviewed("驳回"), reviewed("escalate"),
+    arbitrated("Gatekeeper方案"), arbitrated("复审方案"), arbitrated("combined"), arbitrated("维持原译"),
+    "[AI校对]\n调用失败：网络断开",
+    initial() + "\nStylist复审调用异常：网络断开",
+    reviewed("调整") + "\nArbiter仲裁调用异常：超时",
+    arbitrated("原译") + "\n\n" + initial("否"),
+    arbitrated("初审方案"), reviewed("调整"),
+  ];
+  const rows = noteTexts.map((_, i) => ({ index: i + 1, jp: "A" + i, cn: "B" + i, signature: "sig" + i }));
+  const ui = createWorkbench(undefined, { rows, strictIds: true });
+  const noteItems = Object.fromEntries(noteTexts.map((note, i) => [i + 1, { note, manualDone: i >= 16 }]));
+  ui.run(`Object.assign(notes, ${JSON.stringify(noteItems)}); markNotesDirtyForMetrics(); updateStageMetricsDashboard();`);
+  const cases = [
+    ["stage1PassedItem", "stage1Passed", [1, 2, 16]],
+    ["stage1NeedsEditItem", "stage1NeedsEdit", [3, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 17, 18]],
+    ["stage1UnclearPill", "stage1Unclear", [4]],
+    ["stage1FastPassItem", "fastPassHits", [1]],
+    ["stage1TotalItem", "stage1Total", rows.map((r) => r.index).filter((i) => i !== 13)],
+    ["stage1ErrorItem", "stage1Errors", [13]],
+    ["stage2ReviewedItem", "stage2Reviewed", [5, 6, 7, 8, 9, 10, 11, 12, 15, 17, 18]],
+    ["stage2DivergedItem", "stage2Diverged", [6, 7, 8, 9, 10, 11, 12, 15, 17]],
+    ["stage2AcceptItem", "critiqueAccept", [5]],
+    ["stage2ModifyItem", "critiqueModify", [6, 9, 10, 11, 12, 15, 17, 18]],
+    ["stage2RejectItem", "critiqueReject", [7]],
+    ["stage2EscalateItem", "critiqueEscalate", [8]],
+    ["stage2PendingItem", "stage2Pending", [3, 4, 14]],
+    ["stage2ErrorItem", "stage2Errors", [14]],
+    ["stage3ArbitratedItem", "stage3Arbitrated", [9, 10, 11, 12, 17]],
+    ["stage3SettledItem", "stage3Settled", [9, 10, 11, 12, 17]],
+    ["stage3GatekeeperItem", "arbitrationGatekeeper", [9, 17]],
+    ["stage3StylistItem", "arbitrationStylist", [10]],
+    ["stage3SynthesisItem", "arbitrationSynthesis", [11]],
+    ["stage3OriginalItem", "arbitrationOriginal", [12]],
+    ["stage3PendingItem", "stage3Pending", [6, 7, 8, 15]],
+    ["stage3ErrorItem", "stage3Errors", [15]],
+  ];
+  for (const [id, metric, expected] of cases) {
+    const button = ui.element(id);
+    assert.match(ui.html, new RegExp('<button[^>]*id="' + id + '"[^>]*>'));
+    assert.equal(button.listenerCount("keydown"), 0, id + " uses native keyboard activation");
+    await button.dispatch("click");
+    assert.deepEqual([...ui.run("filteredRows.map(r => r.index)")], expected, id);
+    assert.equal(ui.run(`computeStageMetricsFromNotes().${metric}`), expected.length, metric);
+    assert.equal(button.getAttribute("aria-pressed"), "true", id);
+  }
+  await ui.element("aiStageSummaryUnchanged").dispatch("click");
+  assert.equal(ui.element("stage3ErrorItem").getAttribute("aria-pressed"), "false");
+  await ui.element("stage2AcceptItem").dispatch("click");
+  assert.equal(ui.element("aiStageSummaryUnchanged").getAttribute("aria-pressed"), "false");
+  ui.run(`notes["5"].note = "[AI校对]\\n调用失败：重试失败"; markNotesDirtyForMetrics(); applyFilters();`);
+  assert.deepEqual([...ui.run("filteredRows.map(r => r.index)")], []);
+  await ui.element("clearFilter").dispatch("click");
+  assert.equal(ui.run("filteredRows.length"), rows.length);
+  for (const [id] of cases) assert.equal(ui.element(id).getAttribute("aria-pressed"), "false");
 });
 
 test("自动备注解析：parseAutomatedNote 提取各阶段改案并支持旧版兼容推断", () => {
@@ -513,9 +577,9 @@ test("修改结果默认版本显示逻辑：无关筛选，默认显示最后�
   assert.match(s3Html, /class="stage-pill-btn is-arbiter is-active"/);
 
   // 4. 无论处于何种阶段筛选状态（比如筛选了阶段一），默认版本保持不变（仍是最后的版本）
-  ui.run('activeStageFilter = "1"');
+  ui.run('activeSummaryFilter = "stage1NeedsEdit"');
   assert.equal(ui.run('revisionTextFor(notes["3"])'), "仲裁案3");
-  ui.run('activeStageFilter = null');
+  ui.run('activeSummaryFilter = null');
 
   // 5. 若用户手动点击了「初审」版本按钮，遵循显式选择
   ui.run('applyStageRevision("3", "1")');

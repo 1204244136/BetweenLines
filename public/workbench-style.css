@@ -1641,6 +1641,65 @@
     .empty-state.visible {
       display: block;
     }
+    .ai-stage-card .ai-stage-card-body {
+      cursor: default;
+      transition: none;
+    }
+    .ai-stage-card .ai-stage-card-body:hover {
+      background: transparent;
+    }
+    .ai-stage-card .ai-stage-metric {
+      appearance: none;
+      border: 0;
+      box-shadow: none;
+      height: auto;
+      min-height: 0;
+      margin: 0;
+      font-family: inherit;
+      line-height: inherit;
+      text-align: inherit;
+      cursor: pointer;
+      border-radius: var(--ai-radius-badge, 4px);
+      transition: box-shadow 120ms ease;
+    }
+    .ai-stage-card .ai-stage-card-value.ai-stage-metric,
+    .ai-stage-card .ai-stage-sub-item.ai-stage-metric {
+      padding: 0;
+      background: transparent;
+      font-size: 11px;
+      font-weight: inherit;
+      color: var(--ai-muted);
+    }
+    .ai-stage-card .ai-stage-card-value.ai-stage-metric {
+      font-size: 14px;
+      color: var(--ai-text);
+    }
+    .ai-stage-card .ai-stage-flow-pill.ai-stage-metric {
+      padding: 0 4px;
+      font-size: 13px;
+    }
+    .ai-stage-card .ai-stage-sub-item--warn.ai-stage-metric {
+      padding: 0 4px;
+      background: color-mix(in srgb, #f59e0b 16%, transparent);
+      color: #b45309;
+      font-weight: 600;
+    }
+    .ai-stage-card .ai-stage-sub-item--error.has-errors.ai-stage-metric {
+      padding: 0 4px;
+      background: color-mix(in srgb, #ef4444 12%, transparent);
+      color: #ef4444;
+      font-weight: 600;
+    }
+    .ai-stage-card .ai-stage-metric:hover {
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ai-focus) 40%, transparent);
+    }
+    .ai-stage-card .ai-stage-metric.is-active {
+      box-shadow: 0 0 0 2px var(--ai-focus);
+    }
+    .ai-stage-card .ai-stage-metric:focus-visible {
+      outline: 2px solid var(--ai-focus);
+      outline-offset: 3px;
+    }
     /* 浮动提示（Toast）样式已抽到共享的 public/toast.css：两个工作台共用同一份，
        由各自的构建器注入，避免两页各存一份会各自漂移的副本。 */
     @media (max-width: 1100px) {

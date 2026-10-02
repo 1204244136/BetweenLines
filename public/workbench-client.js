@@ -2844,23 +2844,8 @@
         doneMode === "all" ||
         (doneMode === "open" && !isDone) ||
         (doneMode === "done" && isDone);
-      const rawNote = latestAiNotePart(notes[id]?.note);
-      const matchesStage = !activeStageFilter ||
-        (activeStageFilter === "1" && (rawNote.includes("是否需要修改：否") || (rawNote.includes("调用失败") && !rawNote.includes("Stylist") && !rawNote.includes("Arbiter")))) ||
-        (activeStageFilter === "2" && (rawNote.includes("Stylist复审") || (rawNote.includes("调用失败") && rawNote.includes("Stylist")))) ||
-        (activeStageFilter === "3" && (rawNote.includes("Arbiter仲裁") || (rawNote.includes("调用失败") && rawNote.includes("Arbiter"))));
       const isStage2PendingRow = (r) => {
         return getStage2RowStatus(notes[String(r.index)]).isPending;
-      };
-      const isStage1UnclearRow = (r) => {
-        const rowId = String(r.index);
-        const text = latestAiNotePart(notes[rowId]?.note);
-        if (!text) return false;
-        const p = parseAutomatedNote(text);
-        if (!p) return false;
-        const hasS2 = Boolean(p.stage2 || text.includes("Stylist复审"));
-        const isGkUnclear = p.stage1?.includes("存疑") || (!hasS2 && (p.modify === "待人工确认" || p.modify === "人工确认")) || text.includes("存疑转人工") || text.includes("初审存疑");
-        return Boolean(isGkUnclear);
       };
       const isStage3PendingRow = (r) => {
         const rowId = String(r.index);
@@ -2871,11 +2856,11 @@
         (activeSummaryFilter === "unchanged" && aiResultState(row) === "same") ||
         (activeSummaryFilter === "needsCheck" && aiResultState(row) === "unclear" && !isPendingArbiterRow(row)) ||
         (activeSummaryFilter === "pendingArbiter" && isPendingArbiterRow(row)) ||
-        (activeSummaryFilter === "stage1Unclear" && isStage1UnclearRow(row)) ||
         (activeSummaryFilter === "stage2Pending" && isStage2PendingRow(row)) ||
-        (activeSummaryFilter === "stage3Pending" && isStage3PendingRow(row));
+        (activeSummaryFilter === "stage3Pending" && isStage3PendingRow(row)) ||
+        Boolean(computeStageMetricsFromNotes().metricRowIds[activeSummaryFilter]?.has(id));
       const matchesPrefilterResult = !prefilterResultFilterActive || prefilterResultIds.has(id);
-      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesStage && matchesSummary;
+      return matchesQuery && matchesSeverity && matchesAiResult && matchesIssueSeverity && matchesNotes && matchesDone && matchesPrefilterResult && matchesSummary;
     }
 
     function applyFilters({ reset = true } = {}) {
@@ -3077,112 +3062,63 @@
       applyFilters();
     });
 
-    let activeStageFilter = null;
     let activeSummaryFilter = null;
-    let suppressStageCardFilterUntil = 0;
-
-    function suppressStageCardFilter(durationMs = 600) {
-      suppressStageCardFilterUntil = Math.max(suppressStageCardFilterUntil, Date.now() + durationMs);
-    }
-
-    function bindStageCardFilters() {
-      const cards = ["stage1Card", "stage2Card", "stage3Card"]
-        .map((id) => document.getElementById(id))
-        .filter(Boolean);
-
-      // 为阶段预设下拉选择框绑定完整的事件隔离与抑制锁，杜绝任何冒泡或 Chromium 原生下拉穿透点击
-      const presetSelects = [aiIds.stage1Preset, aiIds.stage2Preset, aiIds.stage3Preset].filter(Boolean);
-      presetSelects.forEach((selectEl) => {
-        const suppressHandler = (e) => {
-          suppressStageCardFilter(600);
-          if (e && (e.type === "click" || e.type === "mousedown" || e.type === "pointerdown")) {
-            e.stopPropagation();
-          }
-        };
-        ["mousedown", "mouseup", "click", "pointerdown", "pointerup", "focus", "blur", "input", "change"].forEach((ev) => {
-          selectEl.addEventListener(ev, suppressHandler);
-        });
-      });
-
-      // 卡片正文（.ai-stage-card-body）是「点指标即筛选」的入口，但它原本只是个纯 div：
-      // 鼠标能点、键盘完全够不着。现在正文带 role="button" + tabindex="0"（见构建模板），
-      // 这里补上键盘等价操作，并把选中态同步到 aria-pressed。
-      function syncStageCardPressed() {
-        for (const card of cards) {
-          const body = card.querySelector?.(".ai-stage-card-body");
-          if (body && typeof body.setAttribute === "function") {
-            body.setAttribute("aria-pressed", String(card.classList.contains("is-active-filter")));
-          }
-        }
-      }
-
-      function toggleStageFilter(card) {
-        const stage = card.dataset.filterStage;
-        if (!stage) return;
-        if (activeStageFilter === stage) {
-          activeStageFilter = null;
-          card.classList.remove("is-active-filter");
-          showToast("已取消阶段筛选，展示全部行", { tone: "info", durationMs: 2500 });
-        } else {
-          cards.forEach((c) => c.classList.remove("is-active-filter"));
-          activeStageFilter = stage;
-          card.classList.add("is-active-filter");
-          const names = { "1": "阶段一 事实初审", "2": "阶段二 文学复审", "3": "阶段三 终审仲裁" };
-          showToast("已筛选 " + names[stage] + " 相关行（再次点击指标可取消）", { tone: "info", durationMs: 3000 });
-        }
-        syncStageCardPressed();
-        applyFilters({ reset: true });
-      }
-
-      cards.forEach((card) => {
-        card.addEventListener("click", (event) => {
-          // 1. 若处于预设选择器的交互抑制窗口内（防原生 select 关闭时的合成穿透点击），忽略
-          if (Date.now() < suppressStageCardFilterUntil) {
-            return;
-          }
-          // 2. 若点击目标位于卡片头部（标题区、下拉框、或任何表单控件），忽略
-          if (event?.target?.closest && event.target.closest(".ai-stage-card-head, .ai-stage-preset-select, select, option, label, button, input")) {
-            return;
-          }
-          toggleStageFilter(card);
-        });
-
-        // 键盘等价操作：只在焦点落在卡片正文上时响应，不跟卡片内的下拉与按钮抢键。
-        card.addEventListener("keydown", (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          if (!event.target?.closest?.(".ai-stage-card-body")) return;
-          event.preventDefault();
-          toggleStageFilter(card);
-        });
-      });
-
-      // 顶部全局审核结论指标筛选与待复审/待仲裁筛选
-      const summaryItems = [
+    const summaryFilterItems = [
         { id: "aiStageSummaryNeedsEdit", filter: "needsEdit", name: "最终建议修改" },
         { id: "aiStageSummaryUnchanged", filter: "unchanged", name: "无需修改" },
         { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "待人工确认" },
         { id: "aiStageSummaryPendingArbiter", filter: "pendingArbiter", name: "待终审" },
-        { id: "stage1UnclearPill", filter: "stage1Unclear", name: "初审存疑" },
-        { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审" },
-        { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁" },
+        { id: "stage1PassedItem", filter: "stage1Passed", name: "初审通过", nativeButton: true },
+        { id: "stage1NeedsEditItem", filter: "stage1NeedsEdit", name: "初审提改", nativeButton: true },
+        { id: "stage1UnclearPill", filter: "stage1Unclear", name: "初审存疑", nativeButton: true },
+        { id: "stage1FastPassItem", filter: "fastPassHits", name: "快速直通", nativeButton: true },
+        { id: "stage1TotalItem", filter: "stage1Total", name: "初审总检", nativeButton: true },
+        { id: "stage1ErrorItem", filter: "stage1Errors", name: "初审异常", nativeButton: true },
+        { id: "stage2ReviewedItem", filter: "stage2Reviewed", name: "文学复审", nativeButton: true },
+        { id: "stage2DivergedItem", filter: "stage2Diverged", name: "复审分歧", nativeButton: true },
+        { id: "stage2AcceptItem", filter: "critiqueAccept", name: "复审采纳", nativeButton: true },
+        { id: "stage2ModifyItem", filter: "critiqueModify", name: "复审调整", nativeButton: true },
+        { id: "stage2RejectItem", filter: "critiqueReject", name: "复审驳回", nativeButton: true },
+        { id: "stage2EscalateItem", filter: "critiqueEscalate", name: "复审升级仲裁", nativeButton: true },
+        { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审", nativeButton: true },
+        { id: "stage2ErrorItem", filter: "stage2Errors", name: "复审异常", nativeButton: true },
+        { id: "stage3ArbitratedItem", filter: "stage3Arbitrated", name: "终审仲裁", nativeButton: true },
+        { id: "stage3SettledItem", filter: "stage3Settled", name: "终审定案", nativeButton: true },
+        { id: "stage3GatekeeperItem", filter: "arbitrationGatekeeper", name: "初审胜", nativeButton: true },
+        { id: "stage3StylistItem", filter: "arbitrationStylist", name: "复审胜", nativeButton: true },
+        { id: "stage3SynthesisItem", filter: "arbitrationSynthesis", name: "结合方案", nativeButton: true },
+        { id: "stage3OriginalItem", filter: "arbitrationOriginal", name: "维持原译", nativeButton: true },
+        { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁", nativeButton: true },
+        { id: "stage3ErrorItem", filter: "stage3Errors", name: "仲裁异常", nativeButton: true },
       ];
-      summaryItems.forEach(({ id, filter, name }) => {
+
+    function syncSummaryFilterButtons() {
+      for (const { id, filter } of summaryFilterItems) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const active = activeSummaryFilter === filter;
+        el.classList.toggle("is-active", active);
+        el.setAttribute("aria-pressed", String(active));
+      }
+    }
+
+    function bindSummaryFilters() {
+      summaryFilterItems.forEach(({ id, filter, name, nativeButton }) => {
         const el = document.getElementById(id);
         if (!el) return;
         const trigger = () => {
           if (activeSummaryFilter === filter) {
             activeSummaryFilter = null;
-            el.classList.remove("is-active");
-            showToast("已取消" + name + "筛选，展示全部行", { tone: "info", durationMs: 2500 });
+            showToast("已取消" + name + "筛选", { tone: "info", durationMs: 2500 });
           } else {
-            summaryItems.forEach((item) => document.getElementById(item.id)?.classList.remove("is-active"));
             activeSummaryFilter = filter;
-            el.classList.add("is-active");
             showToast("已筛选" + name + "行（再次点击可取消）", { tone: "info", durationMs: 3000 });
           }
+          syncSummaryFilterButtons();
           applyFilters({ reset: true });
         };
         el.addEventListener("click", trigger);
+        if (nativeButton) return;
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -3191,7 +3127,7 @@
         });
       });
     }
-    bindStageCardFilters();
+    bindSummaryFilters();
     showSource.addEventListener("change", () => {
       document.documentElement.classList.toggle("hide-source", !showSource.checked);
       // 隐藏/恢复整列会改变输入框宽度（实测 412px → 579px），行高缓存必须整批作废。
@@ -3359,23 +3295,8 @@
       doneFilter.classList.remove("is-active");
       doneFilter.setAttribute("aria-pressed", "false");
       doneFilter.textContent = "未人工确认";
-      if (activeStageFilter) {
-        activeStageFilter = null;
-        for (const id of ["stage1Card", "stage2Card", "stage3Card"]) {
-          const card = document.getElementById(id);
-          if (!card) continue;
-          card.classList.remove("is-active-filter");
-          // 状态同时回写到键盘可达的正文上，清筛选后 aria-pressed 不能停在 true。
-          const body = card.querySelector?.(".ai-stage-card-body");
-          if (body && typeof body.setAttribute === "function") body.setAttribute("aria-pressed", "false");
-        }
-      }
-      if (activeSummaryFilter) {
-        activeSummaryFilter = null;
-        ["aiStageSummaryNeedsEdit", "aiStageSummaryUnchanged", "aiStageSummaryNeedsCheck", "stage1UnclearPill", "stage2PendingItem", "stage3PendingItem"].forEach((id) => {
-          document.getElementById(id)?.classList.remove("is-active");
-        });
-      }
+      activeSummaryFilter = null;
+      syncSummaryFilterButtons();
       showSource.checked = true;
       if (showTranslationDiff) showTranslationDiff.checked = true;
       showRevisionDiff.checked = true;
@@ -4281,14 +4202,18 @@
       let webLookupHits = 0;
       // 失败行的分类明细：与「异常」计数同一轮遍历得出，用来回答悬停时的「到底出了哪些问题」。
       const stageErrorKinds = { stage1: {}, stage2: {}, stage3: {} };
+      // 统计时同步保留命中的行号，指标筛选复用同一份分类与缓存。
+      const metricRowIds = {};
 
       for (const [noteRowKey, item] of Object.entries(sourceNotes || {})) {
         if (!item) continue;
         const noteText = latestAiNotePart(item.note || "").trim();
         if (!noteText) continue;
+        const recordMetricRow = (metric) => (metricRowIds[metric] ||= new Set()).add(String(noteRowKey));
 
         const state = stageNoteState(noteText);
         for (const [stage, failureLine] of Object.entries(state.errors)) {
+          recordMetricRow(stage + "Errors");
           if (stage === "stage1") stage1Errors += 1;
           else if (stage === "stage2") stage2Errors += 1;
           else if (stage === "stage3") stage3Errors += 1;
@@ -4301,6 +4226,7 @@
 
         const parsed = parseAutomatedNote(noteText);
         if (!parsed) continue;
+        recordMetricRow("stage1Total");
 
         totalAudited += 1;
 
@@ -4333,7 +4259,10 @@
           if (parsed.modify === "否") {
             isS1Passed = true;
             // 与服务端同口径：预筛放行，或模型显式回报快速直通，才算直通。
-            if (parsed.fastPass || automatedNoteMarker(noteText) !== "[AI校对]") fastPassHits += 1;
+            if (parsed.fastPass || automatedNoteMarker(noteText) !== "[AI校对]") {
+              fastPassHits += 1;
+              recordMetricRow("fastPassHits");
+            }
           } else if (parsed.modify === "是") {
             isS1NeedsEdit = true;
           } else {
@@ -4354,24 +4283,32 @@
 
         if (isS1Passed) {
           stage1Passed += 1;
+          recordMetricRow("stage1Passed");
         } else if (isS1NeedsEdit) {
           stage1NeedsEdit += 1;
+          recordMetricRow("stage1NeedsEdit");
         } else if (isS1Unclear) {
           stage1Unclear += 1;
+          recordMetricRow("stage1Unclear");
         }
 
         // 阶段二文学复审指标
         if (hasStage2) {
           stage2Reviewed += 1;
+          recordMetricRow("stage2Reviewed");
           const attitude = String(parsed.stage2?.attitude || "");
           if (attitude.includes("采纳") || attitude === "accept") {
             critiqueAccept += 1;
+            recordMetricRow("critiqueAccept");
           } else if (attitude.includes("调整") || attitude === "modify") {
             critiqueModify += 1;
+            recordMetricRow("critiqueModify");
           } else if (attitude.includes("驳回") || attitude === "reject") {
             critiqueReject += 1;
+            recordMetricRow("critiqueReject");
           } else if (attitude.includes("仲裁") || attitude === "escalate") {
             critiqueEscalate += 1;
+            recordMetricRow("critiqueEscalate");
           }
         }
 
@@ -4382,20 +4319,28 @@
         const stage3RowStatus = getStage3RowStatus(item);
         if (stage3RowStatus.isArbitrated || stage3RowStatus.isPending) {
           stage2Diverged += 1;
+          recordMetricRow("stage2Diverged");
         }
 
         // 阶段三终审仲裁指标
         if (hasStage3) {
           stage3Arbitrated += 1;
+          recordMetricRow("stage3Arbitrated");
+          recordMetricRow("stage3Settled");
+          recordMetricRow("stage2Diverged");
           const winner = String(parsed.stage3?.winner || "").toLowerCase();
           if (winner.includes("结合") || winner.includes("综合") || winner.includes("折中") || winner.includes("融合") || winner.includes("synthesis") || winner.includes("combined") || winner.includes("compromise")) {
             arbitrationSynthesis += 1;
+            recordMetricRow("arbitrationSynthesis");
           } else if (winner.includes("维持") || winner.includes("原译") || winner.includes("original") || winner.includes("target")) {
             arbitrationOriginal += 1;
+            recordMetricRow("arbitrationOriginal");
           } else if (winner.includes("初审") || winner.includes("gatekeeper") || /\bgk\b/.test(winner)) {
             arbitrationGatekeeper += 1;
+            recordMetricRow("arbitrationGatekeeper");
           } else if (winner.includes("复审") || winner.includes("stylist")) {
             arbitrationStylist += 1;
+            recordMetricRow("arbitrationStylist");
           }
         }
 
@@ -4408,9 +4353,8 @@
       }
 
       stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
-      // 人工确认过的分歧行不计入分歧（与弹窗、筛选口径一致），但仲裁数照样如实反映：
-      // 分歧数绝不能低于已仲裁数，否则「待仲裁 = 分歧 − 已仲裁」会被算成负数再被夹回 0。
-      stage2Diverged = Math.max(stage2Diverged, stage3Arbitrated);
+      // 已仲裁记录保留在分歧统计内；人工确认只移除尚待仲裁的待办。
+      stage2Diverged = metricRowIds.stage2Diverged?.size || 0;
       const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
       // The visible count follows the same note-level predicate as the filter,
       // so incomplete/failed Stylist rows remain actionable instead of being
@@ -4449,6 +4393,7 @@
         lowScoreHits,
         webLookupHits,
         stageErrorKinds,
+        metricRowIds,
       };
 
       if (sourceNotes === notes) {
@@ -5128,20 +5073,17 @@
     });
     if (aiIds.stage1Preset) {
       aiIds.stage1Preset.addEventListener("change", () => {
-        suppressStageCardFilter(600);
         saveAiConfig();
       });
     }
     if (aiIds.stage2Preset) {
       aiIds.stage2Preset.addEventListener("change", () => {
-        suppressStageCardFilter(600);
         updateStagePresetDependencies();
         saveAiConfig();
       });
     }
     if (aiIds.stage3Preset) {
       aiIds.stage3Preset.addEventListener("change", () => {
-        suppressStageCardFilter(600);
         saveAiConfig();
       });
     }
