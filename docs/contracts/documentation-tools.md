@@ -51,7 +51,7 @@
 | src/workbenches/translation-compare/align_jp.py | CLI | scripts/accelerator_detect.py、语义模型 | 工作目录 paragraphs.json，加载或下载模型并写 jp-align.json |
 | src/workbenches/translation-compare/build-compare.js | CLI | 行组装、输出与渲染模块、project-store | 源文本与对齐产物，写 HTML/CSV/JSON 并发布翻译快照 |
 | scripts/rebuild-layout.js | CLI | src/storage/project-store.js | 指定或活动翻译项目，重渲染并发布新快照、切换活动指针 |
-| scripts/term-prefilter.js | CLI | term-table.js、term-layer.js、offline-cli.js | 活动翻译快照与对照表，离线审计；仅 --out 写指定报告 |
+| scripts/term-prefilter.js | CLI | term-table.js、term-layer.js、offline-cli.js | 活动翻译快照与对照表，离线审计；仅 --out 写报告；--from-snapshot 只读文本汇总，禁止 JSON/报告/明细选项组合 |
 | scripts/speech-habit.js | CLI | speech-habit-layer.js、verify-source.js、offline-cli.js | 活动翻译快照与习惯表，离线审计；仅 --out 写指定报告 |
 | src/workbenches/speaker-attribution/build-workbench.js | CLI | speaker-selection.js、预对齐、attention、speaker-inference | 单语或双语源文本，写独立运行时工作台；启用 AI 才调用模型 |
 | src/runtime/input-server.js | CLI | runtime 路由与生命周期模块 | 启动本机服务；用户请求可保存输入、生成、写回及调用 AI |

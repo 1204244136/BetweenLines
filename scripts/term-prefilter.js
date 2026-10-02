@@ -8,7 +8,7 @@
  *   node scripts/term-prefilter.js --table D:\t.xlsx      # 指定表（可重复）
  *   node scripts/term-prefilter.js --profile demo         # 指定特化档案（用档案 id；本机叠加档案沿用基底 id）
  *   node scripts/term-prefilter.js --target tw            # 三语下指定目标列（默认 cn，与运行期一致）
- *   node scripts/term-prefilter.js --from-snapshot        # 只读构建期落盘结论（与页面徽标同源，不重算）
+ *   node scripts/term-prefilter.js --from-snapshot        # 只读构建期文本汇总，不与输出/明细选项组合
  *   node scripts/term-prefilter.js --json --out report.json
  *   node scripts/term-prefilter.js --limit 20             # 只看前 N 行
  *
@@ -50,7 +50,8 @@ function usage() {
     "  --table          对照表文件（xlsx/csv/tsv/json），可重复；缺省取特化档案声明的表",
     "  --profile        特化档案 id（决定默认对照表与提示词口径）",
     "  --target         目标列：三语下 cn（非原文 B）或 tw（非原文 C）；双语恒为 cn",
-    "  --from-snapshot  只输出构建期落盘的判定（与页面徽标同一份数据），不重新查表",
+    "  --from-snapshot  只输出构建期落盘的文本汇总（与页面徽标同源），不重新查表",
+    "                   不能与 --json、--out、--limit、--all 组合（-o、-n 同样不支持）",
     "  --limit          只输出前 N 条命中明细",
     "  --all            输出全部命中明细（默认只列冲突行）",
     "  --json           以 JSON 输出",
@@ -91,10 +92,19 @@ function reportFromSnapshot({ layer, profileId, proofreadMode, targetKey, files 
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const options = parseArgs(argv);
   if (options.help) {
     console.log(usage());
     return 0;
+  }
+
+  if (options.fromSnapshot) {
+    const unsupported = [...new Set(argv.filter((arg) => ["--json", "--out", "-o", "--limit", "-n", "--all"].includes(arg)))];
+    if (unsupported.length) {
+      console.error(`--from-snapshot 只提供构建期文本汇总，不能与 ${unsupported.join("、")} 组合。请去掉这些选项；如需 JSON、报告文件或明细，请去掉 --from-snapshot。`);
+      return 1;
+    }
   }
 
   const profile = resolveProfile(options.profileId || undefined);

@@ -272,6 +272,8 @@ node scripts/term-prefilter.js --profile demo --from-snapshot # 只读构建期�
 node scripts/term-prefilter.js --profile demo --all --json --out report.json
 ```
 
+`--from-snapshot` 只提供构建期文本汇总；需要 JSON、报告文件或命中明细时，使用现算方式。
+
 ### 低分归因层（先解释为什么低分，再动手改）
 
 逐行看时，极低分长得都一样——"整行与原文无关""像凭空多出来的台词"，但原因不同、修法也不同：整行译文与相邻行**互换了**、这一行只是上下句的一半、代词与省略主语要靠上下文、真的把否定或时态弄错了、译文自己加了原文没有的话、原文本身晦涩被误判……
