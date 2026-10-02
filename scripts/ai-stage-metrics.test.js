@@ -1175,6 +1175,36 @@ test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确�
   assert.equal(activeText1.textContent, "", "隐藏时清空活跃行文本");
 });
 
+test("样式：阶段卡片的预设下拉按内容取宽，不再被固定上限截断", () => {
+  const css = fs.readFileSync(path.resolve(__dirname, "../public/ai-panel.css"), "utf8");
+
+  function ruleBody(selector) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = css.match(new RegExp(escaped + "\\s*\\{([^}]*)\\}"));
+    assert.ok(match, `ai-panel.css 必须包含 ${selector} 规则`);
+    // 注释里出现的属性名不算声明：只对剥掉注释后的正文做断言。
+    return match[1].replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  // 预设标签是「供应商 / 预设名 · 模型」三段拼接（ai-presets.js 的 presetLabel）：
+  // 固定宽度上限会把三个阶段的下拉截成同一段开头，用户分不清各自选了哪个预设。
+  const combobox = ruleBody(".ai-stage-card-head .select-combobox");
+  assert.match(combobox, /max-width:\s*none/, "预设下拉不得再有固定宽度上限");
+  assert.doesNotMatch(combobox, /max-width:\s*\d+px/, "预设下拉不得回落到固定 px 上限");
+  assert.match(combobox, /flex:\s*0\s+1\s+auto/, "预设下拉要能吃掉卡片头部标题右侧的空白");
+
+  // 控件组必须可压缩，否则「标题 + 全宽下拉」在窄卡片里会顶破卡片边界。
+  const ctrls = ruleBody(".ai-stage-card-ctrls");
+  assert.match(ctrls, /flex:\s*0\s+1\s+auto/);
+  assert.doesNotMatch(ctrls, /flex-shrink:\s*0/, "控件组整块不压缩会把下拉按回窄宽度");
+
+  // 压缩顺序固定为「下拉先省略」：标题单行完整，开始/停止按钮不被挤变形。
+  assert.match(ruleBody(".ai-stage-card-title-row"), /flex:\s*0\s+0\s+auto/);
+  assert.match(ruleBody(".ai-stage-card-actions"), /flex:\s*0\s+0\s+auto/);
+  // 原生 select 已换成 .select-combobox + .select-trigger，隐藏载体上不该再留宽度上限。
+  assert.doesNotMatch(ruleBody(".ai-stage-preset-select"), /max-width:\s*\d+px/);
+});
+
 test("认知审核流水线指标：数学意义严格闭环与明确流转脉络", () => {
   const ui = createWorkbench();
 

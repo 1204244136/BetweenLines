@@ -748,6 +748,10 @@ details[open] > summary .details-toggle::before {
   align-items: center;
   gap: 5px;
   min-width: 0;
+  /* 标题行不参与压缩：卡片头部标题与预设下拉之间本来就有大片空白，
+     这块空白要优先让给下拉（见 .ai-stage-card-head .select-combobox）。
+     压缩顺序必须是「下拉先省略」，标题永远保持单行完整。 */
+  flex: 0 0 auto;
 }
 
 .ai-stage-card-label {
@@ -845,13 +849,18 @@ details[open] > summary .details-toggle::before {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex-shrink: 0;
+  /* 原来是 flex-shrink: 0：控件组整块不压缩，预设下拉就被按在固定上限里。
+     改成可压缩后，卡片头部的空白由下拉自己吃掉，窄屏时再从下拉开始让位。 */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .ai-stage-card-actions {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  /* 「开始 / 停止」是固定文案按钮：压缩只允许发生在预设下拉上，按钮不被挤变形。 */
+  flex: 0 0 auto;
 }
 
 .ai-stage-btn {
@@ -871,7 +880,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-preset-select {
-  max-width: 140px;
+  /* 原生 select 被 enhanceSelect 换成 .select-combobox + .select-trigger 后只剩 1×1px
+     的隐藏载体，可见宽度由下面那条 .ai-stage-card-head .select-combobox 决定。 */
+  max-width: none;
   height: 22px;
   padding: 0 4px;
   font-size: 11px;
@@ -889,8 +900,13 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-card-head .select-combobox {
-  max-width: 140px;
+  /* 预设标签是「供应商 / 预设名 · 模型」三段拼接（见 ai-presets.js 的 presetLabel），
+     原来 140px 只够显示开头一段，三个阶段的下拉看起来一模一样，分不清各自选了谁。
+     改成按内容取宽：标签多长下拉就多宽，吃满头部标题右侧那片空白；
+     空间不足时再按 min-width 压缩，由 .select-value 的省略号收尾。 */
+  flex: 0 1 auto;
   min-width: 80px;
+  max-width: none;
 }
 
 .ai-stage-card-head .select-trigger {
