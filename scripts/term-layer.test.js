@@ -21,6 +21,7 @@ const {
 const { rebuildCompareHtmlFromSnapshot } = require("./build-compare");
 const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
 const { hitsUsedInRow } = require("../src/workbenches/translation-compare/ai/term-prefilter");
+const { createClientFixture, storageFixture } = require("./workbench-fixture");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "betweenlines-term-layer-"));
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -277,54 +278,152 @@ test("页面按构建期判定给未跑过的行标出术语徽标，并跟随�
   assert.equal(otherVariant.__verdicts.get("2"), "conflict", "没有该变体时回落到默认变体");
 });
 
-test("页面在跑任务之前就显示本行命中了哪些术语", () => {
-  const { html, pageMeta } = buildFixturePage("termlist");
-  assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"], ["山田太郎 → 山田太郎（人名）"]);
-  const script = html.split("<script>")[1].split("</script>")[0].replace(/\r\n?/g, "\n");
-  const grab = (name) => {
-    const found = script.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n    \\}\\n`));
-    assert.ok(found, `页面脚本里应有 ${name}`);
-    return found[0];
-  };
-  const source = [
-    "termVariantKeyForPage", "currentTermVariant", "refreshTermVerdicts",
-    "renderTermChipHtml", "renderRow", "aiBadgeState", "isAiFailureNote", "automatedNoteMarker", "isNoteProseLine", "parseAutomatedNote",
-  ].map(grab).join("\n");
-  const sandbox = {
-    pageMeta, Map, Set, String, Number, Boolean, Object, Array, Math, JSON, Date, RegExp,
-    latestAiNotePart: require("../src/workbenches/translation-compare/ai/stage-note-state").latestAiNotePart,
-    stageNoteState: require("../src/workbenches/translation-compare/ai/stage-note-state").stageNoteState,
-    escapeHtml: (value) => String(value == null ? "" : value),
-    renderDiffBlock: () => "",
-    renderNoteSummary: () => "<!--note-summary-->",
-    pageLabels: { jp: "原文 A", cn: "非原文 B", tw: "非原文 C" },
-    bilingualMode: true,
-    notes: {},
-    rowsById: new Map(),
-    automatedNoteMarkers: ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[对照表]"],
-    speechHabitMissIndexes: new Set(),
-    aiActiveIds: new Set(),
-    activeRowId: "",
-    aiIds: { profile: { value: "unit" }, target: { value: "cn" }, proofreadMode: { value: "bilingual" } },
-  };
-  vm.createContext(sandbox);
-  vm.runInNewContext(
-    `let termLayer = pageMeta.termPrefilter || null;\nlet termVerdicts = new Map();\nlet termEntries = new Map();\n${source}\nrefreshTermVerdicts();\nthis.__row = renderRow;`,
-    sandbox,
-  );
+function createTermWorkbench(label) {
+  const { html, pageMeta } = buildFixturePage(label);
+  const ui = createClientFixture(html, storageFixture());
+  ui.run('aiIds.profile.value = "unit"; aiIds.proofreadMode.value = "bilingual"; aiIds.target.value = "cn"; refreshTermVerdicts();');
+  return { ui, pageMeta };
+}
 
-  const base = { chapter: "第一章", relation: "原文-译文 1:1", score: 0.9, scoreText: "90%", cls: "row-b", jpChars: 8, cnChars: 6 };
-  // 命中术语的行：芯片给出条数与具体术语（正文与备注都还没跑，显示的是构建期预判）。
-  const hit = sandbox.__row({ ...base, index: 1, jp: "【山田太郎】が来た。", cn: "山田太郎来了。" });
-  assert.match(hit, /class="term-chip" data-term-chip="1"/);
-  assert.match(hit, /术语 1/);
+test("术语预判将状态与命中条数合为单一入口，清单独立于状态徽标组", () => {
+  const { ui, pageMeta } = createTermWorkbench("termlist");
+  assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].terms["1"], ["山田太郎 → 山田太郎（人名）"]);
+  const hit = ui.run('renderRow(allRows.find((row) => row.index === 1))');
+  assert.match(hit, /<button type="button" class="term-chip is-injected" data-term-chip="1"/);
+  assert.match(hit, /term-chip-label">术语注入<\/span><span class="term-chip-count">1<\/span>/);
+  assert.equal((hit.match(/>术语注入</g) || []).length, 1, "注入状态与清单入口只占一个控件");
+  assert.match(hit, /aria-expanded="false"/);
+  assert.match(hit, /aria-controls="term-list-1"/);
+  assert.match(hit, /<ul id="term-list-1" class="term-chip-list" data-term-list="1"[^>]*\bhidden>/);
   assert.match(hit, /山田太郎 → 山田太郎（人名）/);
   assert.match(hit, /构建期判定：本行原文命中对照表 1 条术语/);
-  assert.match(hit, /term-chip-state">预判</);
-  // 没命中的行：芯片容器在，但里面是空的（CSS 用 .term-chip-slot:empty 隐藏）。
-  const miss = sandbox.__row({ ...base, index: 4, jp: "誰も来ない。", cn: "谁都没来。" });
-  assert.equal(miss.includes("term-chip\""), false);
-  assert.match(miss, /data-term-chip-slot="4"><\/span>/);
+  assert.doesNotMatch(hit, /term-chip-state">预判</, "预判来源放在悬停说明里，不再重复占位");
+  assert.match(hit, /<div class="confirm-status">[\s\S]*?<\/div><div class="term-chip-slot" data-term-chip-slot="1">/);
+  assert.doesNotMatch(hit, /<div class="confirm-status">(?:(?!<\/div>)[\s\S])*data-term-chip/, "展开清单不能位于宽度受限的状态徽标组里");
+
+  const conflict = ui.run('renderTermChipHtml("2", "")');
+  assert.match(conflict, /class="term-chip is-conflict"/);
+  assert.match(conflict, /term-chip-label">术语冲突<\/span><span class="term-chip-count">1<\/span>/);
+  ui.run('termVerdicts.set("3", "term-only")');
+  const termOnly = ui.run('renderTermChipHtml("3", "")');
+  assert.match(termOnly, /class="term-chip is-term-only"/);
+  assert.match(termOnly, /term-chip-label">纯术语<\/span><span class="term-chip-count">1<\/span>/);
+
+  const miss = ui.run('renderRow(allRows.find((row) => row.index === 4))');
+  assert.doesNotMatch(miss, /data-term-chip="4"/);
+  assert.doesNotMatch(miss, /data-term-list="4"/);
+  assert.match(miss, /data-term-chip-slot="4"><\/div>/);
+});
+
+test("术语入口兼容缺少清单或判定的历史快照，不制造空清单", () => {
+  const { ui } = createTermWorkbench("termlegacy");
+  for (const [verdict, text] of [["injected", "术语注入"], ["conflict", "术语冲突"], ["term-only", "纯术语"]]) {
+    ui.run(`termEntries.delete("1"); termVerdicts.set("1", ${JSON.stringify(verdict)});`);
+    const html = ui.run('renderTermChipHtml("1", "")');
+    assert.match(html, /<span class="ai-confirm-badge /);
+    assert.ok(html.includes(">" + text + "</span>"), "旧快照仍须显示术语状态");
+    assert.doesNotMatch(html, /<button|data-term-list|term-chip-count|aria-expanded/, "没有条目时不能给出可点击的空清单");
+  }
+  assert.equal(ui.run('renderTermChipHtml("1", "已有校对备注")'), "", "真实备注到达后不再展示旧构建判定");
+
+  ui.run('termEntries.set("1", ["山田太郎 → 山田太郎（人名）"]); termVerdicts.delete("1");');
+  const generic = ui.run('renderTermChipHtml("1", "")');
+  assert.match(generic, /class="term-chip"/);
+  assert.match(generic, /term-chip-label">术语<\/span><span class="term-chip-count">1<\/span>/);
+  assert.match(generic, /term-chip-state">预判<\/span>/);
+
+  ui.run('delete termLayer.byProfile.unit.variants["bilingual:cn"].termOnly; refreshTermVerdicts();');
+  assert.equal(ui.run('termVerdicts.get("1")'), "term-only", "旧版无 termOnly 时沿用当时一致即跳过模型的语义");
+});
+
+test("术语入口一次点击只开合一次，刷新行时保留用户选择", async () => {
+  const { ui } = createTermWorkbench("termtoggle");
+  const button = ui.element("term-test-button");
+  button.dataset.termChip = "1";
+  button.setAttribute("aria-expanded", "false");
+  const list = ui.element("term-list-1");
+  list.hidden = true;
+  const row = ui.element("term-test-row");
+  row.querySelector = (selector) => selector === "[data-term-chip]" ? button : (selector === "[data-term-list]" ? list : null);
+  ui.run('renderedRowsById.set("1", document.getElementById("term-test-row"));');
+  const event = {
+    target: { closest: (selector) => selector === "[data-term-chip]" ? button : null },
+    preventDefault() {}, stopPropagation() {},
+  };
+
+  await ui.element("tbody").dispatch("click", event);
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+  assert.equal(list.hidden, false);
+  assert.equal(ui.run('termOpenRows.has("1")'), true);
+  const rerendered = ui.run('renderRow(allRows.find((item) => item.index === 1))');
+  assert.match(rerendered, /aria-expanded="true"/);
+  assert.match(rerendered, /data-term-list="1"[^>]*>/);
+  assert.doesNotMatch(rerendered, /data-term-list="1"[^>]*\bhidden/);
+
+  await ui.element("tbody").dispatch("click", event);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(list.hidden, true);
+  assert.equal(ui.run('termOpenRows.has("1")'), false);
+});
+
+test("校对备注到达后替换术语预判，保留清单与开合并避免重复重建", () => {
+  const { ui } = createTermWorkbench("termnote");
+  const slot = ui.element("term-test-slot");
+  let button = ui.element("term-note-button-0");
+  button.parentNode = slot;
+  button.setAttribute("aria-expanded", "false");
+  const list = ui.element("term-list-1");
+  list.hidden = true;
+  slot.querySelector = (selector) => selector === "[data-term-chip]" ? button : null;
+  let markup = ui.run('renderTermChipHtml("1", "")');
+  let replacements = 0;
+  Object.defineProperty(slot, "innerHTML", {
+    get() { return markup; },
+    set(value) {
+      // 浏览器重新读取 innerHTML 时会规范化布尔属性，不再逐字等于传入字符串。
+      markup = String(value).replace(/ hidden>/g, ' hidden="">');
+      replacements += 1;
+      button.parentNode = null;
+      button = ui.element("term-note-button-" + replacements);
+      button.parentNode = slot;
+      button.setAttribute("aria-expanded", markup.match(/aria-expanded="(true|false)"/)[1]);
+      list.hidden = /data-term-list="1"[^>]*\bhidden/.test(markup);
+    },
+  });
+  const row = ui.element("term-note-row");
+  row.querySelector = (selector) => ({
+    "[data-term-chip-slot]": slot,
+    "[data-term-chip]": button,
+    "[data-term-list]": list,
+  })[selector] || null;
+  ui.run('renderedRowsById.set("1", document.getElementById("term-note-row")); setTermOpen("1", true);');
+  ui.run('document.activeElement = document.getElementById("term-note-button-0");');
+  const note = ["[AI校对]", "语义是否相同：相同", "是否需要修改：否", "分析：术语与正文含义一致。"].join("\n");
+  const write = `writeNote("1", ${JSON.stringify(note)}, true, { deferCommit: true });`;
+  ui.run(write);
+  assert.match(markup, /class="term-chip"/);
+  assert.match(markup, /term-chip-label">术语<\/span><span class="term-chip-count">1<\/span>/);
+  assert.match(markup, /term-chip-state">结论<\/span>/);
+  assert.doesNotMatch(markup, /is-injected|术语注入|构建期判定/);
+  assert.match(markup, /山田太郎 → 山田太郎（人名）/);
+  assert.match(markup, /术语清单来自对照表/);
+  assert.match(markup, /aria-expanded="true"/);
+  assert.doesNotMatch(markup, /data-term-list="1"[^>]*\bhidden/);
+  assert.equal(replacements, 1);
+  assert.equal(button.focused, true, "备注替换正在操作的按钮时必须恢复键盘焦点");
+
+  ui.run(write);
+  assert.equal(replacements, 1, "重复轮询同一备注不能重建并收起术语清单");
+  assert.equal(ui.run('termOpenRows.has("1")'), true);
+
+  ui.run('setTermOpen("1", false);');
+  ui.run(write);
+  assert.match(markup, /data-term-list="1"[^>]*hidden=""/);
+  assert.equal(replacements, 2);
+  ui.run(write);
+  assert.equal(replacements, 2, "浏览器将 hidden 序列化为 hidden=空字符串后也不应重复重建");
+  assert.equal(list.hidden, true);
+  assert.equal(ui.run('termOpenRows.has("1")'), false);
 });
 
 test("只有整行都是术语的行才标成跳过模型", () => {

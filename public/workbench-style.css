@@ -1244,6 +1244,8 @@
       align-items: center;
       gap: 6px;
       margin-left: auto;
+      min-width: 0;
+      max-width: 100%;
     }
     .done-line {
       display: inline-flex;
@@ -1251,6 +1253,8 @@
       gap: 4px;
       color: var(--muted);
       font-size: 13px;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .ai-confirm-badge {
       display: inline-flex;
@@ -1296,70 +1300,108 @@
       background: #fff7f6;
       color: var(--review-strong);
     }
-    /* 本行命中的术语：默认只显示条数，展开看具体是哪几条（正文与备注列都不占常驻空间）。 */
+    /* 判定与命中条数共用一个入口，列表直接参与备注首行的布局，不挤压状态徽标组。 */
     .term-chip-slot:empty {
       display: none;
     }
-    /* 容器只作占位与更新锚点：`display: contents` 让芯片自己参与 .confirm-status 的 flex 布局，
-       这样展开时它才能拿到整行宽度，而不会被这个 span 限制成一行文字宽。 */
     .term-chip-slot:not(:empty) {
       display: contents;
     }
-    .term-chip {
-      font-size: 12px;
+    .term-chip,
+    .term-chip-slot > .ai-confirm-badge {
+      flex: 0 0 auto;
     }
-    .term-chip > summary {
+    .term-chip {
+      --term-ink: var(--muted);
+      --term-fill: var(--surface-subtle);
+      --term-line: var(--line);
       display: inline-flex;
       align-items: center;
       gap: 4px;
+      height: auto;
       min-height: 20px;
       padding: 1px 6px;
-      border: 1px solid var(--line);
+      border: 1px solid var(--term-line);
       border-radius: var(--radius-badge, 4px);
-      background: var(--surface-subtle);
-      color: var(--muted);
-      cursor: pointer;
-      list-style: none;
+      background: var(--term-fill);
+      color: var(--term-ink);
+      font: inherit;
+      font-size: 11px;
+      line-height: 1.65;
       white-space: nowrap;
     }
-    .term-chip > summary::-webkit-details-marker {
-      display: none;
+    .term-chip.is-injected {
+      --term-ink: var(--info-strong);
+      --term-fill: color-mix(in srgb, var(--info) 62%, var(--surface));
+      --term-line: color-mix(in srgb, var(--focus) 28%, var(--line));
     }
-    .term-chip > summary:hover {
-      border-color: color-mix(in srgb, var(--focus) 40%, var(--line));
+    .term-chip.is-conflict {
+      --term-ink: var(--review-strong);
+      --term-fill: var(--review);
+      --term-line: color-mix(in srgb, var(--review-strong) 28%, var(--line));
+    }
+    .term-chip.is-term-only {
+      --term-ink: var(--ok-strong);
+      --term-fill: var(--ok);
+      --term-line: color-mix(in srgb, var(--ok-strong) 28%, var(--line));
+    }
+    .term-chip:hover,
+    .term-chip[aria-expanded="true"] {
+      border-color: color-mix(in srgb, var(--term-ink) 48%, var(--line));
+      background: color-mix(in srgb, var(--term-fill) 88%, var(--surface));
+    }
+    .term-chip:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    .term-chip-label {
+      font-weight: 600;
     }
     .term-chip-count {
+      padding-left: 4px;
+      border-left: 1px solid color-mix(in srgb, var(--term-ink) 24%, transparent);
       font-weight: 700;
+      font-variant-numeric: tabular-nums;
     }
     .term-chip-state {
       color: var(--muted-2);
       font-size: 11px;
     }
-    .term-chip[open] > summary {
-      border-color: color-mix(in srgb, var(--focus) 28%, var(--line));
-      background: color-mix(in srgb, var(--info) 62%, var(--surface));
-      color: #175cd3;
+    .term-chip-chevron {
+      width: 5px;
+      height: 5px;
+      margin: -2px 1px 0 3px;
+      border-right: 1px solid currentColor;
+      border-bottom: 1px solid currentColor;
+      transform: rotate(45deg);
     }
-    /* 展开列表占满本行备注列整宽（弹层会被 .table-frame 的 overflow 裁掉，所以就地展开）。 */
-    .term-chip[open] {
-      flex-basis: 100%;
+    .term-chip[aria-expanded="true"] .term-chip-chevron {
+      margin-top: 2px;
+      transform: rotate(225deg);
     }
+    /* 就地展开占备注列整宽，避免弹层被表格滚动容器裁切。 */
     .term-chip-list {
-      margin: 6px 0 2px;
-      padding: 8px 10px;
+      flex: 0 0 100%;
+      width: 100%;
+      min-width: 0;
+      margin: 0;
+      padding: 4px 10px;
       max-height: 220px;
       overflow: auto;
-      border: 1px dashed var(--line);
-      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
       background: var(--surface-subtle);
-      color: #344054;
+      color: var(--text);
+      font-size: 12px;
       list-style: none;
       text-align: left;
       white-space: normal;
-      line-height: 1.5;
+      overflow-wrap: anywhere;
+      line-height: 1.6;
     }
+    .term-chip-list li { padding: 4px 0; }
     .term-chip-list li + li {
-      margin-top: 3px;
+      border-top: 1px solid var(--line);
     }
     .note-summary {
       display: grid;

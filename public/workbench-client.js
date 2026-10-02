@@ -443,6 +443,9 @@
     // 行号 → 构建期算出的命中术语对（「原文 → 译名（类型）」）：页面在跑任务之前就能显示命中了什么。
     // 只存文案，判定与备注仍以运行期为准。
     let termEntries = new Map();
+    // 术语清单的开合属于页面会话，备注回包与分页重绘均保留用户选择。
+    const termOpenRows = new Set();
+    const termChipHtmlCache = new WeakMap();
     function termVariantKeyForPage() {
       const mode = aiIds.proofreadMode?.value === "bilingual" ? "bilingual" : "trilingual";
       return mode + ":" + (mode === "bilingual" ? "cn" : (aiIds.target?.value === "tw" ? "tw" : "cn"));
@@ -2397,20 +2400,53 @@
     // 本行命中了哪些术语：构建期随页面下发的行级术语对（只由原文 + 对照表决定，与模型无关）。
     // 有备注时以备注里的结论为准（那是当次任务的判定），这里退回构建期判定并说明出处。
     function renderTermChipHtml(id, noteText) {
-      const pairs = termEntries.get(id);
-      if (!pairs || !pairs.length) return "";
       const fromNote = Boolean(noteText);
+      const verdict = fromNote ? "" : (termVerdicts.get(id) || "");
+      const states = {
+        conflict: {
+          label: "术语冲突", badgeClass: "is-modify",
+          hint: "本行原文命中的术语与译文写法不一致（或整条没译出来）；冲突作为提示词注入，由模型结合整句判断。",
+        },
+        "term-only": {
+          label: "纯术语", badgeClass: "is-same",
+          hint: "本行有效内容全部是项目术语，对照表能给出完整结论；跑预筛选时不会调用模型。",
+        },
+        injected: {
+          label: "术语注入", badgeClass: "is-unclear",
+          hint: "术语一致但句中还有其他内容；命中术语会注入提示词，整句仍交给模型判定。",
+        },
+      };
+      const state = states[verdict];
+      const pairs = termEntries.get(id);
+      // 旧快照可能只有判定而没有术语清单，保留状态但不提供空的展开入口。
+      if (!pairs || !pairs.length) {
+        return state ? '<span class="ai-confirm-badge ' + state.badgeClass + '" title="' + escapeHtml("构建期预判：" + state.hint) + '">' + state.label + '</span>' : "";
+      }
       const cap = 8;
       const lines = pairs.slice(0, cap).map((pair) => "- " + pair);
       if (pairs.length > cap) lines.push("- …（其余 " + (pairs.length - cap) + " 条见对照表）");
       const source = fromNote
         ? "备注已出（术语清单来自对照表）：命中 " + pairs.length + " 条术语"
         : "构建期判定：本行原文命中对照表 " + pairs.length + " 条术语";
-      const title = [source, ...lines].join("\n");
-      return '<details class="term-chip" data-term-chip="' + id + '" title="' + escapeHtml(title) + '">' +
-        '<summary><span class="term-chip-count">术语 ' + pairs.length + '</span><span class="term-chip-state">' + (fromNote ? "结论" : "预判") + '</span></summary>' +
-        '<ul class="term-chip-list">' + pairs.map((pair) => '<li>' + escapeHtml(pair) + '</li>').join("") + '</ul>' +
-        '</details>';
+      const title = [source, state ? "构建期预判：" + state.hint : "", ...lines].filter(Boolean).join("\n");
+      const open = termOpenRows.has(id);
+      const listId = "term-list-" + id;
+      return '<button type="button" class="term-chip' + (state ? " is-" + verdict : "") + '" data-term-chip="' + id + '" aria-expanded="' + open + '" aria-controls="' + listId + '" title="' + escapeHtml(title) + '">' +
+        '<span class="term-chip-label">' + (state?.label || "术语") + '</span><span class="term-chip-count">' + pairs.length + '</span>' +
+        (state ? "" : '<span class="term-chip-state">' + (fromNote ? "结论" : "预判") + '</span>') +
+        '<span class="term-chip-chevron" aria-hidden="true"></span></button>' +
+        '<ul id="' + listId + '" class="term-chip-list" data-term-list="' + id + '" aria-label="本行命中术语"' + (open ? "" : " hidden") + '>' + pairs.map((pair) => '<li>' + escapeHtml(pair) + '</li>').join("") + '</ul>';
+    }
+
+    function setTermOpen(id, open) {
+      const row = renderedRow(id);
+      const button = row?.querySelector('[data-term-chip]');
+      const list = row?.querySelector('[data-term-list]');
+      if (!button || !list) return;
+      if (open) termOpenRows.add(id);
+      else termOpenRows.delete(id);
+      button.setAttribute("aria-expanded", String(open));
+      list.hidden = !open;
     }
 
     function renderRow(row) {
@@ -2423,18 +2459,7 @@
       const habitBadge = speechHabitMissIndexes.has(id)
         ? '<span class="ai-confirm-badge is-habit-miss" title="构建期判定：本行原文有说话习惯特征，译文里没有体现；可在 AI 校对时按说话人习惯补回">特色流失</span>'
         : "";
-      // 对照表的构建期判定只在「这一行还没跑过」时显示：跑过之后以备注里的真实结论为准。
-      const termVerdict = note.note ? "" : (termVerdicts.get(id) || "");
-      const termBadge = termVerdict === "conflict"
-        ? '<span class="ai-confirm-badge is-modify" title="构建期判定：本行原文命中的术语与译文写法不一致（或整条没译出来）。这一行照常交给 AI，术语冲突作为提示词注入，由模型结合整句判断并在结论里写明依据——术语判断是 AI 分析的一环，不直接转人工">术语冲突</span>'
-        : (termVerdict === "term-only"
-          // 只有整行有效内容都是术语时才跳过模型：这一行没有术语之外的内容可校。
-          ? '<span class="ai-confirm-badge is-same" title="构建期判定：本行原文的有效内容全部是项目术语，对照表能给出完整结论；跑预筛选时这行不会调用模型">纯术语</span>'
-          : (termVerdict === "injected"
-            ? '<span class="ai-confirm-badge is-unclear" title="构建期判定：本行原文命中对照表但句中还有术语之外的内容；术语一致只能证明术语用对了，整句仍会交给模型判定（术语以提示词注入）">术语注入</span>'
-            : ""));
-      // 备注列首行分两组：左侧「人工确认」勾选，右侧状态徽标（AI 结论 + 术语/特色提示）。
-      // 徽标必须聚成一组，否则 space-between 会把它们拉到备注列两端，中间空出一大片。
+      // 人工确认靠左，AI 与特色徽标聚组靠右；术语入口紧邻徽标，清单在组外占备注列整宽。
       const rowBadges = aiBadge + habitBadge;
       const verifyBadge = note.recoveredUnverified
         ? '<button type="button" class="ai-confirm-badge is-unverified" data-verify="' + id + '" title="找回记录缺少完整内容证据；点击只解除写回隔离，不会标记人工确认">未校验</button>'
@@ -2476,10 +2501,9 @@
         '<label class="done-line"><input type="checkbox" data-done="' + id + '"' + (done ? " checked" : "") + '><span>人工确认</span></label>',
         '<div class="confirm-status">',
         rowBadges,
-        termBadge,
         verifyBadge,
-        '<span class="term-chip-slot" data-term-chip-slot="' + id + '">' + termChip + '</span>',
         '</div>',
+        '<div class="term-chip-slot" data-term-chip-slot="' + id + '">' + termChip + '</div>',
         '</div>',
         renderNoteSummary(note, id),
         '</td>',
@@ -2751,11 +2775,16 @@
         aiBadge.className = "ai-confirm-badge " + state.cls;
         aiBadge.textContent = state.text;
       }
-      // 术语块只在「跑过对照表/AI」前后切换出处说明（构建期预判 ↔ 备注结论），内容不变就不重建。
+      // 判定、清单与开合统一渲染，备注回包后不会残留预判徽标或收起用户正在看的清单。
       const termChipSlot = rendered?.querySelector('[data-term-chip-slot]');
       if (termChipSlot) {
         const html = renderTermChipHtml(id, notes[id]?.note || "");
-        if (termChipSlot.innerHTML !== html) termChipSlot.innerHTML = html;
+        if ((termChipHtmlCache.get(termChipSlot) ?? termChipSlot.innerHTML) !== html) {
+          const hadFocus = termChipSlot.contains(document.activeElement);
+          termChipSlot.innerHTML = html;
+          if (hadFocus) termChipSlot.querySelector('[data-term-chip]')?.focus();
+        }
+        termChipHtmlCache.set(termChipSlot, html);
       }
       const diffSlot = rendered?.querySelector('[data-diff-slot]');
       const row = rowsById.get(id);
@@ -2972,6 +3001,13 @@
     });
 
     tbody.addEventListener("click", (event) => {
+      const termButton = event.target.closest("[data-term-chip]");
+      if (termButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        setTermOpen(termButton.dataset.termChip, termButton.getAttribute("aria-expanded") !== "true");
+        return;
+      }
       const applyStageBtn = event.target.closest("[data-apply-stage]");
       if (applyStageBtn) {
         event.preventDefault();
