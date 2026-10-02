@@ -450,9 +450,12 @@ test("说话人工作台的一次性回执走共享浮动提示，写回前必�
   assert.match(html, /@keyframes toast-out/, "共享的 public/toast.css 必须注入");
   assert.match(script, /function createToastCenter\(/);
   assert.match(script, /const \{ showToast \} = createToastCenter\(\);/);
+  assert.match(script, /function createConfirmDialog\(/);
+  assert.match(script, /const \{ askConfirm \} = createConfirmDialog\(/);
   assert.doesNotMatch(script, /window\.alert\(/, "一次性回执不再使用阻塞式 alert");
+  assert.doesNotMatch(script, /window\.confirm\(/, "写回必须使用共享页内确认");
 
   // 写回会直接改动原始源文件：单行与批量都必须先确认。
-  assert.match(script, /将 \$\{rowsToWrite\.length\} 行的说话人写回原文件/);
-  assert.match(script, /将第 \$\{row\.index\} 行的说话人/);
+  assert.match(script, /title: "确认写回说话人"/);
+  assert.match(script, /"确认批量写回说话人"/);
 });

@@ -72,7 +72,7 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 
 ## 共享浏览器与 AI 能力
 
-- `public/workbench-shared.js`、`public/toast.css`、`public/workbench-diff.js` 由翻译比较和说话人两个构建器读取并内联。修改时检查两个调用方并执行 `npm test`，不能复制为各自的实现。Toast 与确认、备注空间、模型预设、布局缓存细则由 [工作台契约](workbench-notes-spaces.md) 持有。
+- `public/workbench-shared.js`、`public/toast.css`、`public/workbench-dialog.css`、`public/workbench-diff.js` 由翻译比较和说话人两个构建器读取并内联。修改时检查两个调用方并执行 `npm test`，不能复制为各自的实现。Toast 与确认、备注空间、模型预设、布局缓存细则由 [工作台契约](workbench-notes-spaces.md) 持有。
 - `workbench-diff.js` 只负责纯文本差异算法与 HTML 转义回调，不读取 DOM、备注、筛选或任务状态；`workbench-client.js` 持有差异缓存并决定插槽展示。验证见 `scripts/client-ai-boundaries.test.js`。
 - `src/ai/connection-config.js` 统一规范化连接。`protocol` 决定接口类型，`provider` 仅为供应商身份；预设持久化细则见 [工作台契约](workbench-notes-spaces.md#ai-模型预设管理ai-presetsjs)。说话人请求、CLI `--protocol` 与 `BETWEENLINES_AI_PROTOCOL` 使用相同字段。
 - 模型能力规则目前物理上位于 `translation-compare/ai/model-capabilities.js`，实际由共享传输与两个工作台使用。这是纯能力模块的现有共享入口，不能由此引入翻译领域结果或状态；职责及浏览器注入规则见 [AI 契约](ai-proofread-contract.md#模型能力与思考档位)。

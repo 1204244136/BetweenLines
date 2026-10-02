@@ -1,5 +1,4 @@
-// 生成页面的 VM 交互回归夹具：翻译比较工作台的备注/预筛状态都在客户端，必须跑真实注入脚本来验证。
-// 被 notes-recovery-merge.test.js 与 prefilter-restore.test.js 共用。
+// 生成页面的 VM 交互回归夹具：两个工作台的浏览器状态必须跑真实注入脚本来验证。
 const vm = require("node:vm");
 const { makeHtml } = require("./build-compare");
 
@@ -26,6 +25,16 @@ function storageFixture(initial = {}) {
 }
 
 function createWorkbench(storage = storageFixture(), options = {}) {
+  const targetProjectKey = options.projectKey || projectKey;
+  const targetCurrentKey = options.currentKey || `translation-compare-notes-v7:${targetProjectKey}:rows`;
+  const html = makeHtml(options.rows || ROWS, {
+    comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" },
+  }, { projectKey: targetProjectKey, rowsSignature: options.rowsSignature || "rows", notesStorage: { key: targetCurrentKey } });
+  return createClientFixture(html, storage, options);
+}
+
+// 两个工作台都运行其生成页面的真实脚本，共享这一份最小 DOM/请求夹具。
+function createClientFixture(html, storage = storageFixture(), options = {}) {
   const elements = new Map();
   const timeouts = [];
   let createdSeq = 0;
@@ -43,7 +52,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
     const id = rawId === "aiStart" ? "stage1Start" : (rawId === "aiStop" ? "stage1Stop" : rawId);
     if (!elements.has(id)) {
       const listeners = new Map();
-      elements.set(id, {
+      const node = {
         hidden: false, disabled: false, value: "", textContent: "", innerHTML: "", checked: false,
         dataset: {}, style: { setProperty() {} }, options: [], children: [], files: [], open: false,
         classList: (() => {
@@ -66,6 +75,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           const index = list.indexOf(fn);
           if (index >= 0) list.splice(index, 1);
         },
+        listenerCount(name) { return (listeners.get(name) || []).length; },
         async dispatch(name, event = {}) { for (const fn of listeners.get(name) || []) await fn(event); },
         attributes: new Map(),
         setAttribute(name, value) { this.attributes.set(name, String(value)); },
@@ -87,6 +97,7 @@ function createWorkbench(storage = storageFixture(), options = {}) {
             if (node && typeof node === "object") node.parentNode = this;
           }
         },
+        appendChild(node) { this.append(node); return node; },
         replaceChildren(...nodes) {
           this.children = [];
           this.append(...nodes);
@@ -95,28 +106,34 @@ function createWorkbench(storage = storageFixture(), options = {}) {
           const parent = this.parentNode;
           if (parent) parent.children = parent.children.filter((item) => item !== this);
         },
-        focus() {}, click() { if (!this.disabled) this.dispatchEvent({ type: "click", target: this }); },
+        focus() { this.focused = true; }, click() { if (!this.disabled) this.dispatchEvent({ type: "click", target: this }); },
         showModal() {
           this.open = true;
           // 页内确认弹窗（workbench-client.js 的 askConfirm）在测试里默认按 fixture 的
           // confirm 语义落定：默认「确认」，传 confirm: () => false 即「取消」。
           // 其它 dialog（备注找回预览、AI 启动方式选择）保持只打开，由测试自行驱动。
-          if (id !== "genericConfirmDialog") return;
-          const answer = options.confirm ? options.confirm("") : true;
+          if (this.id !== "genericConfirmDialog" || options.manualConfirm) return;
+          const answer = options.confirm ? options.confirm(elements.get("genericConfirmMessage")?.textContent || "") : true;
           const target = elements.get(answer ? "genericConfirmOk" : "genericConfirmCancel");
           if (target) target.dispatch("click", { target });
         },
-        close() { this.open = false; },
+        close() {
+          if (!this.open) return;
+          this.open = false;
+          Promise.resolve().then(() => this.dispatchEvent({ type: "close", target: this }));
+        },
         getBoundingClientRect() { return { height: 0, top: 0, bottom: 0 }; },
+      };
+      let nodeId = id;
+      Object.defineProperty(node, "id", {
+        get() { return nodeId; },
+        set(value) { nodeId = String(value); elements.set(nodeId, node); },
       });
+      elements.set(id, node);
     }
     return elements.get(id);
   };
-  const targetProjectKey = options.projectKey || projectKey;
-  const targetCurrentKey = options.currentKey || `translation-compare-notes-v7:${targetProjectKey}:rows`;
-  const html = makeHtml(options.rows || ROWS, {
-    comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" },
-  }, { projectKey: targetProjectKey, rowsSignature: options.rowsSignature || "rows", notesStorage: { key: targetCurrentKey } });
+  for (const match of html.matchAll(/\bid="([^"]+)"/g)) element(match[1]);
   element("rowData").textContent = html.match(/<script id="rowData" type="application\/json">([\s\S]*?)<\/script>/)[1];
   const script = html.match(/<script>\s*([\s\S]*?)<\/script>\s*<\/body>/)[1];
   const statusQueue = options.statusQueue ? options.statusQueue.slice() : [];
@@ -124,10 +141,11 @@ function createWorkbench(storage = storageFixture(), options = {}) {
   const posts = [];
   const context = vm.createContext({
     document: {
-      getElementById: element, querySelector: element, querySelectorAll() { return []; },
+      getElementById: options.strictIds ? (id) => elements.get(id) || null : element,
+      querySelector: element, querySelectorAll() { return []; },
       createElement: (tag) => Object.assign(element("created-" + (++createdSeq)), { tagName: String(tag).toUpperCase() }),
       createElementNS: () => element("ns-" + (++createdSeq)),
-      documentElement: element("html"), addEventListener() {},
+      documentElement: element("html"), body: element("body"), addEventListener() {},
     },
     localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob, Event,
     window: {
@@ -135,6 +153,9 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout,
       prompt: options.prompt || ((msg, def) => def || ""),
       confirm: options.confirm || (() => true),
+      location: { protocol: "file:", host: "" },
+      innerHeight: 900,
+      ...(options.windowData || {}),
     },
     navigator: {}, location: { protocol: "file:" },
     fetch(url, request = {}) {
@@ -143,7 +164,8 @@ function createWorkbench(storage = storageFixture(), options = {}) {
       const responses = options.apiResponses || {};
       if (Object.prototype.hasOwnProperty.call(responses, String(url))) {
         const payload = responses[String(url)];
-        return Promise.resolve({ ok: payload?.ok !== false, json: async () => payload });
+        return Promise.resolve(typeof payload === "function" ? payload(request) : payload)
+          .then((result) => ({ ok: result?.ok !== false, json: async () => result }));
       }
       const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, results: [] } };
       return Promise.resolve({ ok: true, json: async () => payload });
@@ -155,8 +177,9 @@ function createWorkbench(storage = storageFixture(), options = {}) {
   });
   vm.runInContext(script, context);
   return {
-    element, storage, fetches, posts, timeouts,
+    html, element, storage, fetches, posts, timeouts,
     run: (code) => vm.runInContext(code, context),
+    settle: async () => { for (let step = 0; step < 24; step += 1) await Promise.resolve(); },
     // 状态轮询是 async + await fetch：把微任务抽干（跨 VM 边界时 await 的延续排在后面）。
     refresh: async () => {
       vm.runInContext("refreshAiStatus()", context);
@@ -193,4 +216,4 @@ function toastMessages(ui) {
   });
 }
 
-module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, toastMessages, prefilterStatus, prefilterResult };
+module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, createClientFixture, toastMessages, prefilterStatus, prefilterResult };

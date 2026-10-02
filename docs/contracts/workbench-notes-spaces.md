@@ -74,7 +74,9 @@
 - **`reportRuntimeNotice` 只报用户不知道的事**：它等价于 `showToast`，只承载「未连接到本地控制台服务」「已跳过 N 条与当前工作台行内容不匹配的结果」「已忽略非当前项目快照的结果」这类异常与副产物。用户自己刚点的动作（正在启动/终止/清除）不播报——它们完成时都有结果提示；每轮都在变的运行统计也不播报——调用数一直在涨，走 Toast 会持续刷屏，阶段卡片已经完整表达了同一件事。回归见 `scripts/ai-stage-metrics.test.js`、`scripts/toast.test.js`、`scripts/build-compare.test.js`。
 - 备注面板为唯一双写区域：`notesPanelStatus` 既写面板内就地状态行，也弹浮动提示。
 - **不可逆操作走页内确认弹窗**：写回原文件、清空本页/历史空间、删除历史空间、从备份登记一律经 `askConfirm()`（`#genericConfirmDialog`）二次确认，不再用 `window.confirm`；`askConfirm` 必须把 Esc 关闭（`close` 事件）也当作取消，否则 Promise 不 settle，调用方流程会静默卡住。写回类确认发生在按钮切到「写回中」之前，取消时按钮不会卡在禁用态。
-- **现状差异**：上述页内统一是目标契约。当前翻译与说话人工作台的单行/批量写回仍使用原生 `confirm` / `window.confirm`，保留了二次确认，但尚未接入 `askConfirm`；备注空间清空、删除与备份登记已使用页内弹窗。后续统一确认实现时必须同时覆盖两个工作台，不能把当前差异描述为已落实。
+- **确认只有一份实现与 DOM**：两个工作台都使用 `public/workbench-shared.js` 的 `createConfirmDialog().askConfirm()`，首次调用创建 `#genericConfirmDialog`，样式归 `public/workbench-dialog.css` 并由两个构建器内联。标题和文案只写 `textContent`；默认焦点落在取消按钮，取消、Esc 与程序关闭均返回 `false`。不支持 `dialog.showModal()` 或打开失败时取消操作并提示，禁止回退原生 `confirm` 或跳过确认。
+- **关闭与队列**：确定/取消调用 `dialog.close()`，等待原生 `close` 事件后清理监听器并落定 Promise，再打开队列中的下一条，防止前一条延迟关闭事件误取消后一条。两个工作台各自的写回锁从确认前持续到请求结束，重复单行/批量点击不能再次提交；按钮只在批准后切为写回中。
+- **批准版本与结果状态**：确认前固定行内容、目标列、行序锚点和备份设置，请求使用同一份快照。异步等待期间若 AI 或编辑更新了当前修改结果/说话人，成功回包只把与批准版本一致的记录标记为已确认/已写回；后来更新的版本保持原状态并提示另行处理。取消无请求、无备注修改，失败恢复按钮并释放写回锁。
 
 ---
 
@@ -133,5 +135,5 @@
 
 修改工作台页面脚本、备注空间与并发控制必须执行：
 ```powershell
-node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js scripts/ai-model-presets.test.js scripts/ai-smart-concurrency.test.js scripts/prefilter-restore.test.js
+node --test scripts/notes-spaces.test.js scripts/build-compare.test.js scripts/notes-recovery-merge.test.js scripts/toast.test.js scripts/ai-model-presets.test.js scripts/ai-smart-concurrency.test.js scripts/prefilter-restore.test.js scripts/confirm-dialog.test.js scripts/writeback-export.test.js scripts/speaker-attribution.test.js
 ```

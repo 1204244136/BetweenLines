@@ -144,7 +144,7 @@ test("写回请求带整卷行序：单行写回只发到该行为止", async ()
     apiResponses: { "/api/translation-export": { ok: true, updated: 1, missed: [], ambiguous: [], targets: ["B.txt"] } },
   });
   ui.run('notes["2"] = { revisionText: "译文二改", revisionTarget: "cn" };');
-  ui.run('writebackSingleRevision("2", { disabled: false, textContent: "", classList: { add() {} } })');
+  await ui.run('writebackSingleRevision("2", { disabled: false, textContent: "", classList: { add() {} } })');
 
   assert.equal(ui.posts.length, 1);
   // 更靠后的行不参与锚点，没必要发——第 2 行只带前两行。

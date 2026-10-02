@@ -16,6 +16,7 @@
   // createToastCenter），与翻译比较工作台同一套语气、去重和停留规则；
   // 不再用阻塞式的 window.alert 打断校对流程。
   const { showToast } = createToastCenter();
+  const { askConfirm } = createConfirmDialog({ showToast });
   const storageKey = String(window.speakerStorageKey || "between-lines:speaker-attribution");
   const speakerBackupStorageKey = "between-lines:speaker-writeback-backup-v1";
   function getSpeakerWritebackBackup() {
@@ -43,6 +44,8 @@
   let onlyPending = false;
   let saveTimer = 0;
   let filterTimer = 0;
+  // 确认弹窗异步等待期间也占住写回入口，避免重复点击排出多个相同请求。
+  let speakerWritebackBusy = false;
 
   function readNotes() {
     try {
@@ -453,6 +456,7 @@
 
   async function batchWriteback(minConfidence = 0) {
     const btn = minConfidence > 0 ? document.getElementById("speakerBatchAdopt") : exportButton;
+    if (speakerWritebackBusy || btn?.disabled) return;
     const rowsToWrite = allRows.filter((row) => {
       const record = recordFor(row);
       if (!record.speaker.trim()) return false;
@@ -468,16 +472,7 @@
       return;
     }
 
-    // 与翻译比较工作台同一口径：批量写回会直接改动原始源文件，落盘前必须二次确认。
-    const backupTip = getSpeakerWritebackBackup() ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
-    if (!window.confirm(`将 ${rowsToWrite.length} 行的说话人写回原文件？\n定位不到或多处同段的段落不会写入，仍留在复核视野里。\n${backupTip}`)) return;
-
-    const originalText = btn?.textContent || "批量写回";
-    if (btn) {
-      btn.textContent = "写回中...";
-      btn.disabled = true;
-    }
-
+    // 确认前固定行内容和备份设置；等待弹窗时的 AI 更新不能改变已确认的写回请求。
     const rows = rowsToWrite.map((row) => {
       const record = recordFor(row);
       return {
@@ -493,12 +488,25 @@
       };
     });
     const rowTexts = speakerRowTexts(rowsToWrite.reduce((max, row) => Math.max(max, Number(row.index) || 0), 0));
+    const backup = getSpeakerWritebackBackup();
+    const backupTip = backup ? "已开启自动备份，写回前将生成 .bak 备份副本。" : "未开启自动备份。";
+    const targetLabel = pageMeta.bilingual ? "译文列（主文本）" : "原文列（主文本）";
+    const originalText = btn?.textContent || "批量写回";
+    speakerWritebackBusy = true;
 
     try {
+      if (!await askConfirm(`将 ${rows.length} 行的说话人写回原文件？\n目标：${targetLabel}对应的原文件。\n定位失败或有多处同段的段落不会写入，仍留在复核视野里。\n${backupTip}`, {
+        title: minConfidence > 0 ? "确认批量写回（置信度 ≥ 80%）" : "确认批量写回说话人",
+        confirmText: "写回原文件",
+      })) return;
+      if (btn) {
+        btn.textContent = "写回中...";
+        btn.disabled = true;
+      }
       const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows, rowTexts, writebackBackup: getSpeakerWritebackBackup() }),
+        body: JSON.stringify({ rows, rowTexts, writebackBackup: backup }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || "批量写回失败");
@@ -506,22 +514,32 @@
       // 定位失败与「有多处同段」都没落到文件上，都不能标记为已写回。
       const unwritten = [...(Array.isArray(result.missed) ? result.missed : []), ...(Array.isArray(result.ambiguous) ? result.ambiguous : [])];
       const missedIndexes = new Set(unwritten.map((item) => String(item?.index)));
+      const requestedEntries = new Map(rows.map((entry) => [String(entry.index), entry]));
       let written = 0;
+      let changedSpeakers = 0;
       for (const row of rowsToWrite) {
         if (missedIndexes.has(String(row.index))) continue;
+        written += 1;
+        // 成功回包只确认本次提交的版本，等待期间更新的说话人仍须另行写回。
+        const submitted = requestedEntries.get(String(row.index));
+        if (recordFor(row).speaker.trim() !== submitted.speaker.trim()
+          || String(row.parallelText || row.sourceText || "") !== String(submitted.parallel || submitted.source || "")) {
+          changedSpeakers += 1;
+          continue;
+        }
         updateRowState(row.id, "status", "written");
         notes[row.id] ||= {};
         notes[row.id].isWritten = true;
-        written += 1;
       }
       scheduleSave();
       // 成功与部分未写入都要有回执：原实现只在「有行没写进去」时才弹窗，
       // 全部成功时页面只剩按钮文字变化，用户滚到别处就看不到结果了。
       showToast(
-        missedIndexes.size
-          ? `已写回 ${written} 行；${missedIndexes.size} 行未写入（原文件中定位不到或多处同段），仍留在复核视野里。`
-          : `已写回 ${written} 行说话人。`,
-        missedIndexes.size ? { tone: "watch", durationMs: 12000 } : { tone: "success" },
+        (changedSpeakers
+          ? `已写回 ${written} 行已确认版本；${changedSpeakers} 行说话人后来已更新，当前版本仍待写回。`
+          : `已写回 ${written} 行说话人。`)
+          + (missedIndexes.size ? ` ${missedIndexes.size} 行未写入（原文件中定位不到或多处同段），仍留在复核视野里。` : ""),
+        missedIndexes.size || changedSpeakers ? { tone: "watch", durationMs: 12000 } : { tone: "success" },
       );
       if (btn) {
         btn.textContent = `已写回 ${result.updated} 行`;
@@ -537,6 +555,8 @@
         btn.textContent = originalText;
       }
       showToast(error.message || String(error), { tone: "error", durationMs: 12000 });
+    } finally {
+      speakerWritebackBusy = false;
     }
   }
 
@@ -631,6 +651,7 @@
   }
 
   async function writebackSingleRow(rowId, button) {
+    if (speakerWritebackBusy || button.disabled) return;
     const row = allRows.find((item) => item.id === rowId);
     if (!row) return;
     const record = recordFor(row);
@@ -638,30 +659,38 @@
       showToast("该行尚未指定说话人，无法写回。", { tone: "watch" });
       return;
     }
-    // 单行写回与批量写回同一口径：确认发生在按钮切到「写回中」之前。
-    const backupTip = getSpeakerWritebackBackup() ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
-    if (!window.confirm(`将第 ${row.index} 行的说话人「${record.speaker}」写回原文件？\n${backupTip}`)) return;
+    const entry = {
+      index: row.index,
+      relation: row.alignment?.relation || "",
+      alignment: alignmentLabel(row),
+      source: row.sourceText,
+      parallel: row.parallelText,
+      speaker: record.speaker,
+      confidence: record.confidence,
+      status: statusLabels[record.status],
+      evidence: record.evidence,
+    };
+    const rowTexts = speakerRowTexts(Number(row.index) || 0);
+    const backup = getSpeakerWritebackBackup();
+    const backupTip = backup ? "已开启自动备份，写回前将生成 .bak 备份副本。" : "未开启自动备份。";
+    const targetLabel = pageMeta.bilingual ? "译文列（主文本）" : "原文列（主文本）";
     const originalText = button.textContent;
-    button.textContent = "写回中...";
-    button.disabled = true;
+    speakerWritebackBusy = true;
     try {
+      // 单行与批量同一口径：批准后才把按钮切到「写回中」，取消不改变按钮。
+      if (!await askConfirm(`将第 ${row.index} 行（共 1 行）的说话人「${entry.speaker}」写回原文件？\n目标：${targetLabel}对应的原文件。\n定位失败或有多处同段的段落不会写入。\n${backupTip}`, {
+        title: "确认写回说话人",
+        confirmText: "写回原文件",
+      })) return;
+      button.textContent = "写回中...";
+      button.disabled = true;
       const response = await apiFetch("/api/speaker-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          row: {
-            index: row.index,
-            relation: row.alignment?.relation || "",
-            alignment: alignmentLabel(row),
-            source: row.sourceText,
-            parallel: row.parallelText,
-            speaker: record.speaker,
-            confidence: record.confidence,
-            status: statusLabels[record.status],
-            evidence: record.evidence,
-          },
-          rowTexts: speakerRowTexts(Number(row.index) || 0),
-          writebackBackup: getSpeakerWritebackBackup(),
+          row: entry,
+          rowTexts,
+          writebackBackup: backup,
         }),
       });
       const result = await response.json();
@@ -670,6 +699,13 @@
         const detail = (Array.isArray(result.ambiguous) && result.ambiguous[0]) || (Array.isArray(result.missed) && result.missed[0]);
         const reason = detail && detail.reason ? detail.reason : "原文件中没有匹配的段落。";
         throw new Error("写回未生效：" + reason);
+      }
+      if (recordFor(row).speaker.trim() !== entry.speaker.trim()
+        || String(row.parallelText || row.sourceText || "") !== String(entry.parallel || entry.source || "")) {
+        showToast(`已写回第 ${row.index} 行已确认版本；1 行说话人后来已更新，当前版本仍待写回。`, { tone: "watch", durationMs: 12000 });
+        button.textContent = originalText;
+        button.disabled = false;
+        return;
       }
       updateRowState(rowId, "status", "written");
       notes[rowId] ||= {};
@@ -687,6 +723,8 @@
       button.disabled = false;
       button.textContent = originalText;
       showToast(error.message || String(error), { tone: "error", durationMs: 12000 });
+    } finally {
+      speakerWritebackBusy = false;
     }
   }
 

@@ -380,49 +380,20 @@
       keep: document.getElementById("aiConfirmKeep"),
       clear: document.getElementById("aiConfirmClear"),
     };
-    // 危险且不可逆的操作（清空备注空间、删除历史空间、从备份登记）统一走页内确认弹窗：
-    // 原来是 window.confirm，样式与语气都和页面里其它弹窗不一致，多行长文案还会被系统
-    // 弹窗挤成一大段纯文本。没有 <dialog> 支持时回退 window.confirm，行为不变。
-    const genericConfirmIds = {
-      dialog: document.getElementById("genericConfirmDialog"),
-      title: document.getElementById("genericConfirmTitle"),
-      message: document.getElementById("genericConfirmMessage"),
-      ok: document.getElementById("genericConfirmOk"),
-      cancel: document.getElementById("genericConfirmCancel"),
-    };
-
-    function askConfirm(message, { title = "请确认", confirmText = "确认", danger = true } = {}) {
-      const text = String(message ?? "");
-      const dialog = genericConfirmIds.dialog;
-      const { ok, cancel } = genericConfirmIds;
-      if (!dialog || !ok || !cancel || typeof dialog.showModal !== "function") {
-        return Promise.resolve(Boolean(confirm(text)));
+    // 备注空间与写回共用跨工作台确认实现，不保留原生 confirm 回退。
+    const { askConfirm } = createConfirmDialog({ showToast: (message, options) => showToast(message, options) });
+    let writebackPending = false;
+    async function withWritebackConfirmation(message, options, operation) {
+      if (writebackPending) return;
+      writebackPending = true;
+      try {
+        if (!await askConfirm(message, options)) return;
+        return await operation();
+      } finally {
+        writebackPending = false;
       }
-      genericConfirmIds.title.textContent = title;
-      genericConfirmIds.message.textContent = text;
-      ok.textContent = confirmText;
-      ok.className = danger ? "btn btn--danger" : "btn btn--primary";
-      return new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => {
-          if (settled) return;
-          settled = true;
-          ok.removeEventListener("click", onOk);
-          cancel.removeEventListener("click", onCancel);
-          dialog.removeEventListener("close", onClose);
-          if (dialog.open) dialog.close();
-          resolve(value);
-        };
-        // Esc 关闭也要算取消：漏了这条，Promise 永远不 settle，调用方的流程会静默卡住。
-        const onClose = () => finish(false);
-        const onOk = () => finish(true);
-        const onCancel = () => finish(false);
-        ok.addEventListener("click", onOk);
-        cancel.addEventListener("click", onCancel);
-        dialog.addEventListener("close", onClose);
-        dialog.showModal();
-      });
     }
+
     const appliedAiResults = new Set();
     const aiActiveIds = new Set();
     const clearedAiRunIds = new Set();
@@ -3448,6 +3419,17 @@
       saveNotes();
     }
 
+    // 弹窗和请求都是异步的；仅确认真正写回的版本，不把后来到达的改案算成已处理。
+    function markMatchingWrittenEntries(entries) {
+      const matching = entries.filter((entry) => {
+        const current = notes[String(entry.id)];
+        return current && revisionTargetFor(current) === entry.targetKey
+          && revisionTextFor(current).trim() === entry.replaceText;
+      });
+      if (matching.length) markEntriesConfirmed(matching.map((entry) => entry.id));
+      return entries.length - matching.length;
+    }
+
     function importedCopyHint(result) {
       return result.importedCopy
         ? " 注意：写入的是导入副本——要写回本地原始文件，请在控制台用「本地路径」导入后重新生成。"
@@ -3546,6 +3528,7 @@
     }
 
     async function writebackSingleRevision(id, button) {
+      if (writebackPending || button?.disabled) return;
       const row = rowsById.get(String(id));
       const item = notes[String(id)];
       if (item?.recoveredUnverified) {
@@ -3563,43 +3546,45 @@
       // 确认发生在按钮切到「写回中」之前，用户取消时按钮不会卡在禁用态。
       const backup = getWritebackBackupSetting();
       const backupTip = backup ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
-      if (!confirm("将第 " + id + " 行的修改结果写回原文件？\n定位失败或有多处同段的段落不会被写入。" + backupTip)) return;
-      button.disabled = true;
-      button.textContent = "写回中...";
-      try {
-        const entries = [{ id: String(id), targetKey, searchText, replaceText: revision }];
-        const response = await apiFetch("/api/translation-export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            projectKey: pageMeta.projectKey,
-            rowsSignature: pageMeta.rowsSignature,
-            entries,
-            rowTexts: writebackRowTexts(entries),
-            writebackBackup: backup,
-          }),
-        });
-        const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
-        if (result.updated !== 1) {
-          const detail = (Array.isArray(result.ambiguous) && result.ambiguous[0]) || (Array.isArray(result.missed) && result.missed[0]);
-          const reason = detail && detail.reason ? detail.reason : "原文件中没有匹配的段落。";
-          throw new Error("写回未生效：" + reason);
+      const entries = [{ id: String(id), targetKey, searchText, replaceText: revision }];
+      const rowTexts = writebackRowTexts(entries);
+      const targetLabel = pageMeta.pageLabels?.[targetKey] || "待写回文本";
+      return withWritebackConfirmation("将第 " + id + " 行的修改结果写回原文件？\n目标：" + targetLabel + "对应的原文件。\n定位失败或有多处同段的段落不会被写入。\n" + backupTip, {
+        title: "确认单行写回", confirmText: "写回原文件",
+      }, async () => {
+        button.disabled = true;
+        button.textContent = "写回中...";
+        try {
+          const response = await apiFetch("/api/translation-export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectKey: pageMeta.projectKey,
+              rowsSignature: pageMeta.rowsSignature,
+              entries,
+              rowTexts,
+              writebackBackup: backup,
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
+          if (result.updated !== 1) {
+            const detail = (Array.isArray(result.ambiguous) && result.ambiguous[0]) || (Array.isArray(result.missed) && result.missed[0]);
+            const reason = detail && detail.reason ? detail.reason : "原文件中没有匹配的段落。";
+            throw new Error("写回未生效：" + reason);
+          }
+          const changed = markMatchingWrittenEntries(entries);
+          applyFilters({ reset: false });
+          const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
+          const backupNote = result.backup ? "（已生成 .bak 备份）" : "";
+          const confirmationNote = changed ? "；该行修改结果后来已更新，未自动确认当前版本。" : "，并标记为人工确认。";
+          showToast("已写回第 " + id + " 行已批准的修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + backupNote + confirmationNote + importedCopyHint(result), { tone: (changed || result.importedCopy) ? "watch" : "success", durationMs: 12000 });
+        } catch (error) {
+          showToast(error.message, { tone: "error", durationMs: 12000 });
+          button.disabled = false;
+          button.textContent = "写回";
         }
-        const current = notes[String(id)] || { note: "", done: false };
-        current.manualDone = true;
-        current.done = true;
-        notes[String(id)] = current;
-        saveNotes();
-        applyFilters({ reset: false });
-        const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
-        const backupNote = result.backup ? "（已生成 .bak 备份）" : "";
-        showToast("已写回第 " + id + " 行修改结果" + (writtenTo ? "（" + writtenTo + "）" : "") + backupNote + "，并标记为人工确认。" + importedCopyHint(result), { tone: result.importedCopy ? "watch" : "success", durationMs: 12000 });
-      } catch (error) {
-        showToast(error.message, { tone: "error", durationMs: 12000 });
-        button.disabled = false;
-        button.textContent = "写回";
-      }
+      });
     }
 
     document.getElementById("acceptAiSame").addEventListener("click", () => {
@@ -3623,6 +3608,8 @@
     });
 
     document.getElementById("exportNotes").addEventListener("click", async () => {
+      const button = document.getElementById("exportNotes");
+      if (writebackPending || button.disabled) return;
       const skippedUnverified = countSkippedUnverifiedRevisions();
       const entries = currentRevisionEntries();
       if (!entries.length) {
@@ -3634,41 +3621,53 @@
       const skipNote = skippedUnverified ? "（另有 " + skippedUnverified + " 条未校验找回行被跳过）" : "";
       const backup = getWritebackBackupSetting();
       const backupTip = backup ? "（已开启自动备份，写回前将生成 .bak 备份副本）" : "（未开启自动备份）";
-      if (!confirm("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？定位失败或有多处同段的段落不会写入。" + skipNote + "\n" + backupTip)) return;
-      try {
-        const response = await apiFetch("/api/translation-export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            projectKey: pageMeta.projectKey,
-            rowsSignature: pageMeta.rowsSignature,
-            entries,
-            rowTexts: writebackRowTexts(entries),
-            writebackBackup: backup,
-          }),
-        });
-        const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
-        // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，
-        // 标成已确认会让它们从复核视野里消失。
-        const unwrittenIds = new Set([...(Array.isArray(result.missed) ? result.missed : []), ...(Array.isArray(result.ambiguous) ? result.ambiguous : [])]
-          .map((item) => String(item?.index)));
-        const confirmed = entries.filter((entry) => !unwrittenIds.has(String(entry.id))).map((entry) => String(entry.id));
-        markEntriesConfirmed(confirmed);
-        applyFilters({ reset: false });
-        const missedCount = (Array.isArray(result.missed) ? result.missed.length : 0);
-        const ambiguousCount = (Array.isArray(result.ambiguous) ? result.ambiguous.length : 0);
-        const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
-        const unwrittenNote = [
-          missedCount ? missedCount + " 处未能在原文件中定位" : "",
-          ambiguousCount ? ambiguousCount + " 处在原文件中有多处同段、未写入" : "",
-        ].filter(Boolean).join("；");
-        const tone = (unwrittenNote || result.importedCopy) ? "watch" : "success";
-        const backupNote = result.backup ? " 已生成 .bak 备份。" : "";
-        showToast((unwrittenNote
-          ? "已写回 " + result.updated + " 处修改；" + unwrittenNote + "，这些行未标记为已确认。"
-          : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + backupNote + importedCopyHint(result), { tone, durationMs: 15000 });
-      } catch (error) { showToast(error.message, { tone: "error", durationMs: 12000 }); }
+      const rowTexts = writebackRowTexts(entries);
+      const targets = [...new Set(entries.map((entry) => pageMeta.pageLabels?.[entry.targetKey] || "待写回文本"))].join("、");
+      return withWritebackConfirmation("将当前筛选结果中的 " + entries.length + " 处修改结果写回原文件？\n目标：" + targets + "对应的原文件。\n定位失败或有多处同段的段落不会写入。" + skipNote + "\n" + backupTip, {
+        title: "确认批量写回", confirmText: "写回原文件",
+      }, async () => {
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = "写回中...";
+        try {
+          const response = await apiFetch("/api/translation-export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectKey: pageMeta.projectKey,
+              rowsSignature: pageMeta.rowsSignature,
+              entries,
+              rowTexts,
+              writebackBackup: backup,
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) throw new Error(result.error || "写回失败");
+          // 只有真正写入的行才算人工确认：定位失败与「有多处同段」的行没有落到文件上，
+          // 标成已确认会让它们从复核视野里消失。
+          const unwrittenIds = new Set([...(Array.isArray(result.missed) ? result.missed : []), ...(Array.isArray(result.ambiguous) ? result.ambiguous : [])]
+            .map((item) => String(item?.index)));
+          const writtenEntries = entries.filter((entry) => !unwrittenIds.has(String(entry.id)));
+          const changed = markMatchingWrittenEntries(writtenEntries);
+          applyFilters({ reset: false });
+          const missedCount = (Array.isArray(result.missed) ? result.missed.length : 0);
+          const ambiguousCount = (Array.isArray(result.ambiguous) ? result.ambiguous.length : 0);
+          const writtenTo = writebackTargetNames(result.targets || (result.target ? [result.target] : []));
+          const unwrittenNote = [
+            missedCount ? missedCount + " 处未能在原文件中定位" : "",
+            ambiguousCount ? ambiguousCount + " 处在原文件中有多处同段、未写入" : "",
+          ].filter(Boolean).join("；");
+          const changedNote = changed ? " " + changed + " 行修改结果后来已更新，未自动确认当前版本。" : "";
+          const tone = (changed || unwrittenNote || result.importedCopy) ? "watch" : "success";
+          const backupNote = result.backup ? " 已生成 .bak 备份。" : "";
+          showToast((unwrittenNote
+            ? "已写回 " + result.updated + " 处修改；" + unwrittenNote + "，这些行未标记为已确认。"
+            : "已写回 " + result.updated + " 处修改。") + (writtenTo ? " 写入：" + writtenTo : "") + backupNote + changedNote + importedCopyHint(result), { tone, durationMs: 15000 });
+        } catch (error) { showToast(error.message, { tone: "error", durationMs: 12000 }); } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+      });
     });
 
     document.getElementById("confirmRevisions").addEventListener("click", () => {

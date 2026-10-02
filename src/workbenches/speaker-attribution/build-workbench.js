@@ -37,6 +37,7 @@ function readSpeakerWorkbenchAssets() {
     workbenchStyle: fs.readFileSync(path.join(publicDir, "speaker-workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
     toastStyle: fs.readFileSync(path.join(publicDir, "toast.css"), "utf8"),
+    confirmStyle: fs.readFileSync(path.join(publicDir, "workbench-dialog.css"), "utf8"),
     workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "speaker-workbench-client.js"), "utf8"),
   };
@@ -344,7 +345,7 @@ function renderHtml(model) {
 
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="transcomparator-session-token" content="">
-<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}</style></head>
+<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style></head>
 <body><div class="speaker-app${bilingual ? " is-bilingual" : " is-monolingual"}">
   <header class="speaker-header"><div class="speaker-topbar">
     <div><p class="speaker-kicker">BetweenLines / 说话人归属</p><h1>说话人归属工作台</h1>

@@ -2,7 +2,7 @@
  * 翻译比较与说话人推断工作台的共享客户端逻辑 (public/workbench-shared.js)
  *
  * 由 build-compare 与 build-workbench 在构建时读取并注入到 HTML 页面脚本顶部。
- * 提供跨工作台统一的 API 请求鉴权、HTML 字符转义、模型能力启发式检测、推理档位映射与剪贴板操作。
+ * 提供统一的 API 请求鉴权、字符转义、确认弹窗、Toast、模型能力适配与剪贴板操作。
  */
 
 async function apiFetch(url, options = {}) {
@@ -51,6 +51,111 @@ async function copyText(value) {
   } finally {
     helper.remove();
   }
+}
+
+// 两个工作台共用确认交互；文案只写 textContent，关闭事件落定后才展示下一条确认。
+function createConfirmDialog({ showToast: reportToast } = {}) {
+  let queue = Promise.resolve();
+  let fallbackToastCenter;
+
+  function dialogElements() {
+    let dialog = document.getElementById("genericConfirmDialog");
+    if (!dialog) {
+      dialog = document.createElement("dialog");
+      dialog.id = "genericConfirmDialog";
+      dialog.className = "workbench-confirm-dialog generic-confirm-dialog";
+      dialog.setAttribute("aria-labelledby", "genericConfirmTitle");
+      dialog.setAttribute("aria-describedby", "genericConfirmMessage");
+      const title = document.createElement("h2");
+      title.id = "genericConfirmTitle";
+      const message = document.createElement("p");
+      message.id = "genericConfirmMessage";
+      message.className = "generic-confirm-message";
+      const actions = document.createElement("div");
+      actions.className = "workbench-confirm-actions";
+      const cancel = document.createElement("button");
+      cancel.id = "genericConfirmCancel";
+      cancel.type = "button";
+      cancel.className = "workbench-confirm-button";
+      cancel.textContent = "取消";
+      cancel.setAttribute("autofocus", "");
+      const ok = document.createElement("button");
+      ok.id = "genericConfirmOk";
+      ok.type = "button";
+      actions.append(cancel, ok);
+      dialog.append(title, message, actions);
+      document.body.append(dialog);
+      return { dialog, title, message, cancel, ok };
+    }
+    return {
+      dialog,
+      title: document.getElementById("genericConfirmTitle"),
+      message: document.getElementById("genericConfirmMessage"),
+      cancel: document.getElementById("genericConfirmCancel"),
+      ok: document.getElementById("genericConfirmOk"),
+    };
+  }
+
+  function unavailable() {
+    const toast = reportToast || (fallbackToastCenter ||= createToastCenter()).showToast;
+    toast("无法打开页内确认框，本次操作已取消。请使用支持 dialog 的浏览器并应用最新工作台页面。", { tone: "error" });
+    return false;
+  }
+
+  function present(message, { title = "请确认", confirmText = "确认", danger = true } = {}) {
+    const ids = dialogElements();
+    const { dialog, ok, cancel } = ids;
+    if (!ids.title || !ids.message || !ok || !cancel || typeof dialog.showModal !== "function" || typeof dialog.close !== "function" || dialog.open) return unavailable();
+    dialog.classList.add("workbench-confirm-dialog");
+    dialog.setAttribute("aria-describedby", "genericConfirmMessage");
+    ids.title.textContent = String(title);
+    ids.message.textContent = String(message ?? "");
+    ok.textContent = String(confirmText);
+    ok.className = "workbench-confirm-button " + (danger ? "is-danger" : "is-primary");
+    cancel.className = "workbench-confirm-button";
+    return new Promise((resolve) => {
+      let settled = false;
+      let closing = false;
+      let answer = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        ok.removeEventListener("click", onOk);
+        cancel.removeEventListener("click", onCancel);
+        dialog.removeEventListener("cancel", onCancel);
+        dialog.removeEventListener("close", onClose);
+        resolve(value);
+      }
+      function close(value) {
+        if (closing || settled) return;
+        closing = true;
+        answer = value;
+        // 等原生 close 事件到达才 resolve，避免上一条的延迟 close 误取消下一条。
+        if (dialog.open) dialog.close();
+        else finish(value);
+      }
+      const onOk = () => close(true);
+      const onCancel = (event) => { event?.preventDefault?.(); close(false); };
+      const onClose = () => finish(answer);
+      ok.addEventListener("click", onOk);
+      cancel.addEventListener("click", onCancel);
+      dialog.addEventListener("cancel", onCancel);
+      dialog.addEventListener("close", onClose);
+      try {
+        dialog.showModal();
+        if (dialog.open) cancel.focus();
+      } catch {
+        finish(unavailable());
+      }
+    });
+  }
+
+  function askConfirm(message, options) {
+    const pending = queue.then(() => present(message, options)).catch(() => unavailable());
+    queue = pending.then(() => undefined);
+    return pending;
+  }
+  return { askConfirm };
 }
 
 /**
@@ -185,6 +290,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildReasoningOptions,
     calculateTotalPages,
     copyText,
+    createConfirmDialog,
     createToastCenter,
     escapeHtml,
     getClientModelCapabilities,

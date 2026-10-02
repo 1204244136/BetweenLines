@@ -38,7 +38,7 @@
   | `public/setup.html` | 控制台 F5（静态文件按 `no-store` 每次重读） |
   | 翻译页面的 `public/workbench-client.js`、`workbench-style.css` 与翻译渲染/纯计算模块 | 「应用新布局」（或 `npm run layout`）→ F5 |
   | 说话人页面的 `public/speaker-workbench-*.js` / `*.css` | 重新生成说话人工作台 → F5 |
-  | 跨工作台共享浏览器资源（`workbench-shared.js`、`workbench-diff.js`、`toast.css`、`ai-panel.css`） | 翻译页面：应用新布局 → F5；说话人页面：重新生成 → F5 |
+  | 跨工作台共享浏览器资源（`workbench-shared.js`、`workbench-diff.js`、`toast.css`、`workbench-dialog.css`、`ai-panel.css`） | 翻译页面：应用新布局 → F5；说话人页面：重新生成 → F5 |
   | 翻译 `ai/**`、`src/ai/**`、`src/runtime/**`、`src/storage/**`、`src/core/{atomic-fs,storage-layout,progress}.js` | 重启控制台服务（`start-setup.bat` / `npm run setup`）；若同时改变页面注入的规则，另按所属工作台重新渲染或生成 |
   | `src/workbenches/speaker-attribution/**` | 重启服务 + 重新生成说话人工作台；其输出不在翻译项目快照中 |
   | 仅由翻译生成子进程读取的正文提取代码、`align_jp.py`，或行集/签名算法 | 重新生成（控制台「开始生成」，或 `npm run align:jp && npm run build`） |

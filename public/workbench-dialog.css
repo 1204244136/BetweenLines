@@ -1,0 +1,59 @@
+/* 两个工作台共用页内确认样式，沿用各自已有的中性色、按钮与危险操作色。 */
+.workbench-confirm-dialog {
+  --confirm-surface: var(--surface, var(--speaker-surface, #fff));
+  --confirm-text: var(--text, var(--speaker-text, #161d27));
+  --confirm-line: var(--line, var(--speaker-line, #dde3ec));
+  --confirm-focus: var(--focus, var(--speaker-focus, #2a63cf));
+  --confirm-focus-hover: var(--focus-hover, var(--speaker-focus-hover, #1f4fa6));
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--confirm-line);
+  border-radius: var(--radius, var(--speaker-radius, 8px));
+  box-shadow: var(--shadow-pop, 0 12px 36px rgba(16, 24, 40, 0.18));
+  background: var(--confirm-surface);
+  color: var(--confirm-text);
+}
+.workbench-confirm-dialog::backdrop {
+  background: color-mix(in srgb, var(--confirm-text) 30%, transparent);
+}
+.workbench-confirm-dialog h2 { margin: 0; font-size: 20px; }
+.workbench-confirm-dialog .generic-confirm-message {
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--confirm-text);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.workbench-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--confirm-line);
+}
+.workbench-confirm-dialog .workbench-confirm-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height, 32px);
+  padding: 6px 12px;
+  border: 1px solid var(--confirm-line);
+  border-radius: var(--radius-btn, var(--speaker-radius-sm, 6px));
+  background: var(--confirm-surface);
+  color: var(--confirm-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.workbench-confirm-dialog .workbench-confirm-button:hover { background: var(--surface-subtle, var(--speaker-surface-soft, #f6f8fb)); }
+.workbench-confirm-dialog .workbench-confirm-button:focus-visible { outline: 2px solid var(--confirm-focus); outline-offset: 2px; }
+.workbench-confirm-dialog .workbench-confirm-button:active { transform: translateY(1px); }
+.workbench-confirm-dialog .workbench-confirm-button.is-primary { border-color: var(--confirm-focus); background: var(--confirm-focus); color: #fff; }
+.workbench-confirm-dialog .workbench-confirm-button.is-primary:hover { background: var(--confirm-focus-hover); }
+.workbench-confirm-dialog .workbench-confirm-button.is-danger { border-color: #f1b0ac; background: #fdf2f2; color: #b42318; }
+.workbench-confirm-dialog .workbench-confirm-button.is-danger:hover { border-color: #e0827b; background: #fee4e2; color: #912018; }

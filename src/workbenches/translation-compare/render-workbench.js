@@ -34,6 +34,7 @@ function readWorkbenchAssets() {
     workbenchStyle: fs.readFileSync(path.join(publicDir, "workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
     toastStyle: fs.readFileSync(path.join(publicDir, "toast.css"), "utf8"),
+    confirmStyle: fs.readFileSync(path.join(publicDir, "workbench-dialog.css"), "utf8"),
     workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchDiff: fs.readFileSync(path.join(publicDir, "workbench-diff.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "workbench-client.js"), "utf8"),
@@ -108,7 +109,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="transcomparator-session-token" content="">
   <title>${bilingual ? "双语" : "三语"}翻译对比校对工作台</title>
-  <style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}</style>
+  <style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style>
 </head>
 <body>
   <div class="app-shell mode-${comparisonMode}">
@@ -487,14 +488,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <button id="aiConfirmCancel" class="btn btn--ghost" type="button" autofocus>取消</button>
           <button id="aiConfirmKeep" class="btn btn--subtle" type="button">继续剩下的（未AI校对过的）</button>
           <button id="aiConfirmClear" class="btn btn--primary" type="button">从未人工确认处开始</button>
-        </div>
-      </dialog>
-      <dialog id="genericConfirmDialog" class="notes-recovery-dialog generic-confirm-dialog" aria-labelledby="genericConfirmTitle">
-        <h2 id="genericConfirmTitle">请确认</h2>
-        <p id="genericConfirmMessage" class="generic-confirm-message"></p>
-        <div class="notes-dialog-actions">
-          <button id="genericConfirmCancel" class="btn btn--ghost" type="button" autofocus>取消</button>
-          <button id="genericConfirmOk" class="btn btn--primary" type="button">确认</button>
         </div>
       </dialog>
     </div>
