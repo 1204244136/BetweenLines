@@ -480,6 +480,8 @@
       grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
       gap: var(--space-3);
       align-items: start;
+      flex: 1 1 560px;
+      min-width: 0;
     }
     .prefilter-hint {
       align-self: center;
@@ -496,26 +498,42 @@
       gap: var(--space-3);
     }
     .prefilter-stats {
+      flex: 1 1 420px;
       min-width: 0;
       color: var(--text);
       font-size: var(--fs-caption);
       font-weight: 600;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
     }
-    .prefilter-actions {
+    .prefilter-actions,
+    .prefilter-result-actions {
       display: inline-flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: var(--space-2);
     }
+    .prefilter-results {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2) var(--space-4);
+      padding-top: var(--space-2);
+      border-top: 1px solid var(--line);
+    }
+    .prefilter-result-toggle {
+      min-height: 28px;
+      cursor: pointer;
+    }
+    .prefilter-result-toggle:has(input:checked) {
+      color: var(--focus-hover);
+    }
+    .prefilter-result-toggle:has(input:disabled) {
+      opacity: 0.55;
+      cursor: default;
+    }
     @media (min-width: 992px) {
-      .prefilter-body {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px 20px;
-        padding-top: 6px;
-        margin-top: 4px;
-        border-top: 1px solid var(--line);
-      }
       .prefilter-config {
         display: flex;
         align-items: center;
@@ -555,14 +573,12 @@
         display: flex;
         align-items: center;
         gap: 16px;
-        flex: 0 0 auto;
       }
       .prefilter-stats {
         margin: 0;
         font-size: 12px;
         font-weight: 600;
         color: var(--text);
-        white-space: nowrap;
       }
       .prefilter-actions {
         display: inline-flex;

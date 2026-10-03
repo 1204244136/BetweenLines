@@ -75,3 +75,110 @@ test("AI 校对（非预筛）的结果不会被当成预筛结果集", async ()
   assert.equal(ui.run("prefilterRunId"), "");
   assert.equal(ROWS.length, 3);
 });
+
+test("恢复预筛结果后可勾选仅看结果，取消勾选恢复全部行", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    statusQueue: [prefilterStatus({ results: [prefilterResult(1), prefilterResult(2)] })],
+  });
+  const resultFilter = ui.element("prefilterResultFilter");
+  const confirmButton = ui.element("prefilterConfirm");
+  assert.equal(resultFilter.disabled, true);
+  await ui.refresh();
+  assert.equal(resultFilter.disabled, false, "认领历史预筛结果后应可筛选");
+  assert.equal(resultFilter.checked, false);
+  assert.equal(confirmButton.disabled, true, "未限定预筛结果时不能批量确认");
+
+  resultFilter.checked = true;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  assert.equal(ui.run("prefilterResultFilterActive"), true);
+  assert.equal(ui.run('filteredRows.map((row) => row.index).join(",")'), "1,2");
+  assert.equal(confirmButton.disabled, false);
+
+  resultFilter.checked = false;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  assert.equal(ui.run("prefilterResultFilterActive"), false);
+  assert.equal(ui.run("filteredRows.length"), ROWS.length);
+  assert.equal(confirmButton.disabled, true);
+});
+
+test("运行中和结果分页未收齐时锁定确认，完整收齐后开放确认", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    statusQueue: [
+      prefilterStatus({ running: true, results: [prefilterResult(1)] }),
+      prefilterStatus({ results: [prefilterResult(1), prefilterResult(2)], hasMoreResults: true }),
+      prefilterStatus({ results: [prefilterResult(1), prefilterResult(2), prefilterResult(3)] }),
+    ],
+  });
+  const resultFilter = ui.element("prefilterResultFilter");
+  const confirmButton = ui.element("prefilterConfirm");
+  await ui.refresh();
+  assert.equal(resultFilter.disabled, false, "运行期间允许查看已返回的结果");
+  resultFilter.checked = true;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  assert.equal(confirmButton.disabled, true, "预筛仍在运行时不能确认");
+  await ui.refresh();
+  assert.equal(resultFilter.checked, true);
+  assert.equal(confirmButton.disabled, true, "运行结束但结果仍在补齐时不能确认");
+  await ui.refresh();
+  assert.equal(confirmButton.disabled, false, "全部结果收齐后可确认");
+});
+
+test("确认预筛只处理搜索范围内的待确认行，排除已确认与需核验记录", async () => {
+  const rows = [
+    ...ROWS.map((row) => ({ ...row, cn: "范围内译文" + row.index })),
+    { index: 4, jp: "原文四", cn: "范围外译文", relation: "1:1", score: 0.9, signature: "sig-4" },
+  ];
+  const confirmations = [];
+  const ui = createWorkbench(storageFixture({}), {
+    rows,
+    confirm: (message) => { confirmations.push(message); return true; },
+    statusQueue: [prefilterStatus({ results: rows.map((row) => prefilterResult(row.index)) })],
+  });
+  await ui.refresh();
+  ui.run('notes["1"].manualDone = true; notes["1"].done = true; notes["2"].recoveredUnverified = true; query.value = "范围内";');
+  const resultFilter = ui.element("prefilterResultFilter");
+  resultFilter.checked = true;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  assert.equal(ui.run('currentPrefilterRows().map((row) => row.index).join(",")'), "3");
+  await ui.element("prefilterConfirm").dispatch("click");
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /当前预筛结果共 1 条/);
+  assert.equal(ui.run('notes["1"].manualDone'), true);
+  assert.equal(ui.run('Boolean(notes["2"].manualDone)'), false, "需核验记录必须逐行确认");
+  assert.equal(ui.run('notes["2"].recoveredUnverified'), true);
+  assert.equal(ui.run('notes["3"].manualDone'), true);
+  assert.equal(ui.run('Boolean(notes["4"].manualDone)'), false, "搜索范围外的结果不可被确认");
+  assert.equal(ui.element("prefilterConfirm").disabled, true, "当前范围已无待确认结果");
+});
+
+test("清除筛选保留预筛结果，清除运行记录则重置并禁用结果控件", async () => {
+  const ui = createWorkbench(storageFixture({}), {
+    statusQueue: [prefilterStatus({ results: [prefilterResult(1), prefilterResult(2)] })],
+  });
+  await ui.refresh();
+  const resultFilter = ui.element("prefilterResultFilter");
+  resultFilter.checked = true;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  ui.run('query.value = "原文一"; applyFilters();');
+  assert.equal(ui.run("filteredRows.length"), 1);
+  await ui.element("clearFilter").dispatch("click");
+  assert.equal(resultFilter.checked, false);
+  assert.equal(resultFilter.disabled, false, "取消筛选后仍可重新查看本轮结果");
+  assert.equal(ui.run("prefilterResultIds.size"), 2);
+  assert.equal(ui.run("filteredRows.length"), ROWS.length);
+  assert.equal(ui.element("prefilterConfirm").disabled, true);
+
+  resultFilter.checked = true;
+  await resultFilter.dispatch("change", { target: resultFilter });
+  ui.run("renderClearedAiStatus()");
+  assert.equal(resultFilter.checked, false);
+  assert.equal(resultFilter.disabled, true);
+  assert.equal(ui.run("prefilterResultFilterActive"), false);
+  assert.equal(ui.run("prefilterResultIds.size"), 0);
+  assert.equal(ui.run("prefilterRunId"), "");
+  assert.equal(ui.run("prefilterResultsCatchingUp"), false);
+  assert.equal(ui.run("filteredRows.length"), ROWS.length);
+  assert.equal(ui.element("prefilterConfirm").disabled, true);
+  assert.equal(ui.element("prefilterStats").textContent, "尚未运行预筛选。");
+});

@@ -140,19 +140,24 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <summary class="panel-summary"><span>预筛选 <span class="panel-summary-state" id="prefilterPanelState">尚未运行</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开预筛选"></button></summary>
           <p class="panel-desc">执行规则与相似度预筛，快速过滤无需校对的高一致性文本。</p>
           <div class="prefilter-body">
-            <div class="prefilter-config">
-              <div class="ai-field">
-                <label for="prefilterSimilarity">${escapeHtml(similarityLabel)}相似度预筛</label>
-                <input id="prefilterSimilarity" type="text" inputmode="decimal" value="92%" aria-label="${escapeHtml(similarityLabel)}相似度预筛百分比">
-              </div>
-              <p class="prefilter-hint">规则预筛统一繁简、全半角、空白和不可见字符；完全一致或两列均空直接通过，结构化内容不一致标记为冲突。相似度预筛只处理足够长的正文，数字或标识符不同、文本过短或长度差异明显时不启用。预筛结果会写入备注，AI 校对会跳过已通过预筛的行。</p>
-            </div>
             <div class="prefilter-runbar">
-              <div id="prefilterStats" class="prefilter-stats" aria-live="polite">尚未运行预筛选。</div>
+              <div class="prefilter-config">
+                <div class="ai-field">
+                  <label for="prefilterSimilarity">${escapeHtml(similarityLabel)}相似度预筛</label>
+                  <input id="prefilterSimilarity" type="text" inputmode="decimal" value="92%" aria-label="${escapeHtml(similarityLabel)}相似度预筛百分比">
+                </div>
+                <p class="prefilter-hint">规则预筛统一繁简、全半角、空白和不可见字符；完全一致或两列均空直接通过，结构化内容不一致标记为冲突。相似度预筛只处理足够长的正文，数字或标识符不同、文本过短或长度差异明显时不启用。预筛结果会写入备注，AI 校对会跳过已通过预筛的行。</p>
+              </div>
               <div class="prefilter-actions">
                 <button id="prefilterStart" class="btn btn--primary" type="button">开始预筛</button>
-                <button id="prefilterConfirm" class="btn btn--success" type="button" disabled>确认预筛</button>
                 <button id="prefilterStop" class="btn btn--danger" type="button" disabled>停止</button>
+              </div>
+            </div>
+            <div class="prefilter-results" role="group" aria-label="预筛结果">
+              <div id="prefilterStats" class="prefilter-stats" aria-live="polite">尚未运行预筛选。</div>
+              <div class="prefilter-result-actions">
+                <label class="toggle-inline prefilter-result-toggle"><input id="prefilterResultFilter" type="checkbox" disabled>仅看预筛结果</label>
+                <button id="prefilterConfirm" class="btn btn--success" type="button" disabled>确认预筛</button>
               </div>
             </div>
           </div>
@@ -431,7 +436,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <button type="button" class="segmented__btn" data-issue-severity="fair" title="一般 (60~74分)：存在较明显缺陷，需重点修改">一般</button>
                 <button type="button" class="segmented__btn" data-issue-severity="poor" title="较差 (<60分)：存在致命错译或严重缺陷，不及格">较差</button>
               </div>
-              <button id="prefilterResultFilter" class="chip" type="button" aria-pressed="false" disabled>预筛结果</button>
               <button id="noteFilter" class="chip" type="button" aria-pressed="false">有备注</button>
               <button id="doneFilter" class="chip" type="button" data-mode="open" aria-pressed="false">未人工确认</button>
             </div>

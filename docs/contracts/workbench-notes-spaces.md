@@ -11,6 +11,7 @@
   4. 备注空间与找回
   按数据流方向自上而下排列（机器加工 → 人工检索与批量落盘 → 数据保全）。
 - 每个抽屉的 `<summary>` 含 `.panel-summary-state` 摘要行展示实时状态。
+- `预筛选`（`#prefilterPanel`）内的 `.prefilter-runbar` 持有阈值与开始/停止，`.prefilter-results` 持有统计、原生复选开关 `#prefilterResultFilter` 与确认预筛；结果查看入口不再放入 `#filterPanel`。结果栏允许统计换行与操作组折行，不能用 `white-space: nowrap` 锁住整条统计。
 - `筛选与批处理`（`#filterPanel`，原「筛选与显示」与「批量操作」合并）收纳 filter-bar、显示开关与会改源文件的批量按钮。单个 `.action-bar` 内 `显示设置` 组在前、`修改结果操作` 组在后，靠 `.action-group + .action-group` 的分隔线区隔，批量按钮必须保持最后一组。默认全部折叠（不带 `open` 属性），避免机器任务被覆盖式展开。
 - 四个抽屉统一置于父抽屉 `#controlStackPanel`（`.panel-group`，带 `data-panel-group`）的 `.panel-group-body` 内用于整组折叠/展开；父抽屉默认带 `open`。父摘要由客户端 `bindPanelGroups()` 在捕获阶段监听 `toggle` 事件同步展开数。
 
@@ -63,6 +64,7 @@
 - 服务端 `clientStatus` 返回上一轮预筛结果。
 - `renderAiStatus` 登记结果时以**运行号**（`prefilterRunId`）为准：遇到 `kind === "prefilter"` 且 `runId` 变化就整体替换 `prefilterResultIds`，不再要求必须在本页启动。
 - 作用域限制在 `sameAiScope`（`projectKey` + `rowsSignature`）；项目或行集签名变化时不认领旧结果，仅重新发布相同行集不改变这一作用域。
+- `updatePrefilterConfirmButton` 统一同步结果开关的 `disabled` / `checked`：认领运行号后即可查看，启动预筛自动勾选；清筛选只取消勾选，清运行记录同时清空运行号并禁用。确认仍仅作用于当前筛选范围内尚未人工确认且不需重新核验的预筛通过行，运行中或分页结果未收齐时禁用。
 
 ---
 

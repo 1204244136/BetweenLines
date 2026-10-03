@@ -134,7 +134,7 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(html, /id="prefilterSimilarity"/);
   assert.match(html, /id="prefilterStart"/);
   assert.match(html, /id="prefilterConfirm"[^>]*disabled/);
-  assert.match(html, /id="prefilterResultFilter"[^>]*disabled>预筛结果/);
+  assert.match(html, /<input id="prefilterResultFilter" type="checkbox" disabled>仅看预筛结果/);
   assert.doesNotMatch(html, /id="aiSimilarity"/);
   assert.match(html, /class="filter-bar"/);
   assert.match(html, /class="action-bar"/);
@@ -190,6 +190,10 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(html, /<span[^>]*(?:id="filterPanelState"[^>]*class="panel-summary-state"|class="panel-summary-state"[^>]*id="filterPanelState")[^>]*>/);
   // 「筛选与批处理」收纳了搜索、筛选分段、显示开关与批量按钮：筛选在前、显示在中、批量落盘在后
   const filterPanel = html.slice(filterIdx, notesIdx);
+  const prefilterPanel = html.slice(prefilterIdx, aiIdx);
+  assert.match(prefilterPanel, /class="prefilter-results"[^>]*aria-label="预筛结果"[\s\S]*?id="prefilterStats"[\s\S]*?id="prefilterResultFilter"[\s\S]*?id="prefilterConfirm"/);
+  assert.doesNotMatch(filterPanel, /id="prefilterResultFilter"/, "预筛结果入口由预筛选模块持有");
+  assert.equal((html.match(/id="prefilterResultFilter"/g) || []).length, 1, "结果查看开关只能有一个");
   assert.match(filterPanel, /<div class="filter-bar" aria-label="筛选">/);
   assert.match(filterPanel, /id="query" class="filter-search"/);
   assert.match(filterPanel, /id="showSource" type="checkbox" checked>原文/);
@@ -238,7 +242,6 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /let prefilterResultsCatchingUp = false/);
   assert.match(script, /result\.status === "rule-prefilter" \|\| result\.status === "similarity-prefilter"/);
   assert.match(script, /const matchesPrefilterResult = !prefilterResultFilterActive \|\| prefilterResultIds\.has\(id\)/);
-  assert.match(script, /prefilterResultFilter\.classList\.add\("is-active"\)/);
   assert.match(script, /prefilterIds\.confirm\.disabled = !prefilterResultFilterActive \|\| prefilterResultsCatchingUp/);
   assert.match(script, /当前预筛结果共 [\s\S]*?规则通过 [\s\S]*?相似度通过/);
   assert.match(script, /prefilterIds\.confirm\.addEventListener\("click"[\s\S]*?current\.manualDone = true;[\s\S]*?applyFilters\(\{ reset: false \}\)/);

@@ -1427,9 +1427,6 @@
       prefilterRunId = "";
       prefilterResultFilterActive = false;
       prefilterResultsCatchingUp = false;
-      prefilterResultFilter.disabled = true;
-      prefilterResultFilter.classList.remove("is-active");
-      prefilterResultFilter.setAttribute("aria-pressed", "false");
       updateRenderedAiActive();
       applyFilters({ reset: false });
     }
@@ -2888,6 +2885,8 @@
       ) {
         prefilterResultsCatchingUp = Boolean(ai.running || ai.hasMoreResults);
       }
+      prefilterResultFilter.disabled = !prefilterRunId;
+      prefilterResultFilter.checked = prefilterResultFilterActive;
       prefilterIds.confirm.disabled = !prefilterResultFilterActive || prefilterResultsCatchingUp || currentPrefilterRows().length === 0;
     }
 
@@ -3123,10 +3122,8 @@
       noteFilter.setAttribute("aria-pressed", String(notesOnly));
       applyFilters();
     });
-    prefilterResultFilter.addEventListener("click", () => {
-      prefilterResultFilterActive = !prefilterResultFilterActive;
-      prefilterResultFilter.classList.toggle("is-active", prefilterResultFilterActive);
-      prefilterResultFilter.setAttribute("aria-pressed", String(prefilterResultFilterActive));
+    prefilterResultFilter.addEventListener("change", () => {
+      prefilterResultFilterActive = prefilterResultFilter.checked;
       applyFilters();
     });
     doneFilter.addEventListener("click", () => {
@@ -3366,8 +3363,6 @@
       for (const button of issueSeverityButtons) button.classList.toggle("is-active", button.dataset.issueSeverity === "all");
       noteFilter.classList.remove("is-active");
       noteFilter.setAttribute("aria-pressed", "false");
-      prefilterResultFilter.classList.remove("is-active");
-      prefilterResultFilter.setAttribute("aria-pressed", "false");
       doneFilter.classList.remove("is-active");
       doneFilter.setAttribute("aria-pressed", "false");
       doneFilter.textContent = "未人工确认";
@@ -5258,9 +5253,6 @@
         prefilterResultIds.clear();
         prefilterResultFilterActive = true;
         prefilterResultsCatchingUp = true;
-        prefilterResultFilter.disabled = false;
-        prefilterResultFilter.classList.add("is-active");
-        prefilterResultFilter.setAttribute("aria-pressed", "true");
         renderAiStatus(data.ai);
         applyFilters();
         refreshAiStatus();
