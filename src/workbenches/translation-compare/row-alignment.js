@@ -292,8 +292,11 @@ function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
       }));
   const pivotLang = loadJpPivotLang(comparisonMode);
   const cnTw = bilingual ? rawCnTw : mergePivotOrphanGroups(rawCnTw, pivotLang);
-  const jpPivotGroups = loadJpGroupAlignmentList(jp);
+  const jpGroups = loadJpGroupAlignmentList(jp);
+  const jpPivotGroups = jpGroups.filter((group) => group.pivotStart !== group.pivotEnd);
+  const sourceOnlyGroups = jpGroups.filter((group) => group.pivotStart === group.pivotEnd);
   const rows = [];
+  const rowSourceStarts = [];
 
   for (let i = 0; i < cnTw.length;) {
     const firstGroup = cnTw[i];
@@ -348,14 +351,29 @@ function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
     const cnGroups = cnTw.slice(i, endIndex)
       .filter((group) => groupPivotStart(group, pivotLang) != null && groupPivotEnd(group, pivotLang) != null)
       .filter((group) => rangesOverlap(groupPivotStart(group, pivotLang), groupPivotEnd(group, pivotLang), unionStart, unionEnd));
-    const jpGroups = jpPivotGroups.filter((group) => rangesOverlap(unionStart, unionEnd, group.pivotStart, group.pivotEnd));
-    if (jpGroups.length) {
-      rows.push(makeRow(rows.length + 1, cnGroups, jpGroups, comparisonMode));
+    const matchingJpGroups = jpPivotGroups.filter((group) => rangesOverlap(unionStart, unionEnd, group.pivotStart, group.pivotEnd));
+    if (matchingJpGroups.length) {
+      rows.push(makeRow(rows.length + 1, cnGroups, matchingJpGroups, comparisonMode));
+      rowSourceStarts.push(Math.min(...matchingJpGroups.map((group) => group.jpStart)));
     }
     i = endIndex;
   }
 
-  return rows;
+  // Source-only groups have no pivot interval; insert them beside the next original
+  // paragraph without changing the order of rows already assembled from the pivot.
+  for (const group of sourceOnlyGroups.sort((a, b) => a.jpStart - b.jpStart)) {
+    let insertion = rows.length;
+    let nextSourceStart = Infinity;
+    for (let index = 0; index < rowSourceStarts.length; index += 1) {
+      if (rowSourceStarts[index] > group.jpStart && rowSourceStarts[index] < nextSourceStart) {
+        insertion = index;
+        nextSourceStart = rowSourceStarts[index];
+      }
+    }
+    rows.splice(insertion, 0, makeRow(0, [], [group], comparisonMode));
+    rowSourceStarts.splice(insertion, 0, group.jpStart);
+  }
+  return rows.map((row, index) => ({ ...row, index: index + 1 }));
 }
 
 function groupPivotStart(group, pivotLang) {

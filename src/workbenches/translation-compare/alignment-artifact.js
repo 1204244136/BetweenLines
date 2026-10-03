@@ -30,22 +30,38 @@ function loadJpGroupAlignmentList(jp) {
   const data = JSON.parse(fs.readFileSync(alignFile, "utf8"));
   const groups = (data.groups || [])
     .map((group) => ({ group, range: pivotRangeOf(group) }))
-    .filter(({ range }) => range.start != null && range.end != null && range.start !== range.end)
+    .filter(({ range }) => range.start != null && range.end != null)
     .filter(({ group }) => group.jpStart !== group.jpEnd)
-    .map(({ group, range }) => ({
-      score: group.score,
-      relation: group.relation,
-      pivotStart: range.start,
-      pivotEnd: range.end,
-      jpStart: group.jpStart,
-      jpEnd: group.jpEnd,
-      items: jp.slice(group.jpStart, group.jpEnd),
-      pivotItems: Array.from(
-        { length: range.end - range.start },
-        (_, index) => ({ sourceIndex: range.start + index })
-      ),
-    }));
-  return assertSingleJpParagraphGroups(groups);
+    .map(({ group, range }) => {
+      if (!Number.isInteger(group.jpStart) || !Number.isInteger(group.jpEnd)
+          || group.jpStart < 0 || group.jpEnd <= group.jpStart || group.jpEnd > jp.length
+          || !Number.isInteger(range.start) || !Number.isInteger(range.end)
+          || range.start < 0 || range.end < range.start) {
+        throw new Error("原文对齐组的段落区间无效，请重新运行 npm run align:jp。");
+      }
+      return {
+        score: group.score,
+        relation: group.relation,
+        pivotStart: range.start,
+        pivotEnd: range.end,
+        jpStart: group.jpStart,
+        jpEnd: group.jpEnd,
+        items: jp.slice(group.jpStart, group.jpEnd),
+        pivotItems: Array.from(
+          { length: range.end - range.start },
+          (_, index) => ({ sourceIndex: range.start + index })
+        ),
+      };
+    });
+  assertSingleJpParagraphGroups(groups);
+  const usedSourceIndexes = new Set();
+  for (const group of groups) {
+    if (usedSourceIndexes.has(group.jpStart)) {
+      throw new Error(`原文段落 ${group.jpStart} 被多个对齐组重复使用，请重新运行 npm run align:jp。`);
+    }
+    usedSourceIndexes.add(group.jpStart);
+  }
+  return groups;
 }
 
 function loadJpPivotLang(comparisonMode = "trilingual") {
