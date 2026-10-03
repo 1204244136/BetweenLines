@@ -31,6 +31,7 @@ const {
 function readWorkbenchAssets() {
   const publicDir = path.join(__dirname, "..", "..", "..", "public");
   return {
+    themeStyle: fs.readFileSync(path.join(publicDir, "workbench-theme.css"), "utf8"),
     workbenchStyle: fs.readFileSync(path.join(publicDir, "workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
     toastStyle: fs.readFileSync(path.join(publicDir, "toast.css"), "utf8"),
@@ -109,7 +110,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="transcomparator-session-token" content="">
   <title>${bilingual ? "双语" : "三语"}翻译对比校对工作台</title>
-  <style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style>
+  <style>${assets.themeStyle}${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style>
 </head>
 <body>
   <div class="app-shell mode-${comparisonMode}">

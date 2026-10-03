@@ -1,0 +1,99 @@
+/*
+ * BetweenLines shared color system.
+ *
+ * 颜色按承载范围分组：
+ *   - foundation：页面底、卡片/输入面、正文、分隔线和焦点反馈；所有页面都可用；
+ *   - feedback：信息、成功、警告、错误，只承载状态徽标、Toast、按钮和结果行；
+ *   - divergence / diff：AI 流程分歧、插入/删除文本和搜索高亮，只承载比较证据；
+ *   - stage：AI 阶段身份（通用、文风、仲裁、汇总），只承载阶段卡片和阶段切换控件，
+ *     不表示好坏；阶段内的接受/修改/拒绝/不明确仍使用 feedback。
+ *
+ * This file is the only source of palette hex literals for the workbench pages.
+ * Page styles map their local --* / --speaker-* aliases to these tokens, while
+ * shared components map to --ai-*, --toast-* or --confirm-* aliases. The
+ * aliases keep each component's scope explicit without creating new palettes.
+ */
+:root {
+  color-scheme: light;
+
+  /* Foundation: used by every page and every component. */
+  --color-canvas: #f3f6fa;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f8fafc;
+  --color-surface-raised: #ffffff;
+  --color-surface-selected: #edf5ff;
+  --color-head: #eef4f8;
+  --color-line: #e3eaf2;
+  --color-line-strong: #c9d5e2;
+  --color-text: #161d27;
+  --color-text-muted: #5b6675;
+  --color-text-subtle: #667085;
+  --color-text-emphasis: #344054;
+  --color-focus: #2a63cf;
+  --color-focus-hover: #1f4fa6;
+  --color-on-accent: #ffffff;
+
+  /* 明亮层：信息、已通过、已写回、当前选中等低压力反馈。 */
+  --color-info-bg: #edf5ff;
+  --color-info-fg: #2a63cf;
+  --color-info-border: #c5dcf7;
+  --color-success-bg: #eaf8ef;
+  --color-success-fg: #247a53;
+  --color-success-border: #bfe4cc;
+  --color-success-bg-strong: #f1fbf4;
+  --color-success-fg-strong: #1f7a4d;
+  --color-success-border-strong: #abd9bc;
+  --color-success-bg-hover: #ddf4e5;
+  --color-success-border-hover: #8fd0a5;
+
+  /* 严肃层：待处理、人工复核、失败和破坏性操作，保持稳定的警示感。 */
+  --color-warning-bg: #fdf3d8;
+  --color-warning-fg: #946312;
+  --color-warning-border: #ead08d;
+  --color-warning-bg-strong: #fef3c7;
+  --color-warning-fg-strong: #92400e;
+  --color-warning-border-strong: #fde68a;
+  --color-warning-accent: #f59e0b;
+  --color-warning-fg-accent: #b45309;
+  --color-danger-bg: #fdeceb;
+  --color-danger-fg: #c2392f;
+  --color-danger-border: #f1b6b0;
+  --color-danger-bg-strong: #fdf2f2;
+  --color-danger-fg-strong: #b42318;
+  --color-danger-border-strong: #f1b0ac;
+  --color-danger-bg-hover: #fee4e2;
+  --color-danger-fg-hover: #912018;
+  --color-danger-border-hover: #e0827b;
+  /* AI process outcome: a divergence is neither a quality result nor a stage identity. */
+  --color-divergence-fg: #7c3aed;
+  --color-divergence-bg: #f9f5ff;
+  --color-divergence-border: #e9d7fe;
+
+  /* Diff and inline evidence: scoped to comparison content. */
+  --color-diff-added-bg: #e7f7ed;
+  --color-diff-added-fg: #216b47;
+  --color-diff-removed-bg: #ffe2e2;
+  --color-diff-removed-fg: #7f1d1d;
+  --color-highlight-bg: #fff2a8;
+
+  /* AI stage identity: one stable trio per stage across every AI component. */
+  --color-stage-neutral-fg: #475467;
+  --color-stage-neutral-border: #d0d5dd;
+  --color-stage-neutral-bg: #f2f4f7;
+  --color-stage-neutral-strong: #344054;
+  --color-stage-stylist-fg: #6941c6;
+  --color-stage-stylist-border: #e9d7fe;
+  --color-stage-stylist-bg: #f9f5ff;
+  --color-stage-stylist-strong: #53389e;
+  --color-stage-arbiter-fg: #b54708;
+  --color-stage-arbiter-border: #fedf89;
+  --color-stage-arbiter-bg: #fef3c7;
+  --color-stage-arbiter-strong: #93370d;
+  --color-stage-summary-fg: #175cd3;
+  --color-stage-summary-border: #b2ddff;
+  --color-stage-summary-bg: #eff8ff;
+
+  /* Shared elevation is part of the same visual language as the palette. */
+  --color-shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
+  --color-shadow-pop: 0 12px 28px rgba(16, 24, 40, 0.16);
+}

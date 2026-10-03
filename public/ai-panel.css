@@ -38,13 +38,53 @@
   --ai-line-strong: var(--line-strong, var(--speaker-line-strong));
   --ai-surface: var(--surface, var(--speaker-surface));
   --ai-surface-subtle: var(--surface-subtle, var(--speaker-surface-soft));
-  --ai-surface-selected: var(--surface-selected, var(--speaker-surface-selected, #e9f1ff));
+  --ai-surface-selected: var(--surface-selected, var(--speaker-surface-selected, var(--color-surface-selected)));
   --ai-text: var(--text, var(--speaker-text));
   --ai-muted: var(--muted, var(--speaker-muted));
   --ai-muted-2: var(--muted-2, var(--speaker-muted-2));
   --ai-focus: var(--focus, var(--speaker-focus));
   --ai-focus-hover: var(--focus-hover, var(--speaker-focus-hover));
-  --ai-info: var(--info, var(--speaker-focus-soft, #e9f1ff));
+  --ai-info: var(--info, var(--speaker-focus-soft, var(--color-info-bg)));
+  /* Feedback outcomes: used for summaries, metrics and status badges only. */
+  --ai-info-bg: var(--color-info-bg);
+  --ai-info-fg: var(--color-info-fg);
+  --ai-info-border: var(--color-info-border);
+  --ai-success-bg: var(--color-success-bg-strong);
+  --ai-success-fg: var(--color-success-fg-strong);
+  --ai-success-border: var(--color-success-border-strong);
+  --ai-success-bg-soft: var(--color-success-bg);
+  --ai-warning-bg: var(--color-warning-bg-strong);
+  --ai-warning-fg: var(--color-warning-fg-strong);
+  --ai-warning-border: var(--color-warning-border-strong);
+  --ai-warning-accent: var(--color-warning-accent);
+  --ai-warning-fg-accent: var(--color-warning-fg-accent);
+  --ai-danger-bg: var(--color-danger-bg-strong);
+  --ai-danger-fg: var(--color-danger-fg-strong);
+  --ai-danger-border: var(--color-danger-border-strong);
+  --ai-danger-border-hover: var(--color-danger-border-hover);
+  --ai-danger-bg-hover: var(--color-danger-bg-hover);
+  --ai-danger-fg-hover: var(--color-danger-fg-hover);
+  --ai-on-strong: var(--color-on-accent);
+  /* Divergence is a process outcome; it deliberately stays separate from the arbiter stage. */
+  --ai-divergence-fg: var(--color-divergence-fg);
+  --ai-divergence-bg: var(--color-divergence-bg);
+  --ai-divergence-border: var(--color-divergence-border);
+  /* AI stage identity: these colors describe which stage is speaking. */
+  --ai-stage-neutral-fg: var(--color-stage-neutral-fg);
+  --ai-stage-neutral-border: var(--color-stage-neutral-border);
+  --ai-stage-neutral-bg: var(--color-stage-neutral-bg);
+  --ai-stage-neutral-strong: var(--color-stage-neutral-strong);
+  --ai-stage-stylist-fg: var(--color-stage-stylist-fg);
+  --ai-stage-stylist-border: var(--color-stage-stylist-border);
+  --ai-stage-stylist-bg: var(--color-stage-stylist-bg);
+  --ai-stage-stylist-strong: var(--color-stage-stylist-strong);
+  --ai-stage-arbiter-fg: var(--color-stage-arbiter-fg);
+  --ai-stage-arbiter-border: var(--color-stage-arbiter-border);
+  --ai-stage-arbiter-bg: var(--color-stage-arbiter-bg);
+  --ai-stage-arbiter-strong: var(--color-stage-arbiter-strong);
+  --ai-stage-summary-fg: var(--color-stage-summary-fg);
+  --ai-stage-summary-border: var(--color-stage-summary-border);
+  --ai-stage-summary-bg: var(--color-stage-summary-bg);
   --ai-radius: var(--radius, var(--speaker-radius, 8px));
   --ai-radius-sm: var(--radius-sm, var(--speaker-radius-sm, 6px));
   --ai-radius-btn: var(--radius-btn, 6px);
@@ -100,8 +140,8 @@
   white-space: nowrap;
 }
 .ai-status-badge.is-running {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--ai-warning-bg);
+  color: var(--ai-warning-fg);
 }
 
 /* 折叠箭头（两个页面共用的 details 开关按钮） */
@@ -181,8 +221,8 @@ details[open] > summary .details-toggle::before {
 /* 次级分组带（校对设置 / 推断设置）使用中性灰强调 */
 .ai-proofread-band .ai-config-label,
 .ai-band--muted .ai-config-label {
-  border-left-color: #667085;
-  color: #344054;
+  border-left-color: var(--ai-muted-2);
+  color: var(--ai-stage-neutral-strong);
 }
 
 /* ---- 字段网格 ----------------------------------------------------------- */
@@ -247,15 +287,15 @@ details[open] > summary .details-toggle::before {
 }
 
 .btn--danger-subtle {
-  border-color: #f1b0ac;
-  background: #fdf2f2;
-  color: #b42318;
+  border-color: var(--ai-danger-border);
+  background: var(--ai-danger-bg);
+  color: var(--ai-danger-fg);
 }
 
 .btn--danger-subtle:hover:not(:disabled) {
-  border-color: #e0827b;
-  background: #fee4e2;
-  color: #912018;
+  border-color: var(--ai-danger-border-hover);
+  background: var(--ai-danger-bg-hover);
+  color: var(--ai-danger-fg-hover);
 }
 
 .ai-service-fields {
@@ -390,7 +430,7 @@ details[open] > summary .details-toggle::before {
   display: none;
 }
 .ai-model-hint.is-error {
-  color: var(--review-strong, #c2392f);
+  color: var(--ai-danger-fg);
 }
 
 /* ---- 对照表状态：特化规范声明的辅助判断数据是否可用 --------------------- */
@@ -417,7 +457,7 @@ details[open] > summary .details-toggle::before {
   color: var(--ai-muted);
 }
 .ai-term-hint[data-state="warning"] {
-  color: var(--review-strong, #c2392f);
+  color: var(--ai-warning-fg);
 }
 .ai-term-hint[data-state="off"] {
   opacity: 0.75;
@@ -425,9 +465,9 @@ details[open] > summary .details-toggle::before {
 
 /* 行内标记：构建期判定“疑似说话特色流失” */
 .ai-confirm-badge.is-habit-miss {
-  border-color: #b8860b;
-  color: #8a6100;
-  background: #fff8e6;
+  border-color: var(--ai-warning-fg-accent);
+  color: var(--ai-warning-fg);
+  background: var(--ai-warning-bg);
   cursor: help;
 }
 
@@ -628,9 +668,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-badge--needs-edit {
-  background: color-mix(in srgb, var(--ai-focus, #3b82f6) 12%, var(--ai-surface, #ffffff));
-  color: var(--ai-focus, #2563eb);
-  border: 1px solid color-mix(in srgb, var(--ai-focus, #3b82f6) 35%, transparent);
+  background: color-mix(in srgb, var(--ai-focus) 12%, var(--ai-surface));
+  color: var(--ai-focus);
+  border: 1px solid color-mix(in srgb, var(--ai-focus) 35%, transparent);
   cursor: pointer;
   user-select: none;
   transition: all 120ms ease;
@@ -638,19 +678,19 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-badge--needs-edit:hover,
 .ai-stage-badge--needs-edit.is-active {
-  background: var(--ai-focus, #2563eb);
-  color: #ffffff;
-  border-color: var(--ai-focus, #2563eb);
+  background: var(--ai-focus);
+  color: var(--ai-on-strong);
+  border-color: var(--ai-focus);
 }
 
 .ai-stage-badge--needs-edit.is-active strong {
-  color: #ffffff;
+  color: var(--ai-on-strong);
 }
 
 .ai-stage-badge--unchanged {
-  background: color-mix(in srgb, #10b981 12%, var(--ai-surface, #ffffff));
-  color: #059669;
-  border: 1px solid color-mix(in srgb, #10b981 25%, transparent);
+  background: var(--ai-success-bg);
+  color: var(--ai-success-fg);
+  border: 1px solid var(--ai-success-border);
   cursor: pointer;
   user-select: none;
   transition: all 120ms ease;
@@ -658,19 +698,19 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-badge--unchanged:hover,
 .ai-stage-badge--unchanged.is-active {
-  background: #059669;
-  color: #ffffff;
-  border-color: #059669;
+  background: var(--ai-success-fg);
+  color: var(--ai-on-strong);
+  border-color: var(--ai-success-fg);
 }
 
 .ai-stage-badge--unchanged.is-active strong {
-  color: #ffffff;
+  color: var(--ai-on-strong);
 }
 
 .ai-stage-badge--warning {
-  background: color-mix(in srgb, #f59e0b 14%, var(--ai-surface, #ffffff));
-  color: #d97706;
-  border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
+  background: var(--ai-warning-bg);
+  color: var(--ai-warning-fg);
+  border: 1px solid var(--ai-warning-border);
   cursor: pointer;
   user-select: none;
   transition: all 120ms ease;
@@ -678,13 +718,13 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-badge--warning:hover,
 .ai-stage-badge--warning.is-active {
-  background: #d97706;
-  color: #ffffff;
-  border-color: #d97706;
+  background: var(--ai-warning-fg);
+  color: var(--ai-on-strong);
+  border-color: var(--ai-warning-fg);
 }
 
 .ai-stage-badge--warning.is-active strong {
-  color: #ffffff;
+  color: var(--ai-on-strong);
 }
 
 /* 每张阶段卡片底部一条进度条：进度 = 该阶段已完成 / 本轮该阶段总量。
@@ -790,9 +830,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-status-pill[data-state="queued"] {
-  background: color-mix(in srgb, #f59e0b 16%, transparent);
-  color: #b45309;
-  border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
+  background: color-mix(in srgb, var(--ai-warning-accent) 16%, transparent);
+  color: var(--ai-warning-fg-accent);
+  border: 1px solid color-mix(in srgb, var(--ai-warning-accent) 45%, transparent);
 }
 
 .ai-stage-status-pill[data-state="disabled"] {
@@ -803,9 +843,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-status-pill[data-state="done"] {
-  background: color-mix(in srgb, #10b981 12%, transparent);
-  color: #059669;
-  border: 1px solid color-mix(in srgb, #10b981 35%, transparent);
+  background: color-mix(in srgb, var(--ai-success-fg) 12%, transparent);
+  color: var(--ai-success-fg);
+  border: 1px solid color-mix(in srgb, var(--ai-success-fg) 35%, transparent);
 }
 
 @keyframes ai-stage-pulse {
@@ -990,7 +1030,7 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-flow-arrow {
   font-size: 11px;
-  color: var(--ai-muted-2, #94a3b8);
+  color: var(--ai-muted-2);
   user-select: none;
   opacity: 0.85;
 }
@@ -1001,41 +1041,41 @@ details[open] > summary .details-toggle::before {
   gap: 2px;
   padding: 0 4px;
   border-radius: var(--ai-radius-badge, 4px);
-  background: color-mix(in srgb, var(--ai-focus, #3b82f6) 10%, transparent);
-  color: var(--ai-focus, #2563eb);
+  background: color-mix(in srgb, var(--ai-focus) 10%, transparent);
+  color: var(--ai-focus);
 }
 
 .ai-stage-flow-pill strong {
   font-weight: 700;
   font-size: 14px;
-  color: var(--ai-focus, #2563eb);
+  color: var(--ai-focus);
 }
 
 .ai-stage-flow-pill.is-arb {
-  background: color-mix(in srgb, #8b5cf6 12%, transparent);
-  color: #7c3aed;
+  background: var(--ai-divergence-bg);
+  color: var(--ai-divergence-fg);
 }
 
 .ai-stage-flow-pill.is-arb strong {
-  color: #7c3aed;
+  color: var(--ai-divergence-fg);
 }
 
 .ai-stage-flow-pill.is-settled {
-  background: color-mix(in srgb, #10b981 12%, transparent);
-  color: #059669;
+  background: color-mix(in srgb, var(--ai-success-fg) 12%, transparent);
+  color: var(--ai-success-fg);
 }
 
 .ai-stage-flow-pill.is-settled strong {
-  color: #059669;
+  color: var(--ai-success-fg);
 }
 
 .ai-stage-flow-pill.is-unclear {
-  background: color-mix(in srgb, #f59e0b 12%, transparent);
-  color: #d97706;
+  background: color-mix(in srgb, var(--ai-warning-accent) 12%, transparent);
+  color: var(--ai-warning-fg-accent);
 }
 
 .ai-stage-flow-pill.is-unclear strong {
-  color: #d97706;
+  color: var(--ai-warning-fg-accent);
 }
 
 .ai-stage-card-sub {
@@ -1061,9 +1101,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-sub-item--warn {
-  color: #b45309;
+  color: var(--ai-warning-fg-accent);
   font-weight: 600;
-  background: color-mix(in srgb, #f59e0b 16%, transparent);
+  background: color-mix(in srgb, var(--ai-warning-accent) 16%, transparent);
   padding: 0 4px;
   border-radius: var(--ai-radius-badge, 3px);
   cursor: pointer;
@@ -1072,12 +1112,12 @@ details[open] > summary .details-toggle::before {
 
 .ai-stage-sub-item--warn:hover,
 .ai-stage-sub-item--warn.is-active {
-  background: #f59e0b;
-  color: #ffffff;
+  background: var(--ai-warning-accent);
+  color: var(--ai-on-strong);
 }
 
 .ai-stage-sub-item--warn.is-active [id^="metric"] {
-  color: #ffffff;
+  color: var(--ai-on-strong);
 }
 
 .ai-stage-sub-item--error {
@@ -1086,9 +1126,9 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-sub-item--error.has-errors {
-  color: #ef4444;
+  color: var(--ai-danger-fg);
   font-weight: 600;
-  background: color-mix(in srgb, #ef4444 12%, transparent);
+  background: color-mix(in srgb, var(--ai-danger-fg) 12%, transparent);
   padding: 0 4px;
   border-radius: var(--ai-radius-badge, 3px);
   /* 悬停展开「到底出了哪些问题」的分类明细（哪几类、各多少行、出在哪几行）。 */
@@ -1096,16 +1136,16 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-sub-item--error.has-errors:hover {
-  background: color-mix(in srgb, #ef4444 22%, transparent);
+  background: color-mix(in srgb, var(--ai-danger-fg) 22%, transparent);
 }
 
 .ai-stage-sub-item--error.has-errors [id^="metric"] {
-  color: #ef4444;
+  color: var(--ai-danger-fg);
   font-weight: 700;
 }
 
 .ai-stage-sub-sep {
-  color: var(--ai-line-strong, #cbd5e1);
+  color: var(--ai-line-strong);
   font-size: 9px;
   opacity: 0.8;
   user-select: none;
@@ -1183,23 +1223,23 @@ details[open] > summary .details-toggle::before {
 }
 
 .pipeline-step.is-stylist {
-  color: #6941c6;
-  background: #f9f5ff;
+  color: var(--ai-stage-stylist-fg);
+  background: var(--ai-stage-stylist-bg);
 }
 
 .pipeline-step.is-stylist.is-modify {
-  color: #b54708;
-  background: #fffaeb;
+  color: var(--ai-warning-fg);
+  background: var(--ai-warning-bg);
 }
 
 .pipeline-step.is-stylist.is-reject {
-  color: #c01048;
-  background: #fff1f3;
+  color: var(--ai-danger-fg);
+  background: var(--ai-danger-bg);
 }
 
 .pipeline-step.is-arbiter {
-  color: #92400e;
-  background: #fef3c7;
+  color: var(--ai-stage-arbiter-fg);
+  background: var(--ai-stage-arbiter-bg);
 }
 
 .pipeline-arrow {
@@ -1242,15 +1282,15 @@ details[open] > summary .details-toggle::before {
 }
 
 .stage-report-card.is-gk {
-  border-left: 3px solid #667085;
+  border-left: 3px solid var(--ai-stage-neutral-fg);
 }
 
 .stage-report-card.is-stylist {
-  border-left: 3px solid #7f56d9;
+  border-left: 3px solid var(--ai-stage-stylist-fg);
 }
 
 .stage-report-card.is-arbiter {
-  border-left: 3px solid #d97706;
+  border-left: 3px solid var(--ai-stage-arbiter-fg);
 }
 
 .stage-report-header {
@@ -1271,28 +1311,28 @@ details[open] > summary .details-toggle::before {
 }
 
 .stage-report-tag.is-accept {
-  background: #ecfdf3;
-  color: #027a48;
+  background: var(--ai-success-bg-soft);
+  color: var(--ai-success-fg);
 }
 
 .stage-report-tag.is-modify {
-  background: #fffaeb;
-  color: #b54708;
+  background: var(--ai-warning-bg);
+  color: var(--ai-warning-fg);
 }
 
 .stage-report-tag.is-reject {
-  background: #fef3f2;
-  color: #b42318;
+  background: var(--ai-danger-bg);
+  color: var(--ai-danger-fg);
 }
 
 .stage-report-tag.is-arbiter {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--ai-stage-arbiter-bg);
+  color: var(--ai-stage-arbiter-fg);
 }
 
 .stage-report-tag.is-unclear {
-  background: #fef3c7;
-  color: #b45309;
+  background: var(--ai-warning-bg);
+  color: var(--ai-warning-fg);
 }
 
 .stage-report-body {
@@ -1303,14 +1343,14 @@ details[open] > summary .details-toggle::before {
 }
 
 .pipeline-step.is-pending-step {
-  color: #b45309;
-  background: #fffbeb;
-  border: 1px dashed #f59e0b;
+  color: var(--ai-warning-fg-accent);
+  background: var(--ai-warning-bg);
+  border: 1px dashed var(--ai-warning-accent);
 }
 
 .pipeline-step.is-final-check {
-  color: #b91c1c;
-  background: #fef2f2;
+  color: var(--ai-danger-fg);
+  background: var(--ai-danger-bg);
   font-weight: 700;
 }
 
@@ -1328,27 +1368,27 @@ details[open] > summary .details-toggle::before {
 }
 
 .diff-step-pill.is-gk {
-  background: #f2f4f7;
-  color: #475467;
-  border: 1px solid #d0d5dd;
+  background: var(--ai-stage-neutral-bg);
+  color: var(--ai-stage-neutral-fg);
+  border: 1px solid var(--ai-stage-neutral-border);
 }
 
 .diff-step-pill.is-stylist {
-  background: #f9f5ff;
-  color: #6941c6;
-  border: 1px solid #e9d7fe;
+  background: var(--ai-stage-stylist-bg);
+  color: var(--ai-stage-stylist-fg);
+  border: 1px solid var(--ai-stage-stylist-border);
 }
 
 .diff-step-pill.is-arbiter {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
+  background: var(--ai-stage-arbiter-bg);
+  color: var(--ai-stage-arbiter-fg);
+  border: 1px solid var(--ai-stage-arbiter-border);
 }
 
 .diff-step-pill.is-summary {
-  background: #eff8ff;
-  color: #175cd3;
-  border: 1px solid #b2ddff;
+  background: var(--ai-stage-summary-bg);
+  color: var(--ai-stage-summary-fg);
+  border: 1px solid var(--ai-stage-summary-border);
 }
 
 .diff-comparison.is-stage-step {
@@ -1356,24 +1396,24 @@ details[open] > summary .details-toggle::before {
 }
 
 .diff-comparison.is-stage-step.is-gk {
-  border-left: 3px solid #98a2b3;
+  border-left: 3px solid var(--ai-stage-neutral-fg);
   padding-left: 8px;
 }
 
 .diff-comparison.is-stage-step.is-stylist {
-  border-left: 3px solid #9e77ed;
+  border-left: 3px solid var(--ai-stage-stylist-fg);
   padding-left: 8px;
 }
 
 .diff-comparison.is-stage-step.is-arbiter {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--ai-stage-arbiter-fg);
   padding-left: 8px;
 }
 
 .diff-comparison.is-cumulative {
-  border-left: 3px solid #2e90fa;
+  border-left: 3px solid var(--ai-stage-summary-fg);
   padding-left: 8px;
-  background: color-mix(in srgb, #f8f9fc 60%, transparent);
+  background: color-mix(in srgb, var(--ai-surface-subtle) 60%, transparent);
 }
 
 .diff-step-details {
@@ -1426,18 +1466,18 @@ details[open] > summary .details-toggle::before {
 }
 
 .stage-proposal-mini.is-gk {
-  border-color: #d0d5dd;
-  background: #fcfcfd;
+  border-color: var(--ai-stage-neutral-border);
+  background: var(--ai-stage-neutral-bg);
 }
 
 .stage-proposal-mini.is-stylist {
-  border-color: #e9d7fe;
-  background: #faf8ff;
+  border-color: var(--ai-stage-stylist-border);
+  background: var(--ai-stage-stylist-bg);
 }
 
 .stage-proposal-mini.is-arbiter {
-  border-color: #fedf89;
-  background: #fffdf5;
+  border-color: var(--ai-stage-arbiter-border);
+  background: var(--ai-stage-arbiter-bg);
 }
 
 .stage-proposal-mini-tag {
@@ -1457,15 +1497,15 @@ details[open] > summary .details-toggle::before {
 }
 
 .stage-proposal-box.is-gk {
-  border-color: #d0d5dd;
+  border-color: var(--ai-stage-neutral-border);
 }
 
 .stage-proposal-box.is-stylist {
-  border-color: #e9d7fe;
+  border-color: var(--ai-stage-stylist-border);
 }
 
 .stage-proposal-box.is-arbiter {
-  border-color: #fedf89;
+  border-color: var(--ai-stage-arbiter-border);
 }
 
 .stage-proposal-head {
@@ -1514,8 +1554,8 @@ details[open] > summary .details-toggle::before {
   gap: 5px;
   margin: 4px 0 2px;
   padding: 3px 6px;
-  background: var(--ai-surface-subtle, #f8fafc);
-  border: 1px solid var(--ai-line, #e2e8f0);
+  background: var(--ai-surface-subtle);
+  border: 1px solid var(--ai-line);
   border-radius: var(--ai-radius-badge, 4px);
   box-sizing: border-box;
   width: 100%;
@@ -1537,7 +1577,7 @@ details[open] > summary .details-toggle::before {
   line-height: 1.3;
   border-radius: var(--ai-radius-badge, 4px);
   border: 1px solid var(--ai-line);
-  background: var(--ai-surface, #ffffff);
+  background: var(--ai-surface);
   color: var(--ai-muted);
   cursor: pointer;
   transition: all 120ms ease;
@@ -1552,21 +1592,21 @@ details[open] > summary .details-toggle::before {
 }
 
 .stage-pill-btn.is-active.is-gk {
-  background: #475467;
-  border-color: #344054;
-  color: #ffffff;
+  background: var(--ai-stage-neutral-fg);
+  border-color: var(--ai-stage-neutral-strong);
+  color: var(--ai-on-strong);
 }
 
 .stage-pill-btn.is-active.is-stylist {
-  background: #6941c6;
-  border-color: #53389e;
-  color: #ffffff;
+  background: var(--ai-stage-stylist-fg);
+  border-color: var(--ai-stage-stylist-strong);
+  color: var(--ai-on-strong);
 }
 
 .stage-pill-btn.is-active.is-arbiter {
-  background: #b54708;
-  border-color: #93370d;
-  color: #ffffff;
+  background: var(--ai-stage-arbiter-fg);
+  border-color: var(--ai-stage-arbiter-strong);
+  color: var(--ai-on-strong);
 }
 
 /* ---- 响应式 ------------------------------------------------------------- */

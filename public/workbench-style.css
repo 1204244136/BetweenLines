@@ -1,28 +1,61 @@
 
     :root {
-      color-scheme: light;
-      --bg: #eef1f6;
-      --surface: #ffffff;
-      --surface-subtle: #f6f8fb;
-      --surface-raised: #ffffff;
-      --head: #eaeef4;
-      --line: #dde3ec;
-      --line-strong: #c3ccd9;
-      --text: #161d27;
-      --muted: #5b6675;
-      /* 次要文字/图标色：原值 #8a94a4 在白底上约 2.6:1，低于 WCAG AA 对普通文本的 4.5:1，
-         而工作台里大量说明性文案都用它。#667085 约 4.97:1，达标且仍保持弱化层级。 */
-      --muted-2: #667085;
-      --focus: #2a63cf;
-      --focus-hover: #1f4fa6;
-      --review: #fdeceb;
-      --review-strong: #c2392f;
-      --watch: #fdf3d8;
-      --watch-strong: #946312;
-      --ok: #e6f4ec;
-      --ok-strong: #1c7a42;
-      --info: #e9f1ff;
-      --info-strong: #2a63cf;
+      /* 页面别名：基础和反馈颜色统一由 workbench-theme.css 承载。 */
+      --bg: var(--color-canvas);
+      --surface: var(--color-surface);
+      --surface-subtle: var(--color-surface-subtle);
+      --surface-raised: var(--color-surface-raised);
+      --surface-selected: var(--color-surface-selected);
+      --head: var(--color-head);
+      --line: var(--color-line);
+      --line-strong: var(--color-line-strong);
+      --text: var(--color-text);
+      --muted: var(--color-text-muted);
+      --muted-2: var(--color-text-subtle);
+      --focus: var(--color-focus);
+      --focus-hover: var(--color-focus-hover);
+      --review: var(--color-danger-bg);
+      --review-strong: var(--color-danger-fg);
+      --watch: var(--color-warning-bg);
+      --watch-strong: var(--color-warning-fg);
+      --ok: var(--color-success-bg);
+      --ok-strong: var(--color-success-fg);
+      --info: var(--color-info-bg);
+      --info-strong: var(--color-info-fg);
+      --info-border: var(--color-info-border);
+      --status-success-border: var(--color-success-border);
+      --status-warning-border: var(--color-warning-border);
+      --status-danger-border: var(--color-danger-border);
+      --on-accent: var(--color-on-accent);
+      --action-danger-bg: var(--color-danger-bg-strong);
+      --action-danger-fg: var(--color-danger-fg-strong);
+      --action-danger-border: var(--color-danger-border-strong);
+      --action-danger-bg-hover: var(--color-danger-bg-hover);
+      --action-danger-fg-hover: var(--color-danger-fg-hover);
+      --action-danger-border-hover: var(--color-danger-border-hover);
+      --action-success-bg: var(--color-success-bg-strong);
+      --action-success-fg: var(--color-success-fg-strong);
+      --action-success-border: var(--color-success-border-strong);
+      --action-success-bg-hover: var(--color-success-bg-hover);
+      --action-success-border-hover: var(--color-success-border-hover);
+      --diff-added-bg: var(--color-diff-added-bg);
+      --diff-added-fg: var(--color-diff-added-fg);
+      --diff-removed-bg: var(--color-diff-removed-bg);
+      --diff-removed-fg: var(--color-diff-removed-fg);
+      --highlight-bg: var(--color-highlight-bg);
+      --text-emphasis: var(--color-text-emphasis);
+      --stage-neutral-fg: var(--color-stage-neutral-fg);
+      --stage-neutral-bg: var(--color-stage-neutral-bg);
+      --stage-neutral-border: var(--color-stage-neutral-border);
+      --stage-stylist-fg: var(--color-stage-stylist-fg);
+      --stage-stylist-bg: var(--color-stage-stylist-bg);
+      --stage-stylist-border: var(--color-stage-stylist-border);
+      --stage-arbiter-fg: var(--color-stage-arbiter-fg);
+      --stage-arbiter-bg: var(--color-stage-arbiter-bg);
+      --stage-arbiter-border: var(--color-stage-arbiter-border);
+      --stage-summary-fg: var(--color-stage-summary-fg);
+      --stage-summary-bg: var(--color-stage-summary-bg);
+      --stage-summary-border: var(--color-stage-summary-border);
       --radius: 8px;
       --radius-sm: 6px;
       --radius-xs: 4px;
@@ -32,8 +65,8 @@
       --radius-pill: 999px;
       --control-height: 30px;
       --control-height-sm: 26px;
-      --shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
-      --shadow-pop: 0 12px 28px rgba(16, 24, 40, 0.16);
+      --shadow-panel: var(--color-shadow-panel);
+      --shadow-pop: var(--color-shadow-pop);
       --space-1: 4px;
       --space-2: 8px;
       --space-3: 12px;
@@ -323,8 +356,8 @@
       color: var(--focus);
     }
     .workbench-tab-badge.is-running {
-      background: #fef3c7 !important;
-      color: #92400e !important;
+      background: var(--watch) !important;
+      color: var(--watch-strong) !important;
     }
     .workbench-tab-badge.is-warn {
       background: var(--review) !important;
@@ -797,7 +830,7 @@
     .select-icon {
       width: 16px;
       height: 16px;
-      color: #344054;
+      color: var(--text-emphasis);
       transition: transform 140ms ease;
     }
     .select-trigger[aria-expanded="true"] .select-icon {
@@ -961,31 +994,31 @@
     .btn--primary {
       border-color: var(--focus);
       background: var(--focus);
-      color: #fff;
+      color: var(--on-accent);
     }
     .btn--primary:hover {
       border-color: var(--focus-hover);
       background: var(--focus-hover);
-      color: #fff;
+      color: var(--on-accent);
     }
     .btn--danger {
-      border-color: #f1b0ac;
-      background: #fdf2f2;
-      color: #b42318;
+      border-color: var(--action-danger-border);
+      background: var(--action-danger-bg);
+      color: var(--action-danger-fg);
     }
     .btn--danger:hover {
-      border-color: #e0827b;
-      background: #fee4e2;
-      color: #912018;
+      border-color: var(--action-danger-border-hover);
+      background: var(--action-danger-bg-hover);
+      color: var(--action-danger-fg-hover);
     }
     .btn--success {
-      border-color: #b3d9bf;
-      background: #edf8f0;
-      color: #166534;
+      border-color: var(--action-success-border);
+      background: var(--action-success-bg);
+      color: var(--action-success-fg);
     }
     .btn--success:hover {
-      border-color: #95cb9f;
-      background: #def1e3;
+      border-color: var(--action-success-border-hover);
+      background: var(--action-success-bg-hover);
     }
     .btn--subtle {
       border-color: color-mix(in srgb, var(--focus) 22%, var(--line));
@@ -1187,7 +1220,7 @@
       border-top: 1px dashed var(--line);
       padding: 9px 10px 10px;
       background: var(--surface-subtle);
-      color: #344054;
+      color: var(--text-emphasis);
       font-size: 14px;
     }
     .diff-title {
@@ -1213,15 +1246,15 @@
       font-weight: 700;
     }
     ins {
-      background: #dff5e5;
-      color: #14532d;
+      background: var(--diff-added-bg);
+      color: var(--diff-added-fg);
       text-decoration: none;
       border-radius: 3px;
       padding: 0 2px;
     }
     del {
-      background: #ffe2e2;
-      color: #7f1d1d;
+      background: var(--diff-removed-bg);
+      color: var(--diff-removed-fg);
       text-decoration: line-through;
       border-radius: 3px;
       padding: 0 2px;
@@ -1270,12 +1303,12 @@
       white-space: nowrap;
     }
     .ai-confirm-badge.is-modify {
-      border-color: #f1b6b0;
+      border-color: var(--status-danger-border);
       background: var(--review);
       color: var(--review-strong);
     }
     .ai-confirm-badge.is-same {
-      border-color: #b8dec5;
+      border-color: var(--status-success-border);
       background: var(--ok);
       color: var(--ok-strong);
     }
@@ -1283,11 +1316,11 @@
     .ai-confirm-badge.is-on {
       border-color: color-mix(in srgb, var(--focus) 28%, var(--line));
       background: color-mix(in srgb, var(--info) 62%, var(--surface));
-      color: #175cd3;
+      color: var(--info-strong);
     }
     .ai-confirm-badge.is-failure {
-      border-color: #e6aaa5;
-      background: #fff7f6;
+      border-color: var(--action-danger-border);
+      background: var(--action-danger-bg);
       color: var(--review-strong);
     }
     .ai-confirm-badge.is-off {
@@ -1296,8 +1329,8 @@
     .ai-confirm-badge.is-unverified {
       height: auto;
       cursor: pointer;
-      border-color: #e6aaa5;
-      background: #fff7f6;
+      border-color: var(--action-danger-border);
+      background: var(--action-danger-bg);
       color: var(--review-strong);
     }
     /* 判定与命中条数共用一个入口，列表直接参与备注首行的布局，不挤压状态徽标组。 */
@@ -1469,7 +1502,7 @@
       flex-shrink: 0;
     }
     .note-summary-value {
-      color: #344054;
+      color: var(--text-emphasis);
       word-break: break-word;
       white-space: pre-wrap;
     }
@@ -1488,28 +1521,28 @@
     }
     .score-badge.is-excellent,
     .issue-severity-badge.is-excellent {
-      border-color: #86efac;
-      background: #f0fdf4;
-      color: #166534;
+      border-color: var(--action-success-border);
+      background: var(--action-success-bg);
+      color: var(--action-success-fg);
     }
     .score-badge.is-good,
     .issue-severity-badge.is-good,
     .issue-severity-badge.is-minor {
-      border-color: #b8cee9;
+      border-color: var(--info-border);
       background: var(--info);
       color: var(--focus-hover);
     }
     .score-badge.is-fair,
     .issue-severity-badge.is-fair,
     .issue-severity-badge.is-major {
-      border-color: #ead08a;
+      border-color: var(--status-warning-border);
       background: var(--watch);
       color: var(--watch-strong);
     }
     .score-badge.is-poor,
     .issue-severity-badge.is-poor,
     .issue-severity-badge.is-critical {
-      border-color: #e6aaa5;
+      border-color: var(--action-danger-border);
       background: var(--review);
       color: var(--review-strong);
     }
@@ -1545,12 +1578,12 @@
       white-space: nowrap;
     }
     .writeback-revision {
-      border-color: #b8dec5;
+      border-color: var(--status-success-border);
       background: var(--ok);
       color: var(--ok-strong);
     }
     .writeback-revision:hover {
-      border-color: #93d0a9;
+      border-color: var(--action-success-border-hover);
     }
     .revision-stage-pills {
       display: flex;
@@ -1667,7 +1700,7 @@
       height: 30px;
     }
     mark {
-      background: #fff2a8;
+      background: var(--highlight-bg);
       color: inherit;
       padding: 0 1px;
     }
@@ -1722,14 +1755,14 @@
     }
     .ai-stage-card .ai-stage-sub-item--warn.ai-stage-metric {
       padding: 0 4px;
-      background: color-mix(in srgb, #f59e0b 16%, transparent);
-      color: #b45309;
+      background: color-mix(in srgb, var(--color-warning-accent) 16%, transparent);
+      color: var(--color-warning-fg-accent);
       font-weight: 600;
     }
     .ai-stage-card .ai-stage-sub-item--error.has-errors.ai-stage-metric {
       padding: 0 4px;
-      background: color-mix(in srgb, #ef4444 12%, transparent);
-      color: #ef4444;
+      background: color-mix(in srgb, var(--review-strong) 12%, transparent);
+      color: var(--review-strong);
       font-weight: 600;
     }
     .ai-stage-card .ai-stage-metric:hover {

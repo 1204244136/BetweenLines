@@ -1,19 +1,23 @@
 :root {
-  color-scheme: light;
-  --speaker-bg: #eef1f6;
-  --speaker-surface: #ffffff;
-  --speaker-surface-soft: #f6f8fb;
-  --speaker-surface-selected: #e9f1ff;
-  --speaker-head: #eaeef4;
-  --speaker-line: #dde3ec;
-  --speaker-line-strong: #c3ccd9;
-  --speaker-text: #161d27;
-  --speaker-muted: #5b6675;
-  /* 与 workbench-style.css 同一口径：#8a94a4 在白底上约 2.6:1，不达 WCAG AA 的 4.5:1。 */
-  --speaker-muted-2: #667085;
-  --speaker-focus: #2a63cf;
-  --speaker-focus-hover: #1f4fa6;
-  --speaker-focus-soft: #e9f1ff;
+  /* 页面别名：与翻译工作台共享同一套基础、反馈和阶段语义。 */
+  --speaker-bg: var(--color-canvas);
+  --speaker-surface: var(--color-surface);
+  --speaker-surface-soft: var(--color-surface-subtle);
+  --speaker-surface-selected: var(--color-surface-selected);
+  --speaker-head: var(--color-head);
+  --speaker-line: var(--color-line);
+  --speaker-line-strong: var(--color-line-strong);
+  --speaker-text: var(--color-text);
+  --speaker-muted: var(--color-text-muted);
+  --speaker-muted-2: var(--color-text-subtle);
+  --speaker-focus: var(--color-focus);
+  --speaker-focus-hover: var(--color-focus-hover);
+  --speaker-focus-soft: var(--color-info-bg);
+  --speaker-success: var(--color-success-fg);
+  --speaker-success-bg: var(--color-success-bg-strong);
+  --speaker-success-fg: var(--color-success-fg-strong);
+  --speaker-success-border: var(--color-success-border-strong);
+  --speaker-on-accent: var(--color-on-accent);
   --speaker-radius: 8px;
   --speaker-radius-sm: 6px;
   --speaker-space-1: 4px;
@@ -21,7 +25,7 @@
   --speaker-space-3: 12px;
   --speaker-space-4: 16px;
   --speaker-space-5: 24px;
-  --speaker-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
+  --speaker-shadow: var(--color-shadow-panel);
 }
 
 * { box-sizing: border-box; }
@@ -566,7 +570,7 @@ th:nth-child(4), td:nth-child(4) { width: 25%; }
 }
 
 .speaker-ai-badge.is-reviewed {
-  color: var(--speaker-success, #10b981);
+  color: var(--speaker-success);
 }
 
 .speaker-writeback-row-btn {
@@ -586,14 +590,14 @@ button.speaker-writeback-row-btn:hover:not(:disabled),
 .speaker-writeback-row-btn:hover {
   background: var(--speaker-focus) !important;
   border-color: var(--speaker-focus) !important;
-  color: #fff !important;
+  color: var(--speaker-on-accent) !important;
 }
 
 button.speaker-writeback-row-btn.is-written,
 .speaker-writeback-row-btn.is-written {
-  background: #10b981 !important;
-  border-color: #10b981 !important;
-  color: #fff !important;
+  background: var(--speaker-success-bg) !important;
+  border-color: var(--speaker-success-border) !important;
+  color: var(--speaker-success-fg) !important;
 }
 
 .speaker-writeback-group {
@@ -604,31 +608,31 @@ button.speaker-writeback-row-btn.is-written,
 
 .speaker-state.is-written,
 .speaker-row.is-written .speaker-state {
-  border-color: #86efac;
-  background: #dcfce7;
-  color: #15803d;
+  border-color: var(--speaker-success-border);
+  background: var(--speaker-success-bg);
+  color: var(--speaker-success-fg);
   font-weight: 700;
 }
 
 .speaker-row.is-written {
-  background: color-mix(in srgb, #10b981 4%, var(--speaker-surface));
+  background: color-mix(in srgb, var(--speaker-success) 4%, var(--speaker-surface));
 }
 
 .speaker-ai-badge.speaker-ai-badge--written {
-  color: #059669;
+  color: var(--speaker-success-fg);
 }
 
 .speaker-writeback-row-btn.is-written {
-  border-color: #86efac !important;
-  background: #f0fdf4 !important;
-  color: #166534 !important;
+  border-color: var(--speaker-success-border) !important;
+  background: var(--speaker-success-bg) !important;
+  color: var(--speaker-success-fg) !important;
 }
 
 button.speaker-writeback-row-btn.is-written:hover:not(:disabled),
 .speaker-writeback-row-btn.is-written:hover {
-  background: #10b981 !important;
-  border-color: #10b981 !important;
-  color: #fff !important;
+  background: var(--speaker-success) !important;
+  border-color: var(--speaker-success) !important;
+  color: var(--speaker-on-accent) !important;
 }
 
 .speaker-btn-secondary {
@@ -675,7 +679,7 @@ button.speaker-btn-secondary:hover:not(:disabled),
   border-radius: var(--speaker-radius);
   border: 1px solid var(--speaker-line);
   background: var(--speaker-surface-soft);
-  color: var(--speaker-ink);
+  color: var(--speaker-text);
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;

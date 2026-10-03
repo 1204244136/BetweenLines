@@ -5,34 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="transcomparator-session-token" content="">
   <title>BetweenLines 控制台</title>
+  <link rel="stylesheet" href="/workbench-theme.css">
   <style>
     :root {
-      color-scheme: light;
-      --bg: #eef1f6;
-      --surface: #ffffff;
-      --surface-subtle: #f6f8fb;
-      --surface-raised: #ffffff;
-      --head: #eaeef4;
-      --line: #dde3ec;
-      --line-strong: #c3ccd9;
-      --text: #161d27;
-      --muted: #5b6675;
-      --muted-2: #8a94a4;
-      --focus: #2a63cf;
-      --focus-hover: #1f4fa6;
-      --review: #fdeceb;
-      --review-strong: #c2392f;
-      --watch: #fdf3d8;
-      --watch-strong: #946312;
-      --ok: #e6f4ec;
-      --ok-strong: #1c7a42;
-      --info: #e9f1ff;
-      --info-strong: #2a63cf;
+      /* 控制台沿用工作台别名；颜色定义统一由 workbench-theme.css 承载。 */
+      --bg: var(--color-canvas);
+      --surface: var(--color-surface);
+      --surface-subtle: var(--color-surface-subtle);
+      --surface-raised: var(--color-surface-raised);
+      --head: var(--color-head);
+      --line: var(--color-line);
+      --line-strong: var(--color-line-strong);
+      --text: var(--color-text);
+      --muted: var(--color-text-muted);
+      --muted-2: var(--color-text-subtle);
+      --focus: var(--color-focus);
+      --focus-hover: var(--color-focus-hover);
+      --review: var(--color-danger-bg);
+      --review-strong: var(--color-danger-fg);
+      --watch: var(--color-warning-bg);
+      --watch-strong: var(--color-warning-fg);
+      --ok: var(--color-success-bg);
+      --ok-strong: var(--color-success-fg);
+      --info: var(--color-info-bg);
+      --info-strong: var(--color-info-fg);
+      --on-accent: var(--color-on-accent);
+      --action-danger-bg: var(--color-danger-bg-strong);
+      --action-danger-fg: var(--color-danger-fg-strong);
+      --action-danger-border: var(--color-danger-border-strong);
+      --action-danger-bg-hover: var(--color-danger-bg-hover);
+      --action-danger-fg-hover: var(--color-danger-fg-hover);
+      --action-danger-border-hover: var(--color-danger-border-hover);
+      --status-success-border: var(--color-success-border);
+      --status-warning-border: var(--color-warning-border);
+      --status-danger-border: var(--color-danger-border);
       --radius: 8px;
       --radius-sm: 6px;
       --radius-pill: 999px;
-      --shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.03);
-      --shadow-pop: 0 12px 28px rgba(16, 24, 40, 0.16);
+      --shadow-panel: var(--color-shadow-panel);
+      --shadow-pop: var(--color-shadow-pop);
       --space-1: 4px;
       --space-2: 8px;
       --space-3: 12px;
@@ -265,7 +276,7 @@
     }
     .dropzone.has-file {
       border-style: solid;
-      border-color: #b8dec5;
+      border-color: var(--status-success-border);
       background: var(--ok);
       color: var(--ok-strong);
     }
@@ -287,7 +298,7 @@
       align-items: center;
       min-height: 22px;
       padding: 1px 7px;
-      border: 1px solid #b8dec5;
+      border: 1px solid var(--status-success-border);
       border-radius: var(--radius-pill);
       background: color-mix(in srgb, var(--ok) 66%, var(--surface));
       color: var(--ok-strong);
@@ -327,7 +338,7 @@
     .file-folder:hover,
     .file-folder:focus-visible {
       border-color: var(--line-strong);
-      color: var(--ink);
+      color: var(--text);
       background: var(--surface);
     }
     .import-actions {
@@ -353,7 +364,7 @@
       border: 1px solid var(--line);
       border-radius: 6px;
       background: var(--surface);
-      color: var(--ink);
+      color: var(--text);
       font-size: 12px;
     }
     .local-path-input:focus {
@@ -476,7 +487,7 @@
       width: 100%;
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: #fff;
+      background: var(--surface);
       color: var(--text);
       font: inherit;
       font-size: 14px;
@@ -531,9 +542,9 @@
       text-decoration: none;
     }
     .btn:hover { border-color: var(--line-strong); }
-    .btn--primary { border-color: var(--focus); background: var(--focus); color: #fff; }
+    .btn--primary { border-color: var(--focus); background: var(--focus); color: var(--on-accent); }
     .btn--primary:hover { border-color: var(--focus-hover); background: var(--focus-hover); }
-    .btn--danger { border-color: #e6aaa5; background: var(--review); color: var(--review-strong); }
+    .btn--danger { border-color: var(--action-danger-border); background: var(--action-danger-bg); color: var(--action-danger-fg); }
     .btn--ghost { border-color: var(--line); background: var(--surface-subtle); color: var(--muted); }
     .btn:disabled, .btn.disabled { cursor: not-allowed; opacity: 0.56; pointer-events: none; }
     button:disabled {
@@ -565,9 +576,9 @@
       color: var(--muted);
       font-size: 13px;
     }
-    .status.ok { background: var(--ok); color: var(--ok-strong); border-color: #b8dec5; }
-    .status.warn { background: var(--watch); color: var(--watch-strong); border-color: #ead08d; }
-    .status.error { background: var(--review); color: var(--review-strong); border-color: #f1b6b0; }
+    .status.ok { background: var(--ok); color: var(--ok-strong); border-color: var(--status-success-border); }
+    .status.warn { background: var(--watch); color: var(--watch-strong); border-color: var(--status-warning-border); }
+    .status.error { background: var(--review); color: var(--review-strong); border-color: var(--status-danger-border); }
     table {
       width: 100%;
       border-collapse: collapse;

@@ -34,6 +34,7 @@ const outputDir = path.resolve(
 function readSpeakerWorkbenchAssets() {
   const publicDir = path.join(__dirname, "..", "..", "..", "public");
   return {
+    themeStyle: fs.readFileSync(path.join(publicDir, "workbench-theme.css"), "utf8"),
     workbenchStyle: fs.readFileSync(path.join(publicDir, "speaker-workbench-style.css"), "utf8"),
     aiPanelStyle: fs.readFileSync(path.join(publicDir, "ai-panel.css"), "utf8"),
     toastStyle: fs.readFileSync(path.join(publicDir, "toast.css"), "utf8"),
@@ -345,7 +346,7 @@ function renderHtml(model) {
 
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="transcomparator-session-token" content="">
-<title>说话人归属工作台</title><style>${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style></head>
+<title>说话人归属工作台</title><style>${assets.themeStyle}${assets.workbenchStyle}${assets.aiPanelStyle}${assets.toastStyle}${assets.confirmStyle}</style></head>
 <body><div class="speaker-app${bilingual ? " is-bilingual" : " is-monolingual"}">
   <header class="speaker-header"><div class="speaker-topbar">
     <div><p class="speaker-kicker">BetweenLines / 说话人归属</p><h1>说话人归属工作台</h1>
@@ -430,7 +431,7 @@ function renderHtml(model) {
           <button id="speakerAiStart" class="speaker-primary" type="button">开始 AI 推断</button>
           <button id="speakerAiStop" type="button" disabled>停止</button>
           <button id="speakerBatchAdopt" type="button" class="speaker-btn-secondary" title="将置信度 ≥ 80% 的发话批量写回原文件">批量写回 (≥80%)</button>
-          <label class="toggle-inline" style="font-size:12px;color:var(--speaker-muted,#666);display:inline-flex;align-items:center;gap:4px;cursor:pointer;" title="写回原文件前自动生成 .bak 备份副本；默认关闭"><input id="speakerWritebackBackup" type="checkbox">写回备份</label>
+          <label class="toggle-inline" style="font-size:12px;color:var(--speaker-muted);display:inline-flex;align-items:center;gap:4px;cursor:pointer;" title="写回原文件前自动生成 .bak 备份副本；默认关闭"><input id="speakerWritebackBackup" type="checkbox">写回备份</label>
           <button id="speakerAiClearCache" type="button">清除推断记录</button>
         </div>
       </div>

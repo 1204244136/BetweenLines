@@ -14,18 +14,18 @@
    ========================================================================== */
 
 .toast-stack {
-  --toast-line-strong: var(--line-strong, var(--speaker-line-strong, #c3ccd9));
-  --toast-surface: var(--surface, var(--speaker-surface, #ffffff));
-  --toast-text: var(--text, var(--speaker-text, #161d27));
-  --toast-muted-2: var(--muted-2, var(--speaker-muted-2, #667085));
-  --toast-head: var(--head, var(--speaker-head, #eaeef4));
-  --toast-info-strong: var(--info-strong, var(--speaker-focus, #2a63cf));
-  --toast-ok-strong: var(--ok-strong, #1c7a42);
-  --toast-watch-strong: var(--watch-strong, #946312);
-  --toast-review-strong: var(--review-strong, #c2392f);
+  --toast-line-strong: var(--line-strong, var(--speaker-line-strong, var(--color-line-strong)));
+  --toast-surface: var(--surface, var(--speaker-surface, var(--color-surface)));
+  --toast-text: var(--text, var(--speaker-text, var(--color-text)));
+  --toast-muted-2: var(--muted-2, var(--speaker-muted-2, var(--color-text-subtle)));
+  --toast-head: var(--head, var(--speaker-head, var(--color-head)));
+  --toast-info-strong: var(--info-strong, var(--speaker-focus, var(--color-info-fg)));
+  --toast-ok-strong: var(--ok-strong, var(--color-success-fg));
+  --toast-watch-strong: var(--watch-strong, var(--color-warning-fg));
+  --toast-review-strong: var(--review-strong, var(--color-danger-fg));
   --toast-radius: var(--radius, var(--speaker-radius, 8px));
   --toast-radius-pill: var(--radius-pill, 999px);
-  --toast-shadow-pop: var(--shadow-pop, 0 12px 28px rgba(16, 24, 40, 0.16));
+  --toast-shadow-pop: var(--shadow-pop, var(--color-shadow-pop));
   --toast-gap: var(--space-2, var(--speaker-space-2, 8px));
   --toast-font-size: var(--fs-section, 13px);
 
