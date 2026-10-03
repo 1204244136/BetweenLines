@@ -200,7 +200,7 @@ test("模型预设界面：渲染预设控件并在下拉框中呈现已存预�
 
   // 下拉列表包含默认选项和存储的预设
   assert.equal(select.children.length, 2);
-  assert.equal(select.children[0].textContent, "-- 自定义 / 未选择预设 --");
+  assert.equal(select.children[0].textContent, "新建预设");
   assert.equal(select.children[1].children[0].textContent, "https://api.deepseek.com/v1 / DeepSeek V3 (测试) · deepseek-chat");
 });
 
@@ -238,6 +238,62 @@ test("模型预设界面：选择预设时更新表单字段、启用操作按�
   // Toast 提示已应用预设
   const toasts = toastMessages(ui);
   assert.ok(toasts.some((msg) => msg.includes("已应用模型预设「https://api.anthropic.com/v1 / Claude 3.7 · claude-3-7-sonnet-20250219」")));
+});
+
+test("模型预设界面：切到「新建预设」清空 AI 服务区域并即时落盘", async () => {
+  const tools = createPresetTools();
+  const storage = storageFixture();
+  const p = tools.savePreset(storage, {
+    name: "Antigravity",
+    provider: "Antigravity",
+    protocol: "compatible",
+    baseUrl: "http://127.0.0.1:8045/v1",
+    apiKey: "sk-antigravity",
+    model: "gemini-3.8-flash-high",
+    reasoningEffort: "high",
+    concurrency: 8,
+  });
+
+  const ui = createWorkbench(storage);
+  const select = ui.element("aiPresetSelect");
+
+  select.value = p.id;
+  await select.dispatch("change");
+
+  // 先确认预设真的填进了区域，否则下面的「清空」断言可能因为字段本来就是空而假通过。
+  assert.equal(ui.element("aiProvider").value, "Antigravity");
+  assert.equal(ui.element("aiProtocol").value, "compatible");
+  assert.equal(ui.element("aiBaseUrl").value, "http://127.0.0.1:8045/v1");
+  assert.equal(ui.element("aiApiKey").value, "sk-antigravity");
+  assert.equal(ui.element("aiModel").value, "gemini-3.8-flash-high");
+  assert.equal(ui.element("aiConcurrency").value, 8);
+
+  select.value = "";
+  await select.dispatch("change");
+
+  // 连接与模型参数清空；没有空值语义的控件回落到默认档。
+  assert.equal(ui.element("aiProvider").value, "");
+  assert.equal(ui.element("aiProtocol").value, "local");
+  assert.equal(ui.element("aiBaseUrl").value, "");
+  assert.equal(ui.element("aiApiKey").value, "");
+  assert.equal(ui.element("aiModel").value, "");
+  assert.deepEqual(ui.element("aiModel").children.map((child) => child.value), ["", "custom"]);
+  assert.equal(ui.element("aiReasoningEffort").value, "");
+  assert.equal(ui.element("aiConcurrency").value, "3");
+  assert.equal(ui.element("aiPresetSave").disabled, true);
+  assert.equal(ui.element("aiPresetDelete").disabled, true);
+
+  // 清空必须落盘：刷新页面不能把上一条连接的地址与 Key 带回来。
+  const saved = JSON.parse(storage.getItem("translation-compare-ai-config-v2"));
+  assert.equal(saved.currentPresetId, "");
+  assert.equal(saved.provider, "");
+  assert.equal(saved.baseUrl, "");
+  assert.equal(saved.apiKey, "");
+  assert.equal(saved.model, "");
+  assert.equal(saved.concurrency, "3");
+
+  const toasts = toastMessages(ui);
+  assert.ok(toasts.some((msg) => msg.includes("已清空 AI 服务配置")));
 });
 
 test("模型预设界面：另存为预设创建新预设并自动选中", async () => {

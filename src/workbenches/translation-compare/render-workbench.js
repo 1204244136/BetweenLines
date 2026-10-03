@@ -172,7 +172,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       </div>
                       <div class="ai-preset-row">
                         <select id="aiPresetSelect">
-                          <option value="">-- 自定义 / 未选择预设 --</option>
+                          <option value="" title="清空下方 AI 服务配置，从零填写后点「另存为预设」保存">新建预设</option>
                         </select>
                         <div class="ai-preset-actions">
                           <button id="aiPresetSave" class="btn btn--subtle" type="button" title="将当前填写的配置覆盖保存到选中的预设" disabled>保存修改</button>
@@ -559,6 +559,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${formatAiErrorHoverTitle.toString()}
 
     const storageKey = ${JSON.stringify(storageKey)};
+    // 「新建预设」清空并发上限时回落到默认档：默认值只从唯一权威来源 ai/concurrency-limits.js 取，页面不再自带一份字面量。
+    const AI_CONCURRENCY_DEFAULT = ${concurrencyLimits.defaultConcurrency};
     const pageMeta = ${safeJson(clientMeta)};
 ${browserModelCapabilitiesSource()}
 ${assets.workbenchShared}

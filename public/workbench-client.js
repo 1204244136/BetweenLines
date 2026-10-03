@@ -923,11 +923,13 @@
       if (!aiIds.presetSelect) return;
       const presets = presetTools.listPresets(localStorage);
       const groups = presetTools.groupPresets(presets);
-      function fillSelect(select, emptyLabel, id) {
+      function fillSelect(select, emptyLabel, id, emptyTitle = "") {
         if (!select) return;
         const empty = document.createElement("option");
         empty.value = "";
         empty.textContent = emptyLabel;
+        // 空值项就是「新建预设」：它会清空下方配置，动作说明挂在选项提示里。
+        if (emptyTitle) empty.title = emptyTitle;
         select.replaceChildren(empty, ...groups.map((group) => {
           const optgroup = document.createElement("optgroup");
           optgroup.label = group.label;
@@ -943,7 +945,7 @@
         select.value = presets.some((preset) => preset.id === id) ? id : "";
         syncEnhancedSelect(select);
       }
-      fillSelect(aiIds.presetSelect, "-- 自定义 / 未选择预设 --", selectedId);
+      fillSelect(aiIds.presetSelect, "新建预设", selectedId, "清空下方 AI 服务配置，从零填写后点「另存为预设」保存");
       currentPresetId = aiIds.presetSelect.value;
       updatePresetActionButtons();
       fillSelect(aiIds.stage1Preset, "使用主配置", aiIds.stage1Preset?.value);
@@ -1017,6 +1019,44 @@
       if (aiIds.presetSelect) aiIds.presetSelect.value = preset.id;
       syncEnhancedSelect(aiIds.presetSelect);
       updatePresetActionButtons();
+      saveAiConfig();
+    }
+
+    // 地址被清空后旧模型列表与能力缓存一起作废，否则同名模型会带着上一条连接的思考档位。
+    // 保留「自定义...」入口：接口没列出模型名时，用户仍能在这里手填。
+    function clearModelOptions() {
+      aiModelOptions = [];
+      aiModelMetadataMap.clear();
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "";
+      const custom = document.createElement("option");
+      custom.value = "custom";
+      custom.textContent = "自定义...";
+      aiIds.model.replaceChildren(blank, custom);
+      aiIds.model.value = "";
+      aiIds.model.dataset.touched = "";
+      syncEnhancedSelect(aiIds.model);
+      updateInferenceSettingOptions();
+    }
+
+    // 「新建预设」：清空 AI 服务区域，让用户从零填写一条连接，再点「另存为预设」保存。
+    // 没有空值语义的控件回落到各自默认档——接口类型 → 本地默认、推理强度 → 模型默认、
+    // 并发上限 → 默认值（留空会被折算成 1，等于静默降速）。
+    function clearPresetFields() {
+      aiIds.provider.value = "";
+      aiIds.protocol.value = "local";
+      syncEnhancedSelect(aiIds.protocol);
+      setProtocolHint(protocolDefaults.local);
+      // 清空后的地址必须标记为已手改：否则状态轮询会用本地默认地址把它填回来。
+      aiIds.baseUrl.value = "";
+      aiIds.baseUrl.dataset.touched = "1";
+      aiIds.apiKey.value = "";
+      savedGptReasoningEffort = "";
+      savedNonGptIntensity = "";
+      clearModelOptions();
+      aiIds.concurrency.value = String(AI_CONCURRENCY_DEFAULT);
+      // 清空结果立即落盘：刷新页面不能把上一条连接的地址与 Key 悄悄带回来。
       saveAiConfig();
     }
 
@@ -4950,9 +4990,9 @@
         const selectedId = aiIds.presetSelect.value;
         if (!selectedId) {
           currentPresetId = "";
+          clearPresetFields();
           updatePresetActionButtons();
-          saveAiConfig();
-          showToast("已切换到自定义配置", { tone: "info", durationMs: 3000 });
+          showToast("已清空 AI 服务配置，填写后点「另存为预设」保存新预设", { tone: "info", durationMs: 6000 });
           return;
         }
         const preset = presetTools.getPreset(localStorage, selectedId);
