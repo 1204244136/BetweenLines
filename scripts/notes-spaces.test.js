@@ -69,8 +69,8 @@ test("自动找回绝不为未确认的历史记录凭空伪造人工确认", ()
 });
 
 test("预览需要显式索引操作且绝不覆盖预览期间新增的行", async () => {
-  const unrelated = "translation-compare-notes-v7:other:otherRows";
-  const ui = createWorkbench(storageFixture({ [key]: "{}", [unrelated]: JSON.stringify({ 1: { note: "其他项目" } }) }));
+  const historical = sourceKey;
+  const ui = createWorkbench(storageFixture({ [key]: "{}", [historical]: JSON.stringify({ 1: { note: "历史项目" } }) }));
   ui.run('previewNotesRecovery(notesSpaceInventory.find(space => !space.current))');
   assert.equal(ui.element("applyNotesRecovery").disabled, true);
   ui.run('previewNotesRecovery(notesSpaceInventory.find(space => !space.current), true)');
@@ -161,8 +161,42 @@ test("部分文件导入保留每个现有空间并如实报告其余失败", ()
   assert.throws(() => helpers.decodeBackup({ 1: "not a note" }));
 });
 
+test("历史面板按项目隔离，跨项目空间保留在存储中但不可从当前页操作", async () => {
+  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
+  const storage = storageFixture({
+    [key]: "{}",
+    [sourceKey]: JSON.stringify({ 1: { note: "本项目历史" } }),
+    [foreignKey]: JSON.stringify({ 1: { note: "其他项目历史" } }),
+  });
+  const ui = createWorkbench(storage);
+  const visible = JSON.parse(ui.run("JSON.stringify(notesSpaceInventory.filter((space) => !space.current).map((space) => space.key))"));
+  assert.deepEqual(visible, [sourceKey]);
+  assert.equal(storage.getItem(foreignKey), JSON.stringify({ 1: { note: "其他项目历史" } }), "隔离只影响当前页面，不得删除其他项目空间");
+  assert.equal(ui.run(`collectNotesSpaces().some((space) => space.key === ${JSON.stringify(foreignKey)})`), false);
+  const backup = JSON.parse(ui.run("JSON.stringify(notesBackup(collectNotesSpaces()))"));
+  assert.equal(backup.spaces.some((space) => space.key === foreignKey), false, "当前项目备份不得带出其他项目记录");
+
+  await ui.element("clearHistoryNotes").dispatch("click");
+  assert.equal(storage.getItem(sourceKey), null, "清空历史只删除当前项目空间");
+  assert.notEqual(storage.getItem(foreignKey), null, "清空历史不得删除其他项目空间");
+});
+
+test("导入裸备注归入当前项目，带来源项目键的空间保持来源隔离", () => {
+  const storage = storageFixture({ [key]: "{}" });
+  const legacyRaw = JSON.stringify({ 1: { note: "裸备份" } });
+  const imported = helpers.importBackup(storage, [{ key: "translation-compare-notes-legacy-file", raw: legacyRaw }], key, 123);
+  assert.deepEqual(imported.imported, ["translation-compare-notes-v7:project:legacy-file"]);
+  assert.equal(storage.getItem("translation-compare-notes-v7:project:legacy-file"), legacyRaw);
+
+  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
+  const foreignRaw = JSON.stringify({ 1: { note: "其他项目备份" } });
+  const foreign = helpers.importBackup(storage, [{ key: foreignKey, raw: foreignRaw }], key, 123);
+  assert.deepEqual(foreign.imported, [foreignKey]);
+  assert.equal(storage.getItem(foreignKey), foreignRaw);
+});
+
 test("清空当前备注保留历史，清空历史保留当前空间", async () => {
-  const historyKey = "translation-compare-notes-v7:previous:rows";
+  const historyKey = sourceKey;
   const ui = createWorkbench(storageFixture({
     [key]: JSON.stringify({ 1: { note: "当前记录" } }),
     [historyKey]: JSON.stringify({ 1: { note: "历史记录" } }),
@@ -179,7 +213,7 @@ test("清空当前备注保留历史，清空历史保留当前空间", async ()
 });
 
 test("清空类操作走页内确认弹窗：取消时不落盘，弹窗带上条数与影响范围", async () => {
-  const historyKey = "translation-compare-notes-v7:previous:rows";
+  const historyKey = sourceKey;
   const storage = storageFixture({
     [key]: JSON.stringify({ 1: { note: "当前记录" } }),
     [historyKey]: JSON.stringify({ 1: { note: "历史记录" } }),

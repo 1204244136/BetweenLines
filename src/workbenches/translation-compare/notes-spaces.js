@@ -127,9 +127,15 @@ function createNotesTools(alignLegacyNotes) {
     const imported = [];
     let skipped = 0;
     let error = null;
+    const currentInfo = identity(currentKey);
     for (const space of spaces) {
       let key = space.key;
       try {
+        // 裸备注对象没有来源项目。导入到具体工作台时把它归入当前项目的
+        // 命名空间；带有明确空间键的备份保留来源项目，避免跨项目记录混入当前历史。
+        if (key === prefix + "legacy-file" && currentInfo.project) {
+          key = `${prefix}${currentInfo.version || "v7"}:${currentInfo.project}:legacy-file`;
+        }
         const base = key.replace(/:import-\d+(?:-\d+)?$/, "");
         let duplicate = storage.getItem(key) === space.raw;
         for (let index = 0; !duplicate && index < storage.length; index += 1) {

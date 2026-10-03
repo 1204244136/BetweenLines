@@ -75,15 +75,17 @@ test("没有任何一条能按内容对上时如实告知，并指向按行号�
   assert.equal(ui.run("toasts[toasts.length - 1].tone"), "watch", "一条都没对上时要提醒，而不是报成功");
 });
 
-test("另一对输入文件的历史备注不参与自动找回，只保留为手动预览项", () => {
+test("另一对输入文件的历史备注不参与找回，当前项目历史面板也不可见", () => {
   const unrelated = "translation-compare-notes-v7:another-project:otherRows";
-  const ui = createWorkbench(storageFixture({
+  const storage = storageFixture({
     [unrelated]: JSON.stringify({ 1: { note: "另一项目的记录", done: true, manualDone: true, rowSig: "sig-1" } }),
-  }));
+  });
+  const ui = createWorkbench(storage);
   assert.equal(ui.run("Object.keys(notes).length"), 0);
   assert.equal(ui.storage.getItem(currentKey), null);
   assert.equal(ui.run("toasts.some((toast) => /找回|历史备注/.test(toast.message))"), false);
-  assert.equal(ui.run("notesSpaceInventory.filter((space) => !space.current).length"), 1, "无关空间仍允许用户手动预览");
+  assert.equal(ui.run("notesSpaceInventory.filter((space) => !space.current).length"), 0, "无关空间不得出现在当前项目历史面板");
+  assert.notEqual(storage.getItem(unrelated), null, "隔离不得删除其他项目空间");
 });
 
 test("预览找回时本页已有记录的行也按签名合并，不丢历史空间里的人工确认", () => {
@@ -181,7 +183,7 @@ test("载入自愈只碰挨过旧版损伤的空间：本页没有未校验记�
   assert.equal(ui.run("toasts.some((toast) => /已修复/.test(toast.message))"), false);
 });
 
-test("手动预览别的项目的空间时，内容对得上的行同样恢复人工确认", () => {
+test("别的项目空间不可从当前工作台恢复，且来源仍保留", () => {
   const otherProject = "translation-compare-notes-v7:another-project:otherRows";
   const space = {};
   for (const index of [3, 5, 7]) {
@@ -195,8 +197,6 @@ test("手动预览别的项目的空间时，内容对得上的行同样恢复�
     [otherProject]: JSON.stringify(space),
   }), { rows: healedRowSet() });
   assert.equal(ui.run('notes["3"].manualDone'), false, "自动层只管同一输入项目，别的项目要用户自己预览");
-  ui.run(`previewNotesRecovery(collectNotesSpaces().find((item) => item.key === ${JSON.stringify(otherProject)}))`);
-  assert.equal(ui.run('notes["3"].manualDone'), true);
-  assert.equal(ui.run("pendingNotesRecovery.plan.approvedRestored"), 3);
-  assert.match(ui.element("notesRecoveryPreview").innerHTML, /恢复确认/);
+  assert.equal(ui.run(`notesSpaceInventory.some((item) => item.key === ${JSON.stringify(otherProject)})`), false, "其他项目空间不得进入当前项目的恢复入口");
+  assert.notEqual(ui.storage.getItem(otherProject), null, "来源空间必须保留");
 });
