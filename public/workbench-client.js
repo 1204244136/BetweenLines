@@ -6199,11 +6199,18 @@
       if (!file) return;
       try {
         const spaces = notesTools.decodeBackup(JSON.parse(await file.text()));
-        if (!(await askConfirm("从备份登记 " + spaces.length + " 个空间？\n相同内容跳过；同名且内容不同会保留为副本。导入后可在列表预览找回。", { title: "导入备份", confirmText: "导入", danger: false }))) return;
+        if (!(await askConfirm("从备份登记 " + spaces.length + " 个空间？\n相同内容跳过；同名且内容不同会保留为副本。当前项目空间可在历史列表预览，其他项目空间会保留在对应项目中。", { title: "导入备份", confirmText: "导入", danger: false }))) return;
         const result = notesTools.importBackup(localStorage, spaces, storageKey);
         renderNotesSpaces();
+        const currentProject = notesTools.identity(storageKey).project;
+        const foreignImported = currentProject
+          ? result.imported.filter((key) => notesTools.identity(key).project !== currentProject).length
+          : 0;
         notesPanelStatus("已导入 " + result.imported.length + " 个空间，跳过 " + result.skipped + " 个相同空间。"
-          + (result.error ? "另有 " + result.failed + " 个未能保存，请先导出并清理空间后重试。" : "可在历史列表预览找回。"),
+          + (result.error ? "另有 " + result.failed + " 个未能保存，请先导出并清理空间后重试。"
+            : foreignImported
+              ? "其中 " + foreignImported + " 个属于其他项目，当前页面不会显示；切换到对应项目后可查看。"
+              : "可在当前项目历史列表预览找回。"),
           { tone: result.error ? "watch" : "success" });
       } catch (error) { notesPanelStatus("导入失败：" + error.message, { tone: "error" }); }
     });

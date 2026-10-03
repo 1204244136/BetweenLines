@@ -195,6 +195,19 @@ test("导入裸备注归入当前项目，带来源项目键的空间保持来�
   assert.equal(storage.getItem(foreignKey), foreignRaw);
 });
 
+test("导入其他项目备份时明确提示当前页不会显示", async () => {
+  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
+  const ui = createWorkbench(storageFixture({ [key]: "{}" }));
+  ui.element("importNotesFile").files = [{ text: async () => JSON.stringify({
+    format: "betweenlines-notes", version: 1,
+    spaces: [{ key: foreignKey, raw: JSON.stringify({ 1: { note: "其他项目历史" } }) }],
+  }) }];
+  await ui.element("importNotesFile").dispatch("change");
+  assert.match(ui.element("notesPanelStatus").textContent, /其他项目.*当前页面不会显示/);
+  assert.equal(ui.run(`notesSpaceInventory.some((space) => space.key === ${JSON.stringify(foreignKey)})`), false);
+  assert.notEqual(ui.storage.getItem(foreignKey), null);
+});
+
 test("清空当前备注保留历史，清空历史保留当前空间", async () => {
   const historyKey = sourceKey;
   const ui = createWorkbench(storageFixture({
