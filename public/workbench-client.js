@@ -5966,7 +5966,11 @@
 
     function collectNotesSpaces() {
       serializeNotes(); // Export also includes fresh signatures before a deferred save.
-      return notesTools.inventory(localStorage, storageKey, notes);
+      // 浏览器的 localStorage 由多个项目共享，但备注空间属于 projectKey。
+      // 当前工作台只展示、导出和操作本项目的空间；其他项目的历史仍留在浏览器里，
+      // 切换到对应项目后再由它自己的工作台读取，避免跨项目误找回或误清空。
+      return notesTools.inventory(localStorage, storageKey, notes)
+        .filter((space) => space.current || space.sameProject);
     }
 
     function notesBackup(spaces) {
@@ -6030,7 +6034,7 @@
       const history = notesSpaceInventory.filter((space) => !space.current);
       const totalKb = (notesSpaceInventory.reduce((total, space) => total + space.bytes, 0) / 1024).toFixed(1);
       notesPanelIds.current.innerHTML = notesSpaceMarkup(current, notesSpaceInventory.indexOf(current));
-      notesPanelIds.summary.textContent = history.length + " 个历史空间 · 本地备注约 " + totalKb + " KB";
+      notesPanelIds.summary.textContent = history.length + " 个本项目历史空间 · 本地备注约 " + totalKb + " KB";
       notesPanelIds.list.innerHTML = history.length
         ? history.map((space) => notesSpaceMarkup(space, notesSpaceInventory.indexOf(space))).join('')
         : '<div class="notes-space-empty">暂无历史记录。可导入之前导出的 JSON 备份。</div>';

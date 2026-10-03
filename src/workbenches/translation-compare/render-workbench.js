@@ -457,7 +457,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
           <div class="notes-body">
             <div class="notes-toolbar">
-              <p class="panel-desc">找回历史备注，或用 JSON 在浏览器之间备份与迁移。</p>
+              <p class="panel-desc">仅显示当前项目的历史备注；切换项目后会自动切换到对应历史。可用 JSON 在浏览器之间备份与迁移。</p>
               <div class="notes-actions">
                 <button id="exportAllNotes" class="btn" type="button">备份全部</button>
                 <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
@@ -469,10 +469,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
             <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
             <div id="notesCurrentSpace"></div>
-            <div class="notes-history-heading"><strong>历史记录</strong><span id="notesSpaceSummary"></span></div>
+            <div class="notes-history-heading"><strong>当前项目历史记录</strong><span id="notesSpaceSummary"></span></div>
             <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
             <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
-            <p class="notes-hint">优先按内容找回，保留本页已有记录。仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
+            <p class="notes-hint">历史空间按项目标识隔离：本页只读取当前项目的记录，其他项目的记录会保留在浏览器里，切换到对应项目后再显示。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
           </div>
         </details>
         </div>
