@@ -181,6 +181,27 @@ test("历史面板按项目隔离，跨项目空间保留在存储中但不可�
   assert.notEqual(storage.getItem(foreignKey), null, "清空历史不得删除其他项目空间");
 });
 
+test("切换工作台项目时各自读取对应历史空间", () => {
+  const projectA = "project-a";
+  const projectB = "project-b";
+  const currentA = `translation-compare-notes-v7:${projectA}:rows`;
+  const historyA = `translation-compare-notes-v7:${projectA}:rows-old`;
+  const currentB = `translation-compare-notes-v7:${projectB}:rows`;
+  const historyB = `translation-compare-notes-v7:${projectB}:rows-old`;
+  const storage = storageFixture({
+    [currentA]: JSON.stringify({ 1: { note: "项目 A 当前" } }),
+    [historyA]: JSON.stringify({ 2: { note: "项目 A 历史" } }),
+    [currentB]: JSON.stringify({ 1: { note: "项目 B 当前" } }),
+    [historyB]: JSON.stringify({ 2: { note: "项目 B 历史" } }),
+  });
+  const uiA = createWorkbench(storage, { projectKey: projectA, currentKey: currentA });
+  const visibleA = JSON.parse(uiA.run("JSON.stringify(notesSpaceInventory.filter((space) => !space.current).map((space) => space.key))"));
+  assert.deepEqual(visibleA, [historyA]);
+  const uiB = createWorkbench(storage, { projectKey: projectB, currentKey: currentB });
+  const visibleB = JSON.parse(uiB.run("JSON.stringify(notesSpaceInventory.filter((space) => !space.current).map((space) => space.key))"));
+  assert.deepEqual(visibleB, [historyB]);
+});
+
 test("导入裸备注归入当前项目，带来源项目键的空间保持来源隔离", () => {
   const storage = storageFixture({ [key]: "{}" });
   const legacyRaw = JSON.stringify({ 1: { note: "裸备份" } });

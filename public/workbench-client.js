@@ -239,7 +239,7 @@
       return canonical;
     }
 
-    // 只在从未保存过、且属于同一输入项目的空间自动恢复；其他项目只进入手动预览列表。
+    // 只在从未保存过、且属于同一输入项目的空间自动恢复；其他项目不进入当前页，切换对应项目再处理。
     // 已有备注（包括刻意清空的空间）同样由用户预览后合并。
     if (initialRaw === null) {
       const candidates = notesTools.inventory(localStorage, storageKey, notes)
