@@ -208,7 +208,15 @@ function findNavDocument(manifest) {
 function isNonBodyNavLabel(label) {
   if (!label) return false;
   if (/禁[书書]目[录録]|魔[導道][书書]目[录録]/i.test(label)) return false;
-  return /後記|后记|あとがき|特典|番外|extra|bonus|版權|版权|colophon|copyright|cover|書封|封面|(?:^|\s|[【\[（(])(?:目錄|目录|目\s*次|目\s*录|contents)(?:\s|$|[：:】\]）)])|制作信息|簡介|简介/i.test(label);
+  return /後記|后记|あとがき|特典|番外|extra|bonus|版權|版权|colophon|copyright|cover|書封|封面|(?:^|\s|[【\[（(])(?:目錄|目录|目\s*次|目\s*录|contents)(?:\s|$|[：:】\]）)])|制作信息|製作信息|簡介|简介|^(?:备注|備註|注释|註釋|译注|譯注|notes?)(?:\s|$|[：:])/i.test(label);
+}
+
+function isNonBodyDocument(filePath, labels) {
+  const basename = path.posix.basename(filePath).replace(/\.x?html?$/i, "");
+  const packagingName = /(?:^|[-_])(?:information|introduction|notes?|navigation|contents|toc|cover|back_cover)(?:_p-\d+)?$/i;
+  const packagingLabel = /^(?:制作信息|製作信息|简介|簡介|备注|備註|译注|譯注|注释|註釋|notes?|navigation|contents|目录|目錄|目\s*次|cover|封面|書封)(?:\s|$|[：:])/i;
+  // Keep afterwords/copyright markers for the downstream end-boundary rules.
+  return packagingName.test(basename) || (!labels.some(isBodyNavLabel) && labels.some((label) => packagingLabel.test(label)));
 }
 
 function isBodyNavLabel(label) {
@@ -401,7 +409,16 @@ function selectBodySpineIndexes(infos) {
 }
 
 async function readEpubTextWithPandoc(file, options = {}) {
-  return withEpubFile(file, (packed) => readPackedEpubTextWithPandoc(packed, options));
+  return withEpubFile(file, (packed) => readPackedEpubTextWithPandoc(packed, options), {
+    prepareArchive: async (zip) => {
+      const documents = await readEpubSpineDocumentsFromArchive(zip, options);
+      for (const document of documents) {
+        if (!document.isNonBodyDocument) continue;
+        // Remove whole non-story pages before Pandoc loses their EPUB boundaries.
+        zip.file(document.path, '<html xmlns="http://www.w3.org/1999/xhtml"><head><title></title></head><body></body></html>');
+      }
+    },
+  });
 }
 
 async function readPackedEpubTextWithPandoc(file, options = {}) {
@@ -422,16 +439,20 @@ async function readPackedEpubTextWithPandoc(file, options = {}) {
 
 async function readEpubSpineDocuments(file, options = {}) {
   const zip = await loadEpubArchive(file);
+  return readEpubSpineDocumentsFromArchive(zip, options);
+}
+
+async function readEpubSpineDocumentsFromArchive(zip, options = {}) {
   const containerFile = zip.file("META-INF/container.xml");
-  if (!containerFile) throw new Error(`Missing META-INF/container.xml in ${file}`);
+  if (!containerFile) throw new Error("Missing META-INF/container.xml in EPUB");
 
   const container = parser.parse(await containerFile.async("string"));
   const rootfile = asArray(container.container?.rootfiles?.rootfile)[0];
   const opfPath = rootfile?.["full-path"];
-  if (!opfPath) throw new Error(`Cannot find OPF path in ${file}`);
+  if (!opfPath) throw new Error("Cannot find OPF path in EPUB");
 
   const opfFile = zip.file(opfPath);
-  if (!opfFile) throw new Error(`Missing OPF file ${opfPath} in ${file}`);
+  if (!opfFile) throw new Error(`Missing OPF file ${opfPath} in EPUB`);
 
   const opf = parser.parse(await opfFile.async("string"));
   const manifest = asArray(opf.package?.manifest?.item);
@@ -463,7 +484,10 @@ async function readEpubSpineDocuments(file, options = {}) {
     const text = normalizeEpubText(epubHtmlToText(preservedHtml, options));
     const index = spineInfos.length;
     const labels = labelsBySpineIndex.get(index) || [];
-    spineInfos.push(analyzeSpineDocument(rawHtml, text, labels));
+    spineInfos.push({
+      ...analyzeSpineDocument(rawHtml, text, labels),
+      isNonBodyDocument: isNonBodyDocument(item.path, labels),
+    });
   }
   const bodyIndexes = selectBodySpineIndexes(spineInfos);
   return spineInfos.map((info, spineIndex) => ({
@@ -472,7 +496,8 @@ async function readEpubSpineDocuments(file, options = {}) {
     href: spineItems[spineIndex].item.href,
     labels: info.labels,
     text: info.text,
-    bodySelected: bodyIndexes ? bodyIndexes.has(spineIndex) : null,
+    bodySelected: info.isNonBodyDocument ? false : bodyIndexes ? bodyIndexes.has(spineIndex) : null,
+    isNonBodyDocument: info.isNonBodyDocument,
     isBodyCandidate: info.isBodyCandidate,
     isStructuralOnly: info.isStructuralOnly,
     isHardEndBoundary: info.isHardEndBoundary,

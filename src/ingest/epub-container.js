@@ -76,9 +76,10 @@ async function validateEpubArchive(zip) {
   if (!documents) throw new Error("EPUB OPF 中没有可读取的 spine 正文文档。");
 }
 
-async function withEpubFile(file, read) {
-  if (!fs.statSync(file).isDirectory()) return read(file);
+async function withEpubFile(file, read, options = {}) {
+  if (!fs.statSync(file).isDirectory() && !options.prepareArchive) return read(file);
   const zip = await loadEpubArchive(file);
+  if (options.prepareArchive) await options.prepareArchive(zip);
   const workDir = storageLayout().workDir;
   fs.mkdirSync(workDir, { recursive: true });
   const temporaryDir = fs.mkdtempSync(path.join(workDir, "epub-directory-"));
