@@ -110,3 +110,99 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.stylistConfig, null);
   assert.equal(config.arbiterConfig, null);
 });
+
+test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当前并发上限/触顶规则", async () => {
+  const ui = createWorkbench();
+
+  // 写入 3 个模型预设
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "p1", name: "词元聚合", protocol: "compatible", model: "v3", concurrency: 4 },
+    { id: "p2", name: "火山方舟", protocol: "compatible", model: "doubao", concurrency: 8 },
+    { id: "p3", name: "WorkBud", protocol: "compatible", model: "claude", concurrency: 32 },
+  ]));
+
+  ui.run("restoreAiConfig()");
+
+  const s1Dropdown = ui.element("stage1AppliedDropdown");
+  const s1Trigger = ui.element("stage1AppliedTrigger");
+  const s1Value = ui.element("stage1AppliedValue");
+  const s1Menu = ui.element("stage1AppliedMenu");
+  const s1Tags = ui.element("stage1PresetTags");
+  const s1Select = ui.element("stage1PresetSelect");
+  const s1Add = ui.element("stage1PresetAdd");
+
+  assert.ok(s1Dropdown, "阶段一适用预设下拉栏存在");
+  assert.ok(s1Trigger, "阶段一适用预设 Trigger 存在");
+  assert.ok(s1Value, "阶段一适用预设文本展示存在");
+  assert.ok(s1Menu, "阶段一适用预设浮层菜单存在");
+  assert.equal(s1Menu.hidden, true, "菜单默认收起");
+
+  // 1. 默认无预设时：阶段一显示「适用：主配置」
+  assert.equal(s1Value.textContent, "适用：主配置");
+
+  // 2. 点击 Trigger 展开下拉菜单，再次点击收起
+  s1Trigger.click();
+  assert.equal(s1Menu.hidden, false, "点击 Trigger 展开适用预设菜单");
+  assert.equal(s1Trigger.getAttribute("aria-expanded"), "true");
+
+  s1Trigger.click();
+  assert.equal(s1Menu.hidden, true, "再次点击 Trigger 收起适用预设菜单");
+  assert.equal(s1Trigger.getAttribute("aria-expanded"), "false");
+
+  // 3. 依次添加 3 个预设到阶段一
+  s1Select.value = "p1";
+  s1Add.click();
+  assert.match(s1Value.textContent, /适用：.*词元聚合/);
+
+  s1Select.value = "p2";
+  s1Add.click();
+  assert.equal(s1Value.textContent, "适用 (2)");
+
+  s1Select.value = "p3";
+  s1Add.click();
+  // 3 个预设被收纳进下拉栏中，标题为「适用 (3)」，头部保持整洁
+  assert.equal(s1Value.textContent, "适用 (3)");
+  assert.equal(s1Tags.children.length, 3, "下拉菜单内包含 3 个预设条目");
+
+  // 4. 并发信息展示规则：未运行时，额定并发上限 32 不展示
+  const tag1 = s1Tags.children[0];
+  const tag2 = s1Tags.children[1];
+  const tag3 = s1Tags.children[2];
+  assert.equal(tag1.children[1].textContent, "", "未运行时不显示「并发上限 4」占位");
+  assert.match(tag1.children[1].title, /额定并发上限 4/);
+  assert.equal(tag3.children[1].textContent, "", "未运行时不显示「并发上限 32」占位");
+  assert.match(tag3.children[1].title, /额定并发上限 32/);
+
+  // 5. 运行状态下：展示「当前并发数/当前并发上限」，触顶时提示「触顶」
+  ui.run(`
+    latestPresetPipelines = {
+      stage1: [
+        { presetId: "p1", inFlight: 2, quota: 3, configuredConcurrency: 4, pending: 5, activeRows: [10, 11] },
+        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, pending: 1, activeRows: [12] },
+        { presetId: "p3", inFlight: 0, quota: 16, configuredConcurrency: 32, pending: 0, activeRows: [] },
+      ]
+    };
+    renderStagePresetSelection("stage1");
+  `);
+
+  const activeTag1 = s1Tags.children[0];
+  const activeTag2 = s1Tags.children[1];
+  const activeTag3 = s1Tags.children[2];
+
+  // p1: 运行 2，配额 3，未触顶（2 < 4）
+  assert.equal(activeTag1.children[1].textContent, "并发 2/3 · 排队 5");
+  assert.match(activeTag1.children[1].title, /当前运行 2 \/ 动态配额 3 \/ 配置并发上限 4 \/ 待派发 5/);
+
+  // p2: 运行 8，配额 8，额定上限 8，已触顶（8 >= 8）
+  assert.equal(activeTag2.children[1].textContent, "并发 8/8 · 触顶 · 排队 1");
+  assert.match(activeTag2.children[1].title, /已触顶/);
+
+  // Trigger 汇总显示：inFlight=2+8+0=10, quota=3+8+16=27
+  assert.match(s1Value.textContent, /适用 \(3\) · 并发 10\/27·触顶/);
+
+  // 6. 移除预设：点击 p3 的删除按钮
+  const removeBtn3 = activeTag3.children[2];
+  removeBtn3.click();
+  assert.match(s1Value.textContent, /适用 \(2\)/);
+  assert.equal(s1Tags.children.length, 2, "移除后菜单内剩余 2 个条目");
+});

@@ -77,10 +77,61 @@
     let latestPresetPipelines = {};
     const stagePresetSelections = { stage1: [], stage2: [], stage3: [] };
     const stagePresetControls = {
-      stage1: { select: "stage1Preset", add: "stage1PresetAdd", tags: "stage1PresetTags" },
-      stage2: { select: "stage2Preset", add: "stage2PresetAdd", tags: "stage2PresetTags" },
-      stage3: { select: "stage3Preset", add: "stage3PresetAdd", tags: "stage3PresetTags" },
+      stage1: {
+        select: "stage1Preset",
+        add: "stage1PresetAdd",
+        tags: "stage1PresetTags",
+        dropdown: "stage1AppliedDropdown",
+        trigger: "stage1AppliedTrigger",
+        value: "stage1AppliedValue",
+        menu: "stage1AppliedMenu",
+      },
+      stage2: {
+        select: "stage2Preset",
+        add: "stage2PresetAdd",
+        tags: "stage2PresetTags",
+        dropdown: "stage2AppliedDropdown",
+        trigger: "stage2AppliedTrigger",
+        value: "stage2AppliedValue",
+        menu: "stage2AppliedMenu",
+      },
+      stage3: {
+        select: "stage3Preset",
+        add: "stage3PresetAdd",
+        tags: "stage3PresetTags",
+        dropdown: "stage3AppliedDropdown",
+        trigger: "stage3AppliedTrigger",
+        value: "stage3AppliedValue",
+        menu: "stage3AppliedMenu",
+      },
     };
+
+    function closeAllStageAppliedMenus() {
+      for (const stage of ["stage1", "stage2", "stage3"]) {
+        const controls = stagePresetControls[stage];
+        const menu = aiIds[controls.menu];
+        const trigger = aiIds[controls.trigger];
+        const dropdown = aiIds[controls.dropdown];
+        if (menu) menu.hidden = true;
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+        if (dropdown) dropdown.classList.remove("is-open");
+      }
+    }
+
+    function toggleStageAppliedMenu(stage) {
+      const controls = stagePresetControls[stage];
+      const menu = aiIds[controls.menu];
+      const trigger = aiIds[controls.trigger];
+      const dropdown = aiIds[controls.dropdown];
+      if (!menu || !trigger || trigger.disabled) return;
+      const isOpen = !menu.hidden;
+      closeAllStageAppliedMenus();
+      if (!isOpen) {
+        menu.hidden = false;
+        trigger.setAttribute("aria-expanded", "true");
+        if (dropdown) dropdown.classList.add("is-open");
+      }
+    }
 
     function committedStagePresetIds(stage) {
       const ids = stagePresetSelections[stage] || [];
@@ -92,39 +143,58 @@
     function renderStagePresetSelection(stage) {
       const controls = stagePresetControls[stage];
       const tags = aiIds[controls.tags];
+      const trigger = aiIds[controls.trigger];
+      const valueEl = aiIds[controls.value];
       if (!tags) return;
       const ids = stagePresetSelections[stage] || [];
+      const stagePipelines = Array.isArray(latestPresetPipelines[stage]) ? latestPresetPipelines[stage] : [];
+
+      let stageInFlight = 0;
+      let stageQuota = 0;
+      let stageAnyTopped = false;
+      let hasActiveRuntime = false;
+
       tags.replaceChildren(...ids.map((id) => {
         const preset = presetTools.getPreset(localStorage, id);
-        const runtime = (Array.isArray(latestPresetPipelines[stage]) ? latestPresetPipelines[stage] : [])
-          .find((item) => String(item.presetId) === String(id));
-        const tag = document.createElement("span");
+        const runtime = stagePipelines.find((item) => String(item.presetId) === String(id));
+        const configuredConcurrency = Math.max(1, Number(runtime?.configuredConcurrency) || Number(preset?.concurrency) || 3);
+        const tag = document.createElement("div");
         tag.className = "ai-stage-preset-tag";
         const label = document.createElement("span");
         label.className = "ai-stage-preset-tag-label";
         label.textContent = preset ? presetTools.presetLabel(preset) : id;
         label.title = label.textContent;
+
         const runtimeLabel = document.createElement("span");
         runtimeLabel.className = "ai-stage-preset-runtime";
         if (runtime) {
           const inFlight = Math.max(0, Number(runtime.inFlight) || 0);
           const quota = Math.max(0, Number(runtime.quota) || 0);
-          const configuredConcurrency = Math.max(quota, Number(runtime.configuredConcurrency) || Number(preset?.concurrency) || quota);
           const pending = Math.max(0, Number(runtime.pending) || 0);
-          runtimeLabel.textContent = `并发 ${inFlight}/${quota} · 排队 ${pending}`;
+          const topped = configuredConcurrency > 0 && inFlight >= configuredConcurrency;
+          stageInFlight += inFlight;
+          stageQuota += quota;
+          if (topped) stageAnyTopped = true;
+          if (inFlight > 0 || quota > 0 || pending > 0) hasActiveRuntime = true;
+
+          runtimeLabel.textContent = `并发 ${inFlight}/${quota}` + (topped ? " · 触顶" : "") + (pending > 0 ? ` · 排队 ${pending}` : "");
           const activeRows = Array.isArray(runtime.activeRows) ? runtime.activeRows : [];
           runtimeLabel.title = `当前运行 ${inFlight} / 动态配额 ${quota} / 配置并发上限 ${configuredConcurrency} / 待派发 ${pending}`
+            + (topped ? "（已触顶）" : "")
             + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : "");
         } else {
-          runtimeLabel.textContent = `并发上限 ${Math.max(1, Number(preset?.concurrency) || 3)}`;
-          runtimeLabel.title = "该预设的配置并发上限";
+          // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
+          runtimeLabel.textContent = "";
+          runtimeLabel.title = `额定并发上限 ${configuredConcurrency}`;
         }
+
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "ai-stage-preset-tag-remove";
         remove.textContent = "×";
         remove.title = "移除该预设";
-        remove.addEventListener("click", () => {
+        remove.addEventListener("click", (event) => {
+          event?.stopPropagation?.();
           stagePresetSelections[stage] = ids.filter((item) => item !== id);
           renderStagePresetSelection(stage);
           updateStagePresetDependencies();
@@ -135,7 +205,46 @@
         tag.append(remove);
         return tag;
       }));
-      tags.hidden = ids.length === 0;
+
+      if (ids.length === 0) {
+        const emptyItem = document.createElement("div");
+        emptyItem.className = "ai-stage-applied-empty";
+        emptyItem.textContent = stage === "stage1" ? "当前使用主配置，未添加独立预设" : "当前未启用预设";
+        tags.replaceChildren(emptyItem);
+      }
+      tags.hidden = false;
+
+      // 更新适用预设下拉栏 Trigger 的文字与 title
+      if (valueEl && trigger) {
+        if (ids.length === 0) {
+          if (stage === "stage1") {
+            valueEl.textContent = "适用：主配置";
+            trigger.title = "阶段一当前未添加独立预设，默认使用主配置";
+          } else {
+            valueEl.textContent = "未启用";
+            trigger.title = stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设";
+          }
+        } else if (ids.length === 1) {
+          const firstPreset = presetTools.getPreset(localStorage, ids[0]);
+          const firstLabel = firstPreset ? presetTools.presetLabel(firstPreset) : ids[0];
+          const runtimeText = hasActiveRuntime && stageInFlight > 0
+            ? ` (${stageInFlight}/${stageQuota}${stageAnyTopped ? "·触顶" : ""})`
+            : "";
+          valueEl.textContent = `适用：${firstLabel}${runtimeText}`;
+          trigger.title = `当前阶段适用预设：${firstLabel}` + (firstPreset?.concurrency ? `（额定并发上限 ${firstPreset.concurrency}）` : "")
+            + (hasActiveRuntime ? `\n当前并发 ${stageInFlight}/${stageQuota}` : "");
+        } else {
+          const runtimeText = hasActiveRuntime && stageInFlight > 0
+            ? ` · 并发 ${stageInFlight}/${stageQuota}${stageAnyTopped ? "·触顶" : ""}`
+            : "";
+          valueEl.textContent = `适用 (${ids.length})${runtimeText}`;
+          const presetList = ids.map((id, index) => {
+            const p = presetTools.getPreset(localStorage, id);
+            return `${index + 1}. ${p ? presetTools.presetLabel(p) : id}`;
+          }).join("\n");
+          trigger.title = `当前阶段适用预设 (${ids.length})：\n${presetList}`;
+        }
+      }
     }
 
     function addSelectedStagePreset(stage) {
@@ -464,6 +573,18 @@
       stage1PresetTags: document.getElementById("stage1PresetTags"),
       stage2PresetTags: document.getElementById("stage2PresetTags"),
       stage3PresetTags: document.getElementById("stage3PresetTags"),
+      stage1AppliedDropdown: document.getElementById("stage1AppliedDropdown"),
+      stage2AppliedDropdown: document.getElementById("stage2AppliedDropdown"),
+      stage3AppliedDropdown: document.getElementById("stage3AppliedDropdown"),
+      stage1AppliedTrigger: document.getElementById("stage1AppliedTrigger"),
+      stage2AppliedTrigger: document.getElementById("stage2AppliedTrigger"),
+      stage3AppliedTrigger: document.getElementById("stage3AppliedTrigger"),
+      stage1AppliedValue: document.getElementById("stage1AppliedValue"),
+      stage2AppliedValue: document.getElementById("stage2AppliedValue"),
+      stage3AppliedValue: document.getElementById("stage3AppliedValue"),
+      stage1AppliedMenu: document.getElementById("stage1AppliedMenu"),
+      stage2AppliedMenu: document.getElementById("stage2AppliedMenu"),
+      stage3AppliedMenu: document.getElementById("stage3AppliedMenu"),
       stage2Card: document.getElementById("stage2Card"),
       stage3Card: document.getElementById("stage3Card"),
       start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
@@ -1100,11 +1221,13 @@
           aiIds.stage3Preset.value = "";
           aiIds.stage3Preset.disabled = true;
           if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = true;
+          if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = true;
           aiIds.stage3Preset.title = "需先在阶段二选择预设启用后，方可配置阶段三";
           aiIds.stage3Card?.classList.add("is-disabled");
         } else {
           aiIds.stage3Preset.disabled = false;
           if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
+          if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = false;
           aiIds.stage3Preset.title = "选择阶段三模型预设（不填代表不启用）";
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
@@ -5320,6 +5443,25 @@
     [["stage1", aiIds.stage1PresetAdd], ["stage2", aiIds.stage2PresetAdd], ["stage3", aiIds.stage3PresetAdd]].forEach(([stage, button]) => {
       button?.addEventListener("click", () => addSelectedStagePreset(stage));
     });
+    ["stage1", "stage2", "stage3"].forEach((stage) => {
+      const controls = stagePresetControls[stage];
+      const trigger = aiIds[controls.trigger];
+      trigger?.addEventListener("click", (event) => {
+        event?.stopPropagation?.();
+        toggleStageAppliedMenu(stage);
+      });
+    });
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".ai-stage-applied-dropdown")) {
+        closeAllStageAppliedMenus();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeAllStageAppliedMenus();
+      }
+    });
+    closeAllStageAppliedMenus();
     aiIds.proofreadMode.addEventListener("change", updateProofreadModeHint);
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
     prefilterIds.similarity.addEventListener("change", () => {

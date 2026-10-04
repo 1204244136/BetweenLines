@@ -304,7 +304,17 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <option value="">使用主配置</option>
                     </select>
                     <button id="stage1PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段一">添加</button>
-                    <div id="stage1PresetTags" class="ai-stage-preset-tags" aria-label="阶段一已选预设"></div>
+                    <div id="stage1AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage1">
+                      <button id="stage1AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设">
+                        <span id="stage1AppliedValue" class="select-value ai-stage-applied-value">适用：主配置</span>
+                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                      </button>
+                      <div id="stage1AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
+                        <div id="stage1PresetTags" class="ai-stage-preset-tags" aria-label="阶段一已选预设"></div>
+                      </div>
+                    </div>
                     <div class="ai-stage-card-actions">
                       <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段一事实初审">开始</button>
                       <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段一任务">停止</button>
@@ -342,7 +352,17 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <option value="">未启用</option>
                     </select>
                     <button id="stage2PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段二">添加</button>
-                    <div id="stage2PresetTags" class="ai-stage-preset-tags" aria-label="阶段二已选预设"></div>
+                    <div id="stage2AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage2">
+                      <button id="stage2AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设">
+                        <span id="stage2AppliedValue" class="select-value ai-stage-applied-value">未启用</span>
+                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                      </button>
+                      <div id="stage2AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
+                        <div id="stage2PresetTags" class="ai-stage-preset-tags" aria-label="阶段二已选预设"></div>
+                      </div>
+                    </div>
                     <div class="ai-stage-card-actions">
                       <button id="stage2Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段二文学复审">开始</button>
                       <button id="stage2Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段二任务">停止</button>
@@ -385,7 +405,17 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <option value="">未启用</option>
                     </select>
                     <button id="stage3PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段三">添加</button>
-                    <div id="stage3PresetTags" class="ai-stage-preset-tags" aria-label="阶段三已选预设"></div>
+                    <div id="stage3AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage3">
+                      <button id="stage3AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设" disabled>
+                        <span id="stage3AppliedValue" class="select-value ai-stage-applied-value">未启用</span>
+                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
+                        </svg>
+                      </button>
+                      <div id="stage3AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
+                        <div id="stage3PresetTags" class="ai-stage-preset-tags" aria-label="阶段三已选预设"></div>
+                      </div>
+                    </div>
                     <div class="ai-stage-card-actions">
                       <button id="stage3Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段三终审仲裁">开始</button>
                       <button id="stage3Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段三任务">停止</button>
