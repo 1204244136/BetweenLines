@@ -97,7 +97,10 @@
         const preset = presetTools.getPreset(localStorage, id);
         const tag = document.createElement("span");
         tag.className = "ai-stage-preset-tag";
-        tag.textContent = preset ? presetTools.presetLabel(preset) : id;
+        const label = document.createElement("span");
+        label.className = "ai-stage-preset-tag-label";
+        label.textContent = preset ? presetTools.presetLabel(preset) : id;
+        label.title = label.textContent;
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "ai-stage-preset-tag-remove";
@@ -109,6 +112,7 @@
           updateStagePresetDependencies();
           saveAiConfig();
         });
+        tag.append(label);
         tag.append(remove);
         return tag;
       }));
