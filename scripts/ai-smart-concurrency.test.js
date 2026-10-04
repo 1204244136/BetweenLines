@@ -7,7 +7,10 @@ const test = require("node:test");
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-smart-concurrency-"));
 const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+const previousRetryJitter = process.env.TRANSCOMPARATOR_RETRY_JITTER_MS;
 process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
+// 这些用例验证重试/熔断状态，不验证随机抖动；关闭测试抖动避免每次限流额外等待最多 500ms。
+process.env.TRANSCOMPARATOR_RETRY_JITTER_MS = "0";
 
 const { BREAKER_POLICY } = require("../src/workbenches/translation-compare/ai/circuit-breaker");
 const {
@@ -36,6 +39,8 @@ const { createWorkbench } = require("./workbench-fixture");
 test.after(() => {
   if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
   else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+  if (previousRetryJitter === undefined) delete process.env.TRANSCOMPARATOR_RETRY_JITTER_MS;
+  else process.env.TRANSCOMPARATOR_RETRY_JITTER_MS = previousRetryJitter;
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -1475,10 +1480,10 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
   const totalRows = 8;
   const { project } = setupMockProject(totalRows, "halfopen");
   const okRequests = [];
-  // 首档冷却按 0.03 缩放。服务端轮询日志，看到断路器真正打开后再计时，
+  // 首档冷却按 0.001 缩放。服务端轮询日志，看到断路器真正打开后再计时，
   // 冷却期内一律 429（含迟到的在途请求），冷却结束后放行并稍作延迟，
   // 让「探测尚未返回时是否又冲出别的请求」可被观察到。
-  const cooldownMs = firstCooldownMs(0.03);
+  const cooldownMs = firstCooldownMs(0.001);
   let openedAt = 0;
   const watcher = setInterval(() => {
     if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
@@ -1505,7 +1510,7 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 
   try {
-    await withBreakerTimeScale(0.03, async () => {
+    await withBreakerTimeScale(0.001, async () => {
       await startProofread({
         protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
@@ -2013,9 +2018,9 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
   let inFlight = 0;
   let requestCount = 0;
   let openedAt = 0;
-  // 首档冷却按 0.03 缩放。看到断路器真正打开后再计时：冷却期内一律 429，
+  // 首档冷却按 0.001 缩放。看到断路器真正打开后再计时：冷却期内一律 429，
   // 冷却结束后放行。放行后记录每个请求发出时刻的在途数，用来检验恢复期的并发爬升曲线。
-  const cooldownMs = firstCooldownMs(0.03);
+  const cooldownMs = firstCooldownMs(0.001);
   const watcher = setInterval(() => {
     if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
       openedAt = Date.now();
@@ -2047,7 +2052,7 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
   const prevInterval = process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
   process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = "10";
   try {
-    await withBreakerTimeScale(0.03, async () => {
+    await withBreakerTimeScale(0.001, async () => {
       await startProofread({
         protocol: "compatible",
         baseUrl: `http://127.0.0.1:${server.address().port}/v1`,

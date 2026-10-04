@@ -1622,7 +1622,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     const retries = (ctrl.rowRetryCounts.get(rowIndex) || 0) + 1;
     ctrl.rowRetryCounts.set(rowIndex, retries);
 
-    const delayMs = backoffDelayMs(ctrl.consecutiveLimits, error.retryAfter) + Math.floor(Math.random() * 500);
+    // 生产环境保留随机抖动，避免多个客户端在同一时刻重试；测试可把上限设为 0，
+    // 只验证退避与断路器状态转换而不为随机等待付出时间成本。
+    const jitterLimit = Number(process.env.TRANSCOMPARATOR_RETRY_JITTER_MS);
+    const jitterMs = Number.isFinite(jitterLimit) && jitterLimit >= 0 ? jitterLimit : 500;
+    const delayMs = backoffDelayMs(ctrl.consecutiveLimits, error.retryAfter)
+      + (jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0);
     ctrl.backoffUntil = Math.max(ctrl.backoffUntil, Date.now() + delayMs);
 
     if (shouldRetryRow(retries, maxRowRetries, status.stopRequested)) {

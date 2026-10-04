@@ -223,7 +223,15 @@ test("Claude 非 thinking 请求保持 temperature 行为", () => {
   assert.equal(body.max_tokens, 4096);
 });
 
-test("模型列表发现会富化推理能力与思考档位", async () => {
+test("模型列表发现会富化推理能力与思考档位", async (t) => {
+  // 该用例只验证本地模型列表与能力合并；禁止单测为加载 models.dev 发起真实公网请求。
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (String(url) === "https://models.dev/api.json") {
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }
+    return realFetch(url, options);
+  });
   const server = http.createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({
