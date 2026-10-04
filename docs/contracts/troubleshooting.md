@@ -43,6 +43,17 @@
 
 ---
 
+## 环境与加速器异常
+
+### torchvision 与 torch 版本不匹配（`operator torchvision::nms does not exist`）
+- **现象**：`import torchvision` 抛 `RuntimeError: operator torchvision::nms does not exist`，`import transformers` / `sentence_transformers` 随之失败；`npm run align:jp` 打印 `torchvision is installed but unusable` 后继续跑；`npm run check:accelerator` 的 `torchvision:` 一行显示 `installed but unusable`。
+- **根因**：torchvision 的原生扩展按导入表绑定 torch 的 C++ 符号，版本号相同（`torch 2.12.0` ↔ `torchvision 0.27.0`）不代表 ABI 相同。ROCm/TheRock 版 torch 的 `c10/util/Exception.h` 把 `ValueError`、`NotImplementedError` 等写成 `using Error::Error;`，`c10.dll` 因此不再导出 `ValueError::ValueError(SourceLocation, std::string)` 这类派生类构造函数；PyPI 版 torchvision 的 `_C.pyd` 恰好导入它们，加载失败报 `ERROR_PROC_NOT_FOUND`，扩展缺失后到注册 Meta kernel 时才抛出上面那句。torch 装好之后被后来的 `pip install`（如 `yomitoku`、`ultralytics`）从 PyPI 补进 torchvision 就会踩中。
+- **证据入口**：`.venv/Lib/site-packages/torchvision/_C.pyd` 的导入表减去 `.venv/Lib/site-packages/torch/lib/{c10,torch_cpu}.dll` 的导出表（`llvm-readobj --coff-imports` / `--coff-exports`；ROCm 环境可直接用 `_rocm_sdk_core/lib/llvm/bin/llvm-readobj.exe`）。
+- **处置**：torch / torchvision / torchaudio 必须来自同一次安装、同一来源；换 torch 后端时连 torchvision 一起换。ROCm 侧对应 TheRock 多架构索引 `https://rocm.nightlies.amd.com/whl-multi-arch/`，torchvision 版本需与 torch 对应，GPU 算子还要 `amd-torchvision-device-<gfx>` 内核包（只装基础轮子时 CPU 算子正常、GPU 算子报 `hipErrorInvalidImage`）。对齐流程本身不需要 torchvision，`align_jp.py` 会把它标记为缺失后继续；确认不再需要时可 `pip uninstall torchvision`。
+- **回归**：`npm run check:accelerator` 应打印 `torchvision: <版本>`；出现 `installed but unusable` 即复发。
+
+---
+
 ## 模式裁剪与第三列泄露
 
 ### 双语产物出现第三列内容

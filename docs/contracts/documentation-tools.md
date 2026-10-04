@@ -44,11 +44,11 @@
 | scripts/check-docs.js | CLI | 本表与 package.json | 只读仓库登记、链接与命令覆盖，失败退出非 0 |
 | scripts/check-pandoc.js | CLI | Pandoc --version | 只探测 Pandoc，缺失也退出 0；信息提示，不是安装门禁 |
 | scripts/detect-accelerator.js | CLI | 系统 GPU、驱动及 HIP 探测 | 安装前只读硬件候选，输出 JSON 后附人类提示 |
-| scripts/check-accelerator.py | CLI | scripts/accelerator_detect.py | 检查当前 PyTorch 能否用设备；拒绝未授权的 CPU 回退 |
+| scripts/check-accelerator.py | CLI | scripts/accelerator_detect.py | 检查当前 PyTorch 能否用设备并报告 torchvision 可用性；拒绝未授权的 CPU 回退，损坏的 torchvision 只告警不拦截 |
 | scripts/setup-env.ps1 | CLI | npm、Python、pip、Pandoc、winget | 安装基础依赖、创建虚拟环境；重建选项会替换 .venv |
 | scripts/setup-accelerator.ps1 | CLI | scripts/detect-accelerator.js、pip | 选择并替换 .venv 中的 PyTorch 后端；支持 DryRun |
 | scripts/export-paragraphs.js | CLI | src/ingest/input-selection.js、text-utils.js | 输入选择与源文本，保存选择并写工作目录段落产物 |
-| src/workbenches/translation-compare/align_jp.py | CLI | scripts/accelerator_detect.py、语义模型 | 工作目录 paragraphs.json，加载或下载模型并写 jp-align.json |
+| src/workbenches/translation-compare/align_jp.py | CLI | scripts/accelerator_detect.py、语义模型 | 工作目录 paragraphs.json，加载或下载模型并写 jp-align.json；torchvision 不可用时按缺失屏蔽 |
 | src/workbenches/translation-compare/build-compare.js | CLI | 行组装、输出与渲染模块、project-store | 源文本与对齐产物，写 HTML/CSV/JSON 并发布翻译快照 |
 | scripts/rebuild-layout.js | CLI | src/storage/project-store.js | 指定或活动翻译项目，重渲染并发布新快照、切换活动指针 |
 | scripts/term-prefilter.js | CLI | term-table.js、term-layer.js、offline-cli.js | 活动翻译快照与对照表，离线审计；仅 --out 写报告；--from-snapshot 只读文本汇总，禁止 JSON/报告/明细选项组合 |
@@ -67,7 +67,7 @@
 | scripts/project-context.js | 兼容桥 | src/core/project-context.js | 只转发 require，项目身份与签名由 core 实现拥有 |
 | scripts/project-store.js | 兼容桥 | src/storage/project-store.js | 只转发 require，快照与指针由 storage 实现拥有 |
 | scripts/text-utils.js | 兼容桥 | src/ingest/text-utils.js | 只转发 require，清理与段落规则由 ingest 实现拥有 |
-| scripts/accelerator_detect.py | 内部辅助 | check-accelerator.py、align_jp.py | Python 内只读硬件与 PyTorch 后端；不是安装入口 |
+| scripts/accelerator_detect.py | 内部辅助 | check-accelerator.py、align_jp.py | Python 内只读硬件、PyTorch 后端与 torchvision 原生扩展可用性；不是安装入口 |
 | scripts/lib/offline-cli.js | 内部辅助 | src/storage/project-store.js、atomic-fs.js | 离线审计共用活动翻译快照读取，不启动模型或写回 |
 | scripts/windows-path-picker.ps1 | 内部辅助 | src/runtime/input-files.js | 打开系统文件选择窗口，只返回选择路径，不导入或写回 |
 | scripts/workbench-fixture.js | 测试夹具 | 工作台生成器与 VM 假 DOM | 合成行、假存储及真实内联脚本交互测试，无真实输入 |

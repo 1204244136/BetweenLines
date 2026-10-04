@@ -9,6 +9,18 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import numpy as np
 import torch
 
+ROOT = Path(__file__).resolve().parents[3]
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from accelerator_detect import (  # noqa: E402
+    TORCHVISION_UNUSABLE,
+    expected_backends,
+    torch_backend,
+    torchvision_probe,
+)
+
 
 def _shield_broken_torchvision() -> None:
     """Alignment never uses torchvision, but transformers imports it whenever it is installed.
@@ -18,29 +30,21 @@ def _shield_broken_torchvision() -> None:
     ``sentence_transformers`` down with it. Probe it once; if it is broken, mark it as absent
     so ``importlib.util.find_spec("torchvision")`` returns None and transformers skips it.
     """
-    try:
-        import torchvision  # noqa: F401
-    except ImportError:
+    status, detail = torchvision_probe()
+    if status != TORCHVISION_UNUSABLE:
         return
-    except Exception as exc:  # RuntimeError / OSError from mismatched native ops
-        sys.modules["torchvision"] = None  # type: ignore[assignment]
-        print(
-            f"warning: torchvision is installed but unusable ({type(exc).__name__}: {exc}); "
-            "continuing without it (alignment does not need torchvision).",
-            file=sys.stderr,
-        )
+
+    sys.modules["torchvision"] = None  # type: ignore[assignment]
+    print(
+        f"warning: torchvision is installed but unusable ({detail}); "
+        "continuing without it (alignment does not need torchvision).",
+        file=sys.stderr,
+    )
 
 
 _shield_broken_torchvision()
 
 from sentence_transformers import SentenceTransformer  # noqa: E402
-
-ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS_DIR = ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-from accelerator_detect import expected_backends, torch_backend
 
 
 OUT = Path(os.environ.get("TRANSCOMPARATOR_OUTPUT_DIR", ROOT / "out" / "runtime" / "work")).resolve()

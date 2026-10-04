@@ -78,6 +78,29 @@ def torch_backend() -> str:
     return "cpu"
 
 
+TORCHVISION_ABSENT = "absent"
+TORCHVISION_OK = "ok"
+TORCHVISION_UNUSABLE = "unusable"
+
+
+def torchvision_probe() -> tuple[str, str | None]:
+    """Probe torchvision without letting a broken native extension escape.
+
+    Alignment never uses torchvision, but ``transformers`` imports it whenever it is
+    installed, so a wheel whose native extension was built against a different torch
+    (for example a PyPI/CUDA build next to a ROCm torch) takes ``sentence_transformers``
+    down with it. Returns ``(status, detail)``; status is one of the ``TORCHVISION_*``
+    constants and detail is the installed version, or the exception text when unusable.
+    """
+    try:
+        import torchvision
+    except ImportError:
+        return TORCHVISION_ABSENT, None
+    except Exception as exc:  # RuntimeError / OSError from mismatched native ops
+        return TORCHVISION_UNUSABLE, f"{type(exc).__name__}: {exc}"
+    return TORCHVISION_OK, str(getattr(torchvision, "__version__", "unknown"))
+
+
 def expected_backends() -> list[str]:
     backends = []
     if nvidia_devices():
