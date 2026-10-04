@@ -130,6 +130,10 @@ function createStagePipelines(value = {}) {
     concurrency: stage.concurrency != null ? Math.max(1, Number(stage.concurrency) || 1) : null,
     // 并发上限（面板上的「并发上限」）；concurrency 是调度器当前实际放行的并发。
     concurrencyMax: stage.concurrencyMax != null ? Math.max(1, Number(stage.concurrencyMax) || 1) : null,
+    // 阶段多预设时：这一阶段有几个预设、其中几个已经顶到自己的并发上限。
+    // 页面据此说「N/M 触顶」「全部触顶」，不再自己重算触顶口径。
+    presetCount: Math.max(0, Number(stage.presetCount) || 0),
+    toppedCount: Math.max(0, Number(stage.toppedCount) || 0),
     activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
   });
   return {

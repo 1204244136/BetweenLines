@@ -197,12 +197,75 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
   assert.equal(activeTag2.children[1].textContent, "并发 8/8 · 触顶 · 排队 1");
   assert.match(activeTag2.children[1].title, /已触顶/);
 
-  // Trigger 汇总显示：inFlight=2+8+0=10, quota=3+8+16=27
-  assert.match(s1Value.textContent, /适用 \(3\) · 并发 10\/27·触顶/);
+  // Trigger 汇总显示：inFlight=2+8+0=10, quota=3+8+16=27，只有 p2 顶到了自己的配置上限 8
+  assert.equal(s1Value.textContent, "适用 (3) · 并发 10/27 · 1/3 触顶", "触顶要精确到「几个预设触顶」");
+  assert.equal(s1Value.classList.contains("is-part-topped"), true, "部分触顶给警示色");
+  assert.equal(s1Value.classList.contains("is-all-topped"), false);
+  // 悬停里说清是哪一个触顶，而不是只给一个数字
+  assert.match(s1Trigger.title, /1\. [^\n]*词元聚合[^\n]*并发 2\/3，配置上限 4/);
+  assert.match(s1Trigger.title, /2\. [^\n]*火山方舟[^\n]*并发 8\/8，配置上限 8 · 已触顶/);
+  assert.match(s1Trigger.title, /已触顶 1\/3 个预设/);
 
-  // 6. 移除预设：点击 p3 的删除按钮
-  const removeBtn3 = activeTag3.children[2];
+  // 6. 全部预设都顶到各自上限：换成「全部触顶」并加粗强调
+  ui.run(`
+    latestPresetPipelines = {
+      stage1: [
+        { presetId: "p1", inFlight: 4, quota: 4, configuredConcurrency: 4, pending: 0, activeRows: [10] },
+        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, pending: 0, activeRows: [11] },
+        { presetId: "p3", inFlight: 32, quota: 32, configuredConcurrency: 32, pending: 0, activeRows: [12] },
+      ]
+    };
+    renderStagePresetSelection("stage1");
+  `);
+  assert.equal(s1Value.textContent, "适用 (3) · 并发 44/44 · 全部触顶");
+  assert.equal(s1Value.classList.contains("is-all-topped"), true, "全部触顶才用更强的一档");
+  assert.equal(s1Value.classList.contains("is-part-topped"), false);
+  assert.match(s1Trigger.title, /已触顶 3\/3 个预设（全部触顶）/);
+
+  // 7. 服务端回报 topped 字段时以它为准（不再由页面重算触顶口径）
+  ui.run(`
+    latestPresetPipelines = {
+      stage1: [
+        { presetId: "p1", inFlight: 1, quota: 4, configuredConcurrency: 4, topped: true, pending: 0, activeRows: [10] },
+        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, topped: false, pending: 0, activeRows: [11] },
+        { presetId: "p3", inFlight: 0, quota: 32, configuredConcurrency: 32, topped: false, pending: 0, activeRows: [] },
+      ]
+    };
+    renderStagePresetSelection("stage1");
+  `);
+  assert.equal(s1Value.textContent, "适用 (3) · 并发 9/44 · 1/3 触顶", "服务端的 topped 字段优先于页面的 inFlight 比较");
+  assert.equal(s1Tags.children[0].children[1].textContent, "并发 1/4 · 触顶");
+
+  // 8. 停止运行后不能残留触顶样式
+  ui.run(`
+    latestPresetPipelines = {
+      stage1: [
+        { presetId: "p1", inFlight: 0, quota: 4, configuredConcurrency: 4, pending: 0, activeRows: [] },
+        { presetId: "p2", inFlight: 0, quota: 8, configuredConcurrency: 8, pending: 0, activeRows: [] },
+        { presetId: "p3", inFlight: 0, quota: 32, configuredConcurrency: 32, pending: 0, activeRows: [] },
+      ]
+    };
+    renderStagePresetSelection("stage1");
+  `);
+  assert.equal(s1Value.textContent, "适用 (3)");
+  assert.equal(s1Value.classList.contains("is-all-topped"), false, "停下后必须清掉上一轮的触顶样式");
+  assert.equal(s1Value.classList.contains("is-part-topped"), false);
+
+  // 9. 移除预设：点击 p3 的删除按钮
+  const removeBtn3 = s1Tags.children[2].children[2];
   removeBtn3.click();
   assert.match(s1Value.textContent, /适用 \(2\)/);
   assert.equal(s1Tags.children.length, 2, "移除后菜单内剩余 2 个条目");
+
+  // 10. 只剩一个预设时不写「1/1 触顶」，沿用原来的「触顶」
+  s1Tags.children[1].children[2].click();
+  assert.equal(s1Tags.children.length, 1);
+  ui.run(`
+    latestPresetPipelines = {
+      stage1: [{ presetId: "p1", inFlight: 4, quota: 4, configuredConcurrency: 4, pending: 2, activeRows: [10] }]
+    };
+    renderStagePresetSelection("stage1");
+  `);
+  assert.match(s1Value.textContent, /适用：.*词元聚合[^\n]*\(4\/4 · 触顶\)$/, "单个预设不写「1/1 触顶」");
+  assert.equal(s1Value.classList.contains("is-all-topped"), true);
 });

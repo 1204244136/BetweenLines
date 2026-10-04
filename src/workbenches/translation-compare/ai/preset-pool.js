@@ -55,6 +55,7 @@ function createPresetPool(value, fallback = null, options = {}) {
   const initialQuotaOf = (item) => (item?.channel ? item.channel.initialConcurrency : (Number(item?.quota) || 0));
   const maxQuotaOf = (item) => (item?.channel ? item.channel.maxConcurrency : (Number(item?.configuredConcurrency) || 0));
   const sumOf = (pick) => items().reduce((total, item) => total + Math.max(0, Number(pick(item)) || 0), 0);
+  const isTopped = (item) => Boolean(item && item.configuredConcurrency > 0 && item.inFlight >= item.configuredConcurrency);
 
   return {
     presets,
@@ -116,10 +117,18 @@ function createPresetPool(value, fallback = null, options = {}) {
         completed: item.completed,
         successes: item.successes,
         failures: item.failures,
+        // 触顶 = 这条通道已经顶到它自己配置的并发上限。它与「配额用满」（inFlight >= quota）
+        // 不是一回事：配额还会继续上探，只有到配置上限才真的加不动了。口径在这里定一次，
+        // 页面只做计数与展示，不再自己重算一遍。
+        topped: isTopped(item),
         activeRows: [...item.activeRows],
         latencyMs: item.latencyMs,
         averageLatencyMs: item.completed ? Math.round(item.latencyMs / item.completed) : 0,
       }));
+    },
+    // 已经顶到配置上限的预设数：阶段整体「全部触顶」才代表这个阶段真的加不动了。
+    toppedCount() {
+      return items().filter(isTopped).length;
     },
   };
 }

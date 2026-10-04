@@ -1015,6 +1015,16 @@ details[open] > summary .details-toggle::before {
   text-align: left;
 }
 
+/* 触顶是运行态信号：有预设顶到自己的并发上限时用警示色，全部顶到才加粗强调。 */
+.ai-stage-applied-value.is-part-topped {
+  color: var(--ai-warning-fg);
+}
+
+.ai-stage-applied-value.is-all-topped {
+  color: var(--ai-warning-fg-accent);
+  font-weight: 600;
+}
+
 .ai-stage-applied-menu {
   position: absolute;
   top: calc(100% + 4px);

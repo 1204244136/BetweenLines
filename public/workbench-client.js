@@ -140,6 +140,22 @@
       return select?.value ? [select.value] : [];
     }
 
+    // 触顶 = 这条通道已经顶到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上探）。
+    // 口径由服务端 presetPipelines[].topped 给出；旧服务端没有这个字段时按同一口径本地折算。
+    function stagePresetTopped(row) {
+      if (!row.runtime) return false;
+      if (typeof row.runtime.topped === "boolean") return row.runtime.topped;
+      return row.configuredConcurrency > 0 && row.inFlight >= row.configuredConcurrency;
+    }
+
+    // 触顶摘要：部分触顶给「N/M 触顶」，全部触顶换成更强的「全部触顶」；
+    // 只有一个预设时不写「1/1 触顶」，沿用原来的「触顶」。
+    function stageToppedSummaryText(toppedCount, total) {
+      if (toppedCount <= 0 || total <= 0) return "";
+      if (toppedCount >= total) return total > 1 ? " · 全部触顶" : " · 触顶";
+      return ` · ${toppedCount}/${total} 触顶`;
+    }
+
     function renderStagePresetSelection(stage) {
       const controls = stagePresetControls[stage];
       const tags = aiIds[controls.tags];
@@ -149,43 +165,49 @@
       const ids = stagePresetSelections[stage] || [];
       const stagePipelines = Array.isArray(latestPresetPipelines[stage]) ? latestPresetPipelines[stage] : [];
 
-      let stageInFlight = 0;
-      let stageQuota = 0;
-      let stageAnyTopped = false;
-      let hasActiveRuntime = false;
-
-      tags.replaceChildren(...ids.map((id) => {
+      // 预设标签、下拉栏文本与悬停提示共用这一份运行数据，避免三处各算各的。
+      const rows = ids.map((id) => {
         const preset = presetTools.getPreset(localStorage, id);
         const runtime = stagePipelines.find((item) => String(item.presetId) === String(id));
-        const configuredConcurrency = Math.max(1, Number(runtime?.configuredConcurrency) || Number(preset?.concurrency) || 3);
+        const row = {
+          id,
+          preset,
+          runtime,
+          label: preset ? presetTools.presetLabel(preset) : id,
+          configuredConcurrency: Math.max(1, Number(runtime?.configuredConcurrency) || Number(preset?.concurrency) || 3),
+          inFlight: Math.max(0, Number(runtime?.inFlight) || 0),
+          quota: Math.max(0, Number(runtime?.quota) || 0),
+          pending: Math.max(0, Number(runtime?.pending) || 0),
+        };
+        row.topped = stagePresetTopped(row);
+        return row;
+      });
+
+      const stageInFlight = rows.reduce((sum, row) => sum + (row.runtime ? row.inFlight : 0), 0);
+      const stageQuota = rows.reduce((sum, row) => sum + (row.runtime ? row.quota : 0), 0);
+      const stageToppedCount = rows.filter((row) => row.topped).length;
+      const hasActiveRuntime = rows.some((row) => row.runtime && (row.inFlight > 0 || row.quota > 0 || row.pending > 0));
+
+      tags.replaceChildren(...rows.map((row) => {
         const tag = document.createElement("div");
         tag.className = "ai-stage-preset-tag";
         const label = document.createElement("span");
         label.className = "ai-stage-preset-tag-label";
-        label.textContent = preset ? presetTools.presetLabel(preset) : id;
-        label.title = label.textContent;
+        label.textContent = row.label;
+        label.title = row.label;
 
         const runtimeLabel = document.createElement("span");
         runtimeLabel.className = "ai-stage-preset-runtime";
-        if (runtime) {
-          const inFlight = Math.max(0, Number(runtime.inFlight) || 0);
-          const quota = Math.max(0, Number(runtime.quota) || 0);
-          const pending = Math.max(0, Number(runtime.pending) || 0);
-          const topped = configuredConcurrency > 0 && inFlight >= configuredConcurrency;
-          stageInFlight += inFlight;
-          stageQuota += quota;
-          if (topped) stageAnyTopped = true;
-          if (inFlight > 0 || quota > 0 || pending > 0) hasActiveRuntime = true;
-
-          runtimeLabel.textContent = `并发 ${inFlight}/${quota}` + (topped ? " · 触顶" : "") + (pending > 0 ? ` · 排队 ${pending}` : "");
-          const activeRows = Array.isArray(runtime.activeRows) ? runtime.activeRows : [];
-          runtimeLabel.title = `当前运行 ${inFlight} / 动态配额 ${quota} / 配置并发上限 ${configuredConcurrency} / 待派发 ${pending}`
-            + (topped ? "（已触顶）" : "")
+        if (row.runtime) {
+          runtimeLabel.textContent = `并发 ${row.inFlight}/${row.quota}` + (row.topped ? " · 触顶" : "") + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
+          const activeRows = Array.isArray(row.runtime.activeRows) ? row.runtime.activeRows : [];
+          runtimeLabel.title = `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
+            + (row.topped ? "（已触顶）" : "")
             + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : "");
         } else {
           // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
           runtimeLabel.textContent = "";
-          runtimeLabel.title = `额定并发上限 ${configuredConcurrency}`;
+          runtimeLabel.title = `额定并发上限 ${row.configuredConcurrency}`;
         }
 
         const remove = document.createElement("button");
@@ -195,7 +217,7 @@
         remove.title = "移除该预设";
         remove.addEventListener("click", (event) => {
           event?.stopPropagation?.();
-          stagePresetSelections[stage] = ids.filter((item) => item !== id);
+          stagePresetSelections[stage] = ids.filter((item) => item !== row.id);
           renderStagePresetSelection(stage);
           updateStagePresetDependencies();
           saveAiConfig();
@@ -216,6 +238,8 @@
 
       // 更新适用预设下拉栏 Trigger 的文字与 title
       if (valueEl && trigger) {
+        // 触顶是运行态：每次重渲染先清掉上一次的样式，否则任务停下后还留着醒目色。
+        valueEl.classList.remove("is-part-topped", "is-all-topped");
         if (ids.length === 0) {
           if (stage === "stage1") {
             valueEl.textContent = "适用：主配置";
@@ -225,24 +249,33 @@
             trigger.title = stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设";
           }
         } else if (ids.length === 1) {
-          const firstPreset = presetTools.getPreset(localStorage, ids[0]);
-          const firstLabel = firstPreset ? presetTools.presetLabel(firstPreset) : ids[0];
+          const first = rows[0];
           const runtimeText = hasActiveRuntime && stageInFlight > 0
-            ? ` (${stageInFlight}/${stageQuota}${stageAnyTopped ? "·触顶" : ""})`
+            ? ` (${stageInFlight}/${stageQuota}${stageToppedSummaryText(stageToppedCount, 1)})`
             : "";
-          valueEl.textContent = `适用：${firstLabel}${runtimeText}`;
-          trigger.title = `当前阶段适用预设：${firstLabel}` + (firstPreset?.concurrency ? `（额定并发上限 ${firstPreset.concurrency}）` : "")
+          valueEl.textContent = `适用：${first.label}${runtimeText}`;
+          trigger.title = `当前阶段适用预设：${first.label}` + (first.preset?.concurrency ? `（额定并发上限 ${first.preset.concurrency}）` : "")
             + (hasActiveRuntime ? `\n当前并发 ${stageInFlight}/${stageQuota}` : "");
+          if (stageToppedCount > 0) valueEl.classList.add("is-all-topped");
         } else {
+          const toppedText = stageToppedSummaryText(stageToppedCount, rows.length);
           const runtimeText = hasActiveRuntime && stageInFlight > 0
-            ? ` · 并发 ${stageInFlight}/${stageQuota}${stageAnyTopped ? "·触顶" : ""}`
+            ? ` · 并发 ${stageInFlight}/${stageQuota}${toppedText}`
             : "";
-          valueEl.textContent = `适用 (${ids.length})${runtimeText}`;
-          const presetList = ids.map((id, index) => {
-            const p = presetTools.getPreset(localStorage, id);
-            return `${index + 1}. ${p ? presetTools.presetLabel(p) : id}`;
+          valueEl.textContent = `适用 (${rows.length})${runtimeText}`;
+          // 悬停里逐条给出每个预设的并发与触顶状态：摘要只说「几个触顶」，这里说清是哪一个。
+          const presetList = rows.map((row, index) => {
+            const stateText = row.runtime
+              ? `（并发 ${row.inFlight}/${row.quota}，配置上限 ${row.configuredConcurrency}${row.topped ? " · 已触顶" : ""}）`
+              : "";
+            return `${index + 1}. ${row.label}${stateText}`;
           }).join("\n");
-          trigger.title = `当前阶段适用预设 (${ids.length})：\n${presetList}`;
+          const toppedSummary = stageToppedCount > 0
+            ? `\n已触顶 ${stageToppedCount}/${rows.length} 个预设${stageToppedCount >= rows.length ? "（全部触顶）" : ""}。`
+            : "";
+          trigger.title = `当前阶段适用预设 (${rows.length})：\n${presetList}${toppedSummary}`;
+          if (stageToppedCount >= rows.length) valueEl.classList.add("is-all-topped");
+          else if (stageToppedCount > 0) valueEl.classList.add("is-part-topped");
         }
       }
     }
@@ -4151,7 +4184,8 @@
     // 分子是实际在飞（真的在跑几个请求），分母是面板上预设的并发上限。
     // stagePipelines.stageN.concurrency 是并发控制器上探出来的**许可值**，队列不足时它不会回落
     // （控制器只在频控、过载或熔断时下调），拿它当分子会写出「1 处理中 · 并发 32/32」这种自相矛盾的
-    // 画面，所以它只进 tooltip。实际在飞真的顶到预设上限时才额外标「触顶」。
+    // 画面，所以它只进 tooltip。全部预设都顶到各自上限时才额外标「全部触顶」——
+    // 阶段整体只有在这一刻才真的加不动了；单个预设触顶由该预设的标签自己说。
     function stageConcurrencyText(pipeline, activeInfoEl = null) {
       const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
       const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
@@ -4163,13 +4197,21 @@
         if (activeInfoEl) activeInfoEl.removeAttribute("title");
         return "";
       }
-      const topped = cap > 0 && inFlight >= cap;
+      // 触顶口径来自服务端的 presetCount/toppedCount；旧服务端没有这两个字段时，
+      // 退回「实际在飞 ≥ 并发上限」——多预设下它天然等价于全部通道都顶到各自上限。
+      const presetCount = Math.max(0, Number(pipeline?.presetCount) || 0);
+      const toppedCount = Math.max(0, Number(pipeline?.toppedCount) || 0);
+      const allTopped = presetCount > 0 ? toppedCount >= presetCount : (cap > 0 && inFlight >= cap);
+      const toppedText = allTopped ? (presetCount > 1 ? " · 全部触顶" : " · 触顶") : "";
       if (activeInfoEl) {
+        const toppedDetail = presetCount > 1
+          ? `已触顶 ${toppedCount}/${presetCount} 个预设${allTopped ? "（全部触顶）" : ""}。`
+          : (allTopped ? "实际在飞已达预设并发上限（触顶）。" : "");
         activeInfoEl.title = "实际在飞 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
-          + "；队列待派发 " + pending + " 行。" + (topped ? "实际在飞已达预设并发上限（触顶）。" : "")
+          + "；队列待派发 " + pending + " 行。" + toppedDetail
           + "允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
       }
-      return "（并发 " + inFlight + "/" + ceiling + (topped ? " · 触顶" : "") + "）";
+      return "（并发 " + inFlight + "/" + ceiling + toppedText + "）";
     }
 
     function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0 } = {}) {

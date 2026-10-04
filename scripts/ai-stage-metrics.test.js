@@ -98,6 +98,46 @@ test("阶段预设标签：每个预设位置显示自己的并发与排队信�
   assert.match(tags.children[1].children[1].title, /配置并发上限 9/);
 });
 
+test("阶段卡片并发后缀：多预设时只有全部预设触顶才标「全部触顶」", () => {
+  const ui = createWorkbench();
+
+  // 3 个预设里只有 1 个顶到自己的上限：阶段整体还加得动，不该标触顶。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      total: 100,
+      queued: 100,
+      modelProcessed: 20,
+      stagePipelines: {
+        stage1: { inFlight: 10, pending: 50, concurrency: 56, concurrencyMax: 96, presetCount: 3, toppedCount: 1, activeRows: [1, 2, 3] },
+      },
+      results: [],
+    });
+  `);
+  const partialText = ui.element("stage1ActiveRowsText").textContent;
+  assert.match(partialText, /并发 10\/96/, "分母是各预设上限之和");
+  assert.equal(partialText.includes("触顶"), false, "部分预设触顶不等于阶段触顶");
+  assert.match(ui.element("stage1ActiveInfo").title, /已触顶 1\/3 个预设/);
+
+  // 3 个预设全部顶到各自上限：阶段真的加不动了，才升级成「全部触顶」。
+  ui.run(`
+    renderAiStatus({
+      kind: "ai",
+      running: true,
+      total: 100,
+      queued: 100,
+      modelProcessed: 20,
+      stagePipelines: {
+        stage1: { inFlight: 96, pending: 0, concurrency: 96, concurrencyMax: 96, presetCount: 3, toppedCount: 3, activeRows: [1, 2, 3] },
+      },
+      results: [],
+    });
+  `);
+  assert.match(ui.element("stage1ActiveRowsText").textContent, /并发 96\/96 · 全部触顶/);
+  assert.match(ui.element("stage1ActiveInfo").title, /已触顶 3\/3 个预设（全部触顶）/);
+});
+
 test("客户端状态渲染：renderAiStatus 实时更新页面内阶段看板指标", () => {
   const ui = createWorkbench();
 

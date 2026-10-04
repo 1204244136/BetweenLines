@@ -1563,10 +1563,17 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     assignPendingPresetIds(pools.stage1, stage1Pending);
     assignPendingPresetIds(pools.stage2, stage2Pending);
     assignPendingPresetIds(pools.stage3, stage3Pending);
+    // 触顶计数与预设总数：页面据此区分「N/M 触顶」与「全部触顶」，
+    // 不在客户端重算一遍触顶口径。
+    const presetSummary = (stageKey) => ({
+      presetCount: pools[stageKey].presets.length,
+      toppedCount: pools[stageKey].toppedCount(),
+    });
     status.stagePipelines.stage1.pending = stage1Pending.length;
     status.stagePipelines.stage1.inFlight = stage1InFlight;
     status.stagePipelines.stage1.concurrency = stageAllowance("stage1");
     status.stagePipelines.stage1.concurrencyMax = stageAllowanceMax("stage1");
+    Object.assign(status.stagePipelines.stage1, presetSummary("stage1"));
 
     status.stagePipelines.stage2.pending = stage2Pending.length;
     status.stagePipelines.stage2.inFlight = stage2InFlight;
@@ -1574,11 +1581,13 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
     status.stagePipelines.stage2.concurrency = stageAllowance("stage2");
     status.stagePipelines.stage2.concurrencyMax = stageAllowanceMax("stage2");
+    Object.assign(status.stagePipelines.stage2, presetSummary("stage2"));
 
     status.stagePipelines.stage3.pending = stage3Pending.length;
     status.stagePipelines.stage3.inFlight = stage3InFlight;
     status.stagePipelines.stage3.concurrency = stageAllowance("stage3");
     status.stagePipelines.stage3.concurrencyMax = stageAllowanceMax("stage3");
+    Object.assign(status.stagePipelines.stage3, presetSummary("stage3"));
     syncPresetPipelines();
   }
   syncStagePipelineQueues();
