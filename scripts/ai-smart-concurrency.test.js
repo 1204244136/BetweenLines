@@ -180,6 +180,26 @@ test("并发上限：预设与服务端一致放开到 32，20 不再被静默�
   assert.equal(html.includes('id="aiSmartConcurrency"'), false, "页面不再有智能并发开关");
 });
 
+test("多预设池：服务端清洗后保住预设身份与各自的并发上限，不再整池丢失", () => {
+  const pool = cleanConfig({
+    concurrency: 3,
+    presetPool: [
+      { presetId: "p1", name: "词元聚合", protocol: "compatible", baseUrl: "https://a.example/v1", model: "m1", apiKey: "k1", concurrency: 3 },
+      { presetId: "p2", name: "火山方舟", protocol: "compatible", baseUrl: "https://b.example/v1", model: "m2", apiKey: "k2", concurrency: 32 },
+      { presetId: "p3", name: "越界预设", protocol: "compatible", baseUrl: "https://c.example/v1", model: "m3", apiKey: "k3", concurrency: 99 },
+    ],
+  }).presetPool;
+
+  assert.equal(pool.length, 3, "三个预设都要保留：漏掉 presetPool 就只剩主配置一条通道");
+  assert.deepEqual(pool.map((item) => item.presetId), ["p1", "p2", "p3"], "预设身份必须保住，否则页面标签对不上运行数据");
+  assert.deepEqual(pool.map((item) => item.name), ["词元聚合", "火山方舟", "越界预设"]);
+  assert.deepEqual(pool.map((item) => item.concurrency), [3, 32, 32], "各自的并发上限独立保留并截断到边界");
+  assert.deepEqual(pool.map((item) => item.model), ["m1", "m2", "m3"], "每个预设用自己的模型，不借用主配置");
+  assert.deepEqual(pool.map((item) => item.baseUrl), ["https://a.example/v1", "https://b.example/v1", "https://c.example/v1"]);
+  // 没有预设池时留空数组，由运行期回落到主配置那一条通道。
+  assert.deepEqual(cleanConfig({ concurrency: 3 }).presetPool, []);
+});
+
 test("并发上限界面：页面只有一个「并发上限」输入，没有智能并发开关与第二个输入框", async () => {
   const html = makeHtml(
     [{ index: 1, jp: "原文一", cn: "译文一", relation: "1:1", score: 0.9, signature: "sig-1" }],
@@ -2088,6 +2108,151 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
     clearInterval(watcher);
     if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
     else process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = prevInterval;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("多预设并发：各预设按自己的并发上限运行，互不越界也不互相卡住", async () => {
+  clearProofreadCache();
+  const totalRows = 24;
+  const { project } = setupMockProject(totalRows, "poolmixed");
+
+  const inFlightByPath = new Map();
+  const peakByPath = new Map();
+  let maxTotal = 0;
+  const server = http.createServer((req, res) => {
+    // 每个预设用不同的 baseUrl 路径，用来分辨这一路请求属于哪个预设。
+    const key = String(req.url || "").split("/").filter(Boolean)[0] || "root";
+    const next = (inFlightByPath.get(key) || 0) + 1;
+    inFlightByPath.set(key, next);
+    peakByPath.set(key, Math.max(peakByPath.get(key) || 0, next));
+    maxTotal = Math.max(maxTotal, [...inFlightByPath.values()].reduce((sum, value) => sum + value, 0));
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        inFlightByPath.set(key, (inFlightByPath.get(key) || 0) - 1);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 30);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id, name, concurrency) => ({
+      presetId: id,
+      name,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/${id}/v1`,
+      model: `model-${id}`,
+      apiKey: "test-key",
+      concurrency,
+    });
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/p1/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 3,
+      presetPool: [preset("p1", "预设一", 3), preset("p2", "预设二", 2), preset("p3", "预设三", 3)],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.errors, 0);
+    assert.equal(finished.concurrency, 8, "起步并发 = 各预设 min(上限, 3) 之和：3 + 2 + 3");
+    assert.equal(finished.concurrencyMax, 8, "并发上限 = 各预设自己的上限之和");
+    assert.equal(maxTotal, 8, `同时在途应达到各预设上限之和，实际 ${maxTotal}`);
+    // 上限 2 的那个预设不得被别的预设的余量带过界；上限 3 的两个也不得越界。
+    assert.ok((peakByPath.get("p1") || 0) <= 3, `p1 上限 3，实际峰值 ${peakByPath.get("p1")}`);
+    assert.ok((peakByPath.get("p2") || 0) <= 2, `p2 上限 2，实际峰值 ${peakByPath.get("p2")}`);
+    assert.ok((peakByPath.get("p3") || 0) <= 3, `p3 上限 3，实际峰值 ${peakByPath.get("p3")}`);
+    assert.ok((peakByPath.get("p2") || 0) >= 1, "上限最小的预设也要真的参与派发");
+
+    const pipelines = finished.presetPipelines.stage1;
+    assert.deepEqual(pipelines.map((item) => item.quota), [3, 2, 3], "每条通道的配额就是它自己的上限");
+    assert.deepEqual(pipelines.map((item) => item.configuredConcurrency), [3, 2, 3]);
+    assert.equal(pipelines.reduce((sum, item) => sum + item.completed, 0), totalRows);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("多预设并发：阶段一选中的每个预设各开自己的并发，总并发是各预设上限之和", async () => {
+  clearProofreadCache();
+  const totalRows = 30;
+  const { project } = setupMockProject(totalRows, "poolfanout");
+
+  let currentInFlight = 0;
+  let maxConcurrentSeen = 0;
+  const server = http.createServer((req, res) => {
+    currentInFlight += 1;
+    maxConcurrentSeen = Math.max(maxConcurrentSeen, currentInFlight);
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        currentInFlight -= 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 40);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id, name) => ({
+      presetId: id,
+      name,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      model: `model-${id}`,
+      apiKey: "test-key",
+      concurrency: 3,
+    });
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 3,
+      presetPool: [preset("p1", "预设一"), preset("p2", "预设二"), preset("p3", "预设三")],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.errors, 0);
+    assert.equal(finished.concurrency, 9, "起步并发 = 三个预设各自起步并发之和");
+    assert.equal(finished.concurrencyMax, 9, "并发上限 = 三个预设各自上限之和");
+    assert.equal(finished.peakConcurrency, 9);
+    assert.equal(maxConcurrentSeen, 9, `三个预设必须各开各的并发，实际同时在途 ${maxConcurrentSeen}`);
+
+    const pipelines = finished.presetPipelines.stage1;
+    assert.equal(pipelines.length, 3, "三个预设都要出现在运行状态里");
+    assert.deepEqual(pipelines.map((item) => item.quota), [3, 3, 3], "每个预设的配额就是它自己的并发上限");
+    assert.equal(pipelines.reduce((sum, item) => sum + item.completed, 0), totalRows, "全部行都要有归属预设");
+    assert.ok(
+      pipelines.every((item) => item.completed > 0),
+      `每个预设都要真的派到活，实际完成数 ${pipelines.map((item) => item.completed)}`
+    );
+  } finally {
+    server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
 });

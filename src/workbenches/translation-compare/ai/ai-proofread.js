@@ -591,8 +591,11 @@ function cleanConfig(input = {}) {
     arbiterEnabled: input.arbiterEnabled !== false,
     stylistConfig: input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults, concurrency) : (input.stage2Preset ? cleanSubStageConfig(input.stage2Preset, defaults, concurrency) : null),
     arbiterConfig: input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults, 2) : (input.stage3Preset ? cleanSubStageConfig(input.stage3Preset, defaults, 2) : null),
-    stylistPresets: normalizePresetPool(input.stylistPresets || input.stage2Presets, input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults, concurrency) : null).map((item) => cleanSubStageConfig(item, defaults, concurrency)).filter(Boolean),
-    arbiterPresets: normalizePresetPool(input.arbiterPresets || input.stage3Presets, input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults, 2) : null).map((item) => cleanSubStageConfig(item, defaults, 2)).filter(Boolean),
+    // 阶段一的多预设池：页面上「适用 (N)」选中的每个预设都带着自己的连接参数与并发上限，
+    // 服务端按预设各开各的并发。漏掉这一项，多预设池会整池丢失、只剩主配置一条通道。
+    presetPool: cleanStagePresetPool(input.presetPool, null, defaults, concurrency),
+    stylistPresets: cleanStagePresetPool(input.stylistPresets || input.stage2Presets, input.stylistConfig || input.stage2Preset, defaults, concurrency),
+    arbiterPresets: cleanStagePresetPool(input.arbiterPresets || input.stage3Presets, input.arbiterConfig || input.stage3Preset, defaults, 2),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
     // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
@@ -627,6 +630,21 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
     reasoningEffort,
     concurrency,
   };
+}
+
+// 阶段预设池的清洗：连接参数走 cleanSubStageConfig，但必须保住预设身份（presetId / name）。
+// 只清洗不保身份的话，运行状态里的预设 id 会退化成 preset-1、preset-2，页面上「适用 (N)」
+// 选中的那几个预设标签就永远对不上运行数据，每个预设各自的并发也就无从展示。
+// fallbackConf 是「这个阶段只配了一个预设」时的兜底连接（主配置 / stylistConfig / arbiterConfig）。
+function cleanStagePresetPool(value, fallbackConf = null, fallbackDefaults = {}, defaultConcurrency = 3) {
+  const fallbackPreset = fallbackConf ? normalizePresetPool([fallbackConf])[0] || null : null;
+  return normalizePresetPool(value, fallbackPreset)
+    .map((item) => {
+      const cleaned = cleanSubStageConfig(item, fallbackDefaults, defaultConcurrency);
+      if (!cleaned) return null;
+      return { ...cleaned, presetId: item.presetId, name: item.name };
+    })
+    .filter(Boolean);
 }
 
 function normalizeIndexSet(value) {
@@ -1489,21 +1507,54 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency);
   const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency);
   const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2);
+  const stageCtrls = { stage1: s1Ctrl, stage2: s2Ctrl, stage3: s3Ctrl };
+
+  // 每个预设一条独立的并发通道：预设各配各的并发上限，阶段总并发是各通道之和。
+  // 只用一个阶段控制器时，多预设会被「第一个预设（或主配置）的上限」卡住——界面选了 3 个预设、
+  // 每个 3 并发，实际却只有 3 个请求在飞，预设的独立并发等于没生效。
+  // 通道仍承担该预设自己的慢启动、上探、下调与熔断塌缩；阶段控制器只留退避窗口与重试计数。
+  const createStageChannel = (stageKey, label, defaultConcurrency) => (preset, index, total) => {
+    const channel = createStageController({
+      stageKey,
+      label,
+      config: preset,
+      fallbackConcurrency: defaultConcurrency,
+      clampInteger,
+    });
+    // 多预设时并发日志要能区分是哪条连接在升降，否则三行「初审：并发从 3 翻倍至 6」看不出是谁。
+    channel.presetLabel = total > 1 ? String(preset.name || preset.presetId || `预设 ${index + 1}`) : "";
+    return channel;
+  };
+
   const pools = {
-    stage1: createPresetPool(config.presetPool || [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }], config),
-    stage2: createPresetPool(config.stylistPresets, config.stylistConfig),
-    stage3: createPresetPool(config.arbiterPresets, config.arbiterConfig),
+    stage1: createPresetPool(
+      config.presetPool?.length ? config.presetPool : [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }],
+      config,
+      { createChannel: createStageChannel("stage1", "初审", config.concurrency) }
+    ),
+    stage2: createPresetPool(config.stylistPresets, config.stylistConfig, {
+      createChannel: createStageChannel("stage2", "文学复审", config.concurrency),
+    }),
+    stage3: createPresetPool(config.arbiterPresets, config.arbiterConfig, {
+      createChannel: createStageChannel("stage3", "终审仲裁", 2),
+    }),
   };
   for (const stage of Object.keys(pools)) status.presetPipelines[stage] = pools[stage].snapshot();
+
+  // 这一行的并发通道：派发时按预设绑定，成功/失败都回它自己的通道做升降。
+  const channelFor = (stageKey, presetId) => pools[stageKey].channelOf(presetId) || stageCtrls[stageKey];
+  // 阶段可派发量 = 各预设通道当前允许并发之和（没配预设时退回阶段控制器）。
+  const stageAllowance = (stageKey) => pools[stageKey].totalQuota() || stageCtrls[stageKey].currentConcurrency;
+  const stageAllowanceMax = (stageKey) => pools[stageKey].totalMaxQuota() || stageCtrls[stageKey].maxConcurrency;
 
   function syncPresetPipelines() {
     for (const stage of Object.keys(pools)) status.presetPipelines[stage] = pools[stage].snapshot();
   }
 
-  status.concurrency = s1Ctrl.initialConcurrency;
-  status.currentConcurrency = s1Ctrl.currentConcurrency;
-  status.concurrencyMax = s1Ctrl.maxConcurrency;
-  status.peakConcurrency = s1Ctrl.currentConcurrency;
+  status.concurrency = pools.stage1.totalInitialQuota() || s1Ctrl.initialConcurrency;
+  status.currentConcurrency = stageAllowance("stage1");
+  status.concurrencyMax = stageAllowanceMax("stage1");
+  status.peakConcurrency = status.currentConcurrency;
   status.concurrencyUps = 0;
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
@@ -1514,36 +1565,41 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     assignPendingPresetIds(pools.stage3, stage3Pending);
     status.stagePipelines.stage1.pending = stage1Pending.length;
     status.stagePipelines.stage1.inFlight = stage1InFlight;
-    status.stagePipelines.stage1.concurrency = s1Ctrl.currentConcurrency;
-    status.stagePipelines.stage1.concurrencyMax = s1Ctrl.maxConcurrency;
+    status.stagePipelines.stage1.concurrency = stageAllowance("stage1");
+    status.stagePipelines.stage1.concurrencyMax = stageAllowanceMax("stage1");
 
     status.stagePipelines.stage2.pending = stage2Pending.length;
     status.stagePipelines.stage2.inFlight = stage2InFlight;
     status.stagePipelines.stage2.reviewed = stage2ReviewedLive;
     status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
-    status.stagePipelines.stage2.concurrency = s2Ctrl.currentConcurrency;
-    status.stagePipelines.stage2.concurrencyMax = s2Ctrl.maxConcurrency;
+    status.stagePipelines.stage2.concurrency = stageAllowance("stage2");
+    status.stagePipelines.stage2.concurrencyMax = stageAllowanceMax("stage2");
 
     status.stagePipelines.stage3.pending = stage3Pending.length;
     status.stagePipelines.stage3.inFlight = stage3InFlight;
-    status.stagePipelines.stage3.concurrency = s3Ctrl.currentConcurrency;
-    status.stagePipelines.stage3.concurrencyMax = s3Ctrl.maxConcurrency;
+    status.stagePipelines.stage3.concurrency = stageAllowance("stage3");
+    status.stagePipelines.stage3.concurrencyMax = stageAllowanceMax("stage3");
     syncPresetPipelines();
   }
   syncStagePipelineQueues();
   if (plan.cascadeToStylist) {
-    pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发上限 ${s2Ctrl.maxConcurrency}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发上限 ${s3Ctrl.maxConcurrency}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
+    pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发上限 ${stageAllowanceMax("stage2")}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发上限 ${stageAllowanceMax("stage3")}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
   } else if (plan.cascadeToArbiter) {
-    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发上限 ${s3Ctrl.maxConcurrency}），不等复审整体跑完。`);
+    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发上限 ${stageAllowanceMax("stage3")}），不等复审整体跑完。`);
   }
 
   // 并发变了：同步状态接口里的实时并发与峰值（状态接口的 currentConcurrency 只代表初审）。
-  function syncConcurrency(ctrl) {
-    status.peakConcurrency = Math.max(status.peakConcurrency, ctrl.currentConcurrency);
-    if (ctrl.stageKey === "stage1") status.currentConcurrency = ctrl.currentConcurrency;
+  // 多预设时这里是各通道之和，单个预设时就是那一条通道，口径与派发上限一致。
+  function syncConcurrency() {
+    const total = stageAllowance("stage1");
+    status.peakConcurrency = Math.max(status.peakConcurrency, total);
+    status.currentConcurrency = total;
   }
 
-  const stageTag = (ctrl) => (ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`);
+  // 多预设时日志带上预设名：否则「初审：并发从 3 翻倍至 6」重复出现，分不清是哪条连接。
+  const stageTag = (ctrl) => (ctrl.presetLabel
+    ? `${ctrl.label}·${ctrl.presetLabel}：`
+    : (ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`));
 
   // 上游正常应答：喂给调度器判断要不要上探。失败窗口逼近熔断线（pressure）时调度器会暂停上探，
   // 状态翻转时各记一行日志，让用户看得到「并发为什么停在这儿」。
@@ -1557,16 +1613,17 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
     if (!step) return;
     status.concurrencyUps += 1;
-    syncConcurrency(ctrl);
+    syncConcurrency();
     pushLog(step.mode === "slow-start"
       ? `[并发调度] ${stageTag(ctrl)}一整轮请求全部正常，并发从 ${step.from} 翻倍至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`
       : `[并发调度] ${stageTag(ctrl)}连续 ${step.successes} 次请求正常，并发从 ${step.from} 上探至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`);
   }
 
   // 成功既喂断路器，也可能顺带解除它设下的冷却（迟到的成功说明上游已经放行）。
-  function noteStageSuccess(ctrl) {
-    clearCooldownIf(ctrl, recordStageSuccess(ctrl.stageKey));
-    onStageSuccess(ctrl);
+  // channel 是这一行所属预设的并发通道（上探用它），stageCtrl 持有阶段级退避窗口与断路器。
+  function noteStageSuccess(channel, stageCtrl) {
+    clearCooldownIf(stageCtrl, recordStageSuccess(channel.stageKey));
+    onStageSuccess(channel);
   }
 
   // 断路器恢复：撤销冷却窗口，并把退避档位归零。
@@ -1579,50 +1636,69 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
   // 半开探测期（冷却已过、尚未收到非限流答复）只放行一个请求：
   // 否则并发数是 10 就会同时打出 10 个请求，等于对着刚冷却完的上游再硬打一轮。
-  // 断路器打开时并发已被塌到 1（collapseForBreaker），这里是兜底：即使并发被别的路径抬高也不会一拥而上。
+  // 断路器打开时各通道已被塌到最低（collapseStageChannels），这里是兜底：即使并发被别的路径抬高也不会一拥而上。
+  // 其余时候阶段可派发量 = 各预设通道当前允许并发之和。
   function dispatchLimit(ctrl) {
-    return stageBreaker(ctrl.stageKey).state === "half-open" ? 1 : ctrl.currentConcurrency;
+    return stageBreaker(ctrl.stageKey).state === "half-open" ? 1 : stageAllowance(ctrl.stageKey);
+  }
+
+  // 断路器打开：该阶段所有预设通道一起塌到最低，恢复后各自从低位慢启动，
+  // 而不是一步跳回冷却前的水位再撞一次刚放行的上游。返回塌缩后的阶段总并发。
+  function collapseStageChannels(stageKey, options) {
+    const channels = pools[stageKey].channels();
+    for (const channel of channels) collapseForBreaker(channel, options);
+    const stageCtrl = stageCtrls[stageKey];
+    if (!channels.includes(stageCtrl)) collapseForBreaker(stageCtrl, options);
+    return stageAllowance(stageKey);
+  }
+
+  // 熔断恢复后的慢启动目标（各通道阈值之和）：日志里要说清「先爬到哪儿」。
+  function stageRestartThreshold(stageKey) {
+    const channels = pools[stageKey].channels();
+    if (!channels.length) return stageCtrls[stageKey].slowStartThreshold;
+    return channels.reduce((total, channel) => total + Math.max(0, Number(channel.slowStartThreshold) || 0), 0);
   }
 
   // 过载型失败（超时 / 5xx / 断连）：并发下调一档。这类失败不重试、也不退避，但它们会进熔断的失败窗口，
   // 提前把并发压下来是为了在「错误率熔断」终止任务之前先把失败率压回去。返回是否属于过载型。
-  function onStageOverload(ctrl, rowIndex, error, startedAt) {
+  function onStageOverload(channel, rowIndex, error, startedAt) {
     const kind = classifyAiError(error);
     if (!overloadKinds.has(kind)) return false;
-    const step = stepDownOnOverload(ctrl, { startedAt, minConcurrency, policy });
+    const step = stepDownOnOverload(channel, { startedAt, minConcurrency, policy });
     if (step) {
       status.concurrencyDowns += 1;
-      syncConcurrency(ctrl);
+      syncConcurrency();
       syncStagePipelineQueues();
-      pushLog(`[并发调度] ${stageTag(ctrl)}第 ${rowIndex} 行遭遇${AI_ERROR_KIND_LABELS[kind]}，并发从 ${step.from} 下调至 ${step.to}，先缓解上游压力。`);
+      pushLog(`[并发调度] ${stageTag(channel)}第 ${rowIndex} 行遭遇${AI_ERROR_KIND_LABELS[kind]}，并发从 ${step.from} 下调至 ${step.to}，先缓解上游压力。`);
     }
     return true;
   }
 
-  function onStageRateLimit(ctrl, rowIndex, error, pendingQueue, itemToRetry, startedAt) {
+  // channel 负责这一行所属预设的并发升降，stageCtrl 负责阶段级退避窗口与单行重试计数。
+  function onStageRateLimit(channel, rowIndex, error, pendingQueue, itemToRetry, startedAt, stageCtrl) {
     status.concurrencyLimits += 1;
-    ctrl.consecutiveLimits += 1;
+    stageCtrl.consecutiveLimits += 1;
 
-    const step = stepDownOnLimit(ctrl, { startedAt, minConcurrency, policy });
+    const step = stepDownOnLimit(channel, { startedAt, minConcurrency, policy });
     if (step) {
       status.concurrencyDowns += 1;
-      syncConcurrency(ctrl);
+      syncConcurrency();
     }
 
-    const retries = (ctrl.rowRetryCounts.get(rowIndex) || 0) + 1;
-    ctrl.rowRetryCounts.set(rowIndex, retries);
+    const retries = (stageCtrl.rowRetryCounts.get(rowIndex) || 0) + 1;
+    stageCtrl.rowRetryCounts.set(rowIndex, retries);
 
     // 生产环境保留随机抖动，避免多个客户端在同一时刻重试；测试可把上限设为 0，
     // 只验证退避与断路器状态转换而不为随机等待付出时间成本。
     const jitterLimit = Number(process.env.TRANSCOMPARATOR_RETRY_JITTER_MS);
     const jitterMs = Number.isFinite(jitterLimit) && jitterLimit >= 0 ? jitterLimit : 500;
-    const delayMs = backoffDelayMs(ctrl.consecutiveLimits, error.retryAfter)
+    const delayMs = backoffDelayMs(stageCtrl.consecutiveLimits, error.retryAfter)
       + (jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0);
-    ctrl.backoffUntil = Math.max(ctrl.backoffUntil, Date.now() + delayMs);
+    stageCtrl.backoffUntil = Math.max(stageCtrl.backoffUntil, Date.now() + delayMs);
 
     if (shouldRetryRow(retries, maxRowRetries, status.stopRequested)) {
-      const stageNamePart = ctrl.stageKey === "stage1" ? "" : `${ctrl.label}`;
-      pushLog(`[频控退避] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${ctrl.currentConcurrency}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
+      const stageNamePart = channel.stageKey === "stage1" ? "" : `${channel.label}`;
+      pushLog(`[频控退避] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${stageAllowance(channel.stageKey)}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
       pendingQueue.unshift(itemToRetry);
       syncStagePipelineQueues();
       return true;
@@ -1630,34 +1706,35 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
     // 单行重试已用尽：交给该阶段的断路器裁决是「记这一行失败」「整阶段冷却」还是「终止任务」。
     if (status.stopRequested) return false;
-    const verdict = stageBreaker(ctrl.stageKey).recordLimitExhausted();
+    const verdict = stageBreaker(channel.stageKey).recordLimitExhausted();
     if (verdict.action === "fail") return false;
     if (verdict.action === "trip") {
-      stopForBreakerTrip(verdict, ctrl.stageKey);
+      stopForBreakerTrip(verdict, channel.stageKey);
       return false;
     }
     // 冷却：这一行没有真正被处理过，不记失败，回到队头等冷却结束；
     // 重试计数置满，让它成为「单发探测」——再被限流就立刻回报断路器，而不是再烧一轮退避。
-    ctrl.rowRetryCounts.set(rowIndex, maxRowRetries);
-    ctrl.backoffUntil = Math.max(ctrl.backoffUntil, verdict.until);
+    stageCtrl.rowRetryCounts.set(rowIndex, maxRowRetries);
+    stageCtrl.backoffUntil = Math.max(stageCtrl.backoffUntil, verdict.until);
     pendingQueue.unshift(itemToRetry);
     if (verdict.opened) {
-      // 联动：断路器打开意味着上游在当前并发下彻底拒绝服务。并发塌到最低，恢复后从低位慢启动，
-      // 而不是一步跳回冷却前的水位再撞一次刚放行的上游。
-      const collapsed = collapseForBreaker(ctrl, { minConcurrency, policy });
-      if (collapsed.from > collapsed.to) {
+      // 联动：断路器打开意味着上游在当前并发下彻底拒绝服务。各预设通道一起塌到最低，
+      // 恢复后从低位慢启动，而不是一步跳回冷却前的水位再撞一次刚放行的上游。
+      const collapsedFrom = stageAllowance(channel.stageKey);
+      const collapsedTo = collapseStageChannels(channel.stageKey, { minConcurrency, policy });
+      if (collapsedFrom > collapsedTo) {
         status.concurrencyDowns += 1;
-        syncConcurrency(ctrl);
+        syncConcurrency();
       }
-      const restartTarget = ctrl.slowStartThreshold;
-      const label = STAGE_OUTCOME_LABELS[ctrl.stageKey] || ctrl.stageKey;
+      const restartTarget = stageRestartThreshold(channel.stageKey);
+      const label = STAGE_OUTCOME_LABELS[channel.stageKey] || channel.stageKey;
       const attempt = `第 ${verdict.cycle}/${verdict.cycles} 档`;
       pushLog(verdict.cycle === 1
         ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
         : `[熔断] ${label}：探测仍被限流，继续冷却 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却）。`);
       // 只在第一档冷却说明一次：后续档位并发早已是最低，重复播报没有信息量。
       if (verdict.cycle === 1) {
-        pushLog(`[并发调度] ${label}：熔断冷却，并发降到 ${collapsed.to}（冷却前 ${collapsed.from}）；恢复后从 ${collapsed.to} 起步慢启动，先爬到 ${restartTarget}，再逐步上探（上限 ${ctrl.maxConcurrency}）。`);
+        pushLog(`[并发调度] ${label}：熔断冷却，并发降到 ${collapsedTo}（冷却前 ${collapsedFrom}）；恢复后从 ${collapsedTo} 起步慢启动，先爬到 ${restartTarget}，再逐步上探（上限 ${stageAllowanceMax(channel.stageKey)}）。`);
       }
     }
     syncStagePipelineQueues();
@@ -1779,12 +1856,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 这一行正在被（重新）处理：先撤掉它上一次的初审异常明细，成功就不再补记，失败才重新登记。
       clearStageError("stage1", row.index);
+      // 这一行派给哪个预设，成功/失败就回哪条并发通道做升降（阶段控制器只留退避窗口）。
+      const channel = channelFor("stage1", row.presetId);
       // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
       const requestStartedAt = Date.now();
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
-          noteStageSuccess(s1Ctrl);
+          noteStageSuccess(channel, s1Ctrl);
         }
 
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
@@ -1821,7 +1900,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待终审。`);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
-          const retried = onStageRateLimit(s1Ctrl, row.index, error, stage1Pending, row, requestStartedAt);
+          const retried = onStageRateLimit(channel, row.index, error, stage1Pending, row, requestStartedAt, s1Ctrl);
           if (!retried) {
             pushLog(`[频控退避] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             recordStageError("stage1", row.index, error, "rate_limit");
@@ -1851,7 +1930,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
-            onStageOverload(s1Ctrl, row.index, error, requestStartedAt);
+            onStageOverload(channel, row.index, error, requestStartedAt);
             clearCooldownIf(s1Ctrl, recordStageFailure("stage1"));
           }
           status.active = status.active.filter((idx) => idx !== row.index);
@@ -1871,6 +1950,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 与初审对称：这一行正在被（重新）复审，先撤掉上一次的复审异常明细，失败才重新登记。
       clearStageError("stage2", s1Item.row.index);
+      // 同理：这一行派给哪个预设，就回哪条通道做升降。
+      const channel = channelFor("stage2", s1Item.presetId);
       // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
       const requestStartedAt = Date.now();
       try {
@@ -1880,7 +1961,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s2.stageError) throw s2.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          noteStageSuccess(s2Ctrl);
+          noteStageSuccess(channel, s2Ctrl);
         }
         // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
         // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，看起来像「阶段二没干活」。
@@ -1909,7 +1990,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(s2Ctrl, s1Item.row.index, error, stage2Pending, s1Item, requestStartedAt)) {
+        if (isRateLimit && onStageRateLimit(channel, s1Item.row.index, error, stage2Pending, s1Item, requestStartedAt, s2Ctrl)) {
           // 成功推回 stage2Pending 重试
         } else {
           if (isRateLimit) {
@@ -1929,7 +2010,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
           else if (isRefusal) clearCooldownIf(s2Ctrl, recordStageNotLimited("stage2"));
           else if (!status.stopRequested && !isRateLimit) {
-            onStageOverload(s2Ctrl, s1Item.row.index, error, requestStartedAt);
+            onStageOverload(channel, s1Item.row.index, error, requestStartedAt);
             clearCooldownIf(s2Ctrl, recordStageFailure("stage2"));
           }
         }
@@ -1953,6 +2034,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       syncStagePipelineQueues();
       // 同理：先撤掉这一行上一次的仲裁异常明细。
       clearStageError("stage3", s2Item.row.index);
+      // 同理：这一行派给哪个预设，就回哪条通道做升降。
+      const channel = channelFor("stage3", s2Item.presetId);
       // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
       const requestStartedAt = Date.now();
       try {
@@ -1962,7 +2045,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s3.stageError) throw s3.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          noteStageSuccess(s3Ctrl);
+          noteStageSuccess(channel, s3Ctrl);
         }
         const result = finalizeRowResult(s3, config);
         addResult(result);
@@ -1974,7 +2057,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(s3Ctrl, s2Item.row.index, error, stage3Pending, s2Item, requestStartedAt)) {
+        if (isRateLimit && onStageRateLimit(channel, s2Item.row.index, error, stage3Pending, s2Item, requestStartedAt, s3Ctrl)) {
           // 成功推回 stage3Pending 重试
         } else {
           if (isRateLimit) {
@@ -1993,7 +2076,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) stopForFatalRequestError(error);
           else if (isRefusal) clearCooldownIf(s3Ctrl, recordStageNotLimited("stage3"));
           else if (!status.stopRequested && !isRateLimit) {
-            onStageOverload(s3Ctrl, s2Item.row.index, error, requestStartedAt);
+            onStageOverload(channel, s2Item.row.index, error, requestStartedAt);
             clearCooldownIf(s3Ctrl, recordStageFailure("stage3"));
           }
         }

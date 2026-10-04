@@ -109,6 +109,7 @@
 面板上只有一个「并发上限」输入。**没有「智能并发」开关**：自适应调度由服务端强制开启，实际并发在 1~上限 之间自动升降，用户填的数字只决定天花板。策略实现在纯函数模块 `ai/concurrency-controller.js`（不读 `status`、不碰网络，时钟可注入），阶段业务与状态写入仍归 `ai-proofread.js`。
 
 - **起步**：`min(上限, 3)`。默认上限 3 时就是固定 3，与旧行为一致；上限更高时先用 3 探路，不上来就用满上限去打陌生的上游。
+- **阶段多预设（阶段一的「适用 (N)」、阶段二/三的预设列表）**：每个预设是一条**独立并发通道**（各自一个 `createStageController`，上限取该预设自己的 `concurrency`）。阶段可派发量 = 各通道当前允许并发之和，起步也是各通道起步值之和——3 个预设各配 3 并发，点「开始」就是 9 个请求同时在飞，而不是被「第一个预设/主配置」的上限卡在 3。配额由 `ai/preset-pool.js` 从通道读取（`quota` 字段就是 `channel.currentConcurrency`），池内不再另算一套 ±1 自适应，避免两套升降互相打架。`cleanConfig` 必须保住 `presetPool` 以及每个预设的 `presetId`/`name`：漏掉整池只剩主配置一条通道，剥掉身份则页面上的预设标签与运行数据对不上号。阶段控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）只保留阶段级退避窗口、单行重试计数与断路器；断路器打开时该阶段**所有**通道一起塌到最低，恢复后各自从低位慢启动。
 - **上探（两段式）**：
   - *慢启动*：一整轮请求（数量 = 当前并发）全部正常，并发翻倍，封顶到慢启动阈值。上限 32 时 3→6→12→24→32，不必等 29 个「连续 5 次」。
   - *加法上探*：到达阈值后，每连续 5 次正常应答 +1。要踏入「上次出事的水位」（`knownLimit`）及以上时，需要连续 15 次——上游天花板通常不变，反复撞同一堵墙只会多吃几次 429。
@@ -122,7 +123,7 @@
   - 断路器打开：并发塌到 1，慢启动阈值设为**出事水位的一半**（至少 2，只收紧不放宽）。冷却结束后半开只放行一个探测（`dispatchLimit`），探测通过后从 1 慢启动爬回阈值，再加法上探；不会一步跳回冷却前的水位去撞刚放行的上游。阈值取「出事水位」而不是塌缩那一刻的当前并发——断路器打开前的连续限流早已把并发压到 1，拿当前并发算一半只会得到 1。
   - 失败窗口逼近熔断线：`pressure`（当前错误率 ÷ 熔断阈值）≥ 0.5 时暂停上探，回落后立即恢复；样本不足 5 个时恒为 0，偶发一次失败不会卡住上探。状态翻转各记一行日志。
 - **日志**：调度相关日志前缀 `[并发调度]`，频控退避为 `[频控退避]`，熔断为 `[熔断]`；任务结束输出「并发调度统计」（起步、峰值、下调/上探次数、限流次数）。
-- **状态接口**：`concurrency` 是起步并发，`concurrencyMax` 是并发上限，`currentConcurrency` 是初审当前放行的并发；`stagePipelines.stageN` 同样只有 `concurrency`（当前）与 `concurrencyMax`（上限）。不再回报 `smartConcurrency`。
+- **状态接口**：`concurrency` 是起步并发，`concurrencyMax` 是并发上限，`currentConcurrency` 是初审当前放行的并发；多预设时这三个值都是各预设通道之和，`stagePipelines.stageN` 的 `concurrency`（当前）/`concurrencyMax`（上限）同理，`presetPipelines.stageN[]` 逐条给出每个预设自己的 `quota`/`inFlight`/`pending`/`configuredConcurrency`。不再回报 `smartConcurrency`。
 - **并发边界**：并发上限共用 `ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS`（当前 1–32），面板输入框 `max` 与 `cleanConfig`/`cleanSubStageConfig`/`createStageController` 均以该常量为准。**越界必须截断到边界，不得回落到默认值**——旧实现把超范围的 20 直接换成 3，用户选了 20 却静默跑成 3。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值字面量，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边。
 - **旧数据折算**：旧客户端、旧预设、旧本地存档还带着 `smartConcurrency` + `concurrencyMax`。开启智能并发的旧数据，有效上限是 `max(concurrency, concurrencyMax)`；关闭的，`concurrencyMax` 从不生效，上限就是 `concurrency`。服务端 `resolveConcurrencyCap`、预设 `sanitizePreset`、页面 `foldLegacyConcurrency` 三处按同一口径折算，读到旧数据即折成一个上限，下一次保存不再回写旧字段，无需迁移脚本。页面的折算必须对全局与项目两份存档**各自**折算后再合并；先合并再折算，会让一份旧存档遗留的 `concurrencyMax` 盖掉另一份存档里用户刚改的值。
 - **项目级持久化**：并发上限随项目配置独立持久化，使用上节列出的 v2 全局与项目配置键；未独立配置的项目继承全局配置基线，跨项目切换时互不污染。
