@@ -74,6 +74,59 @@
     const notesStorage = createNotesStorage(localStorage, LZString);
     const presetTools = createPresetTools();
     let currentPresetId = "";
+    const stagePresetSelections = { stage1: [], stage2: [], stage3: [] };
+    const stagePresetControls = {
+      stage1: { select: "stage1Preset", add: "stage1PresetAdd", tags: "stage1PresetTags" },
+      stage2: { select: "stage2Preset", add: "stage2PresetAdd", tags: "stage2PresetTags" },
+      stage3: { select: "stage3Preset", add: "stage3PresetAdd", tags: "stage3PresetTags" },
+    };
+
+    function committedStagePresetIds(stage) {
+      const ids = stagePresetSelections[stage] || [];
+      if (ids.length) return [...ids];
+      const select = aiIds[stagePresetControls[stage].select];
+      return select?.value ? [select.value] : [];
+    }
+
+    function renderStagePresetSelection(stage) {
+      const controls = stagePresetControls[stage];
+      const tags = aiIds[controls.tags];
+      if (!tags) return;
+      const ids = stagePresetSelections[stage] || [];
+      tags.replaceChildren(...ids.map((id) => {
+        const preset = presetTools.getPreset(localStorage, id);
+        const tag = document.createElement("span");
+        tag.className = "ai-stage-preset-tag";
+        tag.textContent = preset ? presetTools.presetLabel(preset) : id;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "ai-stage-preset-tag-remove";
+        remove.textContent = "×";
+        remove.title = "移除该预设";
+        remove.addEventListener("click", () => {
+          stagePresetSelections[stage] = ids.filter((item) => item !== id);
+          renderStagePresetSelection(stage);
+          updateStagePresetDependencies();
+          saveAiConfig();
+        });
+        tag.append(remove);
+        return tag;
+      }));
+      tags.hidden = ids.length === 0;
+    }
+
+    function addSelectedStagePreset(stage) {
+      const controls = stagePresetControls[stage];
+      const select = aiIds[controls.select];
+      const id = select?.value || "";
+      if (!id) return;
+      if (!stagePresetSelections[stage].includes(id)) stagePresetSelections[stage].push(id);
+      select.value = "";
+      syncEnhancedSelect(select);
+      renderStagePresetSelection(stage);
+      updateStagePresetDependencies();
+      saveAiConfig();
+    }
     const notes = {};
     const initialRaw = notesStorage.getItem(storageKey);
     const initialData = initialRaw === null ? {} : notesTools.parse(initialRaw);
@@ -382,6 +435,12 @@
       stage1Preset: document.getElementById("stage1PresetSelect"),
       stage2Preset: document.getElementById("stage2PresetSelect"),
       stage3Preset: document.getElementById("stage3PresetSelect"),
+      stage1PresetAdd: document.getElementById("stage1PresetAdd"),
+      stage2PresetAdd: document.getElementById("stage2PresetAdd"),
+      stage3PresetAdd: document.getElementById("stage3PresetAdd"),
+      stage1PresetTags: document.getElementById("stage1PresetTags"),
+      stage2PresetTags: document.getElementById("stage2PresetTags"),
+      stage3PresetTags: document.getElementById("stage3PresetTags"),
       stage2Card: document.getElementById("stage2Card"),
       stage3Card: document.getElementById("stage3Card"),
       start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
@@ -1000,24 +1059,29 @@
       fillSelect(aiIds.presetSelect, "新建预设", selectedId, "清空下方 AI 服务配置，从零填写后点「另存为预设」保存");
       currentPresetId = aiIds.presetSelect.value;
       updatePresetActionButtons();
-      fillSelect(aiIds.stage1Preset, "使用主配置", aiIds.stage1Preset?.value);
-      fillSelect(aiIds.stage2Preset, "未启用", aiIds.stage2Preset?.value);
-      fillSelect(aiIds.stage3Preset, "未启用", aiIds.stage3Preset?.value);
+      fillSelect(aiIds.stage1Preset, "选择预设", stagePresetSelections.stage1[0] || aiIds.stage1Preset?.value || "");
+      fillSelect(aiIds.stage2Preset, "选择预设", stagePresetSelections.stage2[0] || aiIds.stage2Preset?.value || "");
+      fillSelect(aiIds.stage3Preset, "选择预设", stagePresetSelections.stage3[0] || aiIds.stage3Preset?.value || "");
+      renderStagePresetSelection("stage1");
+      renderStagePresetSelection("stage2");
+      renderStagePresetSelection("stage3");
       const names = [...new Set(presets.map(presetTools.providerName).filter(Boolean))];
       aiIds.provider._syncProviderOptions?.(names);
       updateStagePresetDependencies();
     }
 
     function updateStagePresetDependencies() {
-      const hasStage2 = Boolean(aiIds.stage2Preset?.value);
+      const hasStage2 = committedStagePresetIds("stage2").length > 0;
       if (aiIds.stage3Preset) {
         if (!hasStage2) {
           aiIds.stage3Preset.value = "";
           aiIds.stage3Preset.disabled = true;
+          if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = true;
           aiIds.stage3Preset.title = "需先在阶段二选择预设启用后，方可配置阶段三";
           aiIds.stage3Card?.classList.add("is-disabled");
         } else {
           aiIds.stage3Preset.disabled = false;
+          if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
           aiIds.stage3Preset.title = "选择阶段三模型预设（不填代表不启用）";
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
@@ -1029,7 +1093,7 @@
       }
       const pill3 = document.getElementById("stage3StatusPill");
       if (pill3 && pill3.dataset.state !== "running") {
-        const hasStage3 = hasStage2 && Boolean(aiIds.stage3Preset?.value);
+        const hasStage3 = hasStage2 && committedStagePresetIds("stage3").length > 0;
         pill3.dataset.state = hasStage3 ? "idle" : "disabled";
         pill3.textContent = hasStage3 ? "待命" : "未启用";
       }
@@ -1135,9 +1199,9 @@
         similarity: prefilterIds.similarity ? formatPercentRatio(prefilterIds.similarity.value) : (prevSaved.similarity || "92%"),
         promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
-        stage1PresetId: aiIds.stage1Preset?.value || "",
-        stage2PresetId: aiIds.stage2Preset?.value || "",
-        stage3PresetId: aiIds.stage3Preset?.value || "",
+        stage1PresetIds: committedStagePresetIds("stage1"),
+        stage2PresetIds: committedStagePresetIds("stage2"),
+        stage3PresetIds: committedStagePresetIds("stage3"),
       };
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
       if (projectAiConfigStorageKey) {
@@ -1217,15 +1281,15 @@
       normalizeSimilarityInput();
       updateProofreadModeHint();
       updateInferenceSettingOptions();
-      if (saved.stage1PresetId && aiIds.stage1Preset) {
-        aiIds.stage1Preset.value = saved.stage1PresetId;
-      }
-      if (saved.stage2PresetId && aiIds.stage2Preset) {
-        aiIds.stage2Preset.value = saved.stage2PresetId;
-      }
-      if (saved.stage3PresetId && aiIds.stage3Preset) {
-        aiIds.stage3Preset.value = saved.stage3PresetId;
-      }
+      stagePresetSelections.stage1 = Array.isArray(saved.stage1PresetIds) ? saved.stage1PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage1PresetId && presetTools.getPreset(localStorage, saved.stage1PresetId) ? [saved.stage1PresetId] : []);
+      stagePresetSelections.stage2 = Array.isArray(saved.stage2PresetIds) ? saved.stage2PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage2PresetId && presetTools.getPreset(localStorage, saved.stage2PresetId) ? [saved.stage2PresetId] : []);
+      stagePresetSelections.stage3 = Array.isArray(saved.stage3PresetIds) ? saved.stage3PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage3PresetId && presetTools.getPreset(localStorage, saved.stage3PresetId) ? [saved.stage3PresetId] : []);
+      if (aiIds.stage1Preset) aiIds.stage1Preset.value = stagePresetSelections.stage1[0] || "";
+      if (aiIds.stage2Preset) aiIds.stage2Preset.value = stagePresetSelections.stage2[0] || "";
+      if (aiIds.stage3Preset) aiIds.stage3Preset.value = stagePresetSelections.stage3[0] || "";
+      renderStagePresetSelection("stage1");
+      renderStagePresetSelection("stage2");
+      renderStagePresetSelection("stage3");
       updateStagePresetDependencies();
     }
 
@@ -3757,9 +3821,12 @@
     });
 
     function aiConfig() {
-      const s1PresetId = aiIds.stage1Preset?.value || "";
-      const s2PresetId = aiIds.stage2Preset?.value || "";
-      const s3PresetId = aiIds.stage3Preset?.value || "";
+      const s1PresetIds = committedStagePresetIds("stage1");
+      const s2PresetIds = committedStagePresetIds("stage2");
+      const s3PresetIds = committedStagePresetIds("stage3");
+      const s1PresetId = s1PresetIds[0] || "";
+      const s2PresetId = s2PresetIds[0] || "";
+      const s3PresetId = s3PresetIds[0] || "";
 
       let mainProtocol = aiIds.protocol.value;
       let mainProvider = aiIds.provider.value.trim();
@@ -3791,8 +3858,8 @@
       const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
       const arbiterEnabled = Boolean(s2PresetId && s3PresetId);
       const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
-      const stage2Presets = stylistConfig ? [{ ...stylistConfig, presetId: s2PresetId }] : [];
-      const stage3Presets = arbiterConfig ? [{ ...arbiterConfig, presetId: s3PresetId }] : [];
+      const stage2Presets = s2PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model);
+      const stage3Presets = s3PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model);
 
       return {
         protocol: mainProtocol,
@@ -3813,7 +3880,7 @@
         arbiterConfig,
         stylistPresets: stage2Presets,
         arbiterPresets: stage3Presets,
-        presetPool: s1PresetId ? [{ ...(presetTools.getPreset(localStorage, s1PresetId) || {}), presetId: s1PresetId }] : [],
+        presetPool: s1PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model),
         concurrency: mainConcurrency,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
@@ -4197,7 +4264,7 @@
       }
 
       // Stage 2
-      const s2Enabled = Boolean(aiIds.stage2Preset?.value || s2Reviewed > 0 || s2Errors > 0 || p2.inFlight > 0 || p2.pending > 0 || stage2WaitingForStage1);
+      const s2Enabled = Boolean(committedStagePresetIds("stage2").length || s2Reviewed > 0 || s2Errors > 0 || p2.inFlight > 0 || p2.pending > 0 || stage2WaitingForStage1);
       const pill2 = document.getElementById("stage2StatusPill");
       const active2 = document.getElementById("stage2ActiveInfo");
       const activeText2 = document.getElementById("stage2ActiveRowsText");
@@ -4239,7 +4306,7 @@
       }
 
       // Stage 3
-      const s3Enabled = Boolean((aiIds.stage3Preset?.value && s2Enabled) || s3Arbitrated > 0 || s3Errors > 0 || p3.inFlight > 0 || p3.pending > 0 || stage3WaitingForStage2);
+      const s3Enabled = Boolean((committedStagePresetIds("stage3").length && s2Enabled) || s3Arbitrated > 0 || s3Errors > 0 || p3.inFlight > 0 || p3.pending > 0 || stage3WaitingForStage2);
       const pill3 = document.getElementById("stage3StatusPill");
       const active3 = document.getElementById("stage3ActiveInfo");
       const activeText3 = document.getElementById("stage3ActiveRowsText");
@@ -4750,7 +4817,7 @@
           (ai.stagePipelines.stage3 && (ai.stagePipelines.stage3.inFlight > 0 || ai.stagePipelines.stage3.pending > 0))
         )) ||
         (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
-        aiIds.stage2Preset?.value
+        committedStagePresetIds("stage2").length > 0
       );
       const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
@@ -5238,6 +5305,9 @@
         saveAiConfig();
       });
     }
+    [["stage1", aiIds.stage1PresetAdd], ["stage2", aiIds.stage2PresetAdd], ["stage3", aiIds.stage3PresetAdd]].forEach(([stage, button]) => {
+      button?.addEventListener("click", () => addSelectedStagePreset(stage));
+    });
     aiIds.proofreadMode.addEventListener("change", updateProofreadModeHint);
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
     prefilterIds.similarity.addEventListener("change", () => {
@@ -5520,10 +5590,10 @@
     // 启动前自己算一份同样的判定，用来把「这次会跑到哪」告诉用户——它不参与调度决策。
     // 预设被删掉时下拉框里可能还残留旧 id，取不到预设就等于那一段没启用。
     function downstreamPlan() {
-      const stylistId = aiIds.stage2Preset?.value || "";
-      const arbiterId = aiIds.stage3Preset?.value || "";
-      const hasStylist = Boolean(stylistId) && Boolean(presetTools.getPreset(localStorage, stylistId));
-      const hasArbiter = hasStylist && Boolean(arbiterId) && Boolean(presetTools.getPreset(localStorage, arbiterId));
+      const stylistIds = committedStagePresetIds("stage2");
+      const arbiterIds = committedStagePresetIds("stage3");
+      const hasStylist = stylistIds.some((id) => Boolean(presetTools.getPreset(localStorage, id)));
+      const hasArbiter = hasStylist && arbiterIds.some((id) => Boolean(presetTools.getPreset(localStorage, id)));
       return { hasStylist, hasArbiter };
     }
 
@@ -5607,7 +5677,7 @@
       pendingStartStage = stage;
 
       if (stage === "stage2") {
-        if (!aiIds.stage2Preset?.value) {
+        if (!committedStagePresetIds("stage2").length) {
           showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
           return;
         }
@@ -5669,7 +5739,7 @@
         await startAiProofread({ continueOnly: true, stage: "stage2" });
         return;
       } else if (stage === "stage3") {
-        if (!aiIds.stage3Preset?.value) {
+        if (!committedStagePresetIds("stage3").length) {
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
           return;
         }
@@ -5750,11 +5820,11 @@
         const cascadeNote = tailText ? `\n\n本次会一路推进：${tailText}。` : "";
         // 配了阶段三预设却取不到（预设被删、下拉残留旧 id）时明确说一声：
         // 否则用户只会看到「配了仲裁却从来不仲裁」，而且阶段三卡片会一直停在很小的定案数上。
-        if (plan.toStylist && aiIds.stage3Preset?.value && !plan.toArbiter) {
+        if (plan.toStylist && committedStagePresetIds("stage3").length && !plan.toArbiter) {
           showToast("阶段三预设已失效（本地找不到该预设），本次不会走到终审仲裁；请重新选择阶段三预设。", { tone: "watch", durationMs: 15000 });
         }
         // 阶段二同理：取不到预设就等于这条流水线只有一段。
-        if (aiIds.stage2Preset?.value && !plan.toStylist) {
+        if (committedStagePresetIds("stage2").length && !plan.toStylist) {
           showToast("阶段二预设已失效（本地找不到该预设），本次只会跑阶段一；请重新选择阶段二预设。", { tone: "watch", durationMs: 15000 });
         }
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();

@@ -974,6 +974,50 @@ details[open] > summary .details-toggle::before {
   left: auto;
 }
 
+.ai-stage-preset-add {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.ai-stage-preset-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: min(320px, 35vw);
+  overflow-x: auto;
+}
+
+.ai-stage-preset-tags[hidden] {
+  display: none !important;
+}
+
+.ai-stage-preset-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 150px;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--ai-focus) 35%, var(--ai-line));
+  border-radius: var(--ai-radius-badge, 4px);
+  background: color-mix(in srgb, var(--ai-focus) 8%, transparent);
+  color: var(--ai-text);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-stage-preset-tag-remove {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ai-muted-2);
+  cursor: pointer;
+  line-height: 1;
+}
+
 .ai-stage-card-body {
   display: flex;
   flex-direction: column;

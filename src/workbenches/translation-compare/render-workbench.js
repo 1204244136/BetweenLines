@@ -304,6 +304,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <select id="stage1PresetSelect" class="ai-stage-preset-select" title="阶段一模型预设（默认使用主配置）">
                       <option value="">使用主配置</option>
                     </select>
+                    <button id="stage1PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段一">添加</button>
+                    <div id="stage1PresetTags" class="ai-stage-preset-tags" aria-label="阶段一已选预设"></div>
                     <div class="ai-stage-card-actions">
                       <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段一事实初审">开始</button>
                       <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段一任务">停止</button>
@@ -340,6 +342,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二模型预设（不填代表不启用）">
                       <option value="">未启用</option>
                     </select>
+                    <button id="stage2PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段二">添加</button>
+                    <div id="stage2PresetTags" class="ai-stage-preset-tags" aria-label="阶段二已选预设"></div>
                     <div class="ai-stage-card-actions">
                       <button id="stage2Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段二文学复审">开始</button>
                       <button id="stage2Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段二任务">停止</button>
@@ -381,6 +385,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二选择预设启用后，方可配置阶段三">
                       <option value="">未启用</option>
                     </select>
+                    <button id="stage3PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段三">添加</button>
+                    <div id="stage3PresetTags" class="ai-stage-preset-tags" aria-label="阶段三已选预设"></div>
                     <div class="ai-stage-card-actions">
                       <button id="stage3Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段三终审仲裁">开始</button>
                       <button id="stage3Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段三任务">停止</button>
