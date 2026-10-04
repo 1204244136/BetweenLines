@@ -470,7 +470,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <button id="refreshNotesSpaces" class="btn btn--ghost" type="button">刷新</button>
               </div>
             </div>
-            <p id="notesStorageUsage" class="notes-hint"></p>
             <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
             <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
             <div id="notesCurrentSpace"></div>

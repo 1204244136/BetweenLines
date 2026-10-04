@@ -19,10 +19,7 @@ function storageFixture(initial = {}) {
     get length() { return data.size; },
     key(index) { return [...data.keys()][index] ?? null; },
     getItem(name) { return data.get(name) ?? null; },
-    setItem(name, value) {
-      if (this.failWrites) throw Object.assign(new Error("Storage quota exceeded"), { name: "QuotaExceededError" });
-      data.set(name, String(value));
-    },
+    setItem(name, value) { if (this.failWrites) throw Error("QuotaExceededError"); data.set(name, String(value)); },
     removeItem(name) { data.delete(name); },
   };
 }

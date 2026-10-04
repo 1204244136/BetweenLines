@@ -24,44 +24,6 @@ function createNotesTools(alignLegacyNotes) {
     return match ? { version: match[1], project: match[2], rows: match[3] } : { version: "", project: "", rows: "" };
   }
 
-  function storageFailureKind(error) {
-    if (error?.name === "QuotaExceededError" || error?.name === "NS_ERROR_DOM_QUOTA_REACHED"
-      || error?.code === 22 || error?.code === 1014) return "quota";
-    if (error?.name === "SecurityError" || error?.name === "NotAllowedError") return "denied";
-    return "unknown";
-  }
-
-  // UTF-16 estimates describe stored strings, not the browser's actual quota accounting.
-  function storageUsage(storage, currentKey, currentRaw) {
-    const usage = { available: true, totalBytes: 0, currentBytes: 0,
-      historyCount: 0, historyBytes: 0, otherNotesCount: 0, otherNotesBytes: 0, otherBytes: 0 };
-    const project = identity(currentKey).project;
-    const bytes = (key, raw) => raw === null ? 0 : 2 * (key.length + raw.length);
-    try {
-      for (let index = 0; index < storage.length; index += 1) {
-        const key = storage.key(index);
-        if (key === null) continue;
-        const raw = storage.getItem(key);
-        if (raw === null) continue;
-        const size = bytes(key, raw);
-        usage.totalBytes += size;
-        if (key === currentKey) usage.currentBytes += size;
-        else if (key.startsWith(prefix) && !auxiliary(key)) {
-          if (project && identity(key).project === project) {
-            usage.historyCount += 1;
-            usage.historyBytes += size;
-          } else {
-            usage.otherNotesCount += 1;
-            usage.otherNotesBytes += size;
-          }
-        } else usage.otherBytes += size;
-      }
-    } catch { usage.available = false; }
-    usage.pendingBytes = bytes(currentKey, currentRaw);
-    usage.projectedBytes = usage.totalBytes - usage.currentBytes + usage.pendingBytes;
-    return usage;
-  }
-
   function inventory(storage, currentKey, currentNotes) {
     const keys = new Set([currentKey]);
     for (let index = 0; index < storage.length; index += 1) {
@@ -195,8 +157,7 @@ function createNotesTools(alignLegacyNotes) {
     return { imported, skipped, failed: spaces.length - imported.length - skipped, error };
   }
 
-  return { prefix, auxiliary, entries, parse, identity, storageFailureKind, storageUsage,
-    inventory, plan, backup, decodeBackup, importBackup };
+  return { prefix, auxiliary, entries, parse, identity, inventory, plan, backup, decodeBackup, importBackup };
 }
 
 module.exports = { createNotesTools };

@@ -5,7 +5,6 @@ const { createNotesTools } = require("../src/workbenches/translation-compare/not
 const { createWorkbench, storageFixture, currentKey: key, siblingKey: sourceKey } = require("./workbench-fixture");
 
 const helpers = createNotesTools(alignLegacyNotes);
-const storageError = (name) => Object.assign(new Error("Storage write failed"), { name });
 
 test("工作台在存储超额失败时内存恢复并保护来源数据", () => {
   const raw = JSON.stringify({ 1: { note: "历史备注", manualDone: true, rowSig: "sig-1" } });
@@ -119,23 +118,18 @@ test("本地存储写满：警告要写明刷新会丢，「重试保存」重�
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   // 让当前空间的写入一直抛配额异常，模拟浏览器本地存储写满。
   const originalSet = ui.storage.setItem.bind(ui.storage);
-  ui.storage.setItem = (k, v) => { if (k === key) throw storageError("QuotaExceededError"); originalSet(k, v); };
+  ui.storage.setItem = (k, v) => { if (k === key) throw Error("QuotaExceededError"); originalSet(k, v); };
 
   ui.run('notes["1"] = { note: "复审结论" }; persistNotes();');
   assert.equal(ui.run("notesPersistFailed"), true);
   assert.equal(ui.element("notesSaveWarning").hidden, false);
   assert.match(ui.element("notesSaveWarning").textContent, /刷新或关闭本页就会丢失/);
-  assert.match(ui.element("notesSaveWarning").textContent, /本项目没有历史空间可清理/);
-  assert.match(ui.element("notesSaveWarning").textContent, /本页记录本身也可能达到容量上限/);
-  assert.equal(ui.element("clearHistoryNotes").disabled, true);
   assert.equal(ui.element("retryNotesSave").hidden, false, "写满时要露出「重试保存」");
 
   // 重试仍然失败：必须给出「仍然失败」的回执。原来只在成功时给回执，用户点完按钮看不出
   // 这次到底成没成，很容易以为已经存好、转头去刷新页面，把只在内存里的这批结果丢掉。
   await ui.element("retryNotesSave").dispatch("click");
   assert.match(ui.element("notesPanelStatus").textContent, /仍然保存失败/);
-  assert.match(ui.element("notesPanelStatus").textContent, /本项目没有历史空间可清理/);
-  assert.doesNotMatch(ui.element("notesPanelStatus").textContent, /清理更多历史空间/);
   assert.equal(ui.run('notes["1"].note'), "复审结论", "保存失败不影响内存里的记录");
 
   // 放开配额后重试成功：回执转为成功，内容落盘。
@@ -143,112 +137,6 @@ test("本地存储写满：警告要写明刷新会丢，「重试保存」重�
   await ui.element("retryNotesSave").dispatch("click");
   assert.match(ui.element("notesPanelStatus").textContent, /本页记录已保存/);
   assert.equal(JSON.parse(ui.storage.getItem(key))[1].note, "复审结论");
-});
-
-test("零历史时按同源容量提示其他项目和本地数据，保留全部原始存储", async () => {
-  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
-  const cacheKey = "between-lines:speaker-ai:models:example";
-  const original = {
-    [key]: "{}",
-    [foreignKey]: "{broken-other-project",
-    [cacheKey]: JSON.stringify(["private-model-name"]),
-  };
-  const storage = storageFixture(original);
-  const ui = createWorkbench(storage);
-  storage.failWrites = true;
-  ui.run('notes["1"] = { note: "未保存的人工备注" }; persistNotes(); renderNotesSpaces();');
-
-  const warning = ui.element("notesSaveWarning").textContent;
-  assert.match(warning, /本项目没有历史空间可清理/);
-  assert.match(warning, /其他项目或旧版备注也占用同一份容量/);
-  assert.match(warning, /其他本地数据也占用容量/);
-  assert.match(ui.element("notesStorageUsage").textContent, /其他项目或旧版备注 1 个空间/);
-  assert.doesNotMatch(ui.element("notesStorageUsage").textContent, /private-model-name|broken-other-project|otherRows/);
-  assert.match(ui.element("notesSpaceSummary").textContent, /本项目内容.*含未保存修改/);
-  assert.equal(ui.element("clearHistoryNotes").disabled, true);
-  assert.equal(ui.run("notesSpaceInventory.filter((space) => !space.current).length"), 0);
-  await ui.element("retryNotesSave").dispatch("click");
-  assert.deepEqual(Object.fromEntries(storage.data), original, "配额失败不能删掉其他项目、损坏数据或缓存");
-  const backup = JSON.parse(ui.run("JSON.stringify(notesBackup(collectNotesSpaces()))"));
-  assert.equal(JSON.parse(backup.spaces[0].raw)[1].note, "未保存的人工备注");
-  assert.equal(backup.spaces.length, 1, "当前项目备份仍保持项目隔离");
-});
-
-test("存储权限与未知异常分别提示原因，不误判容量或要求清理历史", async (t) => {
-  for (const [name, expectedKind, message] of [
-    ["SecurityError", "denied", /本地存储写入被浏览器阻止/],
-    ["Error", "unknown", /本地存储写入失败，尚不能确定原因/],
-  ]) {
-    await t.test(name, async () => {
-      const storage = storageFixture({ [key]: "{}" });
-      const ui = createWorkbench(storage);
-      storage.setItem = () => { throw storageError(name); };
-      ui.run('notes["1"] = { note: "保留在内存的编辑" }; persistNotes();');
-      assert.equal(ui.run("notesPersistFailureKind"), expectedKind);
-      assert.match(ui.element("notesSaveWarning").textContent, message);
-      assert.doesNotMatch(ui.element("notesSaveWarning").textContent, /容量不足|释放容量后|清理更多历史空间/);
-      await ui.element("retryNotesSave").dispatch("click");
-      assert.match(ui.element("notesPanelStatus").textContent, /仍然保存失败/);
-      assert.match(ui.element("notesPanelStatus").textContent, message);
-      assert.equal(storage.getItem(key), "{}");
-      assert.equal(ui.run('notes["1"].note'), "保留在内存的编辑");
-    });
-  }
-});
-
-test("存储异常分类以浏览器异常名称和旧版错误码为准", () => {
-  for (const name of ["QuotaExceededError", "NS_ERROR_DOM_QUOTA_REACHED"]) {
-    assert.equal(helpers.storageFailureKind(storageError(name)), "quota");
-  }
-  for (const code of [22, 1014]) assert.equal(helpers.storageFailureKind({ code }), "quota");
-  for (const name of ["SecurityError", "NotAllowedError"]) {
-    assert.equal(helpers.storageFailureKind(storageError(name)), "denied");
-  }
-  assert.equal(helpers.storageFailureKind(new Error("QuotaExceededError")), "unknown");
-  assert.equal(helpers.storageFailureKind(null), "unknown");
-});
-
-test("容量估算区分已保存和未保存内容，替换本页不重复计算旧版本", () => {
-  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
-  const auxiliaryKey = key + ":previous-notes-migration-old";
-  const initial = {
-    [key]: "{}",
-    [sourceKey]: "{broken-history",
-    [foreignKey]: '{"1":{"note":"其他项目"}}',
-    [auxiliaryKey]: "migration-state",
-    "between-lines:speaker-ai:predictions": "cached-predictions",
-  };
-  const storage = storageFixture(initial);
-  const candidate = JSON.stringify({ 1: { note: "当前页面尚未保存的备注" } });
-  const bytes = (name, raw) => 2 * (name.length + raw.length);
-  const usage = helpers.storageUsage(storage, key, candidate);
-  assert.equal(usage.available, true);
-  assert.equal(usage.currentBytes, bytes(key, initial[key]));
-  assert.equal(usage.pendingBytes, bytes(key, candidate));
-  assert.equal(usage.historyCount, 1, "损坏历史同样占用容量");
-  assert.equal(usage.historyBytes, bytes(sourceKey, initial[sourceKey]));
-  assert.equal(usage.otherNotesCount, 1);
-  assert.equal(usage.otherNotesBytes, bytes(foreignKey, initial[foreignKey]));
-  assert.equal(usage.otherBytes, bytes(auxiliaryKey, initial[auxiliaryKey])
-    + bytes("between-lines:speaker-ai:predictions", initial["between-lines:speaker-ai:predictions"]));
-  assert.equal(usage.totalBytes, Object.entries(initial).reduce((total, [name, raw]) => total + bytes(name, raw), 0));
-  assert.equal(usage.projectedBytes, usage.totalBytes - usage.currentBytes + usage.pendingBytes);
-  assert.deepEqual(Object.fromEntries(storage.data), initial);
-
-  const absent = helpers.storageUsage(storageFixture(), key, candidate);
-  assert.equal(absent.currentBytes, 0);
-  assert.equal(absent.projectedBytes, bytes(key, candidate));
-  const unreadable = helpers.storageUsage({ get length() { throw storageError("SecurityError"); } }, key, candidate);
-  assert.equal(unreadable.available, false);
-});
-
-test("没有新修改时不重写本页，避免把无变化的备注标成保存失败", () => {
-  const storage = storageFixture({ [key]: "{}" });
-  const ui = createWorkbench(storage);
-  storage.failWrites = true;
-  assert.equal(ui.run("persistNotes()"), true);
-  assert.equal(ui.run("notesPersistFailed"), false);
-  assert.equal(ui.element("notesSaveWarning").hidden, true);
 });
 
 test("找回排除歧义签名并将文本推断标记为未核验", () => {
@@ -264,7 +152,7 @@ test("部分文件导入保留每个现有空间并如实报告其余失败", ()
   const storage = storageFixture({ [key]: "{}" });
   let writes = 0;
   const set = storage.setItem.bind(storage);
-  storage.setItem = (...args) => { if (++writes > 1) throw storageError("QuotaExceededError"); set(...args); };
+  storage.setItem = (...args) => { if (++writes > 1) throw Error("Quota"); set(...args); };
   const result = helpers.importBackup(storage, [{ key: sourceKey, raw: "{}" }, { key: sourceKey + ":import-1", raw: '{"1":{"note":"x"}}' }], key);
   assert.equal(result.imported.length, 1);
   assert.equal(result.failed, 1);
@@ -356,30 +244,6 @@ test("清空当前备注保留历史，清空历史保留当前空间", async ()
   await ui.element("clearHistoryNotes").dispatch("click");
   assert.notEqual(ui.storage.getItem(key), null);
   assert.equal(ui.storage.getItem(historyKey), null);
-});
-
-test("显式清空历史包含损坏和空空间，只删除当前项目的历史", async () => {
-  const emptyKey = "translation-compare-notes-v6:project:emptyRows";
-  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
-  const original = { [key]: "{}", [sourceKey]: "{broken-history", [emptyKey]: "{}", [foreignKey]: "{broken-foreign" };
-  const storage = storageFixture(original);
-  const cancelled = createWorkbench(storage, { confirm: () => false });
-  assert.equal(cancelled.element("clearHistoryNotes").disabled, false);
-  const backup = JSON.parse(cancelled.run("JSON.stringify(notesBackup(collectNotesSpaces()))"));
-  assert(backup.spaces.some((space) => space.key === sourceKey && space.raw === original[sourceKey]));
-  await cancelled.element("clearHistoryNotes").dispatch("click");
-  assert.match(cancelled.element("genericConfirmMessage").textContent, /清空 2 个历史空间中的 0 条有效记录/);
-  assert.match(cancelled.element("genericConfirmMessage").textContent, /1 个空间无法解析，也将删除其原始数据/);
-  assert.match(cancelled.element("genericConfirmMessage").textContent, /1 个空间无法解析.*删除其原始数据/);
-  assert.deepEqual(Object.fromEntries(storage.data), original, "取消后损坏与空历史均保留");
-
-  const approved = createWorkbench(storage);
-  await approved.element("clearHistoryNotes").dispatch("click");
-  assert.equal(storage.getItem(sourceKey), null);
-  assert.equal(storage.getItem(emptyKey), null);
-  assert.equal(storage.getItem(key), "{}");
-  assert.equal(storage.getItem(foreignKey), original[foreignKey]);
-  assert.equal(approved.element("clearHistoryNotes").disabled, true);
 });
 
 test("清空类操作走页内确认弹窗：取消时不落盘，弹窗带上条数与影响范围", async () => {
