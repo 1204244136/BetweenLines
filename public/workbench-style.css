@@ -607,6 +607,7 @@
         grid-template-columns: minmax(380px, 1.15fr) minmax(360px, 1fr);
         grid-template-areas:
           "toolbar toolbar"
+          "storage storage"
           "current history-head"
           "current history-list"
           "status  status"
@@ -614,6 +615,7 @@
         gap: 6px 16px;
       }
       .notes-toolbar { grid-area: toolbar; }
+      #notesStorageUsage { grid-area: storage; }
       #notesCurrentSpace { grid-area: current; align-self: start; }
       .notes-history-heading { grid-area: history-head; margin: 0; }
       #notesSpaceList { grid-area: history-list; max-height: 200px; }

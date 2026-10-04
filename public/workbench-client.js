@@ -66,6 +66,7 @@
     }
 
     let notesPersistFailed = false;
+    let notesPersistFailureKind = "";
     const allRows = JSON.parse(document.getElementById("rowData").textContent);
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
     const renderedRowsById = new Map();
@@ -504,6 +505,30 @@
       return JSON.stringify(notes);
     }
 
+    function notesSaveFailureMessage() {
+      const protection = "这些修改只在当前页面内存里，刷新或关闭本页就会丢失。请先导出本页记录。";
+      if (notesPersistFailureKind === "denied") {
+        return "本地存储写入被浏览器阻止：" + protection
+          + "请检查此页面的站点存储权限或隐私设置，允许存储后点击「重试保存」。清理历史空间不能解决权限问题。";
+      }
+      if (notesPersistFailureKind !== "quota") {
+        return "本地存储写入失败，尚不能确定原因：" + protection + "请点击「重试保存」；持续失败时检查浏览器的站点存储设置。";
+      }
+      const usage = notesTools.storageUsage(localStorage, storageKey, JSON.stringify(notes));
+      let advice = "";
+      if (!usage.available) advice = "无法读取存储占用，请检查浏览器的站点存储设置。";
+      else {
+        advice = usage.historyCount
+          ? "可清理本项目已备份的历史空间。"
+          : "本项目没有历史空间可清理。";
+        if (usage.otherNotesCount) advice += "其他项目或旧版备注也占用同一份容量，可在另一个标签页打开对应项目，备份后处理。";
+        if (usage.otherBytes) advice += "其他本地数据也占用容量，详见存储占用摘要。";
+        if (!usage.historyCount && !usage.otherNotesCount) advice += "本页记录本身也可能达到容量上限，请保留导出的备份。";
+      }
+      return "浏览器本地存储容量不足：" + protection + advice
+        + "释放容量后点击「重试保存」；保存成功前请保留本页。";
+    }
+
     function updateNotesSaveState() {
       const banner = document.getElementById("notesSaveWarning");
       const badge = document.getElementById("notesSaveState");
@@ -516,7 +541,7 @@
       banner.hidden = !failed;
       banner.textContent = notesStorageBlocked
         ? "本页空间无法解析或已被其他页面修改，已暂停保存。请先导出本页记录，再刷新页面核对；本地原始数据仍保留。"
-        : "本地存储写入失败：这些修改只在当前页面内存里，刷新或关闭本页就会丢失。请先导出本页记录，清理已备份的历史空间后点击「重试保存」。";
+        : notesSaveFailureMessage();
       const retry = document.getElementById("retryNotesSave");
       if (retry) retry.hidden = !notesPersistFailed || notesStorageBlocked;
     }
@@ -528,13 +553,14 @@
           return false;
         }
         const raw = serializeNotes();
-        localStorage.setItem(storageKey, raw);
+        if (raw !== lastPersistedNotesRaw) localStorage.setItem(storageKey, raw);
         lastPersistedNotesRaw = raw;
         notesPersistFailed = false;
+        notesPersistFailureKind = "";
         return true;
-      } catch {
-        // 浏览器本地存储已满：本次改动只在当前页面生效，不能让它中断整页渲染。
+      } catch (error) {
         notesPersistFailed = true;
+        notesPersistFailureKind = notesTools.storageFailureKind(error);
         return false;
       } finally {
         updateNotesSaveState();
@@ -6066,7 +6092,16 @@
       const history = notesSpaceInventory.filter((space) => !space.current);
       const totalKb = (notesSpaceInventory.reduce((total, space) => total + space.bytes, 0) / 1024).toFixed(1);
       notesPanelIds.current.innerHTML = notesSpaceMarkup(current, notesSpaceInventory.indexOf(current));
-      notesPanelIds.summary.textContent = history.length + " 个本项目历史空间 · 本地备注约 " + totalKb + " KB";
+      notesPanelIds.summary.textContent = history.length + " 个本项目历史空间 · 本项目内容约 " + totalKb + " KB（含未保存修改）";
+      notesPanelIds.clearHistory.disabled = !history.length;
+      const usage = notesTools.storageUsage(localStorage, storageKey, JSON.stringify(notes));
+      const usageLabel = document.getElementById("notesStorageUsage");
+      const kb = (bytes) => (bytes / 1024).toFixed(1) + " KB";
+      if (usageLabel) usageLabel.textContent = usage.available
+        ? "同源浏览器存储估算：已占用 " + kb(usage.totalBytes) + " · 本页已保存 " + kb(usage.currentBytes)
+          + " · 本项目历史 " + kb(usage.historyBytes) + " · 其他项目或旧版备注 " + usage.otherNotesCount + " 个空间 / " + kb(usage.otherNotesBytes)
+          + " · 其他本地数据 " + kb(usage.otherBytes) + " · 保存本页后预计 " + kb(usage.projectedBytes)
+        : "无法读取浏览器存储占用，请检查此页面的站点存储权限。";
       notesPanelIds.list.innerHTML = history.length
         ? history.map((space) => notesSpaceMarkup(space, notesSpaceInventory.indexOf(space))).join('')
         : '<div class="notes-space-empty">暂无历史记录。可导入之前导出的 JSON 备份。</div>';
@@ -6167,6 +6202,7 @@
         updateStageMetricsDashboard(null, {}, false);
         lastPersistedNotesRaw = "{}";
         notesPersistFailed = false;
+        notesPersistFailureKind = "";
         notesStorageBlocked = false;
         updateDoneCount();
         applyFilters({ reset: false });
@@ -6175,10 +6211,13 @@
       } catch { notesPanelStatus("清空失败：浏览器未允许修改本地存储。", { tone: "error" }); }
     });
     notesPanelIds.clearHistory.addEventListener("click", async () => {
-      const history = collectNotesSpaces().filter((space) => !space.current && space.entries);
+      const history = collectNotesSpaces().filter((space) => !space.current);
       if (!history.length) { notesPanelStatus("没有可清空的历史备注空间。", { tone: "watch" }); return; }
       const count = history.reduce((total, space) => total + space.entries, 0);
-      if (!(await askConfirm("清空 " + history.length + " 个历史空间中的 " + count + " 条记录？\n此操作不可撤销，请先点击「备份全部」。", { title: "清空历史空间", confirmText: "清空" }))) return;
+      const unreadable = history.filter((space) => space.parseFailed).length;
+      if (!(await askConfirm("清空 " + history.length + " 个历史空间中的 " + count + " 条有效记录？"
+        + (unreadable ? "\n另有 " + unreadable + " 个空间无法解析，也将删除其原始数据。" : "")
+        + "\n此操作不可撤销，请先点击「备份全部」。", { title: "清空历史空间", confirmText: "清空" }))) return;
       try {
         for (const space of history) localStorage.removeItem(space.key);
         renderNotesSpaces();
@@ -6220,7 +6259,7 @@
       notesPanelStatus(
         notesStorageBlocked
           ? "仍然无法保存：本页空间已被其他页面修改或无法解析。请先导出本页记录，再刷新页面核对。"
-          : "仍然保存失败：浏览器本地存储已满。请先导出本页记录，再清理更多历史空间后重试；在保存成功前不要刷新本页。",
+          : "仍然保存失败：" + notesSaveFailureMessage(),
         { tone: "error" });
     });
     notesPanelIds.panel.addEventListener("toggle", () => {
