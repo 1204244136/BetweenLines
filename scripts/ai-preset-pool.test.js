@@ -100,3 +100,71 @@ test("预设池：不注入通道时仍按池内配额自适应（纯单测与�
   scheduler.finish("solo", 1, { ok: true });
   assert.equal(scheduler.snapshot()[0].quota, 3);
 });
+
+test("预设池热更新：运行中增删预设会递增版本，并随数量刷新日志用的预设名", () => {
+  const channels = new Map();
+  const pool = createPresetPool([{ id: "p1", name: "甲", concurrency: 4 }], null, {
+    createChannel: (preset) => {
+      const channel = {
+        currentConcurrency: 2,
+        initialConcurrency: 2,
+        maxConcurrency: preset.concurrency,
+        presetLabel: "",
+      };
+      channels.set(preset.presetId, channel);
+      return channel;
+    },
+  });
+
+  assert.deepEqual(pool.presets.map((item) => item.presetId), ["p1"]);
+  assert.equal(channels.get("p1").presetLabel, "", "单预设不写预设名前缀");
+  const versionBefore = pool.version;
+
+  const added = pool.addPreset({ id: "p2", name: "乙", concurrency: 8 });
+  assert.equal(added.presetId, "p2");
+  assert.ok(pool.version > versionBefore, "增删预设必须让版本前进，调用方才知道要整队重算");
+  assert.deepEqual(pool.presets.map((item) => item.presetId), ["p1", "p2"]);
+  assert.equal(pool.totalQuota(), 4, "总并发立刻加上新通道的配额");
+  assert.equal(pool.totalMaxQuota(), 12);
+  assert.equal(channels.get("p1").presetLabel, "甲", "多预设时日志要带预设名");
+  assert.equal(channels.get("p2").presetLabel, "乙");
+
+  // 重复加入同一个预设是幂等的：不能出现两条同名通道。
+  assert.equal(pool.addPreset({ id: "p2", name: "乙", concurrency: 8 }).presetId, "p2");
+  assert.equal(pool.presets.length, 2);
+
+  assert.equal(pool.removePreset("p1"), true);
+  assert.equal(pool.removePreset("p1"), false, "重复移除返回 false");
+  assert.deepEqual(pool.presets.map((item) => item.presetId), ["p2"]);
+  assert.equal(pool.totalQuota(), 2);
+  assert.equal(channels.get("p2").presetLabel, "", "删到只剩一个时去掉预设名前缀");
+});
+
+test("预设池热更新：整队重算时新预设立刻分到活，被删预设的绑定被清掉", () => {
+  const pool = createPresetPool([{ id: "pa", concurrency: 2 }, { id: "pb", concurrency: 2 }]);
+  const items = [{ index: 1 }, { index: 2 }, { index: 3 }, { index: 4 }];
+  assignPendingPresetIds(pool, items);
+  assert.deepEqual(items.map((item) => item.presetId), ["pa", "pb", "pa", "pb"]);
+
+  // 稳态（预设集合没变）不重算：已有绑定保持不动。
+  assignPendingPresetIds(pool, items);
+  assert.deepEqual(items.map((item) => item.presetId), ["pa", "pb", "pa", "pb"]);
+
+  // 运行中加入 pc：整队重算后四条待审行分摊到三个预设，新预设立刻有活。
+  pool.addPreset({ id: "pc", concurrency: 2 });
+  const counts = assignPendingPresetIds(pool, items, { reassign: true });
+  assert.deepEqual(counts, { pa: 2, pb: 1, pc: 1 });
+  assert.equal(items.filter((item) => item.presetId === "pc").length, 1, "新预设要立刻分到活");
+
+  // 运行中删掉 pa：不能留下已删预设的绑定，否则它的待审行会永远派不出去。
+  pool.removePreset("pa");
+  assignPendingPresetIds(pool, items, { reassign: true });
+  assert.equal(items.some((item) => item.presetId === "pa"), false);
+  assert.deepEqual([...new Set(items.map((item) => item.presetId))].sort(), ["pb", "pc"]);
+
+  // 预设全被删光：残留绑定要清掉，不能拿旧 id 去找一条不存在的通道。
+  pool.removePreset("pb");
+  pool.removePreset("pc");
+  assignPendingPresetIds(pool, items, { reassign: true });
+  assert.equal(items.some((item) => "presetId" in item), false);
+});

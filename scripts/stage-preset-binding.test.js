@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { makeHtml } = require("./build-compare");
-const { createWorkbench } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 
 test("工作台构建：在阶段卡片内渲染预设选择下拉框", () => {
@@ -268,4 +268,45 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
   `);
   assert.match(s1Value.textContent, /适用：.*词元聚合[^\n]*\(4\/4 · 触顶\)$/, "单个预设不写「1/1 触顶」");
   assert.equal(s1Value.classList.contains("is-all-topped"), true);
+});
+
+test("阶段多预设热更新：运行中增删立刻同步给服务端，未运行时留给下次启动", async () => {
+  const ui = createWorkbench(storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify([
+      { id: "p1", name: "甲", protocol: "compatible", baseUrl: "https://a.example/v1", model: "m1", apiKey: "k1", concurrency: 2 },
+      { id: "p2", name: "乙", protocol: "compatible", baseUrl: "https://b.example/v1", model: "m2", apiKey: "k2", concurrency: 2 },
+    ]),
+  }), {
+    apiResponses: {
+      "/api/ai-proofread/presets": { ok: true, stage: "stage1", added: ["p2"], removed: ["p3"], fallback: false },
+    },
+  });
+  ui.run("restoreAiConfig();");
+  ui.run('stagePresetSelections.stage1 = ["p1", "p2"]; renderStagePresetSelection("stage1");');
+
+  const syncPosts = () => ui.posts.filter((post) => post.url === "/api/ai-proofread/presets");
+  const removeButtons = () => ui.element("stage1PresetTags").children.map((tag) => tag.children[2]);
+
+  // 未运行：改动只落本地配置，不打扰服务端。
+  removeButtons()[1].click();
+  await ui.settle();
+  assert.equal(syncPosts().length, 0, "任务没在跑时不该发起同步请求");
+  assert.deepEqual([...ui.run("stagePresetSelections.stage1")], ["p1"]);
+
+  // 运行中删除：立刻同步，服务端据此把该预设的待审行改派给其余预设。
+  ui.run('stagePresetSelections.stage1 = ["p1", "p2"]; renderStagePresetSelection("stage1");');
+  ui.run("currentAiRunning = true;");
+  removeButtons()[1].click();
+  await ui.settle();
+  assert.equal(syncPosts().length, 1, "运行中删预设必须立刻同步");
+  assert.equal(syncPosts()[0].body.stage, "stage1");
+  assert.deepEqual(syncPosts()[0].body.presets.map((item) => item.presetId), ["p1"]);
+  assert.match(toastMessages(ui).join("|"), /阶段一预设已即时生效/, "同步结果要给回执");
+
+  // 运行中加入：同样立刻同步，新预设马上参与派发。
+  ui.run('aiIds.stage1Preset.value = "p2";');
+  ui.element("stage1PresetAdd").click();
+  await ui.settle();
+  assert.equal(syncPosts().length, 2, "运行中加预设必须立刻同步");
+  assert.deepEqual(syncPosts()[1].body.presets.map((item) => item.presetId), ["p1", "p2"]);
 });

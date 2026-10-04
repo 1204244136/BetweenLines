@@ -1304,6 +1304,28 @@ function stopProofread() {
   return clientStatus({ includeResults: false });
 }
 
+// 运行中改预设集合：删掉的预设，它的待审行立刻改派给其余预设；新加的预设立刻抢活。
+// 任务没在跑时抛 NOT_RUNNING——那种情况下改动会在下次启动时随请求体一起生效。
+function updateStagePresets(payload = {}) {
+  // 只对正在跑的 AI 校对任务开放：预筛走的是另一条队列，没有阶段预设池可改。
+  if (!status.running || status.kind === "prefilter" || typeof activePresetPoolUpdater !== "function") {
+    const error = new Error("当前没有正在运行的 AI 校对任务：预设改动会在下次启动时生效。");
+    error.code = "NOT_RUNNING";
+    throw error;
+  }
+  const stage = payload.stage === "stage2" ? "stage2" : (payload.stage === "stage3" ? "stage3" : "stage1");
+  const presets = cleanStagePresetPool(payload.presets, null, {}, AI_CONCURRENCY_LIMITS.defaultConcurrency);
+  const result = activePresetPoolUpdater(stage, presets);
+  return {
+    stage,
+    added: result.added,
+    removed: result.removed,
+    fallback: result.fallback,
+    rejected: Boolean(result.rejected),
+    ai: clientStatus({ includeResults: false }),
+  };
+}
+
 function clearProofreadCache() {
   if (status.running) {
     const error = new Error(status.kind === "prefilter" ? "预筛选正在运行，请先停止任务再清除缓存。" : "AI 校对正在运行，请先停止任务再清除缓存。");
@@ -1366,6 +1388,8 @@ function clearProofreadCache() {
 }
 
 let currentQueueWakeup = null;
+// 运行中的预设池热更新入口：runQueue 挂上，任务结束时摘掉（见 updateStagePresets）。
+let activePresetPoolUpdater = null;
 
 function isConcurrencyOrRateLimitError(error) {
   if (!error) return false;
@@ -1559,10 +1583,18 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
 
+  // 上一次整队分配时各预设池的版本：版本变了（运行中增删过预设）才整队重算绑定，
+  // 稳态下沿用原有绑定，避免每轮派发都无谓地重排。
+  const assignedPoolVersions = { stage1: -1, stage2: -1, stage3: -1 };
+
   function syncStagePipelineQueues() {
-    assignPendingPresetIds(pools.stage1, stage1Pending);
-    assignPendingPresetIds(pools.stage2, stage2Pending);
-    assignPendingPresetIds(pools.stage3, stage3Pending);
+    const queues = { stage1: stage1Pending, stage2: stage2Pending, stage3: stage3Pending };
+    for (const stageKey of Object.keys(queues)) {
+      const pool = pools[stageKey];
+      const reassign = assignedPoolVersions[stageKey] !== pool.version;
+      assignedPoolVersions[stageKey] = pool.version;
+      assignPendingPresetIds(pool, queues[stageKey], { reassign });
+    }
     // 触顶计数与预设总数：页面据此区分「N/M 触顶」与「全部触顶」，
     // 不在客户端重算一遍触顶口径。
     const presetSummary = (stageKey) => ({
@@ -1604,6 +1636,54 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.peakConcurrency = Math.max(status.peakConcurrency, total);
     status.currentConcurrency = total;
   }
+
+  // 运行中增删预设：把新集合应用到池上，立刻重排队列并唤醒派发。
+  // 在飞的请求不打断（已经发出去的结果不浪费），但它不再拿到新活；
+  // 被删预设腾出来的待审行会立刻按积压均衡改派给其余预设，新预设则立刻开始抢活。
+  function applyPresetPoolUpdate(stageKey, incomingPresets) {
+    const pool = pools[stageKey];
+    const incoming = normalizePresetPool(incomingPresets);
+    // 删空即回落到该阶段的兜底连接（阶段一 → 主配置，阶段二/三 → 各自的单预设配置）：
+    // 否则这一阶段的队列会悬在半空，任务永远跑不完。
+    const fallbackConf = stageKey === "stage1"
+      ? { ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }
+      : (stageKey === "stage2" ? config.stylistConfig : config.arbiterConfig);
+    const target = incoming.length ? incoming : normalizePresetPool([fallbackConf].filter(Boolean));
+    // 连兜底配置都没有（这一阶段本来就没配过模型）：拒绝这次改动，
+    // 否则这一阶段的队列会悬空，任务永远跑不完。
+    if (!target.length) return { added: [], removed: [], fallback: false, rejected: true };
+    const targetIds = new Set(target.map((item) => item.presetId));
+
+    const removed = [];
+    for (const presetId of [...pool.state.keys()]) {
+      if (targetIds.has(presetId)) continue;
+      if (pool.removePreset(presetId)) removed.push(presetId);
+    }
+    const added = [];
+    for (const preset of target) {
+      if (pool.state.has(preset.presetId)) continue;
+      if (pool.addPreset(preset)) added.push(preset.presetId);
+    }
+    const fallbackApplied = !incoming.length && target.length > 0;
+    if (!removed.length && !added.length) return { added, removed, fallback: fallbackApplied };
+
+    // 池的 version 已变：这次 sync 会整队重算绑定（新预设分到活、被删预设的行让出去），
+    // 再唤醒派发让新增的并发立刻用起来。
+    syncStagePipelineQueues();
+    if (typeof currentQueueWakeup === "function") currentQueueWakeup();
+    const label = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
+    if (added.length) {
+      pushLog(`[预设池] ${label}：运行中加入 ${added.length} 个预设，立刻参与派发。`);
+    }
+    if (removed.length) {
+      pushLog(`[预设池] ${label}：运行中移除 ${removed.length} 个预设，其待审行已改派给其余预设；在飞的请求跑完即止。`);
+    }
+    if (fallbackApplied) {
+      pushLog(`[预设池] ${label}：预设已全部移除，回落到阶段配置继续跑完剩余行。`);
+    }
+    return { added, removed, fallback: fallbackApplied };
+  }
+  activePresetPoolUpdater = (stageKey, presets) => applyPresetPoolUpdate(stageKey, presets);
 
   // 多预设时日志带上预设名：否则「初审：并发从 3 翻倍至 6」重复出现，分不清是哪条连接。
   const stageTag = (ctrl) => (ctrl.presetLabel
@@ -1769,6 +1849,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         settled = true;
         clearAllTimers();
         currentQueueWakeup = null;
+        activePresetPoolUpdater = null;
         finish();
         resolve();
       }
@@ -4389,6 +4470,7 @@ module.exports = {
   startPrefilter,
   startProofread,
   stopProofread,
+  updateStagePresets,
   recordHumanFeedback: (event) => globalFeedbackCollector.record(event),
   getFeedbackStatistics: () => globalFeedbackCollector.getStatistics(),
   globalFeedbackCollector,

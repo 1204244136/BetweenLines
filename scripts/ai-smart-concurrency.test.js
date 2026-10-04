@@ -20,6 +20,7 @@ const {
   parseRateLimitReason,
   startProofread,
   stopProofread,
+  updateStagePresets,
   cleanConfig,
   cleanSubStageConfig,
   stagePlan,
@@ -1374,6 +1375,16 @@ function passingBody() {
   });
 }
 
+// 等一个条件成立：涉及真实计时的流水线用例用它替代固定 sleep，避免机器快慢导致偶发失败。
+async function waitUntil(check, timeoutMs = 5000, intervalMs = 10) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 // 首档冷却按缩放后的毫秒数：测试里用它判断「断路器打开后多久才放行」。
 const firstCooldownMs = (scale) => Math.round(BREAKER_POLICY.limit.cooldownsMs[0] * scale);
 
@@ -2255,4 +2266,161 @@ test("多预设并发：阶段一选中的每个预设各开自己的并发，�
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("多预设热更新：运行中加入的预设立刻抢活，移除的预设待审行立刻改派且不卡死", async () => {
+  clearProofreadCache();
+  const totalRows = 24;
+  const { project } = setupMockProject(totalRows, "poolhot");
+
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 40);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id, concurrency) => ({
+      presetId: id,
+      name: `预设 ${id}`,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/${id}/v1`,
+      model: `model-${id}`,
+      apiKey: "test-key",
+      concurrency,
+    });
+    const pipelines = () => clientStatus({ includeResults: false }).presetPipelines.stage1;
+    const pipelineOf = (id) => pipelines().find((item) => item.presetId === id) || null;
+
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/pa/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 1,
+      presetPool: [preset("pa", 1), preset("pb", 1)],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    // 起步只有 a、b 两条通道，各 1 并发。
+    assert.ok(
+      await waitUntil(() => (pipelineOf("pa")?.completed || 0) > 0 && (pipelineOf("pb")?.completed || 0) > 0),
+      "a、b 两条通道都要先跑起来"
+    );
+
+    // 运行中加入 c：它必须立刻拿到活，而不是等这批行跑完。
+    const added = updateStagePresets({ stage: "stage1", presets: [preset("pa", 1), preset("pb", 1), preset("pc", 1)] });
+    assert.deepEqual(added.added, ["pc"]);
+    assert.deepEqual(added.removed, []);
+    assert.equal(added.fallback, false);
+    assert.ok(await waitUntil(() => (pipelineOf("pc")?.completed || 0) > 0), "新加入的预设要立刻参与派发");
+    assert.equal(pipelines().length, 3);
+    assert.equal(
+      clientStatus({ includeResults: false }).stagePipelines.stage1.concurrency,
+      3,
+      "总并发立刻加上新预设的配额"
+    );
+
+    // 运行中移除 a：它的待审行要立刻改派给 b、c，池里不再留下 a。
+    updateStagePresets({ stage: "stage1", presets: [preset("pb", 1), preset("pc", 1)] });
+    assert.equal(pipelineOf("pa"), null, "被移除的预设立刻从运行状态里消失");
+    const afterRemove = clientStatus({ includeResults: false }).stagePipelines.stage1;
+    assert.equal(
+      afterRemove.pending,
+      (pipelineOf("pb")?.pending || 0) + (pipelineOf("pc")?.pending || 0),
+      "队列里不能再留着被删预设的待审行"
+    );
+
+    const deadline = Date.now() + 15000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false, "热更新后整条流水线仍要跑完，不能卡住");
+    assert.equal(finished.errors, 0);
+    assert.equal(finished.results.length, totalRows, "每一行都要有结论");
+    assert.match(finished.logs.join("\n"), /\[预设池\] 初审：运行中加入 1 个预设/, "加入预设要留下日志");
+    assert.match(finished.logs.join("\n"), /\[预设池\] 初审：运行中移除 1 个预设/, "移除预设要留下日志");
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("多预设热更新：运行中把预设删空会回落到主配置，剩余行继续跑完", async () => {
+  clearProofreadCache();
+  const totalRows = 8;
+  const { project } = setupMockProject(totalRows, "poolfallback");
+
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(passingBody());
+      }, 30);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id) => ({
+      presetId: id,
+      name: `预设 ${id}`,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/${id}/v1`,
+      model: `model-${id}`,
+      apiKey: "test-key",
+      concurrency: 1,
+    });
+
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/main/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 1,
+      presetPool: [preset("pa"), preset("pb")],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+    assert.ok(await waitUntil(() => clientStatus({ includeResults: false }).presetPipelines.stage1.length === 2));
+
+    const fallback = updateStagePresets({ stage: "stage1", presets: [] });
+    assert.equal(fallback.fallback, true, "删空必须回落，而不是把阶段挂死");
+    assert.deepEqual(fallback.removed.sort(), ["pa", "pb"]);
+    assert.deepEqual(
+      clientStatus({ includeResults: false }).presetPipelines.stage1.map((item) => item.presetId),
+      ["主配置"]
+    );
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.errors, 0);
+    assert.equal(finished.results.length, totalRows, "回落后剩余行仍要跑完");
+    assert.match(finished.logs.join("\n"), /\[预设池\] 初审：预设已全部移除，回落到阶段配置继续跑完剩余行/);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("多预设热更新：任务没在跑时拒绝同步，改动只在下次启动生效", () => {
+  clearProofreadCache();
+  assert.throws(
+    () => updateStagePresets({ stage: "stage1", presets: [] }),
+    (error) => error.code === "NOT_RUNNING" && /没有正在运行的 AI 校对任务/.test(error.message)
+  );
 });

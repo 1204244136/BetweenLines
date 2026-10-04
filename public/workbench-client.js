@@ -140,6 +140,14 @@
       return select?.value ? [select.value] : [];
     }
 
+    // 该阶段当前选中的预设（含完整连接参数与 presetId）：启动时随请求体发送，
+    // 运行中增删预设也用它同步给服务端。缺 model 的条目发过去也会被服务端滤掉，这里先滤一次。
+    function stagePresetsFor(stage) {
+      return committedStagePresetIds(stage)
+        .map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id }))
+        .filter((item) => item.model);
+    }
+
     // 触顶 = 这条通道已经顶到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上探）。
     // 口径由服务端 presetPipelines[].topped 给出；旧服务端没有这个字段时按同一口径本地折算。
     function stagePresetTopped(row) {
@@ -221,6 +229,7 @@
           renderStagePresetSelection(stage);
           updateStagePresetDependencies();
           saveAiConfig();
+          void syncRunningStagePresets(stage);
         });
         tag.append(label);
         tag.append(runtimeLabel);
@@ -291,6 +300,38 @@
       renderStagePresetSelection(stage);
       updateStagePresetDependencies();
       saveAiConfig();
+      void syncRunningStagePresets(stage);
+    }
+
+    // 运行中增删预设要立刻生效：删掉的预设，它的待审行马上改派给其余预设；新加的预设马上抢活。
+    // 任务没在跑时什么都不做——那种改动本来就会随下次启动的请求体生效。
+    async function syncRunningStagePresets(stage) {
+      if (!currentAiRunning) return;
+      const stageLabel = stage === "stage1" ? "阶段一" : (stage === "stage2" ? "阶段二" : "阶段三");
+      try {
+        const response = await apiFetch("/api/ai-proofread/presets", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ stage, presets: stagePresetsFor(stage) }),
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        const added = Array.isArray(data.added) ? data.added.length : 0;
+        const removed = Array.isArray(data.removed) ? data.removed.length : 0;
+        if (data.rejected) {
+          showToast(`${stageLabel}没有可用的兜底模型配置，这次改动没有生效；请至少保留一个预设。`, { tone: "watch", durationMs: 10000 });
+          return;
+        }
+        const parts = [];
+        if (added) parts.push(`新增 ${added} 个预设，已立刻参与派发`);
+        if (removed) parts.push(`移除 ${removed} 个预设，待审行已改派给其余预设`);
+        if (data.fallback) parts.push("预设已全部移除，本阶段回落到阶段配置继续跑完剩余行");
+        if (parts.length) {
+          showToast(`${stageLabel}预设已即时生效：${parts.join("；")}。`, { tone: "success", durationMs: 7000 });
+        }
+      } catch (error) {
+        showToast(error.message, { tone: "error", durationMs: 12000 });
+      }
     }
     const notes = {};
     const initialRaw = notesStorage.getItem(storageKey);
@@ -4037,8 +4078,8 @@
       const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
       const arbiterEnabled = Boolean(s2PresetId && s3PresetId);
       const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
-      const stage2Presets = s2PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model);
-      const stage3Presets = s3PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model);
+      const stage2Presets = stagePresetsFor("stage2");
+      const stage3Presets = stagePresetsFor("stage3");
 
       return {
         protocol: mainProtocol,
@@ -4059,7 +4100,7 @@
         arbiterConfig,
         stylistPresets: stage2Presets,
         arbiterPresets: stage3Presets,
-        presetPool: s1PresetIds.map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id })).filter((item) => item.model),
+        presetPool: stagePresetsFor("stage1"),
         concurrency: mainConcurrency,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",

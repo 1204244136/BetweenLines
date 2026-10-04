@@ -1,5 +1,5 @@
 const { sendJson, readJson } = require("../http-json");
-const { clearProofreadCache, clientStatus: aiProofreadStatus, listModels, startPrefilter, startProofread, stopProofread, testModel } = require("../../workbenches/translation-compare/ai/ai-proofread");
+const { clearProofreadCache, clientStatus: aiProofreadStatus, listModels, startPrefilter, startProofread, stopProofread, testModel, updateStagePresets } = require("../../workbenches/translation-compare/ai/ai-proofread");
 const { inferSpeakerRow } = require("../../workbenches/speaker-attribution/ai/speaker-inference");
 const { listProviderModels, testModelConnectivity } = require("../../ai/llm-client");
 
@@ -47,6 +47,18 @@ async function handleAiRoutes(req, res, pathname, searchParams) {
 
   if (req.method === "POST" && pathname === "/api/ai-proofread/stop") {
     sendJson(res, 200, { ok: true, ai: stopProofread() });
+    return true;
+  }
+
+  // 运行中增删阶段预设：新预设立刻参与派发，被删预设的待审行立刻改派。
+  // 任务没在跑时不接受（409）：那种改动本来就会随下次启动的请求体生效。
+  if (req.method === "POST" && pathname === "/api/ai-proofread/presets") {
+    try {
+      const payload = await readJson(req);
+      sendJson(res, 200, { ok: true, ...updateStagePresets(payload) });
+    } catch (error) {
+      sendJson(res, error.code === "NOT_RUNNING" ? 409 : 400, { ok: false, error: error.message || String(error) });
+    }
     return true;
   }
 
