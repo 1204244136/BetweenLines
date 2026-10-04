@@ -160,6 +160,7 @@ function rebuildCompareHtmlFromSnapshot(snapshotDir, options = {}) {
     projectContext,
     compareData.speechHabits || null,
     termPrefilter,
+    options.notesRecovery || null,
   );
   const htmlFile = path.join(dir, "translation-compare.html");
   fs.writeFileSync(htmlFile, html, "utf8");

@@ -16,7 +16,7 @@ test("条目相同的历史空间照旧找回（合并改写不改变原行为�
   assert.equal(ui.run('notes["1"].manualDone'), true);
   assert.equal(ui.run('notes["2"].manualDone'), true);
   assert.equal(ui.run('notes["2"].revisionText'), "改写后的译文内容。");
-  assert.equal(JSON.parse(storage.getItem(currentKey))[1].rowSig, "sig-1");
+  assert.equal(JSON.parse(ui.run("notesStorage.getItem(storageKey)"))[1].rowSig, "sig-1");
 });
 
 test("同一行在多份历史空间记录不同时逐字段合并，不再把人工确认整条丢掉", () => {
@@ -34,7 +34,7 @@ test("同一行在多份历史空间记录不同时逐字段合并，不再把�
   assert.equal(ui.run('notes["1"].done'), true);
   assert.equal(ui.run('notes["1"].revisionText'), "改写后的译文内容。");
   assert.equal(ui.run('notes["1"].mergedFromSpaces'), true);
-  const saved = JSON.parse(storage.getItem(currentKey));
+  const saved = JSON.parse(ui.run("notesStorage.getItem(storageKey)"));
   assert.equal(saved[1].manualDone, true);
   assert.equal(saved[1].rowSig, "sig-1");
   // 找回回执走浮动提示；右上角那条固定状态行已整体移除，不再承载任何回执。
@@ -162,7 +162,7 @@ test("载入自愈：补回旧版规则漏掉的记录、还回能证明的人�
     assert.equal(ui.run(`notes["${index}"].manualDone`), true, `第 ${index} 行的记录必须补回`);
   }
   assert.match(toastMessages(ui).join("|"), /已修复旧版找回规则漏掉的记录/);
-  const saved = JSON.parse(storage.getItem(currentKey));
+  const saved = JSON.parse(ui.run("notesStorage.getItem(storageKey)"));
   assert.equal(saved[3].recoveredUnverified, undefined);
   assert.equal(saved[3].manualDone, true);
   assert.equal(saved[13].manualDone, true, "自愈结果要落盘，下次打开工作台才不会又少一截");

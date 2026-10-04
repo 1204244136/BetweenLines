@@ -24,6 +24,72 @@ function createNotesTools(alignLegacyNotes) {
     return match ? { version: match[1], project: match[2], rows: match[3] } : { version: "", project: "", rows: "" };
   }
 
+  function storageFailureKind(error) {
+    if (error?.name === "QuotaExceededError" || error?.name === "NS_ERROR_DOM_QUOTA_REACHED"
+      || error?.code === 22 || error?.code === 1014) return "quota";
+    if (error?.name === "SecurityError" || error?.name === "NotAllowedError") return "denied";
+    return "unknown";
+  }
+
+  function storageUsage(storage, currentKey, encodedRaw) {
+    const usage = { available: true, totalBytes: 0, currentBytes: 0,
+      historyCount: 0, historyBytes: 0, otherNotesCount: 0, otherNotesBytes: 0, otherBytes: 0 };
+    const project = identity(currentKey).project;
+    const bytes = (key, raw) => raw === null ? 0 : 2 * (key.length + raw.length);
+    try {
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (key === null) continue;
+        const raw = storage.getItem(key);
+        if (raw === null) continue;
+        const size = bytes(key, raw);
+        usage.totalBytes += size;
+        if (key === currentKey) usage.currentBytes += size;
+        else if (key.startsWith(prefix) && !auxiliary(key)) {
+          if (project && identity(key).project === project) {
+            usage.historyCount += 1;
+            usage.historyBytes += size;
+          } else {
+            usage.otherNotesCount += 1;
+            usage.otherNotesBytes += size;
+          }
+        } else usage.otherBytes += size;
+      }
+    } catch { usage.available = false; }
+    usage.projectedBytes = usage.totalBytes - usage.currentBytes + bytes(currentKey, encodedRaw);
+    return usage;
+  }
+
+  function restoreSeed(seed, currentKey, rows, currentNotes, { stateFor, userChanged = () => false } = {}) {
+    if (!record(seed) || seed.key !== currentKey || !/^[a-f0-9]{64}$/.test(seed.id || "")) {
+      throw new Error("恢复备份与当前备注空间不匹配。");
+    }
+    const data = parse(seed.raw);
+    if (data === null) throw new Error("恢复备份无法解析。");
+    const rowMap = new Map(rows.map((row) => [String(row.index), row]));
+    const items = entries(data);
+    if (!items.length || items.some(([id, item]) => item.recoveredUnverified
+      || !item.rowSig || item.rowSig !== rowMap.get(id)?.signature)) {
+      throw new Error("恢复备份存在与当前行内容不匹配的记录，未写入。");
+    }
+    const rank = (item) => {
+      const state = stateFor(item.note);
+      return item.manualDone ? 4 : state.arbitrated ? 3 : state.reviewed ? 2 : state.failed ? 0 : 1;
+    };
+    let restored = 0;
+    let kept = 0;
+    for (const [id, source] of items) {
+      const current = currentNotes[id];
+      if (current && (userChanged(current) || (current.rowSig === source.rowSig && rank(current) >= rank(source)))) {
+        kept += 1;
+        continue;
+      }
+      currentNotes[id] = { ...source };
+      restored += 1;
+    }
+    return { restored, kept, total: items.length };
+  }
+
   function inventory(storage, currentKey, currentNotes) {
     const keys = new Set([currentKey]);
     for (let index = 0; index < storage.length; index += 1) {
@@ -157,7 +223,8 @@ function createNotesTools(alignLegacyNotes) {
     return { imported, skipped, failed: spaces.length - imported.length - skipped, error };
   }
 
-  return { prefix, auxiliary, entries, parse, identity, inventory, plan, backup, decodeBackup, importBackup };
+  return { prefix, auxiliary, entries, parse, identity, storageFailureKind, storageUsage, restoreSeed,
+    inventory, plan, backup, decodeBackup, importBackup };
 }
 
 module.exports = { createNotesTools };

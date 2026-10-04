@@ -7,6 +7,7 @@ const { proofreadPromptFor, listProfiles } = require("./ai/proofread-contract");
 const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
+const { createNotesStorage } = require("./notes-storage");
 const { createPresetTools } = require("./ai-presets");
 const { normalizeConnectionConfig } = require("../../ai/connection-config");
 const { createStageNoteTools } = require("./ai/stage-note-state");
@@ -39,6 +40,7 @@ function readWorkbenchAssets() {
     workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchDiff: fs.readFileSync(path.join(publicDir, "workbench-diff.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "workbench-client.js"), "utf8"),
+    notesCodec: fs.readFileSync(require.resolve("lz-string/libs/lz-string.min.js"), "utf8"),
   };
 }
 
@@ -46,7 +48,7 @@ function pivotLabel(pivotLang, labels) {
   return pivotLang === "cn" ? labels.cn : labels.tw;
 }
 
-function makeHtml(rows, selection, projectContext, speechHabits = null, termPrefilter = null) {
+function makeHtml(rows, selection, projectContext, speechHabits = null, termPrefilter = null, notesRecovery = null) {
   const comparisonMode = selection.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   const bilingual = comparisonMode === "bilingual";
   const proofreadPrompt = proofreadPromptFor(comparisonMode);
@@ -76,6 +78,9 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   const fileSummary = `原文 A ${fileNames.jp || ""} · ${bilingual ? "译文 B" : "非原文 B"} ${fileNames.cn || ""}${bilingual ? "" : ` · 非原文 C ${fileNames.tw || ""}`}`;
   const rowsSignature = projectContext.rowsSignature;
   const storageKey = projectContext.notesStorage.key;
+  if (notesRecovery) createNotesTools(alignLegacyNotes).restoreSeed(notesRecovery, storageKey, rows, {}, {
+    stateFor: createStageNoteTools().stageNoteState,
+  });
   const clientMeta = {
     project: projectContext,
     comparisonMode,
@@ -97,6 +102,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     speechHabits,
     // 对照表的构建期判定：页面用它标出“纯术语（跳过模型）/术语注入/术语冲突”的行，并给出预筛数字。
     termPrefilter,
+    ...(notesRecovery ? { notesRecovery } : {}),
   };
   const defaultProofreadMode = comparisonMode;
   const clientRows = workbenchClientRows(rows, comparisonMode);
@@ -470,6 +476,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <button id="refreshNotesSpaces" class="btn btn--ghost" type="button">刷新</button>
               </div>
             </div>
+            <p id="notesStorageUsage" class="notes-hint"></p>
             <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
             <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
             <div id="notesCurrentSpace"></div>
@@ -569,6 +576,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 ${browserModelCapabilitiesSource()}
 ${assets.workbenchShared}
 ${assets.workbenchDiff}
+${assets.notesCodec}
+${createNotesStorage.toString()}
 ${assets.workbenchClient}</script>
 </body>
 </html>`;

@@ -18,13 +18,13 @@ test("工作台在存储超额失败时内存恢复并保护来源数据", () =>
   assert.match(ui.element("notesSaveState").textContent, /尚未保存/);
   storage.failWrites = false;
   ui.run("persistNotes()");
-  assert.equal(JSON.parse(storage.getItem(key))[1].rowSig, "sig-1");
+  assert.equal(JSON.parse(ui.run("notesStorage.getItem(storageKey)"))[1].rowSig, "sig-1");
 });
 
 test("导出包含未保存的修订且未校验条目在重载后保持未校验", () => {
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   ui.run('notes["1"] = { note: "待核验", manualDone: true, recoveredUnverified: true, rowSig: "old" }; persistNotes();');
-  const saved = JSON.parse(ui.storage.getItem(key));
+  const saved = JSON.parse(ui.run("notesStorage.getItem(storageKey)"));
   assert.equal(saved[1].rowSig, undefined);
   const reopened = createWorkbench(ui.storage);
   assert.equal(reopened.run('notes["1"].manualDone'), false);
@@ -96,7 +96,7 @@ test("单行确认解除找回隔离并写入全新签名", async () => {
   const box = { dataset: { done: "1" }, checked: true, closest() { return ui.element("row-1"); } };
   await ui.element("tbody").dispatch("change", { target: { closest(selector) { return selector === "[data-done]" ? box : null; } } });
   ui.run("persistNotes()");
-  const saved = JSON.parse(ui.storage.getItem(key))[1];
+  const saved = JSON.parse(ui.run("notesStorage.getItem(storageKey)"))[1];
   assert.equal(saved.recoveredUnverified, undefined);
   assert.equal(saved.manualDone, true);
   assert.equal(saved.rowSig, "sig-1");
@@ -118,7 +118,14 @@ test("本地存储写满：警告要写明刷新会丢，「重试保存」重�
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   // 让当前空间的写入一直抛配额异常，模拟浏览器本地存储写满。
   const originalSet = ui.storage.setItem.bind(ui.storage);
-  ui.storage.setItem = (k, v) => { if (k === key) throw Error("QuotaExceededError"); originalSet(k, v); };
+  ui.storage.setItem = (k, v) => {
+    if (k === key) {
+      const error = new Error("Storage capacity exceeded");
+      error.name = "QuotaExceededError";
+      throw error;
+    }
+    originalSet(k, v);
+  };
 
   ui.run('notes["1"] = { note: "复审结论" }; persistNotes();');
   assert.equal(ui.run("notesPersistFailed"), true);
@@ -136,7 +143,7 @@ test("本地存储写满：警告要写明刷新会丢，「重试保存」重�
   ui.storage.setItem = originalSet;
   await ui.element("retryNotesSave").dispatch("click");
   assert.match(ui.element("notesPanelStatus").textContent, /本页记录已保存/);
-  assert.equal(JSON.parse(ui.storage.getItem(key))[1].note, "复审结论");
+  assert.equal(JSON.parse(ui.run("notesStorage.getItem(storageKey)"))[1].note, "复审结论");
 });
 
 test("找回排除歧义签名并将文本推断标记为未核验", () => {
@@ -240,7 +247,7 @@ test("清空当前备注保留历史，清空历史保留当前空间", async ()
   assert.notEqual(ui.storage.getItem(historyKey), null);
   assert.equal(ui.run("Object.keys(notes).length"), 0);
   ui.storage.setItem(key, JSON.stringify({ 1: { note: "当前记录" } }));
-  ui.run('notes["1"] = { note: "当前记录" }; lastPersistedNotesRaw = localStorage.getItem(storageKey); renderNotesSpaces();');
+  ui.run('notes["1"] = { note: "当前记录" }; lastPersistedNotesRaw = notesStorage.getItem(storageKey); renderNotesSpaces();');
   await ui.element("clearHistoryNotes").dispatch("click");
   assert.notEqual(ui.storage.getItem(key), null);
   assert.equal(ui.storage.getItem(historyKey), null);

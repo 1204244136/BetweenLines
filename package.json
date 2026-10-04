@@ -25,6 +25,7 @@
     "fast-xml-parser": "^5.9.2",
     "html-to-text": "^10.0.0",
     "jszip": "^3.10.1",
+    "lz-string": "1.5.0",
     "opencc-js": "^1.0.5"
   }
 }

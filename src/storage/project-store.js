@@ -363,7 +363,7 @@ function rebuildProjectHtml(projectKey, options = {}) {
     const translationCompareJson = path.join(stagingDir, "translation-compare.json");
     if (fs.existsSync(translationCompareJson)) {
       const { rebuildCompareHtmlFromSnapshot } = require("../workbenches/translation-compare/build-compare");
-      notesKey = rebuildCompareHtmlFromSnapshot(stagingDir).notesKey;
+      notesKey = rebuildCompareHtmlFromSnapshot(stagingDir, { notesRecovery: options.notesRecovery }).notesKey;
       rebuilt = true;
     }
 

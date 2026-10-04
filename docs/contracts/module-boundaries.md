@@ -53,11 +53,13 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 | `row-output.js` | 模式字段裁剪、CSV、导出行、客户端行与展示质量标签阈值；签名调用共享 `project-context.js` |
 | `render-workbench.js` | HTML 渲染与渲染时读取静态资源 |
 | `model-options.js`、`notes-recovery.js` | 不依赖 DOM、文件系统或任务状态的纯计算 |
+| `notes-spaces.js`、`notes-storage.js` | 翻译备注恢复规则与注入浏览器的同步无损存储适配器；不加载 AI 运行状态 |
 | `ai/proofread-defaults.js`、`ai/decision-score.js` | AI 默认配置与纯评分规则 |
 
 - 职责模块不得反向依赖 `build-compare.js`；新增领域调用直接引用职责模块，兼容入口只服务已有调用方。
 - 渲染器从默认配置、评分与 `proofread-contract.js` 读取契约，不为配置加载 `ai-proofread.js` 的任务运行状态。
 - 静态资源由 `readWorkbenchAssets()` 在 `makeHtml()` 内读取，不能改回导入模块时缓存；快照 HTML 内嵌资源，发布页面的更新动作按 `AGENTS.md` 的刷新契约执行。
+- 明确授权的备注定向恢复仅通过重渲染参数注入当前快照 HTML，仍经 staging 发布，不修改已发布快照或比较 JSON。恢复源与快照内容不提交；普通布局重渲染不注入备份。恢复规则与一次性标记归 [工作台契约](workbench-notes-spaces.md)。
 - 序列化到浏览器的函数不得捕获模块私有依赖；必需常量和纯函数须显式注入。
 - 跨语言语义对齐由 `align_jp.py` 持有；JS 对齐算法与展示标签分别归上表两模块。分数与标签来自算法或集中规则，不能手工覆盖；阈值改动要兼容旧快照展示。
 
