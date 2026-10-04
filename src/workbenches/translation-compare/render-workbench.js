@@ -293,6 +293,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
               </div>
             </div>
             <div class="ai-stage-cards">
+              <div id="aiPresetRuntimePanel" class="ai-preset-runtime-panel" aria-label="各预设运行状态"></div>
               <div class="ai-stage-card" id="stage1Card" title="阶段一 事实初审：事实性硬伤审查与直接通过">
                 <div class="ai-stage-card-head" title="配置阶段一模型预设（默认使用主配置）">
                   <div class="ai-stage-card-title-row">

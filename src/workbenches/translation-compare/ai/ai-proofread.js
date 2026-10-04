@@ -116,6 +116,7 @@ const {
   getModelProfile,
   scheduleModels,
 } = require("./scheduler-profile");
+const { normalizePresetPool, createPresetPool } = require("./preset-pool");
 const {
   globalFeedbackCollector,
 } = require("./feedback-collector");
@@ -290,6 +291,7 @@ const status = {
   stageMetrics: createStageMetrics(),
   stageErrors: createStageErrors(),
   stagePipelines: createStagePipelines(),
+  presetPipelines: { stage1: [], stage2: [], stage3: [] },
   metrics: {
     promptTokens: 0,
     completionTokens: 0,
@@ -438,6 +440,11 @@ function clientStatus(options = {}) {
     // 异常分类明细：页面把「异常」指标的悬停提示按类别展开（哪几类问题、各多少行、出在哪几行）。
     stageErrors: stageErrorKindsSnapshot(),
     stagePipelines: createStagePipelines(status.stagePipelines),
+    presetPipelines: {
+      stage1: status.presetPipelines.stage1.map((item) => ({ ...item, activeRows: [...item.activeRows] })),
+      stage2: status.presetPipelines.stage2.map((item) => ({ ...item, activeRows: [...item.activeRows] })),
+      stage3: status.presetPipelines.stage3.map((item) => ({ ...item, activeRows: [...item.activeRows] })),
+    },
     metrics: { ...status.metrics },
     feedbackStats: globalFeedbackCollector.getStatistics(),
     logs: options.includeLogs === false ? [] : status.logs,
@@ -584,6 +591,8 @@ function cleanConfig(input = {}) {
     arbiterEnabled: input.arbiterEnabled !== false,
     stylistConfig: input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults, concurrency) : (input.stage2Preset ? cleanSubStageConfig(input.stage2Preset, defaults, concurrency) : null),
     arbiterConfig: input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults, 2) : (input.stage3Preset ? cleanSubStageConfig(input.stage3Preset, defaults, 2) : null),
+    stylistPresets: normalizePresetPool(input.stylistPresets || input.stage2Presets, input.stylistConfig ? cleanSubStageConfig(input.stylistConfig, defaults, concurrency) : null).map((item) => cleanSubStageConfig(item, defaults, concurrency)).filter(Boolean),
+    arbiterPresets: normalizePresetPool(input.arbiterPresets || input.stage3Presets, input.arbiterConfig ? cleanSubStageConfig(input.arbiterConfig, defaults, 2) : null).map((item) => cleanSubStageConfig(item, defaults, 2)).filter(Boolean),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
     // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
@@ -720,6 +729,8 @@ function resetStatus(config, rowsLength) {
   status.stageMetrics = createStageMetrics();
   status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
+  status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
+  status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
   status.metrics = {
     promptTokens: 0,
     completionTokens: 0,
@@ -1478,6 +1489,16 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency);
   const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency);
   const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2);
+  const pools = {
+    stage1: createPresetPool(config.presetPool || [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }], config),
+    stage2: createPresetPool(config.stylistPresets, config.stylistConfig),
+    stage3: createPresetPool(config.arbiterPresets, config.arbiterConfig),
+  };
+  for (const stage of Object.keys(pools)) status.presetPipelines[stage] = pools[stage].snapshot();
+
+  function syncPresetPipelines() {
+    for (const stage of Object.keys(pools)) status.presetPipelines[stage] = pools[stage].snapshot();
+  }
 
   status.concurrency = s1Ctrl.initialConcurrency;
   status.currentConcurrency = s1Ctrl.currentConcurrency;
@@ -1488,6 +1509,19 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   status.concurrencyLimits = 0;
 
   function syncStagePipelineQueues() {
+    const assignPending = (pool, items) => {
+      const counts = {};
+      const ids = pool.presets.map((item) => item.presetId);
+      for (const id of ids) counts[id] = 0;
+      for (const item of items) {
+        const id = item.presetId || ids[0];
+        if (id) counts[id] = (counts[id] || 0) + 1;
+      }
+      pool.setPending(counts);
+    };
+    assignPending(pools.stage1, stage1Pending);
+    assignPending(pools.stage2, stage2Pending);
+    assignPending(pools.stage3, stage3Pending);
     status.stagePipelines.stage1.pending = stage1Pending.length;
     status.stagePipelines.stage1.inFlight = stage1InFlight;
     status.stagePipelines.stage1.concurrency = s1Ctrl.currentConcurrency;
@@ -1504,6 +1538,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     status.stagePipelines.stage3.inFlight = stage3InFlight;
     status.stagePipelines.stage3.concurrency = s3Ctrl.currentConcurrency;
     status.stagePipelines.stage3.concurrencyMax = s3Ctrl.maxConcurrency;
+    syncPresetPipelines();
   }
   syncStagePipelineQueues();
   if (plan.cascadeToStylist) {
@@ -1683,6 +1718,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!s3InBackoff) {
         while (stage3InFlight < dispatchLimit(s3Ctrl) && stage3Pending.length > 0 && !status.stopRequested && !settled) {
           const s2Item = stage3Pending.shift();
+          const preset = pools.stage3.next();
+          if (preset) { s2Item.presetId = preset.presetId; s2Item.presetConfig = pools.stage3.presets.find((item) => item.presetId === preset.presetId); pools.stage3.begin(preset.presetId, s2Item.row.index); }
           stage3InFlight += 1;
           syncStagePipelineQueues();
           executeStage3(s2Item);
@@ -1701,6 +1738,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!s2InBackoff) {
         while (stage2InFlight < dispatchLimit(s2Ctrl) && stage2Pending.length > 0 && !status.stopRequested && !settled) {
           const s1Item = stage2Pending.shift();
+          const preset = pools.stage2.next();
+          if (preset) { s1Item.presetId = preset.presetId; s1Item.presetConfig = pools.stage2.presets.find((item) => item.presetId === preset.presetId); pools.stage2.begin(preset.presetId, s1Item.row.index); }
           stage2InFlight += 1;
           syncStagePipelineQueues();
           executeStage2(s1Item);
@@ -1719,6 +1758,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!s1InBackoff) {
         while (stage1InFlight < dispatchLimit(s1Ctrl) && stage1Pending.length > 0 && !status.stopRequested && !settled) {
           const row = stage1Pending.shift();
+          const preset = pools.stage1.next();
+          if (preset) { row.presetConfig = pools.stage1.presets.find((item) => item.presetId === preset.presetId); pools.stage1.begin(preset.presetId, row.index); }
+          row.presetId = preset?.presetId || "主配置";
           stage1InFlight += 1;
           syncStagePipelineQueues();
           executeStage1(row);
@@ -1812,6 +1854,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== row.index);
         }
       } finally {
+        pools.stage1.finish(row.presetId, row.index, { ok: !status.stageErrors.stage1[row.index] });
         status.stagePipelines.stage1.activeRows = status.stagePipelines.stage1.activeRows.filter((idx) => idx !== row.index);
         stage1InFlight -= 1;
         syncStagePipelineQueues();
@@ -1888,6 +1931,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           }
         }
       } finally {
+        pools.stage2.finish(s1Item.presetId, s1Item.row.index, { ok: !status.stageErrors.stage2[s1Item.row.index] });
         status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
         if (!plan.cascadeToArbiter || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
           if (!stage2Pending.some((item) => item.row?.index === s1Item.row.index)) {
@@ -1951,6 +1995,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           }
         }
       } finally {
+        pools.stage3.finish(s2Item.presetId, s2Item.row.index, { ok: !status.stageErrors.stage3[s2Item.row.index] });
         status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
         if (!stage3Pending.some((item) => item.row?.index === s2Item.row.index)) {
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
@@ -2136,6 +2181,8 @@ function recordStageNotLimited(stageKey) {
 }
 
 async function runStage1Gatekeeper(row, allRows, config, labels) {
+  const stageConfig = row.presetConfig || config;
+  if (stageConfig !== config) config = { ...config, ...stageConfig };
   const bilingual = config.proofreadMode === "bilingual";
   const targetKey = bilingual ? "cn" : config.target;
   const counterpartKey = bilingual ? "jp" : (targetKey === "cn" ? "tw" : "cn");
@@ -2453,6 +2500,7 @@ function reconstructStage2Result(row, noteText, config, labels) {
 }
 
 async function runStage2Stylist(stage1Result, config, labels, extraAllRows = null) {
+  if (stage1Result.presetConfig) config = { ...config, stylistConfig: stage1Result.presetConfig };
   const { row, targetLabel, lowScore } = stage1Result;
   let decision = { ...stage1Result.decision };
   decision.stage1RevisedText = String(stage1Result.decision?.revisedText || "");
@@ -2552,6 +2600,7 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
 }
 
 async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = null) {
+  if (stage2Result.presetConfig) config = { ...config, arbiterConfig: stage2Result.presetConfig };
   const { row, targetLabel, targetText } = stage2Result;
   let decision = { ...stage2Result.decision };
   const stylistReview = decision.stylistReview || {};

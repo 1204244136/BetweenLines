@@ -3791,6 +3791,8 @@
       const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
       const arbiterEnabled = Boolean(s2PresetId && s3PresetId);
       const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
+      const stage2Presets = stylistConfig ? [{ ...stylistConfig, presetId: s2PresetId }] : [];
+      const stage3Presets = arbiterConfig ? [{ ...arbiterConfig, presetId: s3PresetId }] : [];
 
       return {
         protocol: mainProtocol,
@@ -3809,6 +3811,9 @@
         arbiterEnabled,
         stylistConfig,
         arbiterConfig,
+        stylistPresets: stage2Presets,
+        arbiterPresets: stage3Presets,
+        presetPool: s1PresetId ? [{ ...(presetTools.getPreset(localStorage, s1PresetId) || {}), presetId: s1PresetId }] : [],
         concurrency: mainConcurrency,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
@@ -4139,6 +4144,7 @@
       const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
       const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
       const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
+      renderPresetRuntimePanel(window.__transComparatorAiPresetPipelines || {});
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
       const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
       // 初审覆盖整张工作台；异常重试行也在队列中，不能再加一遍。
@@ -4298,6 +4304,18 @@
         label: "阶段三 终审仲裁",
         errors: s3Errors,
       });
+    }
+
+    function renderPresetRuntimePanel(pipelines = {}) {
+      const panel = document.getElementById("aiPresetRuntimePanel");
+      if (!panel) return;
+      const stages = [["stage1", "阶段一"], ["stage2", "阶段二"], ["stage3", "阶段三"]];
+      const cards = stages.flatMap(([stage, label]) => (Array.isArray(pipelines[stage]) ? pipelines[stage] : []).map((item) => {
+        const rows = Array.isArray(item.activeRows) ? item.activeRows.slice(0, 5).join(", ") : "";
+        return `<div class="ai-preset-runtime-card"><div class="ai-preset-runtime-card__head"><span>${escapeHtml(label)} · ${escapeHtml(item.name || item.presetId || "预设")}</span><span>${Number(item.inFlight) || 0}/${Number(item.quota) || 0}</span></div><div class="ai-preset-runtime-card__meta"><span>当前运行 ${Number(item.inFlight) || 0}</span><span>配额 ${Number(item.quota) || 0} · 待派发 ${Number(item.pending) || 0}</span></div><div class="ai-preset-runtime-card__rows">${rows ? `当前行：${escapeHtml(rows)}` : "当前无运行行"}</div></div>`;
+      }));
+      panel.innerHTML = cards.join("");
+      panel.hidden = cards.length === 0;
     }
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
@@ -4663,6 +4681,7 @@
         currentStageCascade = reportedCascade;
       }
 
+      window.__transComparatorAiPresetPipelines = ai.presetPipelines || {};
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
       const stageMetricsSummary = stageMetricsSummaryCache;
       const aiRunId = ai.runId || "";
