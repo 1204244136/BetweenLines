@@ -116,7 +116,7 @@ const {
   getModelProfile,
   scheduleModels,
 } = require("./scheduler-profile");
-const { normalizePresetPool, createPresetPool } = require("./preset-pool");
+const { normalizePresetPool, createPresetPool, assignPendingPresetIds } = require("./preset-pool");
 const {
   globalFeedbackCollector,
 } = require("./feedback-collector");
@@ -1509,19 +1509,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   status.concurrencyLimits = 0;
 
   function syncStagePipelineQueues() {
-    const assignPending = (pool, items) => {
-      const counts = {};
-      const ids = pool.presets.map((item) => item.presetId);
-      for (const id of ids) counts[id] = 0;
-      for (const item of items) {
-        const id = item.presetId || ids[0];
-        if (id) counts[id] = (counts[id] || 0) + 1;
-      }
-      pool.setPending(counts);
-    };
-    assignPending(pools.stage1, stage1Pending);
-    assignPending(pools.stage2, stage2Pending);
-    assignPending(pools.stage3, stage3Pending);
+    assignPendingPresetIds(pools.stage1, stage1Pending);
+    assignPendingPresetIds(pools.stage2, stage2Pending);
+    assignPendingPresetIds(pools.stage3, stage3Pending);
     status.stagePipelines.stage1.pending = stage1Pending.length;
     status.stagePipelines.stage1.inFlight = stage1InFlight;
     status.stagePipelines.stage1.concurrency = s1Ctrl.currentConcurrency;
@@ -1722,9 +1712,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
       if (!s3InBackoff) {
         while (stage3InFlight < dispatchLimit(s3Ctrl) && stage3Pending.length > 0 && !status.stopRequested && !settled) {
-          const s2Item = stage3Pending.shift();
           const preset = pools.stage3.next();
-          if (preset) { s2Item.presetId = preset.presetId; s2Item.presetConfig = pools.stage3.presets.find((item) => item.presetId === preset.presetId); pools.stage3.begin(preset.presetId, s2Item.row.index); }
+          if (!preset) break;
+          const s2Item = stage3Pending.shift();
+          s2Item.presetId = preset.presetId;
+          s2Item.presetConfig = pools.stage3.presets.find((item) => item.presetId === preset.presetId);
+          pools.stage3.begin(preset.presetId, s2Item.row.index);
           stage3InFlight += 1;
           syncStagePipelineQueues();
           executeStage3(s2Item);
@@ -1742,9 +1735,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
       if (!s2InBackoff) {
         while (stage2InFlight < dispatchLimit(s2Ctrl) && stage2Pending.length > 0 && !status.stopRequested && !settled) {
-          const s1Item = stage2Pending.shift();
           const preset = pools.stage2.next();
-          if (preset) { s1Item.presetId = preset.presetId; s1Item.presetConfig = pools.stage2.presets.find((item) => item.presetId === preset.presetId); pools.stage2.begin(preset.presetId, s1Item.row.index); }
+          if (!preset) break;
+          const s1Item = stage2Pending.shift();
+          s1Item.presetId = preset.presetId;
+          s1Item.presetConfig = pools.stage2.presets.find((item) => item.presetId === preset.presetId);
+          pools.stage2.begin(preset.presetId, s1Item.row.index);
           stage2InFlight += 1;
           syncStagePipelineQueues();
           executeStage2(s1Item);
@@ -1762,10 +1758,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
       if (!s1InBackoff) {
         while (stage1InFlight < dispatchLimit(s1Ctrl) && stage1Pending.length > 0 && !status.stopRequested && !settled) {
-          const row = stage1Pending.shift();
           const preset = pools.stage1.next();
-          if (preset) { row.presetConfig = pools.stage1.presets.find((item) => item.presetId === preset.presetId); pools.stage1.begin(preset.presetId, row.index); }
-          row.presetId = preset?.presetId || "主配置";
+          if (!preset) break;
+          const row = stage1Pending.shift();
+          row.presetConfig = pools.stage1.presets.find((item) => item.presetId === preset.presetId);
+          row.presetId = preset.presetId;
+          pools.stage1.begin(preset.presetId, row.index);
           stage1InFlight += 1;
           syncStagePipelineQueues();
           executeStage1(row);

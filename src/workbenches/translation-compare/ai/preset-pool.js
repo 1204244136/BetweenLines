@@ -79,4 +79,33 @@ function createPresetPool(value, fallback = null) {
   };
 }
 
-module.exports = { normalizePresetPool, createPresetPool };
+// 将尚未绑定预设的队列项分配给当前积压最少的预设。阶段队列在运行中会不断
+// 追加新项，不能只在初始化时轮转，否则后续进入的行会再次全部落到第一个预设。
+function assignPendingPresetIds(pool, items = []) {
+  const ids = pool?.presets?.map((item) => item.presetId) || [];
+  const knownIds = new Set(ids);
+  const counts = Object.fromEntries(ids.map((id) => [id, 0]));
+  let tieCursor = 0;
+  for (const item of items) {
+    let id = item?.presetId;
+    if (!knownIds.has(id)) {
+      if (!ids.length) continue;
+      const minPending = Math.min(...ids.map((candidate) => counts[candidate]));
+      for (let offset = 0; offset < ids.length; offset += 1) {
+        const candidateIndex = (tieCursor + offset) % ids.length;
+        const candidate = ids[candidateIndex];
+        if (counts[candidate] === minPending) {
+          id = candidate;
+          tieCursor = (candidateIndex + 1) % ids.length;
+          break;
+        }
+      }
+      item.presetId = id;
+    }
+    counts[id] = (counts[id] || 0) + 1;
+  }
+  pool?.setPending(counts);
+  return counts;
+}
+
+module.exports = { normalizePresetPool, createPresetPool, assignPendingPresetIds };

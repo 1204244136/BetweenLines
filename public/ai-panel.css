@@ -984,9 +984,10 @@ details[open] > summary .details-toggle::before {
 .ai-stage-preset-tags {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
   gap: 3px;
   min-width: 0;
-  max-width: min(360px, 38vw);
+  max-width: min(600px, 50vw);
   overflow-x: auto;
 }
 
@@ -999,7 +1000,7 @@ details[open] > summary .details-toggle::before {
   align-items: center;
   gap: 3px;
   min-width: 0;
-  max-width: 150px;
+  max-width: 250px;
   padding: 1px 3px 1px 5px;
   border: 1px solid var(--ai-line);
   border-radius: var(--ai-radius-badge, 4px);
@@ -1010,9 +1011,17 @@ details[open] > summary .details-toggle::before {
 }
 
 .ai-stage-preset-tag-label {
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ai-stage-preset-runtime {
+  flex: 0 0 auto;
+  color: var(--ai-focus);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ai-stage-preset-tag-remove {
@@ -1045,37 +1054,6 @@ details[open] > summary .details-toggle::before {
   margin: 0;
   transition: background 120ms ease;
 }
-
-.ai-preset-runtime-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin: 0 0 5px;
-  padding: 4px 6px;
-  border: 1px solid var(--ai-line);
-  border-radius: var(--ai-radius-badge, 4px);
-  background: var(--ai-surface-subtle);
-}
-
-.ai-preset-runtime-card {
-  flex: 1 1 220px;
-  min-width: 0;
-}
-
-.ai-preset-runtime-card__head,
-.ai-preset-runtime-card__meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  font-size: 10px;
-}
-
-.ai-preset-runtime-card__head { color: var(--ai-text); font-weight: 650; }
-.ai-preset-runtime-card__meta { color: var(--ai-muted-2); margin-top: 3px; }
-.ai-preset-runtime-card__rows { color: var(--ai-focus); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: 10px; }
-.ai-preset-runtime-card__head > span:first-child,
-.ai-preset-runtime-card__meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .ai-stage-card-body:hover {
   background: color-mix(in srgb, var(--ai-focus) 8%, transparent);

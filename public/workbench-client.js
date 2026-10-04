@@ -74,6 +74,7 @@
     const notesStorage = createNotesStorage(localStorage, LZString);
     const presetTools = createPresetTools();
     let currentPresetId = "";
+    let latestPresetPipelines = {};
     const stagePresetSelections = { stage1: [], stage2: [], stage3: [] };
     const stagePresetControls = {
       stage1: { select: "stage1Preset", add: "stage1PresetAdd", tags: "stage1PresetTags" },
@@ -95,12 +96,29 @@
       const ids = stagePresetSelections[stage] || [];
       tags.replaceChildren(...ids.map((id) => {
         const preset = presetTools.getPreset(localStorage, id);
+        const runtime = (Array.isArray(latestPresetPipelines[stage]) ? latestPresetPipelines[stage] : [])
+          .find((item) => String(item.presetId) === String(id));
         const tag = document.createElement("span");
         tag.className = "ai-stage-preset-tag";
         const label = document.createElement("span");
         label.className = "ai-stage-preset-tag-label";
         label.textContent = preset ? presetTools.presetLabel(preset) : id;
         label.title = label.textContent;
+        const runtimeLabel = document.createElement("span");
+        runtimeLabel.className = "ai-stage-preset-runtime";
+        if (runtime) {
+          const inFlight = Math.max(0, Number(runtime.inFlight) || 0);
+          const quota = Math.max(0, Number(runtime.quota) || 0);
+          const configuredConcurrency = Math.max(quota, Number(runtime.configuredConcurrency) || Number(preset?.concurrency) || quota);
+          const pending = Math.max(0, Number(runtime.pending) || 0);
+          runtimeLabel.textContent = `并发 ${inFlight}/${quota} · 排队 ${pending}`;
+          const activeRows = Array.isArray(runtime.activeRows) ? runtime.activeRows : [];
+          runtimeLabel.title = `当前运行 ${inFlight} / 动态配额 ${quota} / 配置并发上限 ${configuredConcurrency} / 待派发 ${pending}`
+            + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : "");
+        } else {
+          runtimeLabel.textContent = `并发上限 ${Math.max(1, Number(preset?.concurrency) || 3)}`;
+          runtimeLabel.title = "该预设的配置并发上限";
+        }
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "ai-stage-preset-tag-remove";
@@ -113,6 +131,7 @@
           saveAiConfig();
         });
         tag.append(label);
+        tag.append(runtimeLabel);
         tag.append(remove);
         return tag;
       }));
@@ -4215,7 +4234,7 @@
       const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
       const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
       const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
-      renderPresetRuntimePanel(window.__transComparatorAiPresetPipelines || {});
+      for (const stage of ["stage1", "stage2", "stage3"]) renderStagePresetSelection(stage);
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
       const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
       // 初审覆盖整张工作台；异常重试行也在队列中，不能再加一遍。
@@ -4375,18 +4394,6 @@
         label: "阶段三 终审仲裁",
         errors: s3Errors,
       });
-    }
-
-    function renderPresetRuntimePanel(pipelines = {}) {
-      const panel = document.getElementById("aiPresetRuntimePanel");
-      if (!panel) return;
-      const stages = [["stage1", "阶段一"], ["stage2", "阶段二"], ["stage3", "阶段三"]];
-      const cards = stages.flatMap(([stage, label]) => (Array.isArray(pipelines[stage]) ? pipelines[stage] : []).map((item) => {
-        const rows = Array.isArray(item.activeRows) ? item.activeRows.slice(0, 5).join(", ") : "";
-        return `<div class="ai-preset-runtime-card"><div class="ai-preset-runtime-card__head"><span>${escapeHtml(label)} · ${escapeHtml(item.name || item.presetId || "预设")}</span><span>${Number(item.inFlight) || 0}/${Number(item.quota) || 0}</span></div><div class="ai-preset-runtime-card__meta"><span>当前运行 ${Number(item.inFlight) || 0}</span><span>配额 ${Number(item.quota) || 0} · 待派发 ${Number(item.pending) || 0}</span></div><div class="ai-preset-runtime-card__rows">${rows ? `当前行：${escapeHtml(rows)}` : "当前无运行行"}</div></div>`;
-      }));
-      panel.innerHTML = cards.join("");
-      panel.hidden = cards.length === 0;
     }
 
     function computeStageMetricsFromNotes(sourceNotes = notes) {
@@ -4752,7 +4759,8 @@
         currentStageCascade = reportedCascade;
       }
 
-      window.__transComparatorAiPresetPipelines = ai.presetPipelines || {};
+      latestPresetPipelines = ai.presetPipelines || {};
+      window.__transComparatorAiPresetPipelines = latestPresetPipelines;
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
       const stageMetricsSummary = stageMetricsSummaryCache;
       const aiRunId = ai.runId || "";

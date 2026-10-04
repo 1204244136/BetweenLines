@@ -68,6 +68,34 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="stage2StatusPill"/);
   assert.match(html, /id="stage3StatusPill"/);
   assert.match(html, /id="stage1ActiveInfo"/);
+  assert.doesNotMatch(html, /aiPresetRuntimePanel/, "不再在阶段卡片外渲染重复的全局预设运行模块");
+  assert.match(html, /id="stage1PresetTags"/);
+});
+
+test("阶段预设标签：每个预设位置显示自己的并发与排队信息", () => {
+  const storage = storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify([
+      { id: "p1", name: "快审", protocol: "compatible", model: "m1", concurrency: 4 },
+      { id: "p2", name: "严审", protocol: "compatible", model: "m2", concurrency: 9 },
+    ]),
+  });
+  const ui = createWorkbench(storage);
+
+  ui.run(`
+    stagePresetSelections.stage1 = ["p1", "p2"];
+    latestPresetPipelines = { stage1: [
+      { presetId: "p1", inFlight: 1, quota: 3, configuredConcurrency: 4, pending: 8, activeRows: [12] },
+      { presetId: "p2", inFlight: 0, quota: 2, configuredConcurrency: 9, pending: 5, activeRows: [] },
+    ] };
+    renderStagePresetSelection("stage1");
+  `);
+
+  const tags = ui.element("stage1PresetTags");
+  assert.equal(tags.children.length, 2);
+  assert.equal(tags.children[0].children[1].textContent, "并发 1/3 · 排队 8");
+  assert.match(tags.children[0].children[1].title, /配置并发上限 4/);
+  assert.equal(tags.children[1].children[1].textContent, "并发 0/2 · 排队 5");
+  assert.match(tags.children[1].children[1].title, /配置并发上限 9/);
 });
 
 test("客户端状态渲染：renderAiStatus 实时更新页面内阶段看板指标", () => {
