@@ -556,7 +556,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${sanitizeModelMetadata.toString()}
     ${createPresetTools.toString()}
     ${createStageNoteTools.toString()}
-    const { latestAiNotePart, stageNoteState } = createStageNoteTools();
+    const { latestAiNotePart, stageNoteState, splitAiNoteParts, splitNoteFields } = createStageNoteTools();
     ${normalizeGrade.toString()}
     // 异常分类：与服务端同一份规则（ai/error-kinds.js），页面只负责把分类结果渲染成悬停明细。
     const AI_ERROR_KIND_ORDER = ${safeJson(AI_ERROR_KIND_ORDER)};

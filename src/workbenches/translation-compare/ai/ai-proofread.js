@@ -111,7 +111,7 @@ const {
   formatArbitrationNoteLines,
 } = require("./arbiter");
 const { AI_ERROR_KIND_LABELS, classifyAiError, recordAiErrorKind } = require("./error-kinds");
-const { latestAiNotePart, stageNoteState } = require("./stage-note-state");
+const { latestAiNotePart, splitNoteFields, stageNoteState } = require("./stage-note-state");
 const {
   getModelProfile,
   scheduleModels,
@@ -2317,7 +2317,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
 }
 
 function parseStoredNote(note = "") {
-  const lines = latestAiNotePart(note).split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const lines = splitNoteFields(latestAiNotePart(note));
   const data = {
     semantic: "",
     modify: "",
@@ -2337,13 +2337,13 @@ function parseStoredNote(note = "") {
     else if (line.startsWith("Gatekeeper初审：")) data.stage1 = line.slice("Gatekeeper初审：".length).trim();
     else if (line.startsWith("初审改案：") || line.startsWith("初审建议：")) data.stage1Revision = line.replace(/^(初审改案|初审建议)：/, "").trim();
     else if (line.startsWith("Stylist复审")) {
-      const match = line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/);
+      const match = line.match(/^Stylist复审(?:\[(.*?)\])?：([\s\S]*)$/);
       if (match) {
         data.stage2 = { attitude: match[1] || "modify", text: match[2]?.trim() || "" };
       }
     } else if (line.startsWith("复审改案：") || line.startsWith("复审建议：")) data.stage2Revision = line.replace(/^(复审改案|复审建议)：/, "").trim();
     else if (line.startsWith("Arbiter仲裁")) {
-      const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/);
+      const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：([\s\S]*)$/);
       if (match) {
         data.stage3 = { winner: match[1] || "裁决", text: match[2]?.trim() || "" };
       }

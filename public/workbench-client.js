@@ -716,9 +716,16 @@
         aiDone: Boolean(value?.aiDone || hasAutomatedDecisionNote(note)),
       };
       const parsedRevision = parseAutomatedNote(item.note)?.revision || "";
+      const latestNote = latestAiNotePart(item.note);
+      const legacyNoteHead = latestNote.split(/\r?\n(?:[ \t]*\r?\n)+/, 1)[0];
+      // 旧解析在首个空行截断后清空了这两个字段；手动清空编辑器会保留目标列。
+      const recoverTruncatedRevision = parsedRevision && !manualDone
+        && value?.revisionText === "" && value?.revisionTarget === ""
+        && latestNote.startsWith("[AI校对]") && legacyNoteHead !== latestNote
+        && !/(?:^|\r?\n)(修改结果|修改后|修改后文本)：/.test(legacyNoteHead);
       // 修复前的备注把归因/查证说明写在了「修改结果：」后面，解析时会并进修改结果；
       // 载入时按行剥掉，避免人工点「写回」把说明写进成品。
-      item.revisionText = (Object.prototype.hasOwnProperty.call(value || {}, "revisionText")
+      item.revisionText = (Object.prototype.hasOwnProperty.call(value || {}, "revisionText") && !recoverTruncatedRevision
         ? String(value.revisionText || "")
         : parsedRevision)
         .split("\n")
@@ -1951,7 +1958,7 @@
     }
 
     function parseAutomatedNoteUncached(note, targetText = "") {
-      const lines = String(note || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const lines = splitNoteFields(note);
       if (!automatedNoteMarker(lines[0])) return null;
       if (isAiFailureNote(note)) return null;
       const data = {
@@ -1992,7 +1999,7 @@
           data.stage1Revision = line.replace(/^(初审改案|初审建议)：/, "").trim();
           currentField = "";
         } else if (line.startsWith("Stylist复审")) {
-          const match = line.match(/^Stylist复审(?:\[(.*?)\])?：(.*)$/);
+          const match = line.match(/^Stylist复审(?:\[(.*?)\])?：([\s\S]*)$/);
           if (match) {
             data.stage2 = {
               attitude: match[1] || "复审",
@@ -2004,7 +2011,7 @@
           data.stage2Revision = line.replace(/^(复审改案|复审建议)：/, "").trim();
           currentField = "";
         } else if (line.startsWith("Arbiter仲裁")) {
-          const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：(.*)$/);
+          const match = line.match(/^Arbiter仲裁(?:\[(.*?)\])?：([\s\S]*)$/);
           if (match) {
             data.stage3 = {
               winner: match[1] || "裁决",
@@ -5357,7 +5364,7 @@
       const note = String(item.note || "").trim();
       if (!note) return false;
       if (automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note)) return true;
-      return note.split(/\n\n+/).some((part) => part.trim().startsWith("[AI校对]"));
+      return splitAiNoteParts(note).some((part) => part.startsWith("[AI校对]"));
     }
 
     function countUnconfirmedAiProofreadNotes() {
@@ -5387,7 +5394,7 @@
         if (targetStage === "stage2") {
           if (!p.stage2 && !state.errors.stage2 && !state.errors.stage3) continue;
           // 清理 Stylist 复审及后续仲裁，保留初审改案
-          const lines = note.split("\n").filter((line) => {
+          const lines = splitNoteFields(note).filter((line) => {
             return line !== state.errors.stage2 && line !== state.errors.stage3 &&
               !line.startsWith("Stylist复审") &&
               !line.startsWith("复审改案：") &&
@@ -5410,7 +5417,7 @@
         } else if (targetStage === "stage3") {
           if (!p.stage3 && !state.errors.stage3) continue;
           // 清理 Arbiter 仲裁，保留复审方案
-          const lines = note.split("\n").filter((line) => {
+          const lines = splitNoteFields(note).filter((line) => {
             return line !== state.errors.stage3 && !line.startsWith("Arbiter仲裁") &&
               !line.startsWith("仲裁改案：") &&
               !line.startsWith("仲裁建议：");
@@ -5443,7 +5450,8 @@
         if (!item || item.manualDone) continue;
         const note = String(item.note || "").trim();
         if (!note) continue;
-        const isFullAiNote = automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note);
+        const parts = splitAiNoteParts(note);
+        const isFullAiNote = parts.length === 1 && (automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note));
         if (isFullAiNote) {
           item.note = "";
           item.revisionText = "";
@@ -5452,8 +5460,8 @@
           cleanAiFailureState(item);
           pruneEmptyNote(id);
           clearedCount += 1;
-        } else if (note.split(/\n\n+/).some((part) => part.trim().startsWith("[AI校对]"))) {
-          const remainingParts = note.split(/\n\n+/).filter((part) => !part.trim().startsWith("[AI校对]"));
+        } else if (parts.some((part) => part.startsWith("[AI校对]"))) {
+          const remainingParts = parts.filter((part) => !part.startsWith("[AI校对]"));
           item.note = remainingParts.join("\n\n").trim();
           const remainingAutomated = parseAutomatedNote(item.note);
           if (remainingAutomated?.revision) {

@@ -255,8 +255,10 @@
 - `ai/stage-note-state.js` 是当前轮次备注与阶段待办判定的共享实现，由构建器序列化到页面。统计、点击筛选、启动弹窗、续跑跳过和服务端队列都读取最新 `[AI校对]` 块，历史块不参与本轮完成判断；人工确认行不计待办。
 - 请求携带备注快照时，内存结论还须与该行最新块一致才可复用；已清空或不在备注快照里的行不得借旧内存重新入队。
 - 阶段二/三清空重跑只修改最新块，保留历史块与人工备注。复审完成读 `.reviewed`，仲裁完成读 `.arbitrated`；阶段名、调用异常行或历史结论都不是本轮完成证据。
+- `splitAiNoteParts` 按轮次标记与结构化字段收齐记录，字段内部空行不得截断本轮复审或仲裁。备注没有结束标记，末尾「修改结果」续段仅在与独立阶段改案完整匹配时纳入；无匹配证据的人工尾注仍隔离。`splitNoteFields` 为客户端显示、服务端重建和阶段清空提供完整字段，保留多段改案的换行与空行，清空时不得留下下游字段续文。
+- 旧空行截断导致 `revisionText` 与 `revisionTarget` 均为空的未人工确认记录，载入时可从完整最新块恢复改案；有目标列的人工清空、非空人工改案与人工确认记录不得被此恢复覆盖。
 
-验证：`node --test scripts/stage-note-state.test.js scripts/ai-smart-concurrency.test.js`。
+验证：`node --test scripts/stage-note-state.test.js scripts/multiline-stage-notes.test.js scripts/ai-smart-concurrency.test.js`。
 
 ### 级联续跑（`collectResumedStage2`）
 

@@ -1598,6 +1598,96 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
   }
 });
 
+test("多段备注重建：清空内存后从复审与仲裁起点保留完整改案且不调用上游", async () => {
+  clearProofreadCache();
+  const { project } = setupMockProject(1, "multiline-note-rebuild");
+  const gatekeeperRevision = "门外的风已经停了。\n\n他沿着石阶慢慢向前。\n\n远处的灯光终于亮了起来。";
+  const stylistRevision = "门外的风终于停了。\n\n他沿着石阶缓缓前行。\n\n远处的灯火渐次亮起。";
+  const initialNote = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：是",
+    "Gatekeeper初审：补齐三个段落中的动作与时间信息。",
+    `初审改案：${gatekeeperRevision}`,
+    "分析：初审方案需要文学复审。",
+    `修改结果：${gatekeeperRevision}`,
+  ].join("\n");
+  const reviewNote = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：是",
+    "Gatekeeper初审：补齐三个段落中的动作与时间信息。",
+    `初审改案：${gatekeeperRevision}`,
+    "Stylist复审[调整]：调整动作描写，保留三个段落。",
+    `复审改案：${stylistRevision}`,
+    "分析：复审方案与初审存在分歧，等待终审。",
+    `修改结果：${stylistRevision}`,
+  ].join("\n");
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const payload = JSON.parse(body);
+      const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
+      const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
+      requests.push({ path: req.url, payload: req.url.startsWith("/gatekeeper/") ? null : JSON.parse(payloadText) });
+      const content = req.url.startsWith("/arbiter/")
+        ? { winner: "stylist", finalDecision: "replace", revisedText: stylistRevision, reason: "复审方案完整保留段落。" }
+        : req.url.startsWith("/stylist/")
+          ? { critique: { attitude: "accept", rationale: "采纳完整初审方案。" }, revisedText: gatekeeperRevision, summary: "复审完成。" }
+          : { semanticSame: true, needsEdit: false, decision: "keep", summary: "无需修改。" };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const config = {
+      protocol: "compatible", baseUrl: `${baseUrl}/gatekeeper/v1`, model: "test-model",
+      proofreadMode: "bilingual", concurrency: 1, continueOnly: true,
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    };
+    const waitDone = async () => {
+      const deadline = Date.now() + 5000;
+      while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const finished = clientStatus();
+      assert.equal(finished.running, false);
+      assert.equal(finished.error, "");
+      assert.equal(finished.errors, 0);
+      return finished;
+    };
+
+    await startProofread({
+      ...config, stage: "stage2", rowNotes: { 1: initialNote },
+      stylistConfig: { protocol: "compatible", baseUrl: `${baseUrl}/stylist/v1`, model: "stylist-model" },
+    });
+    const reviewed = await waitDone();
+    assert.equal(reviewed.stageMetrics.stage2Reviewed, 1);
+    assert.deepEqual(requests.map((request) => request.path), ["/stylist/v1/chat/completions"], "从复审起点只请求复审模型");
+    assert.equal(requests[0].payload.gatekeeperReview.revisedText, gatekeeperRevision, "备注重建不能丢失初审第二、第三段或段落分隔");
+
+    clearProofreadCache();
+    assert.equal(clientStatus().results.length, 0, "仲裁重建前清除上一轮内存结论");
+    await startProofread({
+      ...config, stage: "stage3", rowNotes: { 1: reviewNote },
+      stylistConfig: { protocol: "compatible", baseUrl: `${baseUrl}/stylist/v1`, model: "stylist-model" },
+      arbiterConfig: { protocol: "compatible", baseUrl: `${baseUrl}/arbiter/v1`, model: "arbiter-model" },
+    });
+    const arbitrated = await waitDone();
+    assert.equal(arbitrated.stageMetrics.stage3Arbitrated, 1);
+    assert.deepEqual(requests.map((request) => request.path), ["/stylist/v1/chat/completions", "/arbiter/v1/chat/completions"], "清空内存后从仲裁起点只请求仲裁模型");
+    assert.equal(requests[1].payload.gatekeeperReview.revisedText, gatekeeperRevision, "仲裁备注重建仍保留完整初审方案");
+    assert.equal(requests[1].payload.stylistReview.revisedText, stylistRevision, "仲裁必须收到完整复审方案，不能误用初审或丢失后续段落");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 for (const stage of ["stage2", "stage3"]) {
   test(`${stage} 异常备注：独立及级联续跑均保留前序方案，仅请求失败阶段`, async () => {
     clearProofreadCache();
