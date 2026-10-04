@@ -6,7 +6,7 @@ const {
   computeResultMetricsDelta,
   applyMetricsDelta,
 } = require("../src/workbenches/translation-compare/ai/stage-results");
-const { createWorkbench, storageFixture } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, ROWS } = require("./workbench-fixture");
 
 const doneAfterReview = {
   index: 1,
@@ -141,7 +141,9 @@ test("前端：失败备注文案带阶段关键字也一律记为阶段一异�
 });
 
 test("初审队列耗尽但仍有异常：运行中和结束后均提示待重试，进度包含失败行", () => {
-  const ui = createWorkbench();
+  const ui = createWorkbench(storageFixture(), {
+    rows: Array.from({ length: 3078 }, (_, offset) => ({ ...ROWS[0], index: offset + 1, signature: "sig-" + (offset + 1) })),
+  });
   for (const running of [true, false]) {
     ui.run(`renderAiStatus({ running: ${running},
       stageCascade: { toStylist: true },
@@ -162,14 +164,17 @@ test("初审全失败仍显示零进度；少量失败不能被四舍五入为�
   assert.equal(ui.element("stage1ProgressWrap").hidden, false);
   assert.equal(ui.element("stage1Progress").style.width, "0%");
   assert.match(ui.element("stage1ProgressWrap").title, /已完成 0 \/ 共 3 行/);
-  ui.run("updateStageMetricsDashboard({ stage1Passed: 3013, stage1Errors: 1 }, {}, false)");
-  assert.equal(ui.element("stage1Progress").style.width, "99%");
+  const nearlyDone = createWorkbench(storageFixture(), {
+    rows: Array.from({ length: 3014 }, (_, offset) => ({ ...ROWS[0], index: offset + 1, signature: "sig-" + (offset + 1) })),
+  });
+  nearlyDone.run("updateStageMetricsDashboard({ stage1Passed: 3013, stage1Errors: 1 }, {}, false)");
+  assert.equal(nearlyDone.element("stage1Progress").style.width, "99%");
 });
 
 test("初审异常续跑显示处理中，成功后的最新备注消除异常和重试提示", () => {
   const key = "translation-compare-notes-v7:project:rows";
   const failure = "[AI校对]\n调用失败：请求超时";
-  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) }));
+  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) }), { rows: ROWS.slice(0, 1) });
   assert.equal(ui.element("stage1StatusPill").textContent, "1 行异常待重试");
   ui.run("updateStageMetricsDashboard(null, { stage1: { inFlight: 1, activeRows: [1] } }, true)");
   assert.equal(ui.element("stage1StatusPill").textContent, "1处理中");
@@ -194,7 +199,7 @@ for (const [stage, failure, success] of [
   test(`${stage}：刷新及新任务保留异常，成功后清除；下游失败不作废上游方案`, async () => {
     const key = "translation-compare-notes-v7:project:rows";
     const storage = storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) });
-    const options = { apiResponses: {
+    const options = { rows: ROWS.slice(0, 1), apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "retry-run",
         stageMode: stage, stageCascade: { toArbiter: stage === "stage3" }, stageMetrics: createStageMetrics(), results: [] } },
     } };

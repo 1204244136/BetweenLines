@@ -3920,7 +3920,7 @@
       }
     }
 
-    // 阶段进度条：done 是该阶段已完成行数，total 是本轮该阶段总量（已完成 + 待办 + 处理中）。
+    // 阶段进度条：done 是已完成行数，total 是该阶段覆盖的行数。
     // 原来右上角那条全局进度条按「模型实际调用数 / 总调用数」走，级联流水线在它上面看不出卡在哪个阶段。
     // 阶段卡片底部那行「处理中: …」的并发后缀：默认只给「当前并发数/当前并发上限」——
     // 分子是实际在飞（真的在跑几个请求），分母是面板上预设的并发上限。
@@ -4132,6 +4132,11 @@
       const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
       const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
       const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
+      const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
+      const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
+      // 初审覆盖整张工作台；异常重试行也在队列中，不能再加一遍。
+      const s1ScopeTotal = Math.max(allRows.length, s1Total, s1Done + Math.max(s1Queue, s1Errors));
+      const s1Unreviewed = Math.max(0, s1ScopeTotal - s1Done - s1Errors);
 
       // Stage 1
       const pill1 = document.getElementById("stage1StatusPill");
@@ -4147,6 +4152,12 @@
             pill1.dataset.state = "queued";
             pill1.textContent = p1.pending + "排队";
           }
+        } else if (s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0 || aiRunning)) {
+          pill1.dataset.state = "queued";
+          pill1.textContent = s1Unreviewed + " 未审" + (s1Errors > 0 ? " · " + s1Errors + " 异常" : "");
+          pill1.title = "当前工作台还有 " + s1Unreviewed + " 行尚未取得初审结论"
+            + (s1Errors > 0 ? "，另有 " + s1Errors + " 行异常待重试" : "")
+            + "。点阶段一「开始」→「继续剩下的」处理；已有结论保持不变。";
         } else if (s1Errors > 0) {
           // 队列耗尽只代表本轮尝试结束，调用失败的行没有初审结论，仍需续跑。
           pill1.dataset.state = "queued";
@@ -4262,11 +4273,8 @@
         }
       }
 
-      // 每阶段一条独立进度条。分母取「本轮该阶段总量」= 已完成 + 待办 + 处理中；
-      // stage1Total 是有结论的总检数，不含失败行；失败未完成，必须另计入分母。
-      const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
-      const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
-      renderStageProgress("1", s1Done, Math.max(s1Total, s1Done + s1Queue + s1Errors), {
+      // 初审用同一覆盖范围表示累计进度；复审和仲裁只覆盖实际产生的候选行。
+      renderStageProgress("1", s1Done, s1ScopeTotal, {
         enabled: aiRunning || s1Total > 0 || s1Errors > 0,
         label: "阶段一 事实初审",
         errors: s1Errors,
