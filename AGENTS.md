@@ -243,3 +243,17 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
 ## 限制与客户端约束
 
 公开支持范围与限制归 [README.md](README.md)。行内编辑器缓存、批量量高、可用高度计算和审核轨迹会话状态归 [工作台与备注契约](docs/contracts/workbench-notes-spaces.md)，不在此重复实现细节。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 与 spec 以 GitHub issue 形式记录在本仓库（`gh` CLI）。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用五个默认 triage 标签：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文布局：仓库根一个 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。

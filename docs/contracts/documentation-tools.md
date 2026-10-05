@@ -14,6 +14,9 @@
 | --- | --- | --- |
 | README.md | 操作 | 产品行为、安装运行、用户操作与输出位置；内部规则指向契约 |
 | AGENTS.md | 契约 | 修改纪律、共享不变量、模块所有权、验证与生效操作总入口 |
+| docs/agents/issue-tracker.md | 契约 | GitHub issue 入口、读写命令与 PR 作为请求入口的开关 |
+| docs/agents/triage-labels.md | 契约 | 五个 triage 角色到本仓库实际标签字符串的映射 |
+| docs/agents/domain.md | 契约 | 领域文档布局（单上下文 CONTEXT.md 与 docs/adr/）及工程 skill 的消费规则 |
 | docs/contracts/documentation-tools.md | 契约 | 文档与工具唯一登记、结构门禁范围与兼容入口身份 |
 | docs/contracts/ai-proofread-contract.md | 契约 | 翻译 AI 提示词、判定链、输出门禁与三阶段调度约束 |
 | docs/contracts/workbench-notes-spaces.md | 契约 | 翻译工作台控制栈、备注空间与客户端状态约束 |
