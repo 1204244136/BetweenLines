@@ -1,5 +1,5 @@
 const { sendJson, readJson } = require("../http-json");
-const { clearProofreadCache, clientStatus: aiProofreadStatus, listModels, startPrefilter, startProofread, stopProofread, testModel, updateStagePresets } = require("../../workbenches/translation-compare/ai/ai-proofread");
+const { clearProofreadCache, clearProofreadResults, clientStatus: aiProofreadStatus, listModels, startPrefilter, startProofread, stopProofread, testModel, updateStagePresets } = require("../../workbenches/translation-compare/ai/ai-proofread");
 const { inferSpeakerRow } = require("../../workbenches/speaker-attribution/ai/speaker-inference");
 const { listProviderModels, testModelConnectivity } = require("../../ai/llm-client");
 
@@ -70,6 +70,16 @@ async function handleAiRoutes(req, res, pathname, searchParams) {
       sendJson(res, 200, { ok: true, ai: clearProofreadCache() });
     } catch (error) {
       sendJson(res, error.code === "RUNNING" ? 409 : 400, { ok: false, error: error.message, ai: aiProofreadStatus() });
+    }
+    return true;
+  }
+
+  if (req.method === "POST" && pathname === "/api/ai-proofread/results/clear") {
+    try {
+      const payload = await readJson(req);
+      sendJson(res, 200, { ok: true, ...clearProofreadResults(payload) });
+    } catch (error) {
+      sendJson(res, error.code === "RUNNING" ? 409 : 400, { ok: false, error: error.message || String(error) });
     }
     return true;
   }

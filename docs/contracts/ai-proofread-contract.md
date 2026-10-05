@@ -367,6 +367,7 @@
 - **合并而非覆盖**：写盘时与盘上已有结果按行号 upsert 合并。新一轮可能只跑了少数行（其余被判定为「已完成」而跳过），整份覆盖会把上一轮的结论抹掉。
 - **恢复路径**：`clientStatus({ projectKey, rowsSignature })` 在「没有运行中的任务、且内存里没有任何结果」时，把落盘结果装回 `status`，并重新编号 `resultRevision`，让页面照常按修订游标增量拉取。工作台在每次状态轮询时自报这两个身份（见 `public/workbench-client.js` 的 `refreshAiStatus`）。
 - **身份校验**：读盘时校验文件里的 `projectKey` / `rowsSignature` 与请求方一致，对不上就当作没有——宁可让页面显示「无结果」，也不把别的项目的结论交付出去。
+- **部分清除**：清空未人工确认的某个阶段时，页面把被清除的行号提交给 `/api/ai-proofread/results/clear`，服务端只从对应项目 + 行集的落盘结果移除这些行；下一轮启动也会携带待清除行号作为失败重试兜底，不会把用户刚清掉的旧结论重新合并回来。
 - **清理**：`clearProofreadCache()`（页面的「清除 AI 运行记录」）连盘上那一份一起删，否则刷新页面又会把它装回来。删除项目时同路径一并清理。
 - 回归：`node --test scripts/ai-results-persist.test.js`。
 

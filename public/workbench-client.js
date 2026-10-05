@@ -5123,6 +5123,7 @@
       const pendingResults = [];
       if (sameAiScope) {
         for (const result of ai.results || []) {
+          if (pendingForgottenAiResultIndexes.has(Number(result.index))) continue;
           if (pageMeta.notesRecovery?.ignoredRunIds?.includes(result.runId || ai.runId)) continue;
           const key = result.runId + ":" + result.index + ":" + (result.resultRevision || result.status);
           if (appliedAiResults.has(key)) continue;
@@ -5741,6 +5742,7 @@
         return clearUnconfirmedAiProofreadNotes();
       }
       let clearedCount = 0;
+      const clearedIndexes = [];
       for (const [id, item] of Object.entries(notes)) {
         if (!item || item.manualDone) continue;
         const fullNote = String(item.note || "");
@@ -5774,6 +5776,7 @@
             item.revisionText = p.stage1Revision;
           }
           item.note = replaceCurrentNote(lines.join("\n"));
+          clearedIndexes.push(Number(id));
           clearedCount += 1;
         } else if (targetStage === "stage3") {
           if (!p.stage3 && !state.errors.stage3) continue;
@@ -5794,10 +5797,12 @@
             item.revisionText = fallbackRev;
           }
           item.note = replaceCurrentNote(lines.join("\n"));
+          clearedIndexes.push(Number(id));
           clearedCount += 1;
         }
       }
       if (clearedCount > 0) {
+        forgetPersistedAiResults(clearedIndexes);
         saveNotes();
         applyFilters({ reset: false });
         updateStageMetricsDashboard();
@@ -5807,6 +5812,7 @@
 
     function clearUnconfirmedAiProofreadNotes() {
       let clearedCount = 0;
+      const clearedIndexes = [];
       for (const [id, item] of Object.entries(notes)) {
         if (!item || item.manualDone) continue;
         const note = String(item.note || "").trim();
@@ -5820,6 +5826,7 @@
           item.aiDone = false;
           cleanAiFailureState(item);
           pruneEmptyNote(id);
+          clearedIndexes.push(Number(id));
           clearedCount += 1;
         } else if (parts.some((part) => part.startsWith("[AI校对]"))) {
           const remainingParts = parts.filter((part) => !part.startsWith("[AI校对]"));
@@ -5834,10 +5841,12 @@
           item.aiDone = Boolean(hasAutomatedDecisionNote(item.note));
           cleanAiFailureState(item);
           pruneEmptyNote(id);
+          clearedIndexes.push(Number(id));
           clearedCount += 1;
         }
       }
       if (clearedCount > 0) {
+        forgetPersistedAiResults(clearedIndexes);
         if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
         appliedAiResults.clear();
         aiActiveIds.clear();
@@ -5847,6 +5856,29 @@
         updateDoneCount();
       }
       return clearedCount;
+    }
+
+    const pendingForgottenAiResultIndexes = new Set();
+    function forgetPersistedAiResults(indexes) {
+      const normalized = [...new Set((indexes || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+      if (!normalized.length) return;
+      normalized.forEach((id) => pendingForgottenAiResultIndexes.add(id));
+      if (!pageMeta.projectKey || !pageMeta.rowsSignature) return;
+      apiFetch("/api/ai-proofread/results/clear", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          projectKey: pageMeta.projectKey,
+          rowsSignature: pageMeta.rowsSignature,
+          forgetResultIndexes: normalized,
+        }),
+      }).then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "清除 AI 结果失败。");
+        normalized.forEach((id) => pendingForgottenAiResultIndexes.delete(id));
+      }).catch(() => {
+        // 下一次启动仍会携带待清除行号，避免一次瞬时请求失败把旧结果重新带回页面。
+      });
     }
 
     let latestStagePipelines = null;
@@ -6146,6 +6178,8 @@
         if (item && item.note) rowNotes[id] = item.note;
       }
       baseConfig.rowNotes = rowNotes;
+      const forgetResultIndexes = [...pendingForgottenAiResultIndexes];
+      baseConfig.forgetResultIndexes = forgetResultIndexes;
 
       if (continueOnly) {
         // 跳过口径取决于本次是「从起点一路推进到尽头」还是「只跑这一段」：
@@ -6209,6 +6243,7 @@
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
+        forgetResultIndexes.forEach((id) => pendingForgottenAiResultIndexes.delete(id));
         renderAiStatus(data.ai);
         refreshAiStatus();
       } catch (error) {

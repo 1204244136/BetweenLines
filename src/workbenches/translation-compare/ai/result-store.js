@@ -83,4 +83,61 @@ function removeResults(projectKey, rowsSignature, options = {}) {
   }
 }
 
-module.exports = { SCHEMA_VERSION, aiResultsDir, readResults, removeResults, resultsFile, writeResults };
+function removeResultIndexes(projectKey, rowsSignature, indexes, options = {}) {
+  if (!projectKey || !rowsSignature) return 0;
+  const stored = readResults(projectKey, rowsSignature, options);
+  if (!stored) return 0;
+  const toRemove = new Set((Array.isArray(indexes) ? indexes : [...(indexes || [])])
+    .map((index) => Number(index))
+    .filter((index) => Number.isSafeInteger(index) && index > 0));
+  if (!toRemove.size) return 0;
+  const kept = stored.results.filter((item) => !toRemove.has(Number(item.index)));
+  const removed = stored.results.length - kept.length;
+  if (!removed) return 0;
+  if (kept.length) {
+    writeResults(projectKey, rowsSignature, { ...stored, results: kept }, options);
+  } else {
+    removeResults(projectKey, rowsSignature, options);
+  }
+  return removed;
+}
+
+function removeProjectResults(projectKey, options = {}) {
+  if (!projectKey) return 0;
+  const directory = aiResultsDir(options.dataDir);
+  if (!fs.existsSync(directory)) return 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const file = path.join(directory, entry.name);
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    if (String(parsed?.projectKey || "") !== String(projectKey)) continue;
+    try {
+      fs.rmSync(file, { force: true });
+      removed += 1;
+    } catch {}
+  }
+  return removed;
+}
+
+module.exports = {
+  SCHEMA_VERSION,
+  aiResultsDir,
+  readResults,
+  removeProjectResults,
+  removeResultIndexes,
+  removeResults,
+  resultsFile,
+  writeResults,
+};

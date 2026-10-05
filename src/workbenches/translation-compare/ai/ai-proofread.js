@@ -22,7 +22,7 @@ const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
 const { displayTermPair, evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
 const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-prefilter");
-const { readResults, removeResults, writeResults } = require("./result-store");
+const { readResults, removeResultIndexes, removeResults, writeResults } = require("./result-store");
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
 const {
@@ -349,15 +349,21 @@ function clientStatus(options = {}) {
   const afterRevision = sameRun ? clampInteger(options.afterRevision, 0, Number.MAX_SAFE_INTEGER, 0) : 0;
   const resultLimit = clampInteger(options.resultLimit, 0, 500, 0);
   const incrementalResults = status.resultChanges.slice(afterRevision, resultLimit ? afterRevision + resultLimit : undefined);
-  const results = options.includeResults === false
+  const requestedProjectKey = String(options.projectKey || "");
+  const requestedRowsSignature = String(options.rowsSignature || "");
+  const sameRequestedScope = (!requestedProjectKey && !requestedRowsSignature)
+    || (requestedProjectKey === String(status.projectKey || "")
+      && requestedRowsSignature === String(status.rowsSignature || ""));
+  const resultsForRevision = options.includeResults === false
     ? []
     : (resultLimit || afterRevision
       ? incrementalResults
       : Array.from(status.results.values()).sort((a, b) => a.index - b.index));
+  const visibleResults = sameRequestedScope ? resultsForRevision : [];
   const deliveredRevision = options.includeResults === false
     ? afterRevision
     : (resultLimit || afterRevision
-      ? (results.length ? results.at(-1).resultRevision : afterRevision)
+      ? (visibleResults.length ? visibleResults.at(-1).resultRevision : afterRevision)
       : status.resultRevision);
   return {
     running: status.running,
@@ -452,7 +458,7 @@ function clientStatus(options = {}) {
     metrics: { ...status.metrics },
     feedbackStats: globalFeedbackCollector.getStatistics(),
     logs: options.includeLogs === false ? [] : status.logs,
-    results,
+    results: sameRequestedScope ? resultsForRevision : [],
     resultRevision: deliveredRevision,
     latestResultRevision: status.resultRevision,
     hasMoreResults: deliveredRevision < status.resultRevision,
@@ -572,6 +578,7 @@ function cleanConfig(input = {}) {
     similarityThreshold,
     projectKey: String(input.projectKey || "").trim(),
     rowsSignature: String(input.rowsSignature || "").trim(),
+    forgetResultIndexes: normalizeIndexSet(input.forgetResultIndexes),
     baseUrl: String(input.baseUrl || defaults.baseUrl).trim().replace(/\/+$/, ""),
     model,
     modelMeta,
@@ -864,6 +871,69 @@ function scheduleResultsPersist() {
   if (typeof resultsPersistTimer.unref === "function") resultsPersistTimer.unref();
 }
 
+function resetIdleStatus({ clearPersisted = false } = {}) {
+  if (resultsPersistTimer) {
+    clearTimeout(resultsPersistTimer);
+    resultsPersistTimer = null;
+  }
+  resultsPersistDirty = 0;
+  if (clearPersisted && status.projectKey && status.rowsSignature) {
+    removeResults(status.projectKey, status.rowsSignature);
+  }
+  status.stopRequested = false;
+  status.kind = "proofread";
+  status.runId = "";
+  status.startedAt = null;
+  status.finishedAt = null;
+  status.projectKey = "";
+  status.rowsSignature = "";
+  status.concurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.currentConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.concurrencyMax = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.concurrencyUps = 0;
+  status.concurrencyDowns = 0;
+  status.concurrencyLimits = 0;
+  status.peakConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
+  status.total = 0;
+  status.queued = 0;
+  status.processed = 0;
+  status.handled = 0;
+  status.prefiltered = 0;
+  status.rulePrefiltered = 0;
+  status.similarityPrefiltered = 0;
+  status.structuredConflicts = 0;
+  status.termPrefiltered = 0;
+  status.termConflicts = 0;
+  status.termInjected = 0;
+  status.scriptLeaks = 0;
+  status.webLookups = 0;
+  status.webLookupResolved = 0;
+  status.webLookupAttempts = 0;
+  status.lowScoreChecks = 0;
+  status.lowScoreShifted = 0;
+  status.lowScoreCauses = {};
+  status.termTables = { files: [], entries: 0 };
+  status.speechHabitChapters = 0;
+  status.speechHabitCharacters = [];
+  status.skippedDone = 0;
+  status.modelProcessed = 0;
+  status.modelHandled = 0;
+  status.suggested = 0;
+  status.errors = 0;
+  status.active = [];
+  status.error = "";
+  status.stageMetrics = createStageMetrics();
+  status.stageErrors = createStageErrors();
+  status.stagePipelines = createStagePipelines();
+  status.logs = [];
+  status.results = new Map();
+  resultMetricDeltas = new Map();
+  status.resultChanges = [];
+  status.resultRevision = 0;
+  controllers = new Set();
+  stageBreakers = new Map();
+}
+
 /**
  * 页面刷新或控制台重启后内存里可能一条结果都没有：这时按请求方自报的项目身份，
  * 把落盘的结果重新装回 status，让 clientStatus 照常交付给工作台。
@@ -874,6 +944,10 @@ function adoptPersistedResults(projectKey, rowsSignature) {
   const signature = String(rowsSignature || "");
   if (!key || !signature) return false;
   if (status.running) return false;
+  if ((status.results.size || status.resultChanges.length)
+      && (status.projectKey !== key || status.rowsSignature !== signature)) {
+    resetIdleStatus({ clearPersisted: false });
+  }
   if (status.results.size || status.resultChanges.length) return false;
   const stored = readResults(key, signature);
   if (!stored || !stored.results.length) return false;
@@ -944,6 +1018,7 @@ async function startPrefilter(input) {
   const config = cleanConfig(input);
   const { project, rows, termPrefilter } = readRows(config);
   requireMatchingProjectSnapshot(config, project);
+  forgetRequestedResultIndexes(config);
   config.proofreadMode = project.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   config.kind = "prefilter";
   config.termLayer = termPrefilter;
@@ -1006,6 +1081,7 @@ async function startProofread(input) {
 
   const { project, rows, speechHabits: snapshotSpeechHabits, termPrefilter } = readRows(config);
   requireMatchingProjectSnapshot(config, project);
+  forgetRequestedResultIndexes(config);
   config.proofreadMode = project.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   config.termLayer = termPrefilter;
   if (!String(input.systemPrompt || "").trim()) {
@@ -1439,65 +1515,7 @@ function clearProofreadCache() {
     throw error;
   }
   // 「清除 AI 运行记录」必须连落盘的一份一起清：否则刷新页面时它又会被装回来。
-  if (resultsPersistTimer) {
-    clearTimeout(resultsPersistTimer);
-    resultsPersistTimer = null;
-  }
-  if (status.projectKey && status.rowsSignature) {
-    removeResults(status.projectKey, status.rowsSignature);
-  }
-  status.stopRequested = false;
-  status.kind = "proofread";
-  status.runId = "";
-  status.startedAt = null;
-  status.finishedAt = null;
-  status.projectKey = "";
-  status.rowsSignature = "";
-  status.concurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
-  status.currentConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
-  status.concurrencyMax = AI_CONCURRENCY_LIMITS.defaultConcurrency;
-  status.concurrencyUps = 0;
-  status.concurrencyDowns = 0;
-  status.concurrencyLimits = 0;
-  status.peakConcurrency = AI_CONCURRENCY_LIMITS.defaultConcurrency;
-  status.total = 0;
-  status.queued = 0;
-  status.processed = 0;
-  status.handled = 0;
-  status.prefiltered = 0;
-  status.rulePrefiltered = 0;
-  status.similarityPrefiltered = 0;
-  status.structuredConflicts = 0;
-  status.termPrefiltered = 0;
-  status.termConflicts = 0;
-  status.termInjected = 0;
-  status.scriptLeaks = 0;
-  status.webLookups = 0;
-  status.webLookupResolved = 0;
-  status.webLookupAttempts = 0;
-  status.lowScoreChecks = 0;
-  status.lowScoreShifted = 0;
-  status.lowScoreCauses = {};
-  status.termTables = { files: [], entries: 0 };
-  status.speechHabitChapters = 0;
-  status.speechHabitCharacters = [];
-  status.skippedDone = 0;
-  status.modelProcessed = 0;
-  status.modelHandled = 0;
-  status.suggested = 0;
-  status.errors = 0;
-  status.active = [];
-  status.error = "";
-  status.stageMetrics = createStageMetrics();
-  status.stageErrors = createStageErrors();
-  status.stagePipelines = createStagePipelines();
-  status.logs = [];
-  status.results = new Map();
-  resultMetricDeltas = new Map();
-  status.resultChanges = [];
-  status.resultRevision = 0;
-  controllers = new Set();
-  stageBreakers = new Map();
+  resetIdleStatus({ clearPersisted: true });
   return clientStatus();
 }
 
@@ -2357,6 +2375,39 @@ function finish() {
   } else {
     pushLog(isPrefilter ? "预筛选完成。" : "AI 校对完成。");
   }
+}
+
+function forgetRequestedResultIndexes(config) {
+  if (!config.forgetResultIndexes?.size || !config.projectKey || !config.rowsSignature) return 0;
+  return removeResultIndexes(config.projectKey, config.rowsSignature, config.forgetResultIndexes);
+}
+
+function clearProofreadResults(input = {}) {
+  if (status.running) {
+    const error = new Error("AI 校对正在运行，请先停止任务再清除结果。");
+    error.code = "RUNNING";
+    throw error;
+  }
+  const config = cleanConfig(input);
+  if (!config.projectKey || !config.rowsSignature) {
+    throw new Error("清除 AI 结果请求缺少项目上下文。");
+  }
+  const { project } = readRows(config);
+  requireMatchingProjectSnapshot(config, project);
+  if (!config.forgetResultIndexes.size) return { cleared: 0 };
+  const cleared = removeResultIndexes(config.projectKey, config.rowsSignature, config.forgetResultIndexes);
+  if (status.projectKey === config.projectKey && status.rowsSignature === config.rowsSignature) {
+    status.results = new Map([...status.results].filter(([index]) => !config.forgetResultIndexes.has(Number(index))));
+    const remaining = [...status.results.values()].sort((a, b) => Number(a.resultRevision) - Number(b.resultRevision));
+    status.resultChanges = [];
+    status.resultRevision = 0;
+    for (const item of remaining) {
+      const result = { ...item, resultRevision: ++status.resultRevision };
+      status.results.set(Number(result.index), result);
+      status.resultChanges.push(result);
+    }
+  }
+  return { cleared };
 }
 
 function isModelRefusalError(error) {
@@ -4553,6 +4604,7 @@ module.exports = {
   buildProtocolHeaders,
   callModel,
   clearProofreadCache,
+  clearProofreadResults,
   clientStatus,
   decisionToResult,
   detectModelCapabilities,

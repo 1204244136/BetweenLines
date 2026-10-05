@@ -8,9 +8,10 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-ai-persi
 const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
 process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
 
-const { clearProofreadCache, clientStatus, startPrefilter } = require("./ai-proofread");
+const { clearProofreadCache, clearProofreadResults, clientStatus, startPrefilter } = require("./ai-proofread");
 const {
   readResults,
+  removeProjectResults,
   removeResults,
   resultsFile,
   writeResults,
@@ -108,6 +109,58 @@ test("页面不带项目身份、或身份对不上时，绝不把别的项目�
   writeResults("proj-x", "sig-x", { runId: "r", results: [{ index: 1, note: "x" }] });
   assert.equal(clientStatus({}).results.length, 0, "没有身份就不交付");
   assert.equal(clientStatus({ projectKey: "proj-y", rowsSignature: "sig-x" }).results.length, 0, "项目对不上不交付");
+});
+
+test("同一服务先认领一个项目后，另一个项目仍能按自己的身份恢复结果", () => {
+  clearProofreadCache();
+  writeResults("proj-a", "sig-a", { runId: "run-a", results: [{ index: 1, note: "A" }] });
+  writeResults("proj-b", "sig-b", { runId: "run-b", results: [{ index: 2, note: "B" }] });
+
+  assert.equal(clientStatus({ projectKey: "proj-a", rowsSignature: "sig-a" }).results[0].note, "A");
+  const pageB = clientStatus({ projectKey: "proj-b", rowsSignature: "sig-b" });
+  assert.equal(pageB.projectKey, "proj-b");
+  assert.equal(pageB.results[0].note, "B");
+});
+
+test("清除未确认行时只移除指定行，旧落盘结果不会被重新交付", () => {
+  clearProofreadCache();
+  const rows = Array.from({ length: 2 }, (_, offset) => ({
+    index: offset + 1,
+    jp: `原文 ${offset + 1}`,
+    cn: `译文 ${offset + 1}`,
+    tw: "",
+    twCn: "",
+    score: 1,
+  }));
+  const project = publishFixture("forget-index", rows);
+  writeResults(project.projectKey, project.rowsSignature, {
+    runId: "run-forget",
+    results: [{ index: 1, note: "old-1" }, { index: 2, note: "old-2" }],
+  });
+
+  const cleared = clearProofreadResults({
+    projectKey: project.projectKey,
+    rowsSignature: project.rowsSignature,
+    forgetResultIndexes: [1],
+  });
+  assert.equal(cleared.cleared, 1);
+  assert.deepEqual(readResults(project.projectKey, project.rowsSignature).results.map((item) => item.index), [2]);
+  assert.deepEqual(
+    clientStatus({ projectKey: project.projectKey, rowsSignature: project.rowsSignature }).results.map((item) => item.index),
+    [2],
+  );
+});
+
+test("删除项目时只清理该项目的所有 AI 结果文件", () => {
+  clearProofreadCache();
+  writeResults("deleted-project", "sig-1", { results: [{ index: 1 }] });
+  writeResults("deleted-project", "sig-2", { results: [{ index: 2 }] });
+  writeResults("kept-project", "sig-1", { results: [{ index: 3 }] });
+
+  assert.equal(removeProjectResults("deleted-project"), 2);
+  assert.equal(readResults("deleted-project", "sig-1"), null);
+  assert.equal(readResults("deleted-project", "sig-2"), null);
+  assert.equal(readResults("kept-project", "sig-1").results[0].index, 3);
 });
 
 test("新一轮只产出少量结果时，落盘与盘上已有结果合并，不覆盖上一轮成果", async () => {

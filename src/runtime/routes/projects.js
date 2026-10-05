@@ -2,6 +2,7 @@ const { sendJson, readJson } = require("../http-json");
 const { saveSelection } = require("../../ingest/input-selection");
 const { activateProject, deleteProject, listProjects, readProjectSelection } = require("../../storage/project-store");
 const { clearProofreadCache, clientStatus: aiProofreadStatus } = require("../../workbenches/translation-compare/ai/ai-proofread");
+const { removeProjectResults } = require("../../workbenches/translation-compare/ai/result-store");
 const { savedFilePayloads } = require("../input-files");
 
 function createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }) {
@@ -50,6 +51,7 @@ function createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }
       const projectKey = decodeURIComponent(pathname.split("/")[3]);
       try {
         const { wasActive, activeProject } = deleteProject(projectKey);
+        removeProjectResults(projectKey);
         if (wasActive) clearProofreadCache();
         const payload = {
           ok: true,
