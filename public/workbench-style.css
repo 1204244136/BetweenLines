@@ -144,7 +144,8 @@
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: var(--space-2);
-      max-width: 420px;
+      /* 四项（总行 / 人工确认 / 自动结果 / 修改率）要在同一行放下，避免换行把 header 撑高。 */
+      max-width: 480px;
     }
     .stat {
       display: flex;

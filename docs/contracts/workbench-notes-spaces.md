@@ -75,6 +75,7 @@
 ## 浮动提示（Toast）与进度承载分工
 
 - **阶段指标筛选**：每项阶段数字使用独立的原生 `button`，选中状态同步到 `is-active` 与 `aria-pressed`；原生 Enter/Space 激活只走一次 `click`，不得额外绑定等价键盘事件。卡片正文不再拥有阶段总筛选、按钮角色或 Tab 停靠点。指标与顶部结论摘要共用一个可切换/取消的筛选状态，「清筛选」清除全部指标选中态。`computeStageMetricsFromNotes` 在原统计遍历中记录 `metricRowIds`，非待办指标直接读取该缓存，禁止另写备注分类规则；待复审/待仲裁继续使用共享当前轮次判据。分歧统计保留全部已仲裁记录，人工确认只移除尚待仲裁的待办。回归：`node --test scripts/stage-review-reports.test.js scripts/ai-stage-metrics.test.js scripts/build-compare.test.js`。
+- **顶部统计栏的「修改率」**：分子分母直接复用 `computeStageMetricsFromNotes` 的最终结论指标（`finalNeedsEdit` ÷ `finalNeedsEdit + finalUnchanged + finalNeedsCheck + finalPendingArbiter`），由 `renderStageMetricsDashboard` 统一刷新，禁止另写一套备注分类规则；调用失败的行不进分母，没有任何自动结论时显示 `—`，不显示 `0%`。回归：`node --test scripts/modify-rate.test.js`。
 - **一次性回执走 Toast**：按钮与控件结果（批量确认/写回、预筛/校对完成、模型刷新、空间备份找回删除等）渲染到 `#toastStack`（页面唯一浮动容器，在 `.app-shell` 之外）。
 - **两个工作台共享同一份实现与样式**：实现是 `public/workbench-shared.js` 的 `createToastCenter()`，样式是 `public/toast.css`（在 `.toast-stack` 上把 `--line/--focus…` 与 `--speaker-*` 两套 token 映射成 `--toast-*`）。翻译比较与说话人归属各自在页面里建一个中心并注入同一份样式——**不要把实现或样式复制回任一侧**，否则两边行为会各自漂移。
 - **禁止阻塞式 `window.alert`**：说话人归属工作台原先所有一次性回执都走 alert，会打断校对流程且无法区分语气；一次性回执一律走 Toast，`scripts/speaker-attribution.test.js` 锁住这条边界。

@@ -135,6 +135,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <div class="stat"><strong>${stats.total}</strong>总行</div>
           <div class="stat"><strong id="doneCount">0</strong>人工确认</div>
           <div class="stat"><strong id="aiDoneCount">0</strong>自动结果</div>
+          <div class="stat" id="modifyRateStat" title="最终建议修改的行 ÷ 已有自动结论的行；尚无自动结论时显示 —"><strong id="modifyRate">—</strong>修改率</div>
         </div>
       </div>
     </header>

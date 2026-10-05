@@ -612,6 +612,8 @@
     const lastPage = document.getElementById("lastPage");
     const doneCount = document.getElementById("doneCount");
     const aiDoneCount = document.getElementById("aiDoneCount");
+    const modifyRate = document.getElementById("modifyRate");
+    const modifyRateStat = document.getElementById("modifyRateStat");
     const aiIds = {
       presetSelect: document.getElementById("aiPresetSelect"),
       presetSave: document.getElementById("aiPresetSave"),
@@ -4287,6 +4289,32 @@
       }
     }
 
+    /**
+     * 右上角「修改率」：最终建议修改的行 ÷ 已有自动结论的行。
+     * 分子分母直接复用阶段指标的最终结论口径（finalNeedsEdit / finalUnchanged /
+     * finalNeedsCheck / finalPendingArbiter），不另写一套备注分类规则。
+     * 还没有任何自动结论时显示「—」：0 行结论不等于 0% 修改率。
+     */
+    function updateModifyRateStat(metrics = {}) {
+      if (!modifyRate) return;
+      const needsEdit = Math.max(0, Number(metrics.finalNeedsEdit) || 0);
+      const unchanged = Math.max(0, Number(metrics.finalUnchanged) || 0);
+      const needsCheck = Math.max(0, Number(metrics.finalNeedsCheck) || 0);
+      const pendingArbiter = Math.max(0, Number(metrics.finalPendingArbiter) || 0);
+      const audited = needsEdit + unchanged + needsCheck + pendingArbiter;
+      if (!audited) {
+        modifyRate.textContent = "—";
+        if (modifyRateStat) modifyRateStat.title = "尚无自动校对结论：修改率 = 最终建议修改的行 ÷ 已有自动结论的行。";
+        return;
+      }
+      const rounded = Math.round((needsEdit / audited) * 1000) / 10;
+      modifyRate.textContent = (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)) + "%";
+      if (modifyRateStat) {
+        modifyRateStat.title = "最终建议修改 " + needsEdit + " 行 / 已有自动结论 " + audited + " 行"
+          + "（无需修改 " + unchanged + "、待人工确认 " + needsCheck + "、待终审 " + pendingArbiter + "；调用失败的行不计入分母）。";
+      }
+    }
+
     function renderStageMetricsDashboard(stageMetrics = {}, stagePipelines = {}, aiRunning = false, stageErrorKinds = null) {
       const s1Passed = Math.max(0, Number(stageMetrics.stage1Passed) || 0);
       const s1NeedsEdit = Math.max(0, Number(stageMetrics.stage1NeedsEdit) || 0);
@@ -4324,6 +4352,9 @@
       const finalNeedsCheck = Math.max(0, Number(stageMetrics.finalNeedsCheck) || 0);
       const finalPendingArbiter = Math.max(0, Number(stageMetrics.finalPendingArbiter) || 0);
       const totalAudited = Math.max(s1Total, finalNeedsEdit + finalUnchanged + finalNeedsCheck + finalPendingArbiter, Number(stageMetrics.totalAudited) || 0);
+
+      // 右上角「修改率」跟随同一份最终结论指标刷新：校对跑完后它就是全书的修改率。
+      updateModifyRateStat({ finalNeedsEdit, finalUnchanged, finalNeedsCheck, finalPendingArbiter });
 
       // 全局最终修改结论摘要
       const elFinalNeedsEdit = document.getElementById("metricFinalNeedsEdit");
