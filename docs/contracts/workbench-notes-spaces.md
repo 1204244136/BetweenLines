@@ -23,6 +23,7 @@
 - 备注空间键必须包含当前工作台的 `projectKey`（`translation-compare-notes-v7:<projectKey>:<rowsSignature>`）；`rowsSignature` 只区分同一项目的不同输入快照。浏览器 `localStorage` 虽由多个项目共用，但项目之间的空间必须逻辑隔离。
 - 工作台的历史列表、`备份全部`、`清空历史`、历史找回和载入自愈只读取当前 `projectKey` 的空间（当前空间也必须保留）。其他项目的空间不得出现在当前页面的历史列表、备份结果或批量清理范围内；它们留在浏览器中，用户切换到对应项目后再由对应工作台读取。
 - 跨项目的 JSON 导入必须经过当前项目命名空间校验；导入结果不得让当前工作台直接看到或操作另一个项目的历史空间。若备份包含多个项目，导入器应逐空间保留其项目归属，交由对应项目页面处理，不能把空间改写成当前项目的 key。
+- **其他项目/旧版空间的容量出口**：上一条禁止的是把它们混进本项目的历史列表、`备份全部`、`清空历史` 与找回；但它们与当前项目共用同一份 localStorage 配额，写满时本页备注会直接存不进去（`notesPersistFailed`）。所以页面在历史列表**之外**单独一区列出它们（`notesForeignList` / `collectForeignNotesSpaces()`），只提供导出（单空间按钮与 `导出这些空间`）与删除，**一律不渲染找回入口**（不出 `data-notes-restore` / `data-notes-index`），也不进 `notesSpaceInventory`、`备份全部` 与 `清空历史`。删除必须二次确认并点名所属项目；列出不等于删除。回归：`node --test scripts/notes-foreign-spaces.test.js scripts/notes-spaces.test.js scripts/notes-recovery-merge.test.js`。
 - 备份保留原始数据，导入同名空间只创建副本；找回保留当前行已有记录，不能通过释放来源空间应对配额不足。
 - **未校验记录隔离**：`recoveredUnverified` 记录不能携带当前行的 `rowSig` 或计入人工确认。**按行号找回**与**只剩行序推断的锚点配对**必须保持此标记。
 - **文本证据例外**：配对自带文本证据——记录里的「修改结果」与目标行现在的正文逐字相同（`pair.textConfirmed`）——按 `verified` 处理并保留人工确认。

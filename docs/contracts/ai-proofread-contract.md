@@ -358,6 +358,20 @@
 
 ---
 
+## 结果落盘与刷新恢复（`ai/result-store.js`）
+
+浏览器 localStorage 只有约 10 MB、且同源下所有项目共用一份，写满之后页面上的备注就只活在内存里，刷新即丢。AI 结果是可重新交付的服务端产物，所以不把浏览器存储当作它唯一的落脚点。
+
+- **落盘位置**：`out/runtime/ai-results/<projectKey>-<rowsSignature>.json`（`storageLayout().runtimeDir` 下）。项目键与行集签名都按文件名安全字符收口，避免路径穿越。
+- **写入时机**：`addResult` 后累计脏行，攒够 200 行或距上次写盘满 30 秒写一次，`finish()` 收尾时立即写（不等阈值）。整份快照一次是几 MB，若按秒级节流会在 2000+ 行的任务里写成几个 GB 的写放大。代价是进程被强杀时最多丢这一批，而「页面刷新」不受影响——任务还在服务端跑，页面重新连上继续拉。
+- **合并而非覆盖**：写盘时与盘上已有结果按行号 upsert 合并。新一轮可能只跑了少数行（其余被判定为「已完成」而跳过），整份覆盖会把上一轮的结论抹掉。
+- **恢复路径**：`clientStatus({ projectKey, rowsSignature })` 在「没有运行中的任务、且内存里没有任何结果」时，把落盘结果装回 `status`，并重新编号 `resultRevision`，让页面照常按修订游标增量拉取。工作台在每次状态轮询时自报这两个身份（见 `public/workbench-client.js` 的 `refreshAiStatus`）。
+- **身份校验**：读盘时校验文件里的 `projectKey` / `rowsSignature` 与请求方一致，对不上就当作没有——宁可让页面显示「无结果」，也不把别的项目的结论交付出去。
+- **清理**：`clearProofreadCache()`（页面的「清除 AI 运行记录」）连盘上那一份一起删，否则刷新页面又会把它装回来。删除项目时同路径一并清理。
+- 回归：`node --test scripts/ai-results-persist.test.js`。
+
+---
+
 ## 相关测试集
 
 修改 AI 校对与提示词逻辑必须执行：

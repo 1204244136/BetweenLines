@@ -22,6 +22,7 @@ const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
 const { displayTermPair, evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
 const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-prefilter");
+const { readResults, removeResults, writeResults } = require("./result-store");
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
 const {
@@ -341,6 +342,9 @@ function pushLog(line) {
 }
 
 function clientStatus(options = {}) {
+  // 页面刷新、控制台重启之后内存里可能一条结果都没有：按请求方自报的项目身份
+  // 把落盘的结果装回来，让工作台还能把成果重新认领回去，而不是只剩浏览器内存那一份。
+  adoptPersistedResults(options.projectKey, options.rowsSignature);
   const sameRun = Boolean(options.runId) && options.runId === status.runId;
   const afterRevision = sameRun ? clampInteger(options.afterRevision, 0, Number.MAX_SAFE_INTEGER, 0) : 0;
   const resultLimit = clampInteger(options.resultLimit, 0, 500, 0);
@@ -791,6 +795,106 @@ function makePrefilterResult(row, labels, classification, comparisonMode = "tril
   };
 }
 
+// —— AI 结果落盘 ——
+// 服务端内存里的结果只活在这次会话里：开新任务会清空，控制台重启更是什么都不剩。
+// 浏览器 localStorage 只有约 10 MB 且被多个项目共享，写满时页面上的备注就只剩内存副本，
+// 刷新即丢。AI 结果是可重新交付的服务端产物，所以按「项目键 + 行集签名」落一份盘，
+// 页面刷新或服务重启后由 clientStatus 整份重新交付。
+//
+// 落盘节奏按「脏行数」触发：整份快照一次就是几 MB，2250 行的任务若每两秒写一次会白白
+// 写掉几个 GB。累积到阈值或超过最长等待就写一次，任务收尾再完整写一次——代价是崩溃时
+// 最多丢这么多行，而中途刷新并不受影响（任务还在服务端跑，页面重新连上继续拉）。
+const RESULTS_PERSIST_DIRTY_LIMIT = 200;
+const RESULTS_PERSIST_MAX_DELAY_MS = 30000;
+let resultsPersistTimer = null;
+let resultsPersistDirty = 0;
+
+function resultsPersistTarget() {
+  const projectKey = String(status.projectKey || "");
+  const rowsSignature = String(status.rowsSignature || "");
+  if (!projectKey || !rowsSignature) return null;
+  return { projectKey, rowsSignature };
+}
+
+function persistResultsNow() {
+  if (resultsPersistTimer) {
+    clearTimeout(resultsPersistTimer);
+    resultsPersistTimer = null;
+  }
+  resultsPersistDirty = 0;
+  const target = resultsPersistTarget();
+  if (!target || !status.results.size) return false;
+  // 与盘上已有结果合并：新一轮可能只跑了少数行（其余被判定为已完成而跳过），
+  // 直接整份覆盖会把上一轮的结论抹掉。
+  const merged = new Map();
+  const stored = readResults(target.projectKey, target.rowsSignature);
+  for (const item of stored?.results || []) merged.set(Number(item.index), item);
+  for (const [index, item] of status.results) merged.set(Number(index), item);
+  writeResults(target.projectKey, target.rowsSignature, {
+    runId: status.runId,
+    kind: status.kind,
+    total: status.total,
+    finishedAt: status.finishedAt || "",
+    results: [...merged.values()],
+  });
+  return true;
+}
+
+function scheduleResultsPersist() {
+  resultsPersistDirty += 1;
+  // 攒够一批就先落一次：长任务里既有「崩溃时最多丢这么多行」的上界，也不会写成写放大。
+  if (resultsPersistDirty >= RESULTS_PERSIST_DIRTY_LIMIT) {
+    try {
+      persistResultsNow();
+    } catch (error) {
+      pushLog(`AI 结果落盘失败：${error.message || error}`);
+    }
+    return;
+  }
+  if (resultsPersistTimer) return;
+  resultsPersistTimer = setTimeout(() => {
+    resultsPersistTimer = null;
+    try {
+      persistResultsNow();
+    } catch (error) {
+      pushLog(`AI 结果落盘失败：${error.message || error}`);
+    }
+  }, RESULTS_PERSIST_MAX_DELAY_MS);
+  // 落盘定时器不该拖住进程退出。
+  if (typeof resultsPersistTimer.unref === "function") resultsPersistTimer.unref();
+}
+
+/**
+ * 页面刷新或控制台重启后内存里可能一条结果都没有：这时按请求方自报的项目身份，
+ * 把落盘的结果重新装回 status，让 clientStatus 照常交付给工作台。
+ * 只在「没有运行中的任务、且内存里没有别的项目结果」时接管，避免把别的项目结论串过来。
+ */
+function adoptPersistedResults(projectKey, rowsSignature) {
+  const key = String(projectKey || "");
+  const signature = String(rowsSignature || "");
+  if (!key || !signature) return false;
+  if (status.running) return false;
+  if (status.results.size || status.resultChanges.length) return false;
+  const stored = readResults(key, signature);
+  if (!stored || !stored.results.length) return false;
+  status.projectKey = key;
+  status.rowsSignature = signature;
+  status.kind = stored.kind || "proofread";
+  status.runId = stored.runId || status.runId;
+  status.finishedAt = stored.finishedAt || status.finishedAt;
+  status.total = stored.total || stored.results.length;
+  status.results = new Map();
+  status.resultChanges = [];
+  status.resultRevision = 0;
+  for (const item of stored.results) {
+    status.resultRevision += 1;
+    const result = { ...item, resultRevision: status.resultRevision };
+    status.results.set(Number(result.index), result);
+    status.resultChanges.push(result);
+  }
+  return true;
+}
+
 function addResult(result, { prefilterKind = "" } = {}) {
   status.resultRevision += 1;
   // Every result, including deterministic prefilter rows and transport errors,
@@ -826,6 +930,8 @@ function addResult(result, { prefilterKind = "" } = {}) {
   const delta = computeResultMetricsDelta(storedResult, { prefilterKind });
   resultMetricDeltas.set(result.index, delta);
   applyMetricsDelta(status.stageMetrics, delta, 1);
+  // 每批结果都排队落盘（节流）：这样刷新页面时，成果在服务端已经有一份。
+  scheduleResultsPersist();
 }
 
 async function startPrefilter(input) {
@@ -1331,6 +1437,14 @@ function clearProofreadCache() {
     const error = new Error(status.kind === "prefilter" ? "预筛选正在运行，请先停止任务再清除缓存。" : "AI 校对正在运行，请先停止任务再清除缓存。");
     error.code = "RUNNING";
     throw error;
+  }
+  // 「清除 AI 运行记录」必须连落盘的一份一起清：否则刷新页面时它又会被装回来。
+  if (resultsPersistTimer) {
+    clearTimeout(resultsPersistTimer);
+    resultsPersistTimer = null;
+  }
+  if (status.projectKey && status.rowsSignature) {
+    removeResults(status.projectKey, status.rowsSignature);
   }
   status.stopRequested = false;
   status.kind = "proofread";
@@ -2192,6 +2306,12 @@ function finish() {
   status.finishedAt = new Date().toISOString();
   status.active = [];
   status.stagePipelines = createStagePipelines();
+  // 收尾时立即落盘、不等节流：这是刷新页面后能把本轮成果重新交付出去的关键一份。
+  try {
+    persistResultsNow();
+  } catch (error) {
+    pushLog(`AI 结果落盘失败：${error.message || error}`);
+  }
   const isPrefilter = status.kind === "prefilter";
   if (!isPrefilter) {
     const summary = promptTrimSummary();

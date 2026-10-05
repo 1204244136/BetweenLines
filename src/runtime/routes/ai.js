@@ -12,6 +12,9 @@ async function handleAiRoutes(req, res, pathname, searchParams) {
         afterRevision: searchParams.get("afterRevision") || 0,
         resultLimit: searchParams.get("resultLimit") || 0,
         profileId: searchParams.get("profileId") || "",
+        // 页面自报项目身份：内存里没有结果时（刷新页面、控制台重启）据此把落盘的结果装回来。
+        projectKey: searchParams.get("projectKey") || "",
+        rowsSignature: searchParams.get("rowsSignature") || "",
         includeLogs: searchParams.get("compact") !== "1",
       }),
     });

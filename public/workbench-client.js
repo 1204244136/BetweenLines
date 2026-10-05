@@ -823,7 +823,7 @@
       const usage = notesTools.storageUsage(localStorage, storageKey, notesStorage.encode(JSON.stringify(notes)));
       return "备注无损压缩后仍超出浏览器容量：" + protection
         + (usage.available ? usage.historyCount ? "可清理本项目已备份的历史空间。" : "本项目没有历史空间可清理。" : "无法读取存储占用。")
-        + (usage.available && usage.otherNotesCount ? "其他项目或旧版备注也占用容量，可在另一标签页备份后处理。" : "")
+        + (usage.available && usage.otherNotesCount ? "其他项目或旧版空间也占用容量：展开下方的「其他项目 / 旧版空间」，先导出再删除即可腾出空间。" : "")
         + "释放容量后点击「重试保存」。";
     }
 
@@ -5178,6 +5178,10 @@
       try {
         const params = new URLSearchParams({ compact: "1", resultLimit: "64" });
         if (aiIds.profile) params.set("profileId", aiIds.profile.value);
+        // 自报项目身份：服务端内存为空时（刚重启、或本轮还没跑过）据此把落盘的结果重新交付，
+        // 刷新页面就能把上一轮的校对成果认领回来，不必依赖随时可能写满的浏览器存储。
+        if (pageMeta.projectKey) params.set("projectKey", pageMeta.projectKey);
+        if (pageMeta.rowsSignature) params.set("rowsSignature", pageMeta.rowsSignature);
         if (lastAiRunId) {
           params.set("runId", lastAiRunId);
           params.set("afterRevision", String(lastAiResultRevision));
@@ -6415,13 +6419,22 @@
       showToast(message, { tone, durationMs: 12000 });
     }
 
-    function collectNotesSpaces() {
+    function inventoryAllNotesSpaces() {
       serializeNotes(); // Export also includes fresh signatures before a deferred save.
-      // 浏览器的 localStorage 由多个项目共享，但备注空间属于 projectKey。
-      // 当前工作台只展示、导出和操作本项目的空间；其他项目的历史仍留在浏览器里，
-      // 切换到对应项目后再由它自己的工作台读取，避免跨项目误找回或误清空。
-      return notesTools.inventory(notesStorage, storageKey, notes)
-        .filter((space) => space.current || space.sameProject);
+      return notesTools.inventory(notesStorage, storageKey, notes);
+    }
+
+    // 浏览器的 localStorage 由多个项目共享，但备注空间属于 projectKey。
+    // 当前工作台只对「本项目的空间」做找回，其他项目的历史仍留在浏览器里，
+    // 切换到对应项目后再由它自己的工作台读取，避免跨项目误找回或误清空。
+    function collectNotesSpaces() {
+      return inventoryAllNotesSpaces().filter((space) => space.current || space.sameProject);
+    }
+
+    // 其他项目/旧版空间与当前项目共用同一份浏览器容量：它们写满之后，本页备注就再也存不进去，
+    // 刷新即丢。所以把它们单独列出来，允许导出与删除——但仍然不参与找回。
+    function collectForeignNotesSpaces() {
+      return inventoryAllNotesSpaces().filter((space) => !space.current && !space.sameProject);
     }
 
     function notesBackup(spaces) {
@@ -6455,11 +6468,14 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
-    function notesSpaceMarkup(space, index) {
+    // 其他项目/旧版空间只提供导出与删除：跨项目找回会把这些记录错嫁到当前行集上，必须挡住。
+    // 按钮携带空间键而不是列表下标：当前项目空间与其他项目空间各自成表，用键回查不会串。
+    function notesSpaceMarkup(space, { foreign = false } = {}) {
       const stats = space.entries + " 条记录 · 人工确认 " + space.confirmed
         + (space.unverified ? " · 待核验 " + space.unverified : "")
         + " · 约 " + (space.bytes / 1024).toFixed(1) + " KB";
-      const canRecover = !space.current && space.entries && !space.parseFailed;
+      const canRecover = !foreign && !space.current && space.entries && !space.parseFailed;
+      const spaceKey = escapeHtml(space.key);
       return [
         '<article class="notes-space-row' + (space.current ? " is-current" : "") + '">',
         '<div class="notes-space-main"><div class="notes-space-heading"><strong>' + escapeHtml(notesSpaceTitle(space)) + '</strong>',
@@ -6468,23 +6484,45 @@
         !space.current && space.sameSnapshot ? '<span class="notes-space-tag">同一行集</span>' : '',
         '</div><div class="notes-space-meta">' + stats + '</div>',
         '<details class="notes-space-details"><summary>空间详情' + (space.version ? " · " + escapeHtml(space.version) : "") + '</summary>',
-        '<code>' + escapeHtml(space.key) + '</code>',
+        '<code>' + spaceKey + '</code>',
         '<p>' + (space.minIndex == null ? "没有有效行记录。" : "行号范围 " + space.minIndex + "–" + space.maxIndex) + '</p>',
-        canRecover ? '<button type="button" class="btn btn--ghost" data-notes-index="' + index + '">按行号找回（需核验）</button>' : '',
-        space.current ? '' : '<button type="button" class="btn btn--ghost notes-delete" data-notes-drop="' + index + '">删除此空间</button>',
+        canRecover ? '<button type="button" class="btn btn--ghost" data-notes-index="' + spaceKey + '">按行号找回（需核验）</button>' : '',
+        space.current ? '' : '<button type="button" class="btn btn--ghost notes-delete" data-notes-drop="' + spaceKey + '">删除此空间</button>',
         '</details></div><div class="notes-space-actions">',
-        canRecover ? '<button type="button" class="btn btn--primary" data-notes-restore="' + index + '">预览找回</button>' : '',
-        '<button type="button" class="btn btn--ghost" data-notes-export="' + index + '">' + (space.current ? "导出本页" : "导出") + '</button>',
+        canRecover ? '<button type="button" class="btn btn--primary" data-notes-restore="' + spaceKey + '">预览找回</button>' : '',
+        '<button type="button" class="btn btn--ghost" data-notes-export="' + spaceKey + '">' + (space.current ? "导出本页" : "导出") + '</button>',
         '</div></article>',
       ].join('');
     }
 
+    // 其他项目/旧版空间单列一区：它们占着同一份浏览器容量，是「本页备注存不进去」的直接原因。
+    // 这里只提供导出与删除，找回入口一律不给——跨项目找回会把别的书的记录错嫁到当前行集上。
+    function renderForeignNotesSpaces(spaces) {
+      const heading = document.getElementById("notesForeignHeading");
+      const list = document.getElementById("notesForeignList");
+      const summary = document.getElementById("notesForeignSummary");
+      if (!heading || !list) return;
+      heading.hidden = !spaces.length;
+      list.hidden = !spaces.length;
+      if (!spaces.length) {
+        list.innerHTML = "";
+        if (summary) summary.textContent = "";
+        return;
+      }
+      const totalKb = (spaces.reduce((total, space) => total + space.bytes, 0) / 1024).toFixed(1);
+      if (summary) summary.textContent = spaces.length + " 个空间 · 约 " + totalKb + " KB（删除前请先导出）";
+      list.innerHTML = spaces.map((space) => notesSpaceMarkup(space, { foreign: true })).join("");
+    }
+
     function renderNotesSpaces() {
-      notesSpaceInventory = collectNotesSpaces();
+      const all = inventoryAllNotesSpaces();
+      // notesSpaceInventory 只装「本项目的空间」：它是找回入口的唯一来源，跨项目空间不得进入。
+      notesSpaceInventory = all.filter((space) => space.current || space.sameProject);
+      const foreignSpaces = all.filter((space) => !space.current && !space.sameProject);
       const current = notesSpaceInventory.find((space) => space.current);
       const history = notesSpaceInventory.filter((space) => !space.current);
       const totalKb = (notesSpaceInventory.reduce((total, space) => total + space.bytes, 0) / 1024).toFixed(1);
-      notesPanelIds.current.innerHTML = notesSpaceMarkup(current, notesSpaceInventory.indexOf(current));
+      notesPanelIds.current.innerHTML = notesSpaceMarkup(current);
       notesPanelIds.summary.textContent = history.length + " 个本项目历史空间 · 本项目内容约 " + totalKb + " KB（含未保存修改）";
       notesPanelIds.clearHistory.disabled = !history.length;
       const usage = notesTools.storageUsage(localStorage, storageKey, notesStorage.encode(JSON.stringify(notes)));
@@ -6496,13 +6534,19 @@
           + " · 其他本地数据 " + kb(usage.otherBytes) + " · 无损压缩保存本页后预计 " + kb(usage.projectedBytes)
         : "无法读取浏览器存储占用，请检查站点存储权限。";
       notesPanelIds.list.innerHTML = history.length
-        ? history.map((space) => notesSpaceMarkup(space, notesSpaceInventory.indexOf(space))).join('')
+        ? history.map((space) => notesSpaceMarkup(space)).join('')
         : '<div class="notes-space-empty">暂无历史记录。可导入之前导出的 JSON 备份。</div>';
+      renderForeignNotesSpaces(foreignSpaces);
       updateNotesSaveState();
     }
 
     function freshNotesSpace(key) {
       return collectNotesSpaces().find((space) => space.key === key);
+    }
+
+    // 导出与删除要对其他项目/旧版空间同样生效，找回仍然只走 freshNotesSpace（本项目）。
+    function freshAnyNotesSpace(key) {
+      return inventoryAllNotesSpaces().find((space) => space.key === key) || null;
     }
 
     function previewNotesRecovery(space, byIndex = false) {
@@ -6537,15 +6581,22 @@
       const button = event.target.closest("[data-notes-export], [data-notes-restore], [data-notes-index], [data-notes-drop]");
       if (!button) return;
       const action = ["notesExport", "notesRestore", "notesIndex", "notesDrop"].find((key) => key in button.dataset);
-      const cached = notesSpaceInventory[Number(button.dataset[action])];
-      const space = cached && freshNotesSpace(cached.key);
+      // 按钮带的是空间键：当前项目与其他项目/旧版空间都能回查到，
+      // 但「预览找回 / 按行号找回」只在本项目空间上渲染，所以找回入口仍然进不来。
+      const space = freshAnyNotesSpace(button.dataset[action]);
       if (!space) { renderNotesSpaces(); notesPanelStatus("该空间已发生变化，请重新选择。", { tone: "watch" }); return; }
       if (action === "notesExport") {
         downloadNotesJson("betweenlines-notes-" + (space.rows || "space") + ".json", notesBackup([space]));
       } else if (action === "notesRestore" || action === "notesIndex") {
         if (!space.current && space.data) previewNotesRecovery(space, action === "notesIndex");
       } else if (!space.current) {
-        if (!(await askConfirm("删除「" + notesSpaceTitle(space) + "」的 " + space.entries + " 条记录？\n删除不可撤销，请确认已经导出备份。", { title: "删除历史空间", confirmText: "删除" }))) return;
+        // 其他项目/旧版空间是「本页备注存不进去」的直接原因，允许在这里清理；
+        // 但删除的是别的项目的记录，确认文案必须点名，避免误删。
+        const foreign = !space.sameProject;
+        const foreignNote = foreign
+          ? "\n注意：这个空间属于其他项目（" + (space.project || "旧版") + "），删除后那个项目的工作台也看不到这些记录了。"
+          : "";
+        if (!(await askConfirm("删除「" + notesSpaceTitle(space) + "」的 " + space.entries + " 条记录？" + foreignNote + "\n删除不可撤销，请确认已经导出备份。", { title: foreign ? "删除其他项目的空间" : "删除历史空间", confirmText: "删除" }))) return;
         try {
           notesStorage.removeItem(space.key);
           renderNotesSpaces();
@@ -6584,6 +6635,17 @@
       downloadNotesJson("betweenlines-notes-backup.json", notesBackup(collectNotesSpaces()));
       notesPanelStatus("已导出本页和全部历史空间。", { tone: "success" });
     });
+    // 其他项目/旧版空间不进「备份全部」（当前项目备份不得带出别的项目记录），
+    // 但它们同样占着浏览器容量，清理前需要一个独立出口。
+    const exportForeignNotes = document.getElementById("exportForeignNotes");
+    if (exportForeignNotes) {
+      exportForeignNotes.addEventListener("click", () => {
+        const spaces = collectForeignNotesSpaces();
+        if (!spaces.length) { notesPanelStatus("没有其他项目或旧版空间。", { tone: "watch" }); return; }
+        downloadNotesJson("betweenlines-notes-other-projects.json", notesBackup(spaces));
+        notesPanelStatus("已导出 " + spaces.length + " 个其他项目/旧版空间；导入时会回到各自项目名下，不会串到当前项目。", { tone: "success" });
+      });
+    }
     notesPanelIds.clearCurrent.addEventListener("click", async () => {
       const current = collectNotesSpaces().find((space) => space.current);
       if (!current?.entries) { notesPanelStatus("本页没有可清空的备注记录。", { tone: "watch" }); return; }

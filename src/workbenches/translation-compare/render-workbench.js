@@ -519,8 +519,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div id="notesCurrentSpace"></div>
             <div class="notes-history-heading"><strong>当前项目历史记录</strong><span id="notesSpaceSummary"></span></div>
             <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
+            <div class="notes-history-heading" id="notesForeignHeading" hidden><strong>其他项目 / 旧版空间</strong><span id="notesForeignSummary"></span><button id="exportForeignNotes" class="btn btn--ghost" type="button">导出这些空间</button></div>
+            <div id="notesForeignList" class="notes-space-list" hidden></div>
             <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
-            <p class="notes-hint">历史空间按项目标识隔离：本页只读取当前项目的记录，其他项目的记录会保留在浏览器里，切换到对应项目后再显示。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
+            <p class="notes-hint">历史空间按项目标识隔离：本页只读取当前项目的记录，其他项目的记录会保留在浏览器里，切换到对应项目后再显示。其他项目与旧版空间同样占用浏览器容量，写满时本页备注就存不进去，所以它们在下面单独列出，可以导出或删除，但<strong>不参与找回</strong>。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
           </div>
         </details>
         </div>
