@@ -1117,6 +1117,9 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
   clearProofreadCache();
   const totalRows = 12;
   const { project } = setupMockProject(totalRows, "arbbreaker");
+  // 熔断拦的是「对上游一行行硬打」：按仲裁实际收到的请求数断言。
+  // 熔断后剩余行会被落成异常结果（不再静默丢失），因此异常行数本身可以等于总行数。
+  let arbiterRequests = 0;
 
   const server = http.createServer((req, res) => {
     let body = "";
@@ -1129,6 +1132,7 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
       const isStylist = !isArbiter && userText.includes("gatekeeperReview");
 
       if (isArbiter) {
+        arbiterRequests += 1;
         // 仲裁接口持续 5xx：既不是频控、也不是配置类致命错误，只能靠错误率熔断拦住。
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "arbiter down" } }));
@@ -1163,9 +1167,11 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
     assert.equal(finished.running, false);
     assert.match(finished.error, /错误率熔断/, "仲裁持续失败必须触发熔断，而不是一路刷到队列尽头");
     assert.ok(
-      finished.stageMetrics.stage3Errors < totalRows,
-      `熔断必须在刷满 ${totalRows} 行之前生效，实际异常 ${finished.stageMetrics.stage3Errors} 行`,
+      arbiterRequests < totalRows,
+      `熔断必须在刷满 ${totalRows} 行之前生效，实际仲裁请求 ${arbiterRequests} 次`,
     );
+    // 熔断后未派发的行必须落成异常结果，而不是静默消失。
+    assert.equal(finished.stageMetrics.stage3Errors, totalRows, "熔断后剩余的仲裁行必须逐行记为异常");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

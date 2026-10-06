@@ -1829,7 +1829,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     const removed = [];
     for (const presetId of [...pool.state.keys()]) {
       if (targetIds.has(presetId)) continue;
-      if (pool.removePreset(presetId)) removed.push(presetId);
+      if (pool.removePreset(presetId)) {
+        removed.push(presetId);
+        // 熔断状态随预设一起移除：同 id 再加回时应作为全新通道接活，而不是继承旧的熔断记录。
+        breakerTripBucket(stageKey).delete(breakerPresetId(presetId));
+        presetBreakers.delete(`${stageKey}:${breakerPresetId(presetId)}`);
+      }
     }
     const added = [];
     for (const preset of target) {
@@ -2037,10 +2042,63 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
     }
 
+    // 阶段全部预设熔断后，其待派发行再也派不出去：必须逐行落成异常结果（复审/仲裁回退上一阶段方案），
+    // 否则这些行既无结论也无失败记录，任务却照常报「完成」，用户看不出有行被跳过。
+    function flushBrokenStagePending() {
+      const breakerError = (stageKey) => {
+        const error = new Error(`${STAGE_OUTCOME_LABELS[stageKey] || stageKey}阶段选中的预设已全部熔断，本行未处理。`);
+        error.code = "BREAKER_TRIPPED";
+        return error;
+      };
+      let flushed = 0;
+      if (isStageBreakerBroken("stage3") && stage3Pending.length) {
+        for (const item of stage3Pending.splice(0)) {
+          const error = breakerError("stage3");
+          status.stageMetrics.stage3Errors += 1;
+          recordStageError("stage3", item.row.index, error, "");
+          addResult(withStageFailureNote(finalizeRowResult(item, config), "stage3", error, { stopped: false, refusal: false }));
+          status.active = status.active.filter((idx) => idx !== item.row.index);
+          flushed += 1;
+        }
+      }
+      if (isStageBreakerBroken("stage2") && stage2Pending.length) {
+        for (const item of stage2Pending.splice(0)) {
+          const error = breakerError("stage2");
+          status.stageMetrics.stage2Errors += 1;
+          recordStageError("stage2", item.row.index, error, "");
+          addResult(withStageFailureNote(finalizeRowResult(item, config), "stage2", error, { stopped: false, refusal: false }));
+          status.active = status.active.filter((idx) => idx !== item.row.index);
+          flushed += 1;
+        }
+      }
+      if (isStageBreakerBroken("stage1") && stage1Pending.length) {
+        for (const row of stage1Pending.splice(0)) {
+          const error = breakerError("stage1");
+          recordStageError("stage1", row.index, error, "");
+          addResult({
+            runId: status.runId,
+            index: row.index,
+            signature: rowSignature(row),
+            stage: "stage1",
+            status: "error",
+            done: false,
+            note: `[AI校对]\n调用失败：${error.message}`,
+          });
+          status.active = status.active.filter((idx) => idx !== row.index);
+          flushed += 1;
+        }
+      }
+      if (flushed) {
+        pushLog(`[熔断] ${flushed} 行因所属阶段的预设已全部熔断而未能处理，已标记为调用异常，稍后可用「继续剩下的」重跑。`);
+        syncStagePipelineQueues();
+      }
+    }
+
     function checkDone() {
       if (settled) return;
-      // 阶段全部预设熔断后，队列中的剩余行无法再派发；把它视为该阶段已排空，
-      // 但仍等待已经发出的请求收尾，并让其它健康阶段继续运行。
+      if (!status.stopRequested) flushBrokenStagePending();
+      // 阶段全部预设熔断后，队列中的剩余行已由 flushBrokenStagePending 落成异常结果；
+      // 这里仍等待已经发出的请求收尾，并让其它健康阶段继续运行。
       const stageDrained = (stageKey, pending, inFlight) =>
         (pending.length === 0 && inFlight === 0) || (isStageBreakerBroken(stageKey) && inFlight === 0);
       const allEmpty = stageDrained("stage1", stage1Pending, stage1InFlight)
@@ -2611,6 +2669,8 @@ function stopForBreakerTrip(trip, stageKey, presetId) {
   // 只有参与本次流水线的每个阶段都进入「全部预设熔断」才终止整条任务。
   if (allActiveStagesBroken()) {
     status.stopRequested = true;
+    // 整体终止不是「部分预设熔断」：清掉先前的局部告警，页面才会按调用异常展示。
+    status.breakerWarning = "";
     status.error = stageTripText(trip, stageKey, id, true);
     pushLog(status.error);
     for (const controller of controllers) controller.abort();
