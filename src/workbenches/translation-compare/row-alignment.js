@@ -269,6 +269,48 @@ function mergePivotOrphanGroups(groups, pivotLang) {
   return result;
 }
 
+function withGroupRanges(group) {
+  return {
+    ...group,
+    relation: `${group.left.length}:${group.right.length}`,
+    cnStart: group.left[0]?.sourceIndex ?? null,
+    cnEnd: group.left.length ? group.left[group.left.length - 1].sourceIndex + 1 : null,
+    twStart: group.right[0]?.sourceIndex ?? null,
+    twEnd: group.right.length ? group.right[group.right.length - 1].sourceIndex + 1 : null,
+  };
+}
+
+// 简台组的技术 pivot 区间跨过原文对齐组的边界时，行组装会把多段原文并进同一行，
+// 破坏「一张表格行只含一段原文」。非原文段落允许为对齐拆分：这里按原文组在 pivot 上的边界
+// 把简台组切开——pivot 侧按源索引切段，另一侧段落整段按顺序分给各段（不拆文本、不丢段落）。
+function splitPivotGroupsAtSourceBoundaries(groups, jpPivotGroups, pivotLang) {
+  const boundaries = [...new Set(jpPivotGroups.flatMap((group) => [group.pivotStart, group.pivotEnd]))]
+    .sort((a, b) => a - b);
+  const pivotKey = pivotLang === "cn" ? "left" : "right";
+  const otherKey = pivotKey === "left" ? "right" : "left";
+  const result = [];
+  for (const group of groups) {
+    const start = groupPivotStart(group, pivotLang);
+    const end = groupPivotEnd(group, pivotLang);
+    const cuts = start == null || end == null ? [] : boundaries.filter((value) => value > start && value < end);
+    if (!cuts.length) {
+      result.push(group);
+      continue;
+    }
+    const edges = [start, ...cuts, end];
+    const segments = edges.slice(0, -1).map((segmentStart, k) => group[pivotKey]
+      .filter((item) => item.sourceIndex >= segmentStart && item.sourceIndex < edges[k + 1]));
+    const others = group[otherKey];
+    segments.forEach((pivotItems, k) => {
+      const from = Math.round((k / segments.length) * others.length);
+      const to = Math.round(((k + 1) / segments.length) * others.length);
+      const piece = { [pivotKey]: pivotItems, [otherKey]: others.slice(from, to) };
+      result.push(withGroupRanges({ ...piece, score: groupScore(piece.left, piece.right) }));
+    });
+  }
+  return result;
+}
+
 function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
   const bilingual = comparisonMode === "bilingual";
   // 双语模式只有一份译文：不伪造 cn↔tw 对齐组，每个主文本段落直接作为技术 pivot 单元。
@@ -291,9 +333,11 @@ function alignRows(cn, tw, jp, comparisonMode = "trilingual") {
         twEnd: group.right.length ? group.right[group.right.length - 1].sourceIndex + 1 : null,
       }));
   const pivotLang = loadJpPivotLang(comparisonMode);
-  const cnTw = bilingual ? rawCnTw : mergePivotOrphanGroups(rawCnTw, pivotLang);
   const jpGroups = loadJpGroupAlignmentList(jp);
   const jpPivotGroups = jpGroups.filter((group) => group.pivotStart !== group.pivotEnd);
+  const cnTw = bilingual
+    ? rawCnTw
+    : splitPivotGroupsAtSourceBoundaries(mergePivotOrphanGroups(rawCnTw, pivotLang), jpPivotGroups, pivotLang);
   const sourceOnlyGroups = jpGroups.filter((group) => group.pivotStart === group.pivotEnd);
   const rows = [];
   const rowSourceStarts = [];
@@ -388,6 +432,10 @@ function makeRow(index, cnGroups, jpGroups, comparisonMode = "trilingual") {
     const bilingual = comparisonMode === "bilingual";
     const cnItems = cnGroups.flatMap((group) => group.left);
     const jpItems = uniqueBySourceIndex(jpGroups.flatMap((group) => group.items));
+    // 兜底：任何组装路径都不得把多段原文放进同一行，宁可拒绝构建也不静默产出错行。
+    if (jpItems.length > 1) {
+      throw new Error(`表格行 ${index} 包含 ${jpItems.length} 段原文；工作台要求一张表格行只对应一段原文，请检查对齐结果后重新运行 npm run align:jp。`);
+    }
     const jpText = joinTexts(jpItems, "text");
     const jpRelation = relationSummary(jpGroups, "items", "pivotItems");
     const jpScore = average(jpGroups.map((group) => group.score));

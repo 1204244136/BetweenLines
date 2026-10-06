@@ -99,3 +99,20 @@ test("无效或越界的原文独有对齐组要求重新对齐", () => {
   assert.throws(() => withAlignment([group(0, 2, 0, 0)], "cn", () => alignRows([], [], jp, "bilingual")), /一张表格行只对应一段原文/);
   assert.throws(() => withAlignment([group(0, 1, 0, 0)], "cn", () => alignRows([], [], [], "bilingual")), /段落区间无效/);
 });
+
+for (const pivotLang of ["cn", "tw"]) {
+  test(`trilingual/${pivotLang} 简台组跨过原文边界时按原文拆行，一行只含一段原文`, () => {
+    const jp = paragraphs(["原文第一段。", "原文第二段。"], "jp");
+    const a = "他走进房间看信";
+    const b = "她转身不说话";
+    // 技术 pivot 侧两段、另一侧合成一段：简台对齐会组成跨两段原文的 2:1 组。
+    const cn = paragraphs(pivotLang === "cn" ? [a, b] : [a + b], "cn");
+    const tw = paragraphs(pivotLang === "cn" ? [a + b] : [a, b], "tw");
+    const rows = withAlignment([group(0, 1, 0, 1, 0.9), group(1, 2, 1, 2, 0.9)], pivotLang, () => alignRows(cn, tw, jp, "trilingual"));
+    assert.deepEqual(rows.map((row) => row.jp), jp.map((item) => item.text));
+    assert.deepEqual(rows.map((row) => row.index), [1, 2]);
+    // 非原文段落只拆分归属，不丢失：两列合起来仍是完整的输入文本。
+    assert.equal(rows.map((row) => row.cn).filter(Boolean).join(""), a + b);
+    assert.equal(rows.map((row) => row.tw).filter(Boolean).join(""), a + b);
+  });
+}
