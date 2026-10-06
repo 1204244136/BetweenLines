@@ -1520,14 +1520,16 @@ function updateStagePresets(payload = {}) {
   };
 }
 
-function clearProofreadCache() {
+// clearPersisted 默认 true：「清除 AI 运行记录」必须连落盘的一份一起清，否则刷新页面时它又会被装回来。
+// 切换项目、开始生成只需重置内存状态，必须传 false：落盘结果按「项目 + 行集」隔离，
+// 删掉它们会让切回项目或行集未变的重新生成之后再也找不回仍然有效的 AI 结论。
+function clearProofreadCache({ clearPersisted = true } = {}) {
   if (status.running) {
     const error = new Error(status.kind === "prefilter" ? "预筛选正在运行，请先停止任务再清除缓存。" : "AI 校对正在运行，请先停止任务再清除缓存。");
     error.code = "RUNNING";
     throw error;
   }
-  // 「清除 AI 运行记录」必须连落盘的一份一起清：否则刷新页面时它又会被装回来。
-  resetIdleStatus({ clearPersisted: true });
+  resetIdleStatus({ clearPersisted });
   return clientStatus();
 }
 

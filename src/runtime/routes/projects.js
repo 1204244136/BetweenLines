@@ -21,7 +21,8 @@ function createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }
         sendJson(res, 409, { ok: false, error: `${runningTaskLabel()}正在运行，请先停止后再切换项目。` });
         return true;
       }
-      clearProofreadCache();
+      // 只重置内存状态：落盘结果按项目隔离，切回原项目时还要能找回。
+      clearProofreadCache({ clearPersisted: false });
       const projectKey = decodeURIComponent(pathname.split("/")[3]);
       const project = activateProject(projectKey);
       const saved = readProjectSelection(projectKey, { snapshotId: project.snapshotId });
@@ -52,7 +53,8 @@ function createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }
       try {
         const { wasActive, activeProject } = deleteProject(projectKey);
         removeProjectResults(projectKey);
-        if (wasActive) clearProofreadCache();
+        // 被删项目的落盘结果已由 removeProjectResults 清掉；这里只重置内存，不误删别的项目的结果。
+        if (wasActive) clearProofreadCache({ clearPersisted: false });
         const payload = {
           ok: true,
           apiVersion: consoleApiVersion,

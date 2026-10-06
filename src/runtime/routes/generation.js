@@ -23,7 +23,8 @@ function createGenerationRoutes({ generation, speaker, consoleApiVersion, runnin
         sendJson(res, 400, { ok: false, error: "请先导入所需文件。", pipeline: generation.status() });
         return true;
       }
-      clearProofreadCache();
+      // 只重置内存状态：行集不变的重新生成之后，落盘结果仍然有效、刷新可找回。
+      clearProofreadCache({ clearPersisted: false });
       const selection = validateSelection(readJsonFile(selectionFile));
       generation.run(selection);
       sendJson(res, 202, { ok: true, apiVersion: consoleApiVersion, pipeline: generation.status() });
