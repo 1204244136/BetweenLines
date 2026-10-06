@@ -227,7 +227,7 @@
 | stage2 | — | 是 | 复审 → 仲裁 |
 | stage3 | — | — | 只跑仲裁 |
 
-阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。每个阶段配多个预设时，**每个预设是一条独立并发通道**（`ai/preset-pool.js` 为每条通道读取 `channel.currentConcurrency` 作为配额），阶段可派发量 = 各通道当前允许并发之和，`cleanConfig` 必须原样保住 `presetPool`/`stylistPresets`/`arbiterPresets` 里的连接参数与 `presetId`/`name`；单预设时退化回那一条通道。**运行中增删预设**经 `POST /api/ai-proofread/presets` 进入 `updateStagePresets`：池的版本变化触发整队重算绑定，新预设立刻派活、被删预设的待审行立刻改派，在飞请求不打断；删空回落到该阶段配置。阶段控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）只保留阶段级退避窗口、单行重试计数与断路器，各阶段的并发上探与下调落在行所属的通道上（自适应调度与热更新的细则见 [workbench-notes-spaces.md](workbench-notes-spaces.md)「并发上限与内部自适应调度」，与熔断的联动也在那里）；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。每个阶段配多个预设时，**每个预设是一条独立并发通道**（`ai/preset-pool.js` 为每条通道读取 `channel.currentConcurrency` 作为配额），阶段可派发量 = 各通道当前允许并发之和，`cleanConfig` 必须原样保住 `presetPool`/`stylistPresets`/`arbiterPresets` 里的连接参数与 `presetId`/`name`；单预设时退化回那一条通道。**运行中增删预设**经 `POST /api/ai-proofread/presets` 进入 `updateStagePresets`：池的版本变化触发整队重算绑定，新预设立刻派活、被删预设的待审行立刻改派，在飞请求不打断；删空回落到该阶段配置。阶段控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）只保留兜底状态，各预设自己的退避窗口、单行重试计数、并发上探与下调和断路器都落在行所属的通道上（自适应调度与热更新的细则见 [workbench-notes-spaces.md](workbench-notes-spaces.md)「并发上限与内部自适应调度」，与熔断的联动也在那里）；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
 
 ### 「待人工确认」只能由终审分发
 
@@ -299,8 +299,8 @@
 「计入异常」只解决了可见性，还必须有东西**拦住它**，否则一次配置错误就是一行行刷到队列尽头：
 
 1. **致命请求错误当场终止**：`executeStage2` / `executeStage3` 与 `executeStage1` 一样判 `isFatalRequestError`（400/401/403/404/405/415/422 与非 JSON 响应），命中即 `stopForFatalRequestError`。缺这一条时，同一个配置错误在阶段一会立刻停下、在阶段二/三却会一直刷。
-2. **非频控失败进熔断采样**：`recordStageFailure(stageKey)`；成功路径也必须 `recordStageSuccess(stageKey)`（经 `noteStageSuccess`），否则窗口里只剩失败样本，错误率虚高到 100%。限流耗尽的行不进这个窗口（见下节的限流轨）。
-3. **熔断器按阶段隔离**（`stageBreakers`，每阶段一个 `createStageBreaker()`）：三个阶段各维护自己的成功/失败序列。共用一个窗口时，「初审成功 + 复审成功 + 仲裁全失败」的错误率只有约三分之一（实测 12 行里 40%），永远够不到 50% 阈值，单阶段塌方拦不住。
+2. **非频控失败进熔断采样**：`recordStageFailure(stageKey, presetId)`；成功路径也必须 `recordStageSuccess(stageKey, presetId)`（经 `noteStageSuccess`），否则窗口里只剩失败样本，错误率虚高到 100%。限流耗尽的行不进这个窗口（见下节的限流轨）。
+3. **熔断器按预设隔离**（`presetBreakers`，每个「阶段 × 预设」一个 `createStageBreaker()`）：一个预设失败或持续限流时，只暂停该预设并把待派发行改派给健康预设；同阶段其它预设继续运行。只有当前阶段选择的所有预设都熔断，阶段才进入熔断状态；只有本次流水线参与的所有阶段都进入该状态，才设置 `stopRequested` 终止整条 AI 校对任务。
 
 ### 熔断是内部决策，不接受外部开关
 
@@ -318,10 +318,10 @@
 - 成功样本也要重新评估窗口（成功把旧成功挤出、错误率抬到阈值时同样成立），不只看失败那一刻。
 - 限流轨前两行按原逻辑记失败；第三行起进入冷却的行**不记失败**，回到队头，并把 `rowRetryCounts` 置满：再被限流就立即回报断路器，而不是再烧一轮退避。
 - **与单行自动重试（`onStageRateLimit` 的 3 次退避重试）的分工**：单行重试处理「偶发限流」，用尽后才把证据交给断路器；断路器处理「持续限流」。两层不能互相绕过——重试用尽的行**必须**经 `recordLimitExhausted()` 裁决，不得直接记失败；冷却中的 `hold` 不得再触发新一轮退避重试。二者共用 `ctrl.backoffUntil` 做派发闸门（取较大值），不各自维护第二套计时。
-- **半开只放行一个请求**：`dispatchLimit(ctrl)` 在断路器 `half-open` 时把该阶段派发并发压到 1。限流本身会把并发逐步下调，但下调有 800ms 间隔、每次只降一档（32 需要 7 步才到 1），断路器打开时并发往往仍很高，不设这一层冷却结束后会对着刚冷却完的上游一拥而上。
+- **半开只放行一个请求**：每条预设通道在断路器 `half-open` 时只放行一个探测请求；同阶段其它预设不被这条通道的半开状态阻挡。
 - **限流轨的解除条件是「拿到非限流的答复」**，不只是成功：探测得到普通失败（进失败窗口）或拒答（`recordNotLimited`，不进窗口）同样解除，否则半开会停在并发 1 上。恢复时经 `clearCooldownIf` 撤销 `backoffUntil` 并清零 `consecutiveLimits`（固定并发下它原本只增不减，恢复后的下一次 429 仍按最长退避）。
 - 冷却期内到达的迟到结果（发出时断路器还没打开）只回队，不推进阶梯；冷却期内的迟到成功说明上游已放行，提前恢复并撤销 `backoffUntil`。
-- 阶梯用尽时 `onStageRateLimit` 返回 false，让这一行沿用原有「记失败 / 回退上一阶段方案」的收尾，再由 `stopForBreakerTrip` 终止任务。
+- 阶梯用尽时 `onStageRateLimit` 返回 false，让这一行沿用原有「记失败 / 回退上一阶段方案」的收尾，再由 `stopForBreakerTrip` 标记当前预设熔断；阶段与整体任务是否终止由预设/阶段汇总状态决定。
 - 拒答与致命配置错误不进失败窗口：前者是上游的正常应答，后者当场终止。三个阶段一致：拒答走 `recordStageNotLimited`（只解除限流轨，不计成败）。阶段一标记待终审；阶段二/三回退到上一阶段方案，且仍如实计入 `stageNErrors`（指标口径不变，只是不再喂熔断——此前阶段二/三的拒答会被当成失败样本，一批敏感内容就能把整条流水线熔断掉）。
 - `TRANSCOMPARATOR_BREAKER_TIME_SCALE` 只缩放冷却时长，供回归测试把分钟级冷却压到毫秒级，不是运行时开关。
 - **冷却阶梯的取值依据**（`BREAKER_POLICY.limit.cooldownsMs`，只在这一处定义，测试与文案均从它推算）：被限流的请求由上游直接拒掉、不计费，等待只花时间不花钱，而过早放弃要人工点「继续剩下的」，所以整体宁长勿短。30s：单行退避重试用尽时已过去约 10~20 秒，再等 30 秒正好盖过常见的 1 分钟速率窗口；90s：覆盖一个完整分钟窗口再加抖动；4min、10min：中转渠道自动熔断与上游过载（503/529）常按分钟级恢复。累计约 16 分钟仍被限流，基本是额度耗尽或长时间故障，继续等没有意义。档间比约 3，探测频率随时间指数衰减。约束由 `scripts/circuit-breaker.test.js` 锁住：逐档变长、首档不低于 30s、末档不超过 10 分钟、累计不超过 20 分钟。
@@ -329,8 +329,8 @@
 
 终止消息带阶段名：
 
-- 失败轨：`AI 请求错误率熔断（终审仲裁）：最近 N 次处理中有 M 次失败（X%，阈值 Y%），任务已自动终止。`
-- 限流轨：`AI 上游持续限流熔断（初审）：已按 4 档冷却重试（累计等待约 16 分钟）仍被限流，任务已自动终止。……`
+- 失败轨：当前预设先记录带预设名的错误率熔断；阶段内所有预设熔断后才暂停阶段，所有参与阶段都熔断时才追加“任务已自动终止”。
+- 限流轨：当前预设先记录带预设名的持续限流熔断；健康预设继续派发，已完成的行保留。
 
 冷却与恢复会以 `[熔断] <阶段>：……` 写进日志。管家的「防放飞熔断」（`pipeline-butler.js`）是另一回事，只判断改稿是否偏离，与本节无关。
 

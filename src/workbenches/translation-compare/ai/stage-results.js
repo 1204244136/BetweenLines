@@ -134,6 +134,9 @@ function createStagePipelines(value = {}) {
     // 页面据此说「N/M 触顶」「全部触顶」，不再自己重算触顶口径。
     presetCount: Math.max(0, Number(stage.presetCount) || 0),
     toppedCount: Math.max(0, Number(stage.toppedCount) || 0),
+    // 熔断按预设汇总：只有全部选中预设熔断，阶段才算熔断。
+    breakerTrippedCount: Math.max(0, Number(stage.breakerTrippedCount) || 0),
+    breakerBroken: stage.breakerBroken === true,
     activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
   });
   return {

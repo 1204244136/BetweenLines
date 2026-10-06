@@ -126,8 +126,10 @@ function createPresetPool(value, fallback = null, options = {}) {
     channels() {
       return items().map((item) => item.channel).filter(Boolean);
     },
-    next() {
-      const available = items().filter((item) => item.pending > 0 && item.inFlight < quotaOf(item));
+    next(predicate = null) {
+      const available = items().filter((item) => item.pending > 0
+        && item.inFlight < quotaOf(item)
+        && (typeof predicate !== "function" || predicate(item)));
       if (!available.length) return null;
       const load = (item) => item.inFlight / Math.max(1, quotaOf(item));
       available.sort((a, b) => load(a) - load(b) || a.completed - b.completed);
@@ -195,13 +197,16 @@ function createPresetPool(value, fallback = null, options = {}) {
 // 新预设要立刻分到活，被删预设的待派发行也要立刻让给其余预设。
 function assignPendingPresetIds(pool, items = [], options = {}) {
   const reassign = options.reassign === true;
-  const ids = pool?.presets?.map((item) => item.presetId) || [];
+  const allPresets = pool?.presets || [];
+  const isEligible = typeof options.isEligible === "function" ? options.isEligible : () => true;
+  const ids = allPresets.filter((item) => isEligible(item)).map((item) => item.presetId);
+  const allIds = new Set(allPresets.map((item) => item.presetId));
   const knownIds = new Set(ids);
   const counts = Object.fromEntries(ids.map((id) => [id, 0]));
   let tieCursor = 0;
   for (const item of items) {
     let id = reassign ? "" : item?.presetId;
-    if (!knownIds.has(id)) {
+    if (!allIds.has(id) || !knownIds.has(id)) {
       if (!ids.length) {
         // 池里没有可用预设：把残留绑定清掉，避免下一轮拿旧 id 去找一条不存在的通道。
         if (item && typeof item === "object") delete item.presetId;

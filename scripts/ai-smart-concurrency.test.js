@@ -2268,6 +2268,125 @@ test("多预设并发：阶段一选中的每个预设各开自己的并发，�
   }
 });
 
+test("熔断按预设隔离：阶段一单个预设熔断时，健康预设与阶段二继续运行", async () => {
+  clearProofreadCache();
+  const totalRows = 24;
+  const { project } = setupMockProject(totalRows, "preset-breaker-isolation");
+  const server = http.createServer((req, res) => {
+    const channel = String(req.url || "").split("/").filter(Boolean)[0] || "root";
+    req.resume();
+    req.on("end", () => {
+      if (channel === "bad") {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "bad preset is down" } }));
+        return;
+      }
+      const body = channel === "stage2"
+        ? { critique: { attitude: "accept", rationale: "复审通过" }, revisedText: "", summary: "复审通过" }
+        : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(body) } }] }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id, name) => ({
+      presetId: id,
+      name,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/${id}/v1`,
+      model: `model-${id}`,
+      concurrency: 1,
+    });
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/main/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 1,
+      presetPool: [preset("bad", "故障预设"), preset("good", "健康预设")],
+      stylistConfig: {
+        protocol: "compatible",
+        baseUrl: `http://127.0.0.1:${port}/stage2/v1`,
+        model: "stylist-model",
+        concurrency: 1,
+      },
+      stylistPresets: [preset("stage2", "复审预设")],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, false, "单个预设熔断不能终止其它阶段");
+    assert.ok(finished.stageMetrics.stage2Reviewed > 0, "健康预设产出的行仍应进入阶段二");
+    assert.equal(finished.stageMetrics.stage2Errors, 0);
+    const stage1 = Object.fromEntries(finished.presetPipelines.stage1.map((item) => [item.presetId, item]));
+    assert.equal(stage1.bad.breakerTripped, true, "故障预设必须单独记录为熔断");
+    assert.equal(stage1.good.breakerTripped, false, "健康预设不能被同阶段熔断连带标记");
+    assert.match(finished.logs.join("\n"), /初审·故障预设/);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("阶段熔断汇总：只有阶段内所有预设熔断后才终止整体任务", async () => {
+  clearProofreadCache();
+  const totalRows = 30;
+  const { project } = setupMockProject(totalRows, "all-preset-breaker");
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "all selected presets are down" } }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const port = server.address().port;
+    const preset = (id) => ({
+      presetId: id,
+      name: id,
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/${id}/v1`,
+      model: `model-${id}`,
+      concurrency: 1,
+    });
+    await startProofread({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${port}/main/v1`,
+      model: "main-model",
+      proofreadMode: "bilingual",
+      concurrency: 1,
+      presetPool: [preset("bad-a"), preset("bad-b")],
+      projectKey: project.projectKey,
+      rowsSignature: project.rowsSignature,
+    });
+
+    const deadline = Date.now() + 10000;
+    while (clientStatus({ includeResults: false }).running && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const finished = clientStatus();
+    assert.equal(finished.running, false);
+    assert.equal(finished.stopRequested, true, "阶段内所有预设熔断后才终止整体任务");
+    assert.match(finished.error, /错误率熔断（初审）/);
+    assert.ok(finished.presetPipelines.stage1.every((item) => item.breakerTripped));
+    assert.ok(finished.processed < totalRows, "阶段熔断后不应刷完整个待处理队列");
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("多预设热更新：运行中加入的预设立刻抢活，移除的预设待审行立刻改派且不卡死", async () => {
   clearProofreadCache();
   const totalRows = 24;

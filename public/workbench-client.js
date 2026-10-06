@@ -186,6 +186,7 @@
           inFlight: Math.max(0, Number(runtime?.inFlight) || 0),
           quota: Math.max(0, Number(runtime?.quota) || 0),
           pending: Math.max(0, Number(runtime?.pending) || 0),
+          breakerTripped: runtime?.breakerTripped === true || runtime?.breakerState === "tripped",
         };
         row.topped = stagePresetTopped(row);
         return row;
@@ -207,10 +208,14 @@
         const runtimeLabel = document.createElement("span");
         runtimeLabel.className = "ai-stage-preset-runtime";
         if (row.runtime) {
-          runtimeLabel.textContent = `并发 ${row.inFlight}/${row.quota}` + (row.topped ? " · 触顶" : "") + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
+          runtimeLabel.textContent = `并发 ${row.inFlight}/${row.quota}`
+            + (row.topped ? " · 触顶" : "")
+            + (row.breakerTripped ? " · 熔断" : "")
+            + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
           const activeRows = Array.isArray(row.runtime.activeRows) ? row.runtime.activeRows : [];
           runtimeLabel.title = `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
             + (row.topped ? "（已触顶）" : "")
+            + (row.breakerTripped ? "（该预设已熔断，后续行改派给其它预设）" : "")
             + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : "");
         } else {
           // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
@@ -275,7 +280,7 @@
           // 悬停里逐条给出每个预设的并发与触顶状态：摘要只说「几个触顶」，这里说清是哪一个。
           const presetList = rows.map((row, index) => {
             const stateText = row.runtime
-              ? `（并发 ${row.inFlight}/${row.quota}，配置上限 ${row.configuredConcurrency}${row.topped ? " · 已触顶" : ""}）`
+              ? `（并发 ${row.inFlight}/${row.quota}，配置上限 ${row.configuredConcurrency}${row.topped ? " · 已触顶" : ""}${row.breakerTripped ? " · 已熔断" : ""}）`
               : "";
             return `${index + 1}. ${row.label}${stateText}`;
           }).join("\n");
@@ -5086,8 +5091,11 @@
             ? (ai.stopRequested ? "预筛选已终止" : "预筛选完成")
             : (ai.stopRequested ? "已终止" : "校对完成");
           aiIds.panelState.className = "ai-status-badge";
-        } else if (ai.error) {
+        } else if (ai.error && !ai.breakerWarning) {
           aiIds.panelState.textContent = "调用异常";
+          aiIds.panelState.className = "ai-status-badge";
+        } else if (ai.breakerWarning) {
+          aiIds.panelState.textContent = "部分预设熔断";
           aiIds.panelState.className = "ai-status-badge";
         } else {
           aiIds.panelState.textContent = "就绪";
@@ -5108,8 +5116,8 @@
       if (finishedRunId && finishedRunId === observedRunningRunId && notifiedFinishedRunId !== finishedRunId) {
         notifiedFinishedRunId = finishedRunId;
         // 失败轮次优先报错因（固定状态行只给统计数字），原因比数字更可行动。
-        showToast(ai.error || finishedStatus, {
-          tone: ai.error ? "error" : (ai.stopRequested ? "watch" : "success"),
+        showToast(ai.error || ai.breakerWarning || finishedStatus, {
+          tone: ai.error && !ai.breakerWarning ? "error" : (ai.breakerWarning || ai.stopRequested ? "watch" : "success"),
           durationMs: ai.error ? 15000 : 12000,
         });
       }
