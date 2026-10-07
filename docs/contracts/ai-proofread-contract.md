@@ -73,9 +73,9 @@
 
 ### 规范来源与同步义务
 
-第 ③ 层的规范正文**不在本仓库**：上游 index-X 的 `docs/translation-spec.md` 是成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），`tools/check_translation_spec.py` 的 `P1`–`P15` 是同一规范的机器检查实现；`translation-name-selection-spec.md` 管译名在候选之间怎么取舍，`translation-name-rulings.md` 是已生效裁定的总表，`x-translation-differences.md` 是与维基译名表的人为固有差异（属取舍，不得按表回改）。
+第 ③ 层的规范正文**不在本仓库**：上游 index-X 的 `docs/translation-spec.md` 是成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），`tools/check_translation_spec.py` 的 `P1`–`P16` 是同一规范的机器检查实现；`translation-name-selection-spec.md` 管译名在候选之间怎么取舍，`translation-name-rulings.md` 是已生效裁定的总表，`x-translation-differences.md` 是与维基译名表的人为固有差异（属取舍，不得按表回改）。
 
-`profiles/novel.js`（通用成品规范）与 `profiles/demo.js`（作品取值）是同一规范在 AI 校对层的实现，属上游声明的「规范正文 → 机器检查 → AI 档案」三处同步之一：上游改规范要同步这里的条目，这里补条目也要回头校准 `translation-spec.md` §七 的「AI 档案」列。三处口径不一致时以上游规范正文为准。逐条对应关系见 `translation-spec.md` §七；其中 `P12`（单个省略号）与 `P15`（异形词）有意不在 AI 档案里单列。
+`profiles/novel.js`（通用成品规范）与 `profiles/demo.js`（作品取值）是同一规范在 AI 校对层的实现，属上游声明的「规范正文 → 机器检查 → AI 档案」三处同步之一：上游改规范要同步这里的条目，这里补条目也要回头校准 `translation-spec.md` §七 的「AI 档案」列。三处口径不一致时以上游规范正文为准。逐条对应关系见 `translation-spec.md` §七；其中 `P12`（单个省略号）有意不在 AI 档案里单列。
 
 第 ③ 层分**三种**条目形态（写法与选择标准写在 `profiles/novel.js` 文件头）：
 1. **字符串**＝常驻（语义判断类：遗漏信息、否定时态、译名一致性、作品专有写法、证据边界）。

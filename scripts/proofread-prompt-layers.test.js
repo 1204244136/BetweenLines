@@ -634,9 +634,12 @@ test("真实行样本保持压缩后的请求预算", () => {
   // 五.7 外国人名与外文专名按原语还原，最坏行 +106）与六条按行条目（一.3 间隔号与西文缩写、
   // 一.5 省略号后不跟点号、一.6 赛事项目名写「公里」、一.7 招呼语与否定拟声不音译、
   // 三.1 不得凭空创建注音与其证据边界），基线相应上调；再增条目时同样按实测值改这里。
-  assert.ok(messages[0].content.length <= 4400, `system 前缀仍过长：${messages[0].content.length}`);
+  // 随后又同步一批上游口径：一.9 异形词与五.4 的繁简混杂各自新增为常驻条目，一.3 的半角「-」例外、
+  // 三.1 收窄后的拉丁保留范围（灵装与种族名一律汉译）、一.7 的 ひゃっほー／ぶーぶー 分流则落在已有
+  // 按行条目里（只增本行长度）。最坏行实测 system 4712、单行请求 4712+858=5570，两个基线同步上调。
+  assert.ok(messages[0].content.length <= 4712, `system 前缀仍过长：${messages[0].content.length}`);
   assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
-  assert.ok(messages[0].content.length + messages[1].content.length <= 5300, "单行请求总长度超过预算");
+  assert.ok(messages[0].content.length + messages[1].content.length <= 5570, "单行请求总长度超过预算");
 });
 
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {

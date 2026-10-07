@@ -81,7 +81,7 @@ index-X 结构与命名规范契约（正文规范以 index-X 的 `AGENTS.md` �
 
 翻译规范来源与同步义务：
 AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，而在 index-X 的 `docs/`：
-- `translation-spec.md`：成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），判定译文是否合规以它为准；`tools/check_translation_spec.py` 的 `P1`–`P15` 是同一规范的机器检查实现。
+- `translation-spec.md`：成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），判定译文是否合规以它为准；`tools/check_translation_spec.py` 的 `P1`–`P16` 是同一规范的机器检查实现。
 - `translation-name-selection-spec.md`：译名在多个候选之间如何取舍（从俗 → 从官 → 自拟，以及外国人名与专名的原语还原、防日语中转）。
 - `translation-name-rulings.md`：已生效译名裁定的总表，动任何译名前先查它。
 - `x-translation-differences.md`：X 版与灰机 Wiki 译名表的人为固有差异，属取舍而非缺陷，不得按表回改。

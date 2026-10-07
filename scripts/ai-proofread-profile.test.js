@@ -220,9 +220,11 @@ test("仓库自带的示范档案展示作品专有档案的写法", () => {
   // 作品相关的具体内容只集中在示范档案里，通用档案不出现。
   assert.doesNotMatch(proofreadPromptFor("bilingual", "novel").profileSystem, /某魔法的禁书目录/);
   assert.match(demoPrompt, /某魔法的禁书目录/);
-  // 示范档案不再为单个角色开 `characters` 例外：角色规则走说话习惯表（表就内化在该档案自己身上），
-  // 实体闸门只留给「离开那个名字就无从谈起的专有规则」，由探针档案覆盖（proofread-prompt-layers.test.js）。
-  assert.deepEqual(profileEntities(demo), []);
+  // 示范档案只为一个「离开那个名字就无从谈起的专有规则」开 `characters` 例外：茵蒂克丝的科技盲学舌
+  // （上游 index-X `docs/translation-spec.md` 五.9，取值见该档案的「本作品专有事实」）。普通角色规则走
+  // 说话习惯表（表就内化在该档案自己身上），不得再为口癖一类条目开实体条目；实体闸门本身的覆盖由
+  // 探针档案负责（proofread-prompt-layers.test.js）。
+  assert.deepEqual(profileEntities(demo).map((entity) => entity.id), ["茵蒂克丝"]);
   const demoTable = loadSpeechTables(demo.speechTables);
   assert.deepEqual(demoTable.errors, []);
   assert.equal(demoTable.entries.length > 0, true, "示范档案的说话习惯表内化在档案文件里");
