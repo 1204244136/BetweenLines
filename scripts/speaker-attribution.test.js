@@ -292,6 +292,24 @@ test("预对齐将过远的多余对话置为未匹配而不错位后续行", ()
   assert.deepEqual(result.rows.filter((row) => row.source).slice(-2).map((row) => row.parallel.map((item) => item.id)), [["p1"], ["p2"]]);
 });
 
+test("预对齐按对齐路径判断段落距离：全书段落序号整体偏移时仍逐句正确配对", () => {
+  const lines = ["今天天气很好我们出去走走吧", "你到底在说什么我听不懂", "快跑后面有人追过来了", "这件事情和你没有关系",
+    "我早就知道会变成这样", "把门关上不要让任何人进来", "你还记得那天晚上的事吗", "别开玩笑了这根本不可能"];
+  const units = (lang, drift) => lines.map((text, index) => ({
+    id: `${lang}:${index + drift}:0`,
+    text: `「${text}」`,
+    sourceIndex: index + drift,
+    parentParagraphId: `${lang}:${index + drift}`,
+  }));
+  // 译文拆段、译注或预处理删段会让全书段落序号累积偏移；偏移超过阈值不能把每句配到别的行上。
+  for (const drift of [3, 6, 20]) {
+    const result = prealignLineUnits(units("jp", 0), units("cn", drift));
+    const pairs = result.rows.filter((row) => row.source && row.parallel.length);
+    assert.equal(pairs.length, lines.length, `偏移 ${drift} 时应全部配对`);
+    assert.ok(pairs.every((row) => row.source.text === row.parallel[0].text), `偏移 ${drift} 时不应错配`);
+  }
+});
+
 test("预对齐仅在显式启用时才合并被切分的单元", () => {
   const result = prealignLineUnits([
     { id: "s1", text: "「第一段对应两句。」", sourceIndex: 7, parentParagraphId: "jp:7" },

@@ -30,16 +30,26 @@ function scoreSpan(source, parallelItems) {
   return alignmentScore(source?.text || "", joinTextItems(parallelItems));
 }
 
-function canMatchParallelItem(source, parallel, options = {}) {
+// 一次配对在对齐路径上的段落偏移（对照侧段落序号 - 原文侧段落序号）；缺少序号时为 NaN。
+function pathOffset(source, parallel) {
+  const offset = Number(parallel?.sourceIndex) - Number(source?.sourceIndex);
+  return Number.isFinite(offset) ? offset : NaN;
+}
+
+// baselineOffset 是对齐路径上最近一个配对点的段落偏移。距离按路径判断而不是比较全书段落序号的
+// 绝对值：全书序号的差距会随译文拆段、译注、预处理删段一路累积，比较绝对值会在偏移超过阈值后
+// 禁止所有正确配对，把每句原文配到错误的对照行上。路径上还没有配对点时只受搜索带宽约束。
+function canMatchParallelItem(source, parallel, options = {}, baselineOffset = NaN) {
   if (!source || !parallel) return false;
   if (options.ignoreSourceIndex) return true;
 
   const sourceIndex = Number(source.sourceIndex);
   const parallelIndex = Number(parallel.sourceIndex);
   if (Number.isFinite(sourceIndex) && Number.isFinite(parallelIndex)) {
+    if (!Number.isFinite(baselineOffset)) return true;
     const configuredGap = Number(options.maxMatchSourceGap);
     const maxGap = Number.isFinite(configuredGap) ? Math.max(0, Math.floor(configuredGap)) : 2;
-    return Math.abs(parallelIndex - sourceIndex) <= maxGap;
+    return Math.abs((parallelIndex - sourceIndex) - baselineOffset) <= maxGap;
   }
 
   const hasMetadata = "parentParagraphId" in source || "parentParagraphId" in parallel
@@ -125,6 +135,7 @@ function alignMonotonic(sourceUnits, parallelUnits, options = {}) {
   const ranges = Array.from({ length: sourceCount + 1 }, () => null);
   let previous = null;
   let previousRange = null;
+  let previousOffsets = null;
 
   for (let sourceIndex = 0; sourceIndex <= sourceCount; sourceIndex += 1) {
     const range = rangeFor(sourceIndex, sourceCount, parallelCount, band);
@@ -132,6 +143,9 @@ function alignMonotonic(sourceUnits, parallelUnits, options = {}) {
     const current = new Float64Array(width);
     current.fill(NEGATIVE_INFINITY);
     const trace = new Int8Array(width);
+    // 每个状态沿最优路径记住最近一个配对点的段落偏移；NaN 表示路径上还没有配对。
+    const offsets = new Float64Array(width);
+    offsets.fill(NaN);
 
     for (let parallelIndex = range.lo; parallelIndex <= range.hi; parallelIndex += 1) {
       const offset = parallelIndex - range.lo;
@@ -142,50 +156,58 @@ function alignMonotonic(sourceUnits, parallelUnits, options = {}) {
 
       let best = NEGATIVE_INFINITY;
       let code = 0;
-      const consider = (candidate, candidateCode) => {
+      let bestOffset = NaN;
+      const consider = (candidate, candidateCode, candidateOffset) => {
         if (candidate <= NEGATIVE_INFINITY / 2) return;
         // 分数相同时优先选择真实匹配，其次选择单行匹配，
         // 以免中性的跨语言先验产生不必要的未匹配行。
         if (candidate > best || (candidate === best && candidateCode < code)) {
           best = candidate;
           code = candidateCode;
+          bestOffset = candidateOffset;
         }
       };
 
       if (previous && previousRange) {
-        const previousValue = (index) => {
-          if (index < previousRange.lo || index > previousRange.hi) return NEGATIVE_INFINITY;
-          return previous[index - previousRange.lo];
-        };
+        const inPrevious = (index) => index >= previousRange.lo && index <= previousRange.hi;
+        const previousValue = (index) => (inPrevious(index) ? previous[index - previousRange.lo] : NEGATIVE_INFINITY);
+        const previousOffset = (index) => (inPrevious(index) ? previousOffsets[index - previousRange.lo] : NaN);
         if (sourceIndex > 0) {
-          consider(previousValue(parallelIndex) + gapPenalty, 3);
+          consider(previousValue(parallelIndex) + gapPenalty, 3, previousOffset(parallelIndex));
           if (parallelIndex > 0) {
             const source = sourceUnits[sourceIndex - 1];
             const parallel = parallelUnits[parallelIndex - 1];
-            if (canMatchParallelItem(source, parallel, options)) {
-              consider(previousValue(parallelIndex - 1) + scoreSpan(source, [parallel]), 1);
+            if (canMatchParallelItem(source, parallel, options, previousOffset(parallelIndex - 1))) {
+              consider(previousValue(parallelIndex - 1) + scoreSpan(source, [parallel]), 1, pathOffset(source, parallel));
             }
           }
+          const mergeBaseline = parallelIndex > 1 ? previousOffset(parallelIndex - 2) : NaN;
           if (options.allowMergedParallel === true
             && parallelIndex > 1
             && canMergeParallelItems(parallelUnits[parallelIndex - 2], parallelUnits[parallelIndex - 1], options)
-            && canMatchParallelItem(sourceUnits[sourceIndex - 1], parallelUnits[parallelIndex - 2], options)
-            && canMatchParallelItem(sourceUnits[sourceIndex - 1], parallelUnits[parallelIndex - 1], options)) {
+            && canMatchParallelItem(sourceUnits[sourceIndex - 1], parallelUnits[parallelIndex - 2], options, mergeBaseline)
+            && canMatchParallelItem(sourceUnits[sourceIndex - 1], parallelUnits[parallelIndex - 1], options, mergeBaseline)) {
             const source = sourceUnits[sourceIndex - 1];
-            consider(previousValue(parallelIndex - 2) + scoreSpan(source, parallelUnits.slice(parallelIndex - 2, parallelIndex)) + mergePenalty, 2);
+            consider(
+              previousValue(parallelIndex - 2) + scoreSpan(source, parallelUnits.slice(parallelIndex - 2, parallelIndex)) + mergePenalty,
+              2,
+              pathOffset(source, parallelUnits[parallelIndex - 1]),
+            );
           }
         }
       }
 
-      if (offset > 0) consider(current[offset - 1] + gapPenalty, 4);
+      if (offset > 0) consider(current[offset - 1] + gapPenalty, 4, offsets[offset - 1]);
       current[offset] = best;
       trace[offset] = code;
+      offsets[offset] = bestOffset;
     }
 
     traces[sourceIndex] = trace;
     ranges[sourceIndex] = range;
     previous = current;
     previousRange = range;
+    previousOffsets = offsets;
   }
 
   return reconstructMoves(sourceUnits, parallelUnits, traces, ranges);
