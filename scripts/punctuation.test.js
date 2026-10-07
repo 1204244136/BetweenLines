@@ -108,8 +108,18 @@ test("内联标记整段跳过，标签内的标点不被改写", () => {
   assert.equal(fixed, '<a epub:type="noteref"><sup>㊟</sup></a>这是译注，对吗？');
   assert.equal(fixed.includes('epub:type="noteref"'), true, "标签属性里的冒号与引号必须原样保留");
 
-  // 跨标签的语境判断：标签占位符算作文档上下文的一侧。
+  // 跨标签的语境判断：标签占位符不代表任何语种，按标签另一侧的真实字符判断。
   assert.equal(fix("<b>你好</b>,走吧"), "<b>你好</b>，走吧");
+  assert.equal(fix("他说<b>好</b>..."), "他说<b>好</b>……");
+});
+
+test("英文紧挨内联标记时标点保持半角", () => {
+  // 回归：标签占位符曾被算作中文语境，标签旁的英文标点被一律全角化。
+  for (const text of ["<b>Hello</b>, world.", "<b>English</b> (note) here", "<b>Wait</b>... what?"]) {
+    const result = normalizeTargetPunctuation(text);
+    assert.equal(result.text, text, `标签旁的英文标点被改动了：${text}`);
+    assert.equal(result.changed, false);
+  }
 });
 
 test("空值与纯文本不受影响", () => {

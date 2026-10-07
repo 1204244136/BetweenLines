@@ -28,18 +28,18 @@
 const { diffChars } = require("diff");
 
 
-// 内联标记先摘出来，用私用区字符占位：它同时充当“文档上下文里的一侧”，
-// 这样 `<b>你好</b>，` 这种跨标签的语境判断与中文语境一致。
+// 内联标记先摘出来，用私用区字符占位。占位符本身不代表任何语种：找邻居时跳过它，
+// 用标签另一侧的真实字符判断语境——`<b>你好</b>，` 仍按中文处理，`<b>Hello</b>, world.` 保持半角。
 const TAG_PATTERN = /<\/?[A-Za-z][^>]*>/g;
 const TAG_SENTINEL = "\uE000";
-// 中日文语境：CJK 标点、假名、汉字、全角形式，以及标签占位符。
-const CJK_CONTEXT = /[\u3000-\u303f\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff01-\uff60\uffe0-\uffe6\uE000]/u;
-// “这一段文字是中日文写的”判据（反向规范化用）：只看汉字、假名与标签占位符，**不算标点**。
-const CJK_SCRIPT = /[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uE000]/u;
+// 中日文语境：CJK 标点、假名、汉字、全角形式（不含标签占位符：它不代表任何语种，找邻居时被跳过，用标签另一侧的真实字符判断语境）。
+const CJK_CONTEXT = /[\u3000-\u303f\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff01-\uff60\uffe0-\uffe6]/u;
+// “这一段文字是中日文写的”判据（反向规范化用）：只看汉字与假名，**不算标点、不算标签占位符**。
+const CJK_SCRIPT = /[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
 const ASCII_ALNUM = /[A-Za-z0-9]/;
-// 找“左右邻居”时一并跳过的字符：空白与引号。引号不参与判宽度，但它挡在中间会让
-// 「他问'这样吗'?」这类写法判不出中文语境。
-const SKIP_FOR_NEIGHBOUR = /[\s"'\u2018\u2019\u201c\u201d]/u;
+// 找“左右邻居”时一并跳过的字符：空白、引号与标签占位符。引号不参与判宽度，但它挡在中间会让
+// 「他问'这样吗'?」这类写法判不出中文语境；标签占位符同理。
+const SKIP_FOR_NEIGHBOUR = /[\s"'\u2018\u2019\u201c\u201d\uE000]/u;
 
 const HALF_TO_FULL = Object.freeze({ ",": "，", ".": "。", "!": "！", "?": "？", ";": "；", ":": "：" });
 const FULL_TO_HALF = Object.freeze({ "，": ",", "。": ".", "！": "!", "？": "?", "；": ";", "：": ":" });
