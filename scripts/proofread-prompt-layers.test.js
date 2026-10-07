@@ -212,6 +212,13 @@ test("通用侧的三条可判定规则也按行注入：片段、noteref 与原
   assert.equal(outOfScope.includes("目标列中原文没有的特典"), true);
 });
 
+test("原文侧的 <b> 加粗也算着重命中：不能漏掉“原文加粗、译文没加”的行", () => {
+  // 回归：导入时原文傍点默认转成 <b>…</b>，原文侧曾只认傍点字符。
+  assert.equal(detectRowFeatures({ source: "<b>重要</b>なことだ。", target: "重要的事情。" }).has("emphasis"), true);
+  assert.equal(detectRowFeatures({ source: "<strong>重要</strong>なことだ。", target: "重要的事情。" }).has("emphasis"), true);
+  assert.equal(detectRowFeatures({ source: "重要なことだ。", target: "重要的事情。" }).has("emphasis"), false);
+});
+
 test("页面预填的默认提示词作为 customSystem 传入时，通用侧条件规则仍按行裁剪", () => {
   // 回归：生产路径总把默认提示词当作 customSystem 传入，曾因比较对象带着档案块而误走自定义分支，
   // 导致片段/noteref/原文外内容三条条件规则每行都被注入。

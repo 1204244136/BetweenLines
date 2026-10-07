@@ -69,8 +69,12 @@ const RULES = {
     /<\s*(ruby|rt)[\s>/]/i.test(source)
     || /\|[^\s|\]]{0,30}\[[^\]\n]{1,40}\]/u.test(source)
     || /<\s*(ruby|rt)[\s>/]/i.test(target),
+  // 着重现象同样在**任一侧**出现都算命中：原文的傍点在导入时默认转成 <b>…</b>（epub-utils 的 inlineMarkup.bold），
+  // 只认原文侧的傍点字符会让「原文加粗、译文没加」的行整条拿不到傍点→加粗规范——而这类行恰恰最需要它。
   emphasis: ({ source, target }) =>
-    /[\uFE45\uFE46\uFF9E\uFF9F]/u.test(source) || /<\s*(b|strong)[\s>]/i.test(target),
+    /[\uFE45\uFE46\uFF9E\uFF9F]/u.test(source)
+    || /<\s*(b|strong)[\s>]/i.test(source)
+    || /<\s*(b|strong)[\s>]/i.test(target),
   noteref: ({ source, target }) =>
     /noteref|epub:type|㊟/iu.test(`${source}\n${target}`),
   page: ({ source, target }) =>
