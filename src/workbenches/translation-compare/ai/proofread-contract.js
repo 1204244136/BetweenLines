@@ -416,7 +416,12 @@ function buildProofreadSystemPrompt({
     String(lowScoreBlock || "").trim(),
     String(webLookupBlock || "").trim(),
   ];
-  const body = !custom || custom === contract.body
+  // 页面预填与服务端兜底传进来的都是完整默认提示词：必须按同一条剥离链处理后再比较。
+  // 直接与带档案块的 contract.body 比较永远不相等（custom 的档案块已被剥掉），默认提示词会误走
+  // 自定义分支，通用侧的条件规则（片段/noteref/原文外内容）也就不再按行裁剪。
+  const defaultCustom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(contract.system))));
+  const isDefaultPrompt = !custom || custom === contract.body || custom === defaultCustom;
+  const body = isDefaultPrompt
     ? promptSections(trimmedBody, ...dynamicBlocks)
     : promptSections(
       custom,

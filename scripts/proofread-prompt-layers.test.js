@@ -212,6 +212,24 @@ test("通用侧的三条可判定规则也按行注入：片段、noteref 与原
   assert.equal(outOfScope.includes("目标列中原文没有的特典"), true);
 });
 
+test("页面预填的默认提示词作为 customSystem 传入时，通用侧条件规则仍按行裁剪", () => {
+  // 回归：生产路径总把默认提示词当作 customSystem 传入，曾因比较对象带着档案块而误走自定义分支，
+  // 导致片段/noteref/原文外内容三条条件规则每行都被注入。
+  for (const mode of ["bilingual", "trilingual"]) {
+    const contract = proofreadPromptFor(mode, "novel");
+    const plain = detectRowFeatures({ source: "高圧電流。", target: "高压电流。" });
+    const args = { mode, profileId: "novel", rowFeatures: plain, sourceText: "高圧電流。", targetText: "高压电流。" };
+    const withDefault = buildProofreadSystemPrompt({ ...args, customSystem: contract.system });
+    assert.equal(withDefault, buildProofreadSystemPrompt(args), `${mode}：默认提示词应与不传 customSystem 时一致`);
+    for (const marker of ["任一侧是不完整片段", "EPUB 注释标记", "目标列中原文没有的特典"]) {
+      assert.equal(withDefault.includes(marker), false, `${mode}：普通完整行不该注入通用规则：${marker}`);
+    }
+    // 用户真的改过提示词时仍保留其补充内容。
+    const edited = buildProofreadSystemPrompt({ ...args, customSystem: `${contract.system}\n补充规则：测试。` });
+    assert.equal(edited.includes("补充规则：测试。"), true);
+  }
+});
+
 test("原文侧的 HTML 注音也算命中：不能漏掉“原文有注音、译文没有”的行", () => {
   // 本工作台的日文原文列就是 <ruby>基文<rt>注文</rt></ruby> 形态（实测整卷 3119 行里 1116 行），
   // 探测器只认目标列会让其中 923 行拿不到注音规范——模型没有口径可依，就会照抄原文的日文读音。
