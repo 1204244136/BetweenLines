@@ -260,6 +260,17 @@
 
 验证：`node --test scripts/stage-note-state.test.js scripts/multiline-stage-notes.test.js scripts/ai-smart-concurrency.test.js`。
 
+### 默认修改结果只认末阶段真正采纳的改案
+
+行上的「修改结果」是人工写回成品的唯一来源，默认值必须来自**被采纳的成品改案**，不能是过程稿：
+
+- 终审结论是「不需要修改」（`是否需要修改：否`）的行没有默认修改结果：初审/复审改案只是过程稿，`parseAutomatedNote` 不得把它们回填成仲裁定案，`revisionTextFor` 也不得按「仲裁 ＞ 复审 ＞ 初审」把它当成待写回文本（真实事件：某卷 14 行写回了终审明确「维持原译」的阶段改案）。
+- 下游阶段明确「驳回 / 维持原译 / 存疑」时不把上游改案向下传播；只有「采纳 / 同意」或终审标出「初审方案 / 复审方案 / 结合方案」时才传播。
+- 用户显式切换过版本（`revisionStageActive`）或自己写过文本时以人工内容为准；存量备注在载入时只清「正好等于某个阶段改案」的自动推导值，不碰人工内容。
+- 页面脚本内嵌在已发布快照里：改这一层后必须「应用新布局」+ F5，存量备注才会按新规则归一化。
+
+验证：`node --test scripts/stage-review-reports.test.js`。
+
 ### 级联续跑（`collectResumedStage2`）
 
 从阶段一起步、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
