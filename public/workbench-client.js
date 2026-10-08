@@ -999,7 +999,8 @@
         manualDone,
         aiDone: Boolean(value?.aiDone || hasAutomatedDecisionNote(note)),
       };
-      const parsedRevision = parseAutomatedNote(item.note)?.revision || "";
+      const parsedNote = parseAutomatedNote(item.note);
+      const parsedRevision = parsedNote?.revision || "";
       const latestNote = latestAiNotePart(item.note);
       const legacyNoteHead = latestNote.split(/\r?\n(?:[ \t]*\r?\n)+/, 1)[0];
       // 旧解析在首个空行截断后清空了这两个字段；手动清空编辑器会保留目标列。
@@ -1016,6 +1017,19 @@
         .filter((line) => !isNoteProseLine(line))
         .join("\n")
         .replace(/\s+$/, "");
+      // 存量备注迁移：终审结论是「不需要修改」的行不该带着自动推导出来的修改结果。
+      // 早期版本会把初审/复审的过程稿当成默认修改结果存下来，人工点「批量写回」就会把
+      // 已经否掉的方案写进源文件（真实事件：某卷 14 行写回了终审明确「维持原译」的改案）。
+      // 只清「正好等于某个阶段改案」的那种自动推导值：用户显式切过版本、或自己写过别的
+      // 文本时照旧保留，不碰人工内容。
+      const stageProposals = [parsedNote?.stage1Revision, parsedNote?.stage2Revision, parsedNote?.stage3Revision]
+        .map((text) => String(text || "").trim())
+        .filter(Boolean);
+      if (!value?.revisionStageActive && item.revisionText
+        && String(parsedNote?.modify || "").trim() === "否"
+        && stageProposals.includes(item.revisionText)) {
+        item.revisionText = "";
+      }
       item.revisionTarget = normalizeRevisionTarget(value?.revisionTarget);
       if (value?.recoveredUnverified) item.recoveredUnverified = true;
       else if (value?.rowSig) item.rowSig = String(value.rowSig);
@@ -1113,7 +1127,11 @@
       }
       // 2. 对于多阶段校对行：无关当前筛选，默认显示最后的合格全量版本（仲裁 ＞ 复审 ＞ 初审）
       const noteData = parseAutomatedNote(item.note || "", targetText);
-      if (noteData && (noteData.stage2 || noteData.stage3)) {
+      // 终审结论是「不需要修改」的行没有默认修改结果：初审/复审改案只是过程稿，被判
+      // 「维持原译」之后再当成待写回的成品，就会把已经否掉的方案写进源文件
+      //（真实事件：某卷 14 行写回了被仲裁驳回的初审/复审改案）。用户显式切换过版本走上面第 1 条。
+      const unchangedVerdict = String(noteData?.modify || "").trim() === "否";
+      if (noteData && !unchangedVerdict && (noteData.stage2 || noteData.stage3)) {
         if (noteData.stage3) {
           const s3 = noteData.stage3Revision || noteData.revision || noteData.stage2Revision || noteData.stage1Revision;
           if (s3 && !isPartialProposal(s3, targetText, item.note)) return s3;
@@ -2431,29 +2449,39 @@
         data.revision = "";
       }
 
-      // 只有非局部提议的完整全量改案，才允许在采纳/维持时向下游阶段传播
+      // 只有非局部提议的完整全量改案，才允许在下游阶段**采纳**时向下游传播。
+      // 明确驳回/维持原译/存疑时绝不回填：把被否掉的改案当成下游阶段的定案，既会让
+      // 「分步演进明细」把否掉的方案画成终审定案，也会让它变成默认修改结果被写回成品
+      //（真实事件：某卷 14 行写回了终审明确「维持原译」的初审/复审改案）。
+      const stage2Rejected = /驳回|维持原译|无需修改|存疑/.test(String(data.stage2?.attitude || ""));
       if (data.stage2 && !data.stage2Revision) {
         if (data.stage2.attitude.includes("采纳") && data.stage1Revision && !isS1Partial) {
           data.stage2Revision = data.stage1Revision;
         } else if (!data.stage3 && data.revision && !isRevPartial) {
           data.stage2Revision = data.revision;
-        } else if (data.stage1Revision && !isS1Partial) {
+        } else if (!stage2Rejected && data.stage1Revision && !isS1Partial) {
           data.stage2Revision = data.stage1Revision;
         }
       }
+      // 终审「维持原译」「驳回」「存疑待定」都表示它没有采纳任何上游改案。
+      const stage3Rejected = /维持原译|驳回|存疑/.test(String(data.stage3?.winner || ""));
       if (data.stage3 && !data.stage3Revision) {
         if (data.revision && !isRevPartial) {
           data.stage3Revision = data.revision;
-        } else if (data.stage2Revision && !isS2Partial) {
+        } else if (!stage3Rejected && data.stage2Revision && !isS2Partial) {
           data.stage3Revision = data.stage2Revision;
-        } else if (data.stage1Revision && !isS1Partial) {
+        } else if (!stage3Rejected && data.stage1Revision && !isS1Partial) {
           data.stage3Revision = data.stage1Revision;
         }
       }
 
-      // 默认版本显示逻辑：最后阶段的版本优先（仲裁 ＞ 复审 ＞ 初审）
+      // 默认版本显示逻辑：最后阶段的版本优先（仲裁 ＞ 复审 ＞ 初审）。
       // 安全红线：局部提议（isPartialProposal）绝不能直接作为全量成品文本覆盖 data.revision！
-      if (data.stage3 && (data.stage3Revision || data.revision)) {
+      // 「不需要修改」是终审的结论：这一行没有成品改案，过程稿不得被抬成默认修改结果。
+      const verdictUnchanged = String(data.modify || "").trim() === "否";
+      if (verdictUnchanged) {
+        data.revision = "";
+      } else if (data.stage3 && (data.stage3Revision || data.revision)) {
         if (data.stage3Revision && !isPartialProposal(data.stage3Revision, targetText, note)) {
           data.revision = data.stage3Revision;
         } else if (isPartialProposal(data.stage3Revision, targetText, note) && data.revision === data.stage3Revision) {

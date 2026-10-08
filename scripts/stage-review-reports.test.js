@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createWorkbench } = require("./workbench-fixture");
+const { createWorkbench, storageFixture } = require("./workbench-fixture");
 
 test("自动备注解析：parseAutomatedNote 提取结构化多阶段评审轨迹", () => {
   const ui = createWorkbench();
@@ -639,4 +639,87 @@ test("长段与含noteref行中局部修正提议绝不覆盖整段修改结果"
   ui.run('applyStageRevision("525", "1")');
   const afterClickRev = ui.run('notes["525"].revisionText || ""');
   assert.notEqual(afterClickRev, "该怎么办？", "applyStageRevision 不得直接将 5 字局部短语写为整行 revisionText");
+});
+
+test("终审维持原译的行不带默认修改结果，被否掉的过程稿不得被写回成品", () => {
+  const ui = createWorkbench(undefined, {
+    rows: [
+      { index: 1, relation: "1:1", jp: "A1", cn: "B1", signature: "sig1" },
+      { index: 2, relation: "1:1", jp: "A2", cn: "B2", signature: "sig2" },
+    ],
+  });
+
+  // 行 1：初审在评语里提了改案，复审驳回、终审维持原译——备注里没有独立的改案行。
+  const rejected = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：否",
+    "Gatekeeper初审：原译增出原文没有的宾语；改为「金钱方面的事情」并保留否定语气。",
+    "Stylist复审[驳回]：初审属翻译腔负优化，原译符合中文表达习惯。",
+    "Arbiter仲裁[维持原译]：初审改动是反向劣化，维持原译。",
+  ].join("\n");
+  // 行 2：终审明确采纳初审方案，仍要按阶段传播给出默认修改结果。
+  const adopted = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：是",
+    "Gatekeeper初审：漏译句末断定助动词。",
+    "初审改案：初审案2",
+    "Stylist复审[采纳]：同意初审判断。",
+    "Arbiter仲裁[初审方案]：采纳初审方案。",
+  ].join("\n");
+
+  const rejectedParsed = ui.run(`parseAutomatedNote(${JSON.stringify(rejected)})`);
+  assert.equal(rejectedParsed.stage1Revision, "金钱方面的事情", "初审过程稿仍可在阶段卡片里回看");
+  assert.equal(rejectedParsed.stage2Revision, "", "复审驳回后不得把初审改案回填成复审改案");
+  assert.equal(rejectedParsed.stage3Revision, "", "终审维持原译后不得把初审改案回填成仲裁定案");
+  assert.equal(rejectedParsed.revision, "", "终审结论是不改的行没有默认修改结果");
+
+  const adoptedParsed = ui.run(`parseAutomatedNote(${JSON.stringify(adopted)})`);
+  assert.equal(adoptedParsed.stage3Revision, "初审案2", "终审采纳初审方案时仍按阶段传播");
+  assert.equal(adoptedParsed.revision, "初审案2", "被采纳的改案仍是默认修改结果");
+
+  ui.run(`
+    notes["1"] = { note: ${JSON.stringify(rejected)}, manualDone: false };
+    notes["2"] = { note: ${JSON.stringify(adopted)}, manualDone: false };
+  `);
+  assert.equal(ui.run('revisionTextFor(notes["1"])'), "", "不改行不得带默认修改结果");
+  assert.equal(ui.run('revisionTextFor(notes["2"])'), "初审案2");
+
+  // 修改结果区整块不渲染：过程稿只能留在阶段卡片里，不能进待写回文本，也不给「写回」按钮。
+  const summary = ui.run('renderNoteSummary(notes["1"], "1")');
+  assert.equal(summary.includes('class="note-detail note-revision"'), false, "不改行不得渲染修改结果区");
+  assert.equal(summary.includes("data-writeback-revision"), false, "不改行不得给出单行写回按钮");
+  assert.match(summary, /仲裁·维持原译/);
+});
+
+test("存量备注迁移：不改行自动推导的修改结果在载入时清空，人工内容保留", () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const keepNote = [
+    "[AI校对]",
+    "语义是否相同：不同",
+    "是否需要修改：否",
+    "Gatekeeper初审：原译增出原文没有的宾语；改为「金钱方面的事情」并保留否定语气。",
+    "Stylist复审[驳回]：初审属翻译腔负优化。",
+    "Arbiter仲裁[维持原译]：维持原译。",
+  ].join("\n");
+  const storage = storageFixture({
+    [currentKey]: JSON.stringify({
+      1: { note: keepNote, revisionText: "金钱方面的事情", revisionTarget: "cn", aiDone: true, manualDone: false, rowSig: "sig-1" },
+      2: { note: keepNote, revisionText: "人工自己写的结果。", revisionTarget: "cn", aiDone: true, manualDone: false, rowSig: "sig-2" },
+      3: { note: keepNote, revisionText: "金钱方面的事情", revisionTarget: "cn", revisionStageActive: "1", aiDone: true, manualDone: false, rowSig: "sig-3" },
+    }),
+  });
+  const ui = createWorkbench(storage, {
+    rows: [
+      { index: 1, jp: "A1", cn: "B1", relation: "1:1", score: 0.9, signature: "sig-1" },
+      { index: 2, jp: "A2", cn: "B2", relation: "1:1", score: 0.9, signature: "sig-2" },
+      { index: 3, jp: "A3", cn: "B3", relation: "1:1", score: 0.9, signature: "sig-3" },
+    ],
+  });
+
+  assert.equal(ui.run('notes["1"].revisionText'), "", "自动推导的过程稿在载入时清掉");
+  assert.equal(ui.run('revisionTextFor(notes["1"])'), "");
+  assert.equal(ui.run('revisionTextFor(notes["2"])'), "人工自己写的结果。", "人工自己写的文本保留");
+  assert.equal(ui.run('revisionTextFor(notes["3"])'), "金钱方面的事情", "显式切换过版本的选择保留");
 });
