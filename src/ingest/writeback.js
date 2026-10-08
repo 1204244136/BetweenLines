@@ -33,6 +33,15 @@ const WRITEBACK_HINT = "支持 TXT、XHTML/HTML、EPUB 文件与解压 EPUB 目�
 //
 // 间距阈值取 2：真实回归里两处相同的发话段落之间正好隔着一句旁白（索引差 2），
 // 这条线以下就报歧义；全卷范围内的重复（差 3 以上）仍按顺序各归其位。
+//
+// 近处重复有唯一的例外：**行序能 1:1 对应时按行序落位**。源文件里连续 N 段同样的文字
+// 与工作台里连续 N 行同样的文字一一对上时，「改的是哪一处」由行序唯一确定，不必再猜；
+// 数量对不上（源文件 3 段而只有 1 行，或反过来）仍报歧义。真实事件：某卷第二章连续三段
+// `<p>也就是说。</p>`，工作台这三行也连续，却因为一律判歧义而永远写不回去。
+//
+// 「未落地」的拦截同样只看位置：记下那一行没能落地时可能想占的**最后一块**，
+// 后面的行只有在自己的首个候选仍落在这一簇里时才被拦住。真实事件：第二章这一簇没落地，
+// 让第七章另一处位置唯一、锚点刚好停在上面的 `<p>也就是说。</p>` 被全卷按文本连坐。
 const NEAR_DUPLICATE_BLOCKS = 2;
 
 // 允许在替换文本中原样保留的内联标记（与 ingest 归一化保留的集合一致）。
@@ -292,6 +301,22 @@ function prepareDocuments(documents) {
   return documents;
 }
 
+function hitOf(block) {
+  return { docIndex: block.docIndex, start: block.innerStart, end: block.innerEnd, block };
+}
+
+// 从 first 起**严格连续**的同文本块数（索引逐个 +1、可比文本相同、未被占用，且不越过 maxBlock）。
+// 行序 1:1 落位要用它跟「剩下的同文本行数」对齐：中间隔着别的段落就不是连续簇，仍按歧义处理。
+function consecutiveBlockRun(state, first, maxBlock = Infinity) {
+  let length = 1;
+  for (let index = first.index + 1; index <= maxBlock; index += 1) {
+    const block = state.blockAt(index);
+    if (!block || block.used || block.comparable !== first.comparable) break;
+    length += 1;
+  }
+  return length;
+}
+
 /**
  * 定位：从锚点向后扫描**未占用**的块，取第一处文本相同的段落。
  *
@@ -323,20 +348,33 @@ function locate(text, state, options = {}) {
   const [first, second] = candidates;
   // 第二处必须紧挨着第一处才算歧义：隔得远的那一处是同一段文字在别处出现，不是同一个位置的两种可能。
   if (second && second.index - first.index <= NEAR_DUPLICATE_BLOCKS) {
-    return { hit: null, ambiguous: true, candidates: [first.index, second.index] };
+    const clusterLength = consecutiveBlockRun(state, first, maxBlock);
+    const duplicateRunLength = Number.isInteger(options.duplicateRunLength) ? options.duplicateRunLength : 0;
+    // 行序 1:1：剩下的同文本行数正好等于从 first 起严格连续的同文本块数。两边都严格连续、
+    // 数量又相等时，行序已经把「这一行改的是哪一块」定死，按行序取第一块即可。
+    if (duplicateRunLength > 1 && duplicateRunLength === clusterLength) {
+      return { hit: hitOf(first), ambiguous: false };
+    }
+    return { hit: null, ambiguous: true, candidates: [first.index, second.index], clusterEnd: first.index + clusterLength - 1 };
   }
-  return {
-    hit: { docIndex: first.docIndex, start: first.innerStart, end: first.innerEnd, block: first },
-    ambiguous: false,
-  };
+  return { hit: hitOf(first), ambiguous: false };
 }
 
 // 全局单调锚点：工作台行顺序与原文顺序一致，定位从上一行的落点之后继续。
 // `lastBlock` 是行锚点——定位失败的行不推进锚点，也不会把它后面的行一起带偏到别处。
 function createPlacementState(documents) {
   prepareDocuments(documents);
+  // 块序号 → 块。近处重复的「严格连续」判定要按序号取相邻块，不能靠数组下标猜。
+  const blocksByIndex = new Map();
+  for (const doc of documents) {
+    for (const block of doc.blocks || []) blocksByIndex.set(block.index, block);
+  }
   return {
     documents,
+    blocksByIndex,
+    blockAt(index) {
+      return this.blocksByIndex.get(index) || null;
+    },
     comparableText: documents[0]?.kind === TARGET_TEXT ? plainComparableText : comparableText,
     docIndex: 0,
     // 仅用于整行放弃后的回滚：有「已占用」标记在，定位本身不再依赖字符偏移。
@@ -487,7 +525,7 @@ function placeEntry(state, entry, options = {}) {
       placements.push({ ...located.hit, replacement: instruction.replacement });
       continue;
     }
-    if (located.ambiguous) conflict = { search: instruction.search, candidates: located.candidates || [] };
+    if (located.ambiguous) conflict = { search: instruction.search, candidates: located.candidates || [], clusterEnd: located.clusterEnd };
     else failed = instruction;
     break;
   }
@@ -498,12 +536,25 @@ function placeEntry(state, entry, options = {}) {
   return { placements, failed: null, conflict: null };
 }
 
-// 没能落地的行文本：后面出现同一段文字时，第一处候选可能正是它该改而没占住的那一处。
-function noteUnresolved(unresolved, parts, normalize = comparableText) {
+// 没能落地的行文本 → 那一行可能想占的**最后一块**（Infinity 表示「从它之后全卷都可能是它的」）。
+// 后面出现同一段文字时，只有首个候选仍落在这个范围里才拦：候选已经越过整簇，说明它不可能是
+// 前面那一行该改而没占住的位置；再按文本全卷连坐，会把全卷唯一、位置确定的那一处一并废掉。
+function noteUnresolved(unresolved, parts, normalize = comparableText, blockLimit = Infinity) {
   for (const part of parts) {
     const text = normalize(part);
-    if (text) unresolved.add(text);
+    if (!text) continue;
+    const known = unresolved.get(text);
+    unresolved.set(text, known === undefined ? blockLimit : Math.max(known, blockLimit));
   }
+}
+
+// 「未落地」拦不拦得住这一行：候选落在未落地那一簇里就拦，已经越过就放它去定位。
+function unresolvedBlocksCandidate(unresolved, text, blockIndex, lastBlock) {
+  if (!unresolved.has(text)) return false;
+  const limit = unresolved.get(text);
+  if (limit === Infinity) return true;
+  const candidate = firstBlockAtOrAfter(blockIndex, text, lastBlock);
+  return candidate == null || candidate <= limit;
 }
 
 // 未改动的行只推进锚点：命中就占用（后面的行从它之后继续找），命中不到或命中不唯一就停在原地。
@@ -513,7 +564,12 @@ function seekRow(state, text, unresolved, options = {}) {
   for (let index = 0; index < parts.length; index += 1) {
     const located = state.place(parts[index], options);
     if (!located.hit) {
-      noteUnresolved(unresolved, parts.slice(index), state.comparableText);
+      noteUnresolved(
+        unresolved,
+        parts.slice(index),
+        state.comparableText,
+        located.ambiguous ? (located.clusterEnd ?? Infinity) : Infinity,
+      );
       return false;
     }
     state.commit(located.hit);
@@ -530,8 +586,9 @@ function seekRow(state, text, unresolved, options = {}) {
  * <p>尽管如此。</p>，想写回第 667 行却写进了第 423 行）。把未改动的行也按行序插进来占用锚点，
  * 重复段落才各归其位。缺这份行清单（旧调用方、单条脚本）时退化成只按条目推进。
  *
- * 前一行没能落地（定位失败或命中不唯一）时，它没占住的那段文字记为「未落地」：后面遇到同一段
- * 文字的行报歧义，不猜第一处候选是不是它的。
+ * 前一行没能落地（定位失败或命中不唯一）时，它没占住的那段文字记为「未落地」，连它可能想占的
+ * 最后一块一起记下：后面遇到同一段文字的行，只有首个候选还落在这一簇里才报歧义，越过就照常定位
+ * ——候选已经越过整簇，就不可能是前面那一行没占住的位置。
  */
 /**
  * 行序定位的公共骨架：去重 → 按行号登记锚点 → 逐行推进（无条目的行只占锚点）→ 落地 → 按文档分组。
@@ -548,7 +605,7 @@ function planPlacements(documents, entries, options, strategy) {
   const touched = new Set();
   const missed = [];
   const ambiguous = [];
-  const unresolved = new Set();
+  const unresolved = new Map();
   // 同一行（同 id 同文本）在一次请求里出现两次时只落一次，第二次直接跳过：
   // 第一次已经把该段落改掉、再写一遍只会命中同一处或漂到别处，两种结果都不是用户要的；
   // 也不把它计进 updated——那会让「已写回 N 处」比实际写入的段落多。
@@ -574,12 +631,25 @@ function planPlacements(documents, entries, options, strategy) {
     futureAnchors.push({ row, text: state.comparableText(splitParts(strategy.textOf(entry))[0]) });
   }
   const blockIndex = buildBlockIndex(state.documents);
+  // 行序上的「同文本连续段」：第 i 行还剩几行（含自己）是同文本。近处重复只有在
+  // 「剩下的同文本行数 === 从候选起严格连续的同文本块数」时才按行序落位，见 locate。
+  const runTails = new Array(rowTexts.length).fill(1);
+  for (let index = rowTexts.length - 1; index >= 0; index -= 1) {
+    const text = state.comparableText(splitParts(rowTexts[index])[0]);
+    const nextText = index + 1 < rowTexts.length ? state.comparableText(splitParts(rowTexts[index + 1])[0]) : "";
+    runTails[index] = text && text === nextText ? (runTails[index + 1] || 1) + 1 : 1;
+  }
 
   const commitEntry = (entry, commitOptions = {}) => {
     const outcome = strategy.commit(state, entry, commitOptions);
     if (outcome.empty) return;
     if (outcome.failed || outcome.conflict) {
-      noteUnresolved(unresolved, splitParts(strategy.textOf(entry)), state.comparableText);
+      noteUnresolved(
+        unresolved,
+        splitParts(strategy.textOf(entry)),
+        state.comparableText,
+        outcome.conflict ? (outcome.conflict.clusterEnd ?? Infinity) : Infinity,
+      );
       const target = outcome.conflict ? ambiguous : missed;
       target.push(strategy.report(entry, outcome.conflict ? outcome.conflict.reason : outcome.failed.reason));
       return;
@@ -596,19 +666,23 @@ function planPlacements(documents, entries, options, strategy) {
   const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
   for (let row = 1; row <= maxRow; row += 1) {
     const maxBlock = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
+    const duplicateRunLength = runTails[row - 1] || 1;
     const entry = byRow.get(row);
     if (!entry) {
-      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock });
+      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock, duplicateRunLength });
       continue;
     }
     const parts = splitParts(strategy.textOf(entry));
-    const blocked = parts.find((part) => unresolved.has(state.comparableText(part)));
+    const blocked = parts.find((part) => unresolvedBlocksCandidate(
+      unresolved, state.comparableText(part), blockIndex, state.lastBlock,
+    ));
     if (blocked) {
-      noteUnresolved(unresolved, parts, state.comparableText);
+      const limit = unresolved.get(state.comparableText(blocked));
+      noteUnresolved(unresolved, parts, state.comparableText, limit === undefined ? Infinity : limit);
       ambiguous.push(strategy.report(entry, strategy.blockedReason(previewText(blocked))));
       continue;
     }
-    commitEntry(entry);
+    commitEntry(entry, { duplicateRunLength });
   }
   for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();

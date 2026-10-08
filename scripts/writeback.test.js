@@ -188,6 +188,62 @@ test("写回：前面有同一段文字的行没能落地时报歧义，不猜�
   assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "同一句。", "乙段。", "丙段。", "同一句。", "收场。"]);
 });
 
+test("写回：连续多段同文本与连续多行同文本一一对应时按行序落位", async () => {
+  // 真实事件：某卷第二章连续三段 `<p>也就是说。</p>`，工作台这三行也连续。「近处重复即歧义」
+  // 曾经让这一簇永远写不回去——两边都严格连续、数量又相等时行序已经把落位定死，应当按行序取。
+  const dir = epubFixture({
+    first: ["开场。", "也是。", "也是。", "也是。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "也是。", "也是。", "也是。", "收场。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "3", searchText: "也是。", replaceText: "第三处改。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "也是。", "第三处改。", "也是。", "收场。"]);
+});
+
+test("写回：行数与连续同文本块数对不上时仍报歧义", async () => {
+  // 源文件里连续三段「也是。」，页面只有连续两行：数量对不上，落位无从确定，必须继续拒写。
+  const dir = epubFixture({
+    first: ["开场。", "也是。", "也是。", "也是。", "收场。"],
+    second: [],
+  });
+  const rowTexts = ["开场。", "也是。", "也是。", "收场。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "3", searchText: "也是。", replaceText: "也是（改）。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 0);
+  assert.equal(result.ambiguous.length, 1);
+  assert.match(result.ambiguous[0].reason, /多处同样的段落|前面有同一段文字/);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "也是。", "也是。", "也是。", "收场。"]);
+});
+
+test("写回：前面未落地的同文本簇不再连坐后面的唯一一处", async () => {
+  // 真实事件：第二章连续三段 `<p>也就是说。</p>`（页面只有一行同文本，判歧义），第七章另一处
+  // 同文本位置唯一、锚点刚好停在它上面，却因为全卷按文本记为「未落地」而被拒写。
+  // 未落地的范围只能覆盖那一簇，候选越过之后必须照常定位。
+  const dir = epubFixture({
+    first: ["开场。", "同一句。", "同一句。", "同一句。", "甲段。", "乙段。", "丙段。", "丁段。", "收场。"],
+    second: ["同一句。", "结尾。"],
+  });
+  const rowTexts = ["开场。", "同一句。", "甲段。", "乙段。", "丙段。", "丁段。", "同一句。", "结尾。"];
+  const result = await applyTextReplacements(dir, [
+    { id: "7", searchText: "同一句。", replaceText: "同一句（改）。" },
+  ], { rowTexts });
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  // 第一节里的那一簇一段都不能动。
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "同一句。", "同一句。", "同一句。", "甲段。", "乙段。", "丙段。", "丁段。", "收场。"]);
+  assert.deepEqual(paragraphsOf(dir, "b.xhtml"), ["同一句（改）。", "结尾。"]);
+});
+
 test("写回：前面未改动的短句不能越过后面条目的目标块", async () => {
   // 页面第 2 行是「但是。」，源文件原位其实是「话说回来。」；卷末另有一处「但是。」。
   // 旧实现会让第 2 行直接吃到卷末，锚点越过第 3 行的目标块，导致真正的写回条目 missed。
