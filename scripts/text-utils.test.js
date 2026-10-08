@@ -118,3 +118,47 @@ test("正文起点检测：保留紧挨正文开篇的章节标题而非切除�
   assert.equal(paras[0].chapter, "序章 四位少女");
   assert.equal(paras[0].text, "「学姐，御坂学姐！看这边！我们在这！」");
 });
+
+test("正文起点检测：不丢弃短且无句末点号的开篇引子，标题经节号仍被保留", () => {
+  // 真实形态：正文页 <h1>第一章</h1><h2>1</h2><p>欢迎，上条当麻，</p><p>欢迎来到…</p>。
+  // 「欢迎，上条当麻，」既无引号也无句末点号且短于判定阈值，曾被当成非正文块，
+  // 正文起点随之落到下一段，首段被整段切掉，整卷跨语言错位一行。
+  const source = [
+    "第一章",
+    "\n\n1",
+    "\n\n欢迎，上条当麻，",
+    "\n\n欢迎来到绚丽多彩的Underground！",
+    "\n\n「唔……」",
+    "\n\n听到耳中传来的声音，上条当麻这才发现呻吟声出自自己的口中。",
+  ].join("");
+
+  const sliced = sliceMainDocument(source, "cn");
+  assert.match(sliced, /^第一章/);
+  const paras = splitParagraphs(sliced, "cn");
+  assert.deepEqual(paras.map((p) => p.text), [
+    "1",
+    "欢迎，上条当麻，",
+    "欢迎来到绚丽多彩的Underground！",
+    "「唔……」",
+    "听到耳中传来的声音，上条当麻这才发现呻吟声出自自己的口中。",
+  ]);
+  assert.deepEqual(paras.map((p) => p.chapter), Array(5).fill("第一章"));
+});
+
+test("正文起点检测：简介之后的弱块不被并入正文", () => {
+  // 简介范围内的块即使很短也不得成为正文起点；结束它的标题才是结构性边界。
+  const source = [
+    "简介",
+    "\n\n这是个短介绍。",
+    "\n\n序章",
+    "\n\n短引子。",
+    "\n\n接着是一段足够长的正文内容，用来确认正文已经真正开始。",
+  ].join("");
+
+  const paras = splitParagraphs(sliceMainDocument(source, "cn"), "cn");
+  assert.deepEqual(paras.map((p) => p.text), [
+    "短引子。",
+    "接着是一段足够长的正文内容，用来确认正文已经真正开始。",
+  ]);
+  assert.equal(paras[0].chapter, "序章");
+});

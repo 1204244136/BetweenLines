@@ -172,12 +172,21 @@ function findBodyStart(text, lang, markers = {}) {
   }
 
   let inSynopsis = false;
+  // 正文起点 = 最近一次结构性边界（简介范围、章节标题、媒体占位）之后的第一个非前置块，
+  // 而不是「第一个通过正文判定的块」。后者会把判定为弱块的开篇段落连同它前面的块一起
+  // 切掉：中文开篇「欢迎，上条当麻，」短且以逗号收尾，isLikelyBodyBlock 返回 false，
+  // 于是正文从下一段「欢迎来到绚丽多彩的Underground！」才开始，首段被永久丢弃，
+  // 造成整卷跨语言错位。判定只用来确认「这里确实进入了正文」，不再决定起点位置。
+  let bodyStart = null;
+  let bodyStartIndex = -1;
   const ranges = blockRanges(text);
   for (let k = 0; k < ranges.length; k += 1) {
     const range = ranges[k];
     const normalized = normalizeBlock(range.text);
     if (/^(简介|簡介)(?:\s|：|:|$)/i.test(normalized)) {
       inSynopsis = true;
+      bodyStart = null;
+      bodyStartIndex = -1;
       continue;
     }
     if (inSynopsis) {
@@ -185,20 +194,38 @@ function findBodyStart(text, lang, markers = {}) {
       // 该标题已结束简介章节，不能继续吞掉随后无标题的引子。
       if (isMediaOnlyBlock(normalized) || /^(彩[页頁]|插[图圖]|Illustrations)$/i.test(normalized)) {
         inSynopsis = false;
+        bodyStart = null;
+        bodyStartIndex = -1;
         continue;
       }
-      if (normalizeTitle(normalized, lang)) inSynopsis = false;
-      else continue;
+      if (normalizeTitle(normalized, lang)) {
+        // 标题已结束简介章节，它本身是结构性边界；紧随其后的块才是候选起点。
+        inSynopsis = false;
+        bodyStart = null;
+        bodyStartIndex = -1;
+        continue;
+      }
+      continue;
+    }
+    if (isFrontMatterBlock(normalized, lang)) {
+      bodyStart = null;
+      bodyStartIndex = -1;
+      continue;
+    }
+    if (bodyStart === null) {
+      bodyStart = range.start;
+      bodyStartIndex = k;
     }
     if (isLikelyBodyBlock(range.text, lang)) {
-      if (k > 0) {
-        const prevRange = ranges[k - 1];
+      // 开篇章节标题紧挨正文起点时一并保留，否则会被切掉并把首章降级为「正文」。
+      if (bodyStartIndex > 0) {
+        const prevRange = ranges[bodyStartIndex - 1];
         const prevTitle = normalizeTitle(normalizeBlock(prevRange.text), lang);
         if (prevTitle && isOpeningChapterTitle(prevTitle)) {
           return prevRange.start;
         }
       }
-      return range.start;
+      return bodyStart;
     }
   }
   return -1;
