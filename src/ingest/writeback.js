@@ -82,14 +82,23 @@ function decodeXmlEntities(text) {
   });
 }
 
-// 块级匹配用的“可比文本”：去注释、剥离 ruby 注音（rt 不属于正文文本流）、去标签、解码实体、去所有空白。
+// 零宽空格（U+200B）：提取端 `html-to-text`（见 ingest/epub-utils.js）把它当可折叠空白，
+// 段中折成空格、段尾连同块尾一起丢掉，工作台行文本因此不含它。JS 的 `\s` **不**匹配 U+200B，
+// 所以写回端若照原文保留，块的可比文本就与行文本对不上，这一行永远定位失败
+// （真实回归：某卷三段尾部各带 4 个 U+200B 的段落，批量写回后报「未能在原文件中定位段落」）。
+// 口径必须与提取端一致：可比文本忽略它，替换区间也只覆盖可见文本，让原文件里的这些字符留在原处。
+const INVISIBLE_WHITESPACE_PATTERN = /[\s\u200b]+/g;
+const LEADING_ZERO_WIDTH_PATTERN = /^[\u200b]+/;
+const TRAILING_ZERO_WIDTH_PATTERN = /[\u200b]+$/;
+
+// 块级匹配用的“可比文本”：去注释、剥离 ruby 注音（rt 不属于正文文本流）、去标签、解码实体、去所有空白与零宽空格。
 function comparableText(value) {
   return decodeXmlEntities(
     String(value || "")
       .replace(/<!--[\s\S]*?-->/g, "")
       .replace(/<ruby\b[^>]*>([\s\S]*?)<\/ruby>/gi, (match, inner) => inner.replace(/<rt\b[^>]*>[\s\S]*?<\/rt>/gi, ""))
       .replace(/<[^<>]*>/g, ""),
-  ).replace(/\s+/g, "");
+  ).replace(INVISIBLE_WHITESPACE_PATTERN, "");
 }
 
 function escapeXmlText(value) {
@@ -274,16 +283,23 @@ function documentBlocks(doc, docIndex = -1) {
     const openTagEnd = match.index + match[0].indexOf(">") + 1;
     const closeTag = `</${tagName}>`;
     const innerEnd = match.index + match[0].length - closeTag.length;
+    // 替换区间收缩到「可见文本」：块首尾的零宽空格留在原处，写回正文时不顺手把它们删掉。
+    // 收缩只影响替换范围；可比文本一直是整块的可比结果（首尾零宽本来就已被忽略）。
+    const inner = match[3];
+    const lead = (inner.match(LEADING_ZERO_WIDTH_PATTERN) || [""])[0].length;
+    const trail = (inner.match(TRAILING_ZERO_WIDTH_PATTERN) || [""])[0].length;
+    const contentStart = openTagEnd + lead;
+    const contentEnd = Math.max(contentStart, innerEnd - trail);
     blocks.push({
       docIndex,
       tagName,
       index: blockIndexCursor++,
       start: match.index,
       openEnd: openTagEnd,
-      innerStart: openTagEnd,
-      innerEnd,
+      innerStart: contentStart,
+      innerEnd: contentEnd,
       end: match.index + match[0].length,
-      comparable: comparableText(match[3]),
+      comparable: comparableText(inner),
       used: false,
     });
   }

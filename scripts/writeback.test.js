@@ -577,3 +577,44 @@ test("解压 EPUB 备份失败时不修改任何正文，恢复后仍可写入",
     assert.deepEqual(fs.readFileSync(second + ".bak"), before[1]);
   } finally { mocked.mock.restore(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// 真实回归：某卷三段段落尾部各带 4 个 U+200B（出版社排版残留）。提取端 `html-to-text`
+// 把零宽空格当可折叠空白丢掉，工作台行文本因此不含它；写回端若照原文保留，块的可比文本
+// 就与行文本对不上，批量写回后这几行一律报「未能在原文件中定位段落」。
+test("写回：段落尾部的零宽空格不参与定位，且写回后仍留在原处", async () => {
+  const zeroWidth = "\u200b".repeat(4);
+  const dir = epubFixture({ first: [`尾零宽原文。${zeroWidth}`, `第二行原文。${zeroWidth}`], second: [] });
+  const result = await applyTextReplacements(dir, [
+    { id: 1, searchText: "尾零宽原文。", replaceText: "尾零宽改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(result.ambiguous, []);
+  // 替换只覆盖可见文本：原文件里的零宽字符一个不少地留在原位。
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [`尾零宽改后。${zeroWidth}`, `第二行原文。${zeroWidth}`]);
+});
+
+test("写回：段落中部的零宽空格按提取端口径忽略（提取端把它折成空格）", async () => {
+  const dir = epubFixture({ first: ["前\u200b后原文。"], second: [] });
+  const result = await applyTextReplacements(dir, [
+    // 行文本来自提取端：段中的零宽空格已被折叠成普通空格。
+    { id: 1, searchText: "前 后原文。", replaceText: "前 后改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(result.missed, []);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["前 后改后。"]);
+});
+
+// 零宽空格在块首/块尾都要按同一口径处理：只收缩尾部会让首部零宽字符的段落仍然定位失败。
+test("写回：段落首部的零宽空格同样被忽略且保留", async () => {
+  const zeroWidth = "\u200b".repeat(2);
+  const dir = epubFixture({ first: [`${zeroWidth}首零宽原文。`], second: [] });
+  const result = await applyTextReplacements(dir, [
+    { id: 1, searchText: "首零宽原文。", replaceText: "首零宽改后。" },
+  ]);
+
+  assert.equal(result.updated, 1);
+  assert.deepEqual(paragraphsOf(dir, "a.xhtml"), [`${zeroWidth}首零宽改后。`]);
+});
