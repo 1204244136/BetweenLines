@@ -48,7 +48,7 @@ test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回�
   assert.equal(cleaned.apiKey, "sk-secret-key");
   assert.equal(cleaned.model, "deepseek-chat");
   assert.deepEqual(cleaned.modelOptions, ["deepseek-chat", "deepseek-reasoner", "123"]);
-  assert.equal(cleaned.concurrency, 32); // 99 超出 1~32 截断为上限，不再回落到 3
+  assert.equal(cleaned.concurrency, 99); // 99 原样保留：没有并发硬顶，也不回落到 3
   // 旧预设里遗留的熔断字段必须被清掉：熔断已转为内部决策，不再随预设保存或回放。
   assert.equal("breakerThreshold" in cleaned, false);
   assert.equal("breakerDisabled" in cleaned, false);

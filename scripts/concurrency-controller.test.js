@@ -11,7 +11,7 @@ const {
   collapseForBreaker,
   describeConcurrencyPolicy,
 } = require("../src/workbenches/translation-compare/ai/concurrency-controller");
-const { AI_CONCURRENCY_LIMITS, resolveConcurrencyCap } = require("../src/workbenches/translation-compare/ai/concurrency-limits");
+const { resolveConcurrencyCap } = require("../src/workbenches/translation-compare/ai/concurrency-limits");
 const { createStageBreaker } = require("../src/workbenches/translation-compare/ai/circuit-breaker");
 
 // 让上探不受「最短间隔」限制：这里测的是策略本身，间隔单独有一条用例。
@@ -47,9 +47,10 @@ test("起步并发：min(上限, 3)；默认上限 3 就是固定 3，与旧行�
   assert.deepEqual({ cur: wide.currentConcurrency, max: wide.maxConcurrency, initial: wide.initialConcurrency }, { cur: 3, max: 20, initial: 3 });
 });
 
-test("上限是唯一输入：越界截断到 1~32，20 原样保留", () => {
+test("上限是唯一输入：只保底 1，20/99/256 都原样保留（没有 32 硬顶）", () => {
   assert.equal(controller(20).maxConcurrency, 20);
-  assert.equal(controller(99).maxConcurrency, AI_CONCURRENCY_LIMITS.max);
+  assert.equal(controller(99).maxConcurrency, 99);
+  assert.equal(controller(256).maxConcurrency, 256);
   assert.equal(controller(0).maxConcurrency, 1);
   assert.equal(controller(-5).maxConcurrency, 1);
   // 没配置时取阶段默认值。
@@ -59,7 +60,7 @@ test("上限是唯一输入：越界截断到 1~32，20 原样保留", () => {
 test("旧口径折算：开启智能并发的旧数据，上限取 max(初始并发, concurrencyMax)", () => {
   assert.equal(resolveConcurrencyCap({ concurrency: 4, smartConcurrency: true, concurrencyMax: 8 }), 8);
   assert.equal(resolveConcurrencyCap({ concurrency: 12, smartConcurrency: true, concurrencyMax: 8 }), 12);
-  assert.equal(resolveConcurrencyCap({ concurrency: 4, smartConcurrency: true, concurrencyMax: 99 }), 32);
+  assert.equal(resolveConcurrencyCap({ concurrency: 4, smartConcurrency: true, concurrencyMax: 99 }), 99);
   // 关闭智能并发的旧数据，concurrencyMax 是历史遗留、从不生效：上限就是 concurrency。
   assert.equal(resolveConcurrencyCap({ concurrency: 4, smartConcurrency: false, concurrencyMax: 20 }), 4);
   assert.equal(resolveConcurrencyCap({ concurrency: 4, concurrencyMax: 20 }), 4);

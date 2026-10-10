@@ -9,8 +9,9 @@ function createPresetTools() {
   // 并发边界必须与 Node 侧 ai/concurrency-limits.js 保持一致。本函数会被 toString()
   // 注入浏览器页面、不能引用模块作用域，因此自带一份同值字面量；两边的边界行为由
   // scripts/ai-smart-concurrency.test.js 的断言锁死，改一边必须同步改另一边。
+  // 只有下界是硬约束：CONCURRENCY_MAX 是挡 Infinity / NaN 的算术护栏，不是业务上限。
   const CONCURRENCY_MIN = 1;
-  const CONCURRENCY_MAX = 32;
+  const CONCURRENCY_MAX = Number.MAX_SAFE_INTEGER;
   const DEFAULT_CONCURRENCY = 3;
 
   function providerName(item) {
@@ -61,11 +62,12 @@ function createPresetTools() {
     return presets.find((preset) => preset.name === name && providerKey(preset) === key) || null;
   }
 
-  // 越界一律截断到边界，而不是回落到默认值：旧实现把 20 直接换成 3，
-  // 用户在预设里选了 20 却静默跑成 3，且没有任何提示。
+  // 越界只补下界，不回落默认值：旧实现把 20 直接换成 3，用户在预设里选了 20 却静默跑成 3。
+  // 非整数同样按四舍五入取整（与服务端 clampCap 同口径），只有 NaN / 非有限值才用 fallback。
   function clampPresetConcurrency(value, fallback) {
-    if (!Number.isSafeInteger(value)) return fallback;
-    return Math.max(CONCURRENCY_MIN, Math.min(CONCURRENCY_MAX, value));
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(CONCURRENCY_MIN, Math.min(CONCURRENCY_MAX, Math.round(number)));
   }
 
   function sanitizePreset(item) {

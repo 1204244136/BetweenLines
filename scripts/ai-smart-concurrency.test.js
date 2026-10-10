@@ -137,22 +137,23 @@ test("并发上限：预设只保存一个并发上限，旧预设的智能并�
   assert.equal("concurrencyMax" in legacySmart, false);
   // 旧预设：关闭智能并发时 concurrencyMax 从不生效，上限就是 concurrency。
   assert.equal(tools.sanitizePreset({ name: "固定", smartConcurrency: false, concurrency: 5, concurrencyMax: 15 }).concurrency, 5);
-  // 折算后仍受 1~32 边界约束。
-  assert.equal(tools.sanitizePreset({ name: "超界", smartConcurrency: true, concurrency: 4, concurrencyMax: 99 }).concurrency, 32);
+  // 折算后同样不设硬顶。
+  assert.equal(tools.sanitizePreset({ name: "超界", smartConcurrency: true, concurrency: 4, concurrencyMax: 99 }).concurrency, 99);
 });
 
-test("并发上限：预设与服务端一致放开到 32，20 不再被静默改写", () => {
+test("并发上限：预设与服务端一致取消硬顶，20/33/99 都原样保留", () => {
   const tools = createPresetTools();
 
   // 用户这次的实际现象：预设里选 20，旧实现因 20 > 12 直接回落成 3。
   const preset = tools.sanitizePreset({ name: "20 并发预设", concurrency: 20 });
   assert.equal(preset.concurrency, 20);
 
-  // 预设侧边界：下界仍保底 1，上界截断到 32。
+  // 预设侧边界：只有下界保底 1，上界不再截断。
   assert.equal(tools.sanitizePreset({ name: "下界", concurrency: 0 }).concurrency, 1);
-  assert.equal(tools.sanitizePreset({ name: "上界", concurrency: 33 }).concurrency, 32);
-  // 非整数仍回落到默认值，不参与截断。
-  assert.equal(tools.sanitizePreset({ name: "非整数", concurrency: 2.5 }).concurrency, 3);
+  assert.equal(tools.sanitizePreset({ name: "高并发", concurrency: 33 }).concurrency, 33);
+  assert.equal(tools.sanitizePreset({ name: "更高", concurrency: 99 }).concurrency, 99);
+  // 非整数按四舍五入取整（与服务端 clampCap 同口径），不再静默回落到默认值。
+  assert.equal(tools.sanitizePreset({ name: "非整数", concurrency: 4.5 }).concurrency, 5);
 
   // 服务端侧必须与预设侧同档，否则预设保存 20、运行又被压回 12。
   const mainConf = cleanConfig({ concurrency: 20 });
@@ -162,21 +163,22 @@ test("并发上限：预设与服务端一致放开到 32，20 不再被静默�
   // 旧客户端仍会带 smartConcurrency + concurrencyMax：折算成同一个上限，不能被静默压回去。
   assert.equal(cleanConfig({ concurrency: 4, smartConcurrency: true, concurrencyMax: 20 }).concurrency, 20);
   assert.equal(cleanConfig({ concurrency: 4, smartConcurrency: false, concurrencyMax: 20 }).concurrency, 4);
-  assert.equal(cleanConfig({ concurrency: 33 }).concurrency, 32);
+  assert.equal(cleanConfig({ concurrency: 33 }).concurrency, 33);
   assert.equal(cleanConfig({ concurrency: 0 }).concurrency, 1);
 
   const subConf = cleanSubStageConfig({ model: "gpt-4o", concurrency: 20 });
   assert.equal(subConf.concurrency, 20);
   assert.equal("concurrencyMax" in subConf, false);
-  assert.equal(cleanSubStageConfig({ model: "gpt-4o", concurrency: 33 }).concurrency, 32);
+  assert.equal(cleanSubStageConfig({ model: "gpt-4o", concurrency: 33 }).concurrency, 33);
 
-  // 生成页面也必须把放开后的上界写进控件，否则数字箭头上不去、提示文案还停在旧口径。
+  // 生成页面不再给控件写 max：没有硬顶，旧口径的 max 属性反而会拦住数字箭头。
   const html = makeHtml(
     [{ index: 1, jp: "原文一", cn: "译文一", relation: "1:1", score: 0.9, signature: "sig-1" }],
     { comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" } },
     { projectKey: "project", rowsSignature: "rows", notesStorage: { key: "rows" } },
   );
-  assert.match(html, /id="aiConcurrency"[^>]*max="32"/);
+  assert.equal(/id="aiConcurrency"[^>]*\smax=/.test(html), false, "并发输入框不再渲染 max 属性");
+  assert.match(html, /id="aiConcurrency"[^>]*min="1"/);
   assert.equal(html.includes('id="aiConcurrencyMax"'), false, "页面不再有第二个并发输入框");
   assert.equal(html.includes('id="aiSmartConcurrency"'), false, "页面不再有智能并发开关");
 });
@@ -194,7 +196,7 @@ test("多预设池：服务端清洗后保住预设身份与各自的并发上�
   assert.equal(pool.length, 3, "三个预设都要保留：漏掉 presetPool 就只剩主配置一条通道");
   assert.deepEqual(pool.map((item) => item.presetId), ["p1", "p2", "p3"], "预设身份必须保住，否则页面标签对不上运行数据");
   assert.deepEqual(pool.map((item) => item.name), ["词元聚合", "火山方舟", "越界预设"]);
-  assert.deepEqual(pool.map((item) => item.concurrency), [3, 32, 32], "各自的并发上限独立保留并截断到边界");
+  assert.deepEqual(pool.map((item) => item.concurrency), [3, 32, 99], "各自的并发上限独立保留，越界不再截断");
   assert.deepEqual(pool.map((item) => item.model), ["m1", "m2", "m3"], "每个预设用自己的模型，不借用主配置");
   assert.deepEqual(pool.map((item) => item.baseUrl), ["https://a.example/v1", "https://b.example/v1", "https://c.example/v1"]);
   // 没有预设池时留空数组，由运行期回落到主配置那一条通道。

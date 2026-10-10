@@ -8,7 +8,10 @@
 
 class TaskQueue {
   constructor({ concurrency = 3, retryCount = 1, onProgress = null, signal = null } = {}) {
-    this.concurrency = Math.max(1, Math.min(32, Number(concurrency) || 3));
+    // 并发只有下界，没有业务上界（与 translation-compare 的 ai/concurrency-limits.js 同口径）。
+    // workerCount 还要受 items.length 限制，上限配得再大也不会凭空起 worker。
+    const requested = Number(concurrency);
+    this.concurrency = Number.isFinite(requested) ? Math.max(1, Math.round(requested)) : 3;
     this.retryCount = Math.max(0, Math.min(5, Number(retryCount) || 0));
     this.onProgress = typeof onProgress === "function" ? onProgress : null;
     this.signal = signal;

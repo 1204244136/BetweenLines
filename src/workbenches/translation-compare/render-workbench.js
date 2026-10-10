@@ -246,7 +246,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                         <label for="aiConcurrency" id="aiConcurrencyLabel">并发上限</label>
                       </div>
                       <div class="ai-concurrency-inputs">
-                        <input id="aiConcurrency" type="number" min="1" max="${concurrencyLimits.max}" value="3" title="并发上限（1~${concurrencyLimits.max}，默认 3）：实际并发由调度器在 1~上限 之间自动升降——请求稳定时逐步上探，遇到频控或过载自动降速，熔断冷却后从低位重新爬升。">
+                        <input id="aiConcurrency" type="number" min="1" value="3" title="并发上限（不小于 1，默认 3）：没有上限硬顶，填多少就是多少——实际并发由调度器从 min(上限, 3) 起步，请求稳定时逐步上探，遇到频控或过载自动降速，熔断冷却后从低位重新爬升。">
                       </div>
                     </div>
                   </div>

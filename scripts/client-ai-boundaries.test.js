@@ -45,12 +45,12 @@ test("并发控制器只负责策略状态，不依赖 AI 任务模块", () => {
   assert.equal(shouldRetryRow(4, 3, false), false);
   assert.equal(shouldRetryRow(1, 3, true), false);
 
-  // 并发上限放开到 32：20 必须原样保留，越界才截断到上限。
+  // 并发上限没有硬顶：20 与 99 都必须原样保留。
   const wide = createStageController({ stageKey: "stage1", label: "初审", config: { concurrency: 20 }, clampInteger: clamp });
   assert.deepEqual({ current: wide.currentConcurrency, max: wide.maxConcurrency }, { current: 3, max: 20 });
 
-  const clamped = createStageController({ stageKey: "stage1", label: "初审", config: { concurrency: 99 }, clampInteger: clamp });
-  assert.deepEqual({ current: clamped.currentConcurrency, max: clamped.maxConcurrency }, { current: 3, max: 32 });
+  const huge = createStageController({ stageKey: "stage1", label: "初审", config: { concurrency: 99 }, clampInteger: clamp });
+  assert.deepEqual({ current: huge.currentConcurrency, max: huge.maxConcurrency }, { current: 3, max: 99 });
 
   // 上限小于起步值时直接以上限起步，没有上探空间。
   const small = createStageController({ stageKey: "stage1", label: "初审", config: { concurrency: 2 }, clampInteger: clamp });
