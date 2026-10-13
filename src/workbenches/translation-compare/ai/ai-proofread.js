@@ -22,7 +22,7 @@ const { toCn } = require("../../../ingest/text-utils");
 const { classifyPrefilter } = require("./ai-prefilter");
 const { displayTermPair, evaluateTermRow, loadTermTables, normalizeTermTablePaths, termTableSummary } = require("./term-table");
 const { makeTermResult, termGuidanceFor, termTargetKeyFor } = require("./term-prefilter");
-const { readResults, removeResultIndexes, removeResults, writeResults } = require("./result-store");
+const { createProofreadResults } = require("./proofread-results");
 const { contextFromLayerEntry, speechHabitLayerFor } = require("../speech-habit-layer");
 const { termLayerFor, variantIndexSets } = require("../term-layer");
 const {
@@ -303,10 +303,11 @@ const status = {
     averageLatencyMs: 0,
   },
   logs: [],
-  results: new Map(),
-  resultChanges: [],
-  resultRevision: 0,
 };
+
+const proofreadResults = createProofreadResults({
+  onPersistError: (error) => pushLog(`AI 结果落盘失败：${error.message || error}`),
+});
 
 function recordModelCallMetrics(latencyMs, usage = {}) {
   const promptTokens = Math.max(0, Number(usage.promptTokens) || 0);
@@ -350,26 +351,7 @@ function clientStatus(options = {}) {
   // 页面刷新、控制台重启之后内存里可能一条结果都没有：按请求方自报的项目身份
   // 把落盘的结果装回来，让工作台还能把成果重新认领回去，而不是只剩浏览器内存那一份。
   adoptPersistedResults(options.projectKey, options.rowsSignature);
-  const sameRun = Boolean(options.runId) && options.runId === status.runId;
-  const afterRevision = sameRun ? clampInteger(options.afterRevision, 0, Number.MAX_SAFE_INTEGER, 0) : 0;
-  const resultLimit = clampInteger(options.resultLimit, 0, 500, 0);
-  const incrementalResults = status.resultChanges.slice(afterRevision, resultLimit ? afterRevision + resultLimit : undefined);
-  const requestedProjectKey = String(options.projectKey || "");
-  const requestedRowsSignature = String(options.rowsSignature || "");
-  const sameRequestedScope = (!requestedProjectKey && !requestedRowsSignature)
-    || (requestedProjectKey === String(status.projectKey || "")
-      && requestedRowsSignature === String(status.rowsSignature || ""));
-  const resultsForRevision = options.includeResults === false
-    ? []
-    : (resultLimit || afterRevision
-      ? incrementalResults
-      : Array.from(status.results.values()).sort((a, b) => a.index - b.index));
-  const visibleResults = sameRequestedScope ? resultsForRevision : [];
-  const deliveredRevision = options.includeResults === false
-    ? afterRevision
-    : (resultLimit || afterRevision
-      ? (visibleResults.length ? visibleResults.at(-1).resultRevision : afterRevision)
-      : status.resultRevision);
+  const resultDelivery = proofreadResults.read(options);
   return {
     running: status.running,
     kind: status.kind,
@@ -464,10 +446,7 @@ function clientStatus(options = {}) {
     metrics: { ...status.metrics },
     feedbackStats: globalFeedbackCollector.getStatistics(),
     logs: options.includeLogs === false ? [] : status.logs,
-    results: sameRequestedScope ? resultsForRevision : [],
-    resultRevision: deliveredRevision,
-    latestResultRevision: status.resultRevision,
-    hasMoreResults: deliveredRevision < status.resultRevision,
+    ...resultDelivery,
     protocolDefaults,
     proofreadPrompt: proofreadPromptFor(status.proofreadMode, status.profileId),
   };
@@ -507,13 +486,12 @@ function requireMatchingProjectSnapshot(inputProject, currentProject) {
 function reusePreviousResults(config = {}) {
   const resumedCascade = config.continueOnly && stagePlan(config).cascadeToArbiter;
   if (config.targetStage !== "stage2" && config.targetStage !== "stage3" && !resumedCascade) return false;
-  return Boolean(
-    status.results.size > 0
-    && status.projectKey
-    && status.projectKey === config.projectKey
-    && status.rowsSignature
-    && status.rowsSignature === config.rowsSignature
-  );
+  if (!config.projectKey || !config.rowsSignature) return false;
+  return proofreadResults.read({
+    projectKey: config.projectKey,
+    rowsSignature: config.rowsSignature,
+    resultLimit: 1,
+  }).results.length > 0;
 }
 
 function cleanConfig(input = {}) {
@@ -684,7 +662,7 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, number));
 }
 
-function resetStatus(config, rowsLength) {
+function resetStatus(config, rowsLength, { reusePrevious = false } = {}) {
   status.running = true;
   status.kind = config.kind || "proofread";
   status.stopRequested = false;
@@ -776,14 +754,19 @@ function resetStatus(config, rowsLength) {
     averageLatencyMs: 0,
   };
   status.logs = [];
-  status.results = new Map();
   resultMetricDeltas = new Map();
-  status.resultChanges = [];
-  status.resultRevision = 0;
   controllers = new Set();
   presetBreakers = new Map();
   presetBreakerTrips = new Map();
   breakerRuntime = null;
+  return proofreadResults.begin({
+    projectKey: status.projectKey,
+    rowsSignature: status.rowsSignature,
+    runId: status.runId,
+    kind: status.kind,
+    total: status.total,
+    finishedAt: status.finishedAt,
+  }, { reusePrevious });
 }
 
 function makePrefilterResult(row, labels, classification, comparisonMode = "trilingual") {
@@ -811,84 +794,12 @@ function makePrefilterResult(row, labels, classification, comparisonMode = "tril
   };
 }
 
-// —— AI 结果落盘 ——
-// 服务端内存里的结果只活在这次会话里：开新任务会清空，控制台重启更是什么都不剩。
-// 浏览器 localStorage 只有约 10 MB 且被多个项目共享，写满时页面上的备注就只剩内存副本，
-// 刷新即丢。AI 结果是可重新交付的服务端产物，所以按「项目键 + 行集签名」落一份盘，
-// 页面刷新或服务重启后由 clientStatus 整份重新交付。
-//
-// 落盘节奏按「脏行数」触发：整份快照一次就是几 MB，2250 行的任务若每两秒写一次会白白
-// 写掉几个 GB。累积到阈值或超过最长等待就写一次，任务收尾再完整写一次——代价是崩溃时
-// 最多丢这么多行，而中途刷新并不受影响（任务还在服务端跑，页面重新连上继续拉）。
-const RESULTS_PERSIST_DIRTY_LIMIT = 200;
-const RESULTS_PERSIST_MAX_DELAY_MS = 30000;
-let resultsPersistTimer = null;
-let resultsPersistDirty = 0;
-
-function resultsPersistTarget() {
-  const projectKey = String(status.projectKey || "");
-  const rowsSignature = String(status.rowsSignature || "");
-  if (!projectKey || !rowsSignature) return null;
-  return { projectKey, rowsSignature };
-}
-
-function persistResultsNow() {
-  if (resultsPersistTimer) {
-    clearTimeout(resultsPersistTimer);
-    resultsPersistTimer = null;
-  }
-  resultsPersistDirty = 0;
-  const target = resultsPersistTarget();
-  if (!target || !status.results.size) return false;
-  // 与盘上已有结果合并：新一轮可能只跑了少数行（其余被判定为已完成而跳过），
-  // 直接整份覆盖会把上一轮的结论抹掉。
-  const merged = new Map();
-  const stored = readResults(target.projectKey, target.rowsSignature);
-  for (const item of stored?.results || []) merged.set(Number(item.index), item);
-  for (const [index, item] of status.results) merged.set(Number(index), item);
-  writeResults(target.projectKey, target.rowsSignature, {
-    runId: status.runId,
-    kind: status.kind,
-    total: status.total,
-    finishedAt: status.finishedAt || "",
-    results: [...merged.values()],
-  });
-  return true;
-}
-
-function scheduleResultsPersist() {
-  resultsPersistDirty += 1;
-  // 攒够一批就先落一次：长任务里既有「崩溃时最多丢这么多行」的上界，也不会写成写放大。
-  if (resultsPersistDirty >= RESULTS_PERSIST_DIRTY_LIMIT) {
-    try {
-      persistResultsNow();
-    } catch (error) {
-      pushLog(`AI 结果落盘失败：${error.message || error}`);
-    }
-    return;
-  }
-  if (resultsPersistTimer) return;
-  resultsPersistTimer = setTimeout(() => {
-    resultsPersistTimer = null;
-    try {
-      persistResultsNow();
-    } catch (error) {
-      pushLog(`AI 结果落盘失败：${error.message || error}`);
-    }
-  }, RESULTS_PERSIST_MAX_DELAY_MS);
-  // 落盘定时器不该拖住进程退出。
-  if (typeof resultsPersistTimer.unref === "function") resultsPersistTimer.unref();
-}
-
 function resetIdleStatus({ clearPersisted = false } = {}) {
-  if (resultsPersistTimer) {
-    clearTimeout(resultsPersistTimer);
-    resultsPersistTimer = null;
-  }
-  resultsPersistDirty = 0;
-  if (clearPersisted && status.projectKey && status.rowsSignature) {
-    removeResults(status.projectKey, status.rowsSignature);
-  }
+  proofreadResults.reset({ clearPersisted });
+  resetIdleTaskStatus();
+}
+
+function resetIdleTaskStatus() {
   status.stopRequested = false;
   status.kind = "proofread";
   status.runId = "";
@@ -936,10 +847,7 @@ function resetIdleStatus({ clearPersisted = false } = {}) {
   status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
   status.logs = [];
-  status.results = new Map();
   resultMetricDeltas = new Map();
-  status.resultChanges = [];
-  status.resultRevision = 0;
   controllers = new Set();
   presetBreakers = new Map();
   presetBreakerTrips = new Map();
@@ -952,51 +860,26 @@ function resetIdleStatus({ clearPersisted = false } = {}) {
  * 只在「没有运行中的任务、且内存里没有别的项目结果」时接管，避免把别的项目结论串过来。
  */
 function adoptPersistedResults(projectKey, rowsSignature) {
-  const key = String(projectKey || "");
-  const signature = String(rowsSignature || "");
-  if (!key || !signature) return false;
-  if (status.running) return false;
-  if ((status.results.size || status.resultChanges.length)
-      && (status.projectKey !== key || status.rowsSignature !== signature)) {
-    resetIdleStatus({ clearPersisted: false });
-  }
-  if (status.results.size || status.resultChanges.length) return false;
-  const stored = readResults(key, signature);
-  if (!stored || !stored.results.length) return false;
-  status.projectKey = key;
-  status.rowsSignature = signature;
-  status.kind = stored.kind || "proofread";
-  status.runId = stored.runId || status.runId;
-  status.finishedAt = stored.finishedAt || status.finishedAt;
-  status.total = stored.total || stored.results.length;
-  status.results = new Map();
-  status.resultChanges = [];
-  status.resultRevision = 0;
-  for (const item of stored.results) {
-    status.resultRevision += 1;
-    const result = { ...item, resultRevision: status.resultRevision };
-    status.results.set(Number(result.index), result);
-    status.resultChanges.push(result);
-  }
+  const restored = proofreadResults.restore({ projectKey, rowsSignature }, { running: status.running });
+  if (restored.resetTask) resetIdleTaskStatus();
+  if (!restored.metadata) return false;
+  Object.assign(status, restored.metadata);
   return true;
 }
 
 function addResult(result, { prefilterKind = "" } = {}) {
-  status.resultRevision += 1;
   // Every result, including deterministic prefilter rows and transport errors,
   // exposes the same stage contract for consumers that do not understand the
   // legacy note/status fields yet.
-  const storedResult = {
+  const normalizedResult = {
     ...result,
     stageResult: result.stageResult || reviewStageResultFromLegacy(result, status.model),
-    resultRevision: status.resultRevision,
   };
   // 一行可能被后续阶段或重跑再次写入：指标是「每行当前结果」的快照，
   // 先按上次记下的贡献整体撤销，再按新结果累加。
   const previousDelta = resultMetricDeltas.get(result.index);
   if (previousDelta) applyMetricsDelta(status.stageMetrics, previousDelta, -1);
-  status.results.set(result.index, storedResult);
-  status.resultChanges.push(storedResult);
+  const storedResult = proofreadResults.record(normalizedResult);
   status.processed += 1;
   if (result.done) status.handled += 1;
   if (prefilterKind) {
@@ -1016,8 +899,6 @@ function addResult(result, { prefilterKind = "" } = {}) {
   const delta = computeResultMetricsDelta(storedResult, { prefilterKind });
   resultMetricDeltas.set(result.index, delta);
   applyMetricsDelta(status.stageMetrics, delta, 1);
-  // 每批结果都排队落盘（节流）：这样刷新页面时，成果在服务端已经有一份。
-  scheduleResultsPersist();
 }
 
 async function startPrefilter(input) {
@@ -1100,10 +981,8 @@ async function startProofread(input) {
     config.systemPrompt = proofreadPromptFor(config.proofreadMode, config.profileId).system;
   }
   if (config.proofreadMode === "bilingual") config.target = "cn";
-  // 独立阶段二/三任务要复用上一轮留在内存里的结论：resetStatus 会清空 status.results，
-  // 所以必须在它之前把可复用的快照摘出来，否则复审只能从备注文本反推（有损）。
-  const reusableResults = reusePreviousResults(config) ? new Map(status.results) : new Map();
-  resetStatus(config, rows.length);
+  // 独立复审/仲裁及级联续跑由结果模块先取同快照的完整结果，再初始化本轮。
+  const reusableResults = resetStatus(config, rows.length, { reusePrevious: reusePreviousResults(config) });
   // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
   resetPromptTrim();
   // 状态接口如实显示本次任务用的查证站点顺序（未声明/已关闭时为空数组，前端据此说明这一层未启用）。
@@ -1133,7 +1012,7 @@ async function startProofread(input) {
     : (defaultCounterpartKey === "cn" ? (labels.cn || "非原文 B") : (labels.tw || "非原文 C"));
 
   function memoryForRow(idx) {
-    const result = reusableResults.get(idx) || status.results.get(idx);
+    const result = reusableResults.get(idx) || proofreadResults.get(idx);
     if (!result) return null;
     // 同一快照也可能切换备注空间或重新初审；只复用与当前轮备注吻合的内存结论。
     if (input.rowNotes && typeof input.rowNotes === "object" &&
@@ -2426,11 +2305,7 @@ function finish() {
   status.active = [];
   status.stagePipelines = createStagePipelines();
   // 收尾时立即落盘、不等节流：这是刷新页面后能把本轮成果重新交付出去的关键一份。
-  try {
-    persistResultsNow();
-  } catch (error) {
-    pushLog(`AI 结果落盘失败：${error.message || error}`);
-  }
+  proofreadResults.finish(status.finishedAt);
   const isPrefilter = status.kind === "prefilter";
   if (!isPrefilter) {
     const summary = promptTrimSummary();
@@ -2480,7 +2355,8 @@ function finish() {
 
 function forgetRequestedResultIndexes(config) {
   if (!config.forgetResultIndexes?.size || !config.projectKey || !config.rowsSignature) return 0;
-  return removeResultIndexes(config.projectKey, config.rowsSignature, config.forgetResultIndexes);
+  return proofreadResults.forget({ projectKey: config.projectKey, rowsSignature: config.rowsSignature },
+    config.forgetResultIndexes, { memory: false });
 }
 
 function clearProofreadResults(input = {}) {
@@ -2496,18 +2372,8 @@ function clearProofreadResults(input = {}) {
   const { project } = readRows(config);
   requireMatchingProjectSnapshot(config, project);
   if (!config.forgetResultIndexes.size) return { cleared: 0 };
-  const cleared = removeResultIndexes(config.projectKey, config.rowsSignature, config.forgetResultIndexes);
-  if (status.projectKey === config.projectKey && status.rowsSignature === config.rowsSignature) {
-    status.results = new Map([...status.results].filter(([index]) => !config.forgetResultIndexes.has(Number(index))));
-    const remaining = [...status.results.values()].sort((a, b) => Number(a.resultRevision) - Number(b.resultRevision));
-    status.resultChanges = [];
-    status.resultRevision = 0;
-    for (const item of remaining) {
-      const result = { ...item, resultRevision: ++status.resultRevision };
-      status.results.set(Number(result.index), result);
-      status.resultChanges.push(result);
-    }
-  }
+  const cleared = proofreadResults.forget({ projectKey: config.projectKey, rowsSignature: config.rowsSignature },
+    config.forgetResultIndexes);
   return { cleared };
 }
 

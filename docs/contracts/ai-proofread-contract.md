@@ -369,18 +369,21 @@
 
 ---
 
-## 结果落盘与刷新恢复（`ai/result-store.js`）
+## 结果落盘与刷新恢复（`ai/proofread-results.js`、`ai/result-store.js`）
 
 浏览器 localStorage 只有约 10 MB、且同源下所有项目共用一份，写满之后页面上的备注就只活在内存里，刷新即丢。AI 结果是可重新交付的服务端产物，所以不把浏览器存储当作它唯一的落脚点。
 
+- **状态所有权**：`createProofreadResults` 的单个实例持有最新结果集合、修订日志、游标、脏行计数与定时器；`ai-proofread.js` 只通过 `begin` / `record` / `get` / `restore` / `read` / `forget` / `reset` / `finish` 使用它。任务运行、领域结果规范化、指标贡献的撤销与累加、异常和日志仍由调度持有；恢复与局部清除不重算阶段指标。实例只保存 `projectKey`、`rowsSignature`、`runId`、`kind`、`total`、`finishedAt` 六项元数据，`result-store.js` 继续拥有文件读写与项目删除。
+- **轮次切换**：`begin` 先按身份取得可复用旧结果的独立集合快照，再初始化本轮；是否符合复审/仲裁续跑条件由调度判断。`begin`、`reset` 与落盘均取消所属轮次的定时器，防止回调跨轮次残留。`restore` 返回任务展示是否需要复位及受限元数据；跨项目时调度先复位旧任务展示，再应用元数据，不再次清除刚恢复的结果。
 - **落盘位置**：`out/runtime/ai-results/<projectKey>-<rowsSignature>.json`（`storageLayout().runtimeDir` 下）。项目键与行集签名都按文件名安全字符收口，避免路径穿越。
-- **写入时机**：`addResult` 后累计脏行，攒够 200 行或距上次写盘满 30 秒写一次，`finish()` 收尾时立即写（不等阈值）。整份快照一次是几 MB，若按秒级节流会在 2000+ 行的任务里写成几个 GB 的写放大。代价是进程被强杀时最多丢这一批，而「页面刷新」不受影响——任务还在服务端跑，页面重新连上继续拉。
+- **写入时机**：`record` 后累计脏更新，攒够 200 次或首个尚未落盘的结果等待满 30 秒写一次；后续更新不延长该期限，`finish` 收尾时立即写（不等阈值）。整份快照一次是几 MB，若按秒级节流会在 2000+ 行的任务里写成几个 GB 的写放大。代价是进程被强杀时最多丢这一批，而「页面刷新」不受影响——任务还在服务端跑，页面重新连上继续拉。写盘失败按原日志口径回报，内存结果仍可交付。
 - **合并而非覆盖**：写盘时与盘上已有结果按行号 upsert 合并。新一轮可能只跑了少数行（其余被判定为「已完成」而跳过），整份覆盖会把上一轮的结论抹掉。
-- **恢复路径**：`clientStatus({ projectKey, rowsSignature })` 在「没有运行中的任务、且内存里没有任何结果」时，把落盘结果装回 `status`，并重新编号 `resultRevision`，让页面照常按修订游标增量拉取。工作台在每次状态轮询时自报这两个身份（见 `public/workbench-client.js` 的 `refreshAiStatus`）。
+- **恢复路径**：`clientStatus({ projectKey, rowsSignature })` 在「没有运行中的任务、且内存里没有任何结果」时，通过结果实例认领落盘结果，并重新编号 `resultRevision`，让页面照常按修订游标增量拉取。工作台在每次状态轮询时自报这两个身份（见 `public/workbench-client.js` 的 `refreshAiStatus`）。
+- **交付兼容**：无分页且游标为 0 时按行号交付最新结果；分页或非零游标则交付修订日志，同一行的多个版本不去重。`runId` 不匹配时忽略旧游标，`resultLimit` 仍为 0–500（0 不限量），`includeResults:false` 不消费游标。缺项目身份不能触发磁盘恢复，但仍可读取已在内存的结果；身份不匹配时只隐藏结果。恢复及显式局部清除按现行规则重编号并保留 `runId`。
 - **身份校验**：读盘时校验文件里的 `projectKey` / `rowsSignature` 与请求方一致，对不上就当作没有——宁可让页面显示「无结果」，也不把别的项目的结论交付出去。
-- **部分清除**：清空未人工确认的某个阶段时，页面把被清除的行号提交给 `/api/ai-proofread/results/clear`，服务端只从对应项目 + 行集的落盘结果移除这些行；下一轮启动也会携带待清除行号作为失败重试兜底，不会把用户刚清掉的旧结论重新合并回来。
+- **部分清除**：清空未人工确认的某个阶段时，页面把被清除的行号提交给 `/api/ai-proofread/results/clear`，结果实例移除对应项目 + 行集的磁盘结果，并同步清除同身份的内存结果。下一轮启动携带的待清除行号作为失败重试兜底，只先删磁盘，再按既有条件取得旧内存快照并初始化本轮。
 - **清理**：`clearProofreadCache()`（页面的「清除 AI 运行记录」）连盘上那一份一起删，否则刷新页面又会把它装回来。删除项目时同路径一并清理。
-- 回归：`node --test scripts/ai-results-persist.test.js`。
+- 回归：`node --test scripts/proofread-results.test.js scripts/ai-results-persist.test.js scripts/ai-proofread-status.test.js scripts/ai-stage-metrics-regression.test.js`。结果实例测试使用真实临时目录与可控定时器；任务入口回归同时验证重复行更新的指标撤销与分页交付。
 
 ---
 

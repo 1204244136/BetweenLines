@@ -415,6 +415,49 @@ async function runProofreadAgainst({ label, rowCount, breaker, respond, rowsFor 
   }
 }
 
+test("任务收到重复行号时，新结果撤销旧指标贡献，修订分页仍保留两次更新", async () => {
+  // 模拟同一行两次进入实际任务入口，验证 addResult 与结果 module 的协作，
+  // 而不是在测试里手工重演指标加减。响应顺序固定为提改 → 通过。
+  const { finished, requestCount } = await runProofreadAgainst({
+    label: "duplicate-delivery",
+    rowCount: 2,
+    rowsFor: () => ({ index: 1 }),
+    respond(count, response) {
+      if (count === 1) {
+        response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+          semanticSame: false, needsEdit: true, needsContext: false, better: "target",
+          revisedText: "修订内容。", summary: "需要修改。", score: 95,
+        }) } }] }));
+        return;
+      }
+      const complete = () => {
+        if (clientStatus({ includeResults: false }).latestResultRevision < 1) {
+          setTimeout(complete, 1);
+          return;
+        }
+        response.end(passingDecisionBody);
+      };
+      complete();
+    },
+  });
+  assert.equal(finished.running, false);
+  assert.equal(requestCount, 2);
+  const latest = clientStatus();
+  assert.equal(latest.processed, 2, "任务计数仍按交付次数累加");
+  assert.equal(latest.results.length, 1, "最新集合按行号保留一个结果");
+  assert.equal(latest.results[0].done, true);
+  assert.equal(latest.stageMetrics.stage1Total, 1);
+  assert.equal(latest.stageMetrics.stage1Passed, 1);
+  assert.equal(latest.stageMetrics.stage1NeedsEdit, 0, "旧提改贡献必须撤销");
+  assert.equal(latest.stageMetrics.finalNeedsEdit, 0);
+  assert.equal(latest.stageMetrics.finalUnchanged, 1);
+  const first = clientStatus({ runId: latest.runId, resultLimit: 1 });
+  const second = clientStatus({ runId: latest.runId, afterRevision: first.resultRevision, resultLimit: 1 });
+  assert.equal(first.results[0].done, false);
+  assert.equal(second.results[0].done, true);
+  assert.equal(second.resultRevision, 2);
+});
+
 test("原文短式先现在下一行同头重写时，基础轮主动带上下一行", async () => {
   const payloads = [];
   const { finished } = await runProofreadAgainst({

@@ -55,6 +55,8 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 | `model-options.js`、`notes-recovery.js` | 不依赖 DOM、文件系统或任务状态的纯计算 |
 | `notes-spaces.js`、`notes-storage.js` | 翻译备注恢复规则与注入浏览器的同步无损存储适配器；不加载 AI 运行状态 |
 | `ai/proofread-defaults.js`、`ai/decision-score.js` | AI 默认配置与纯评分规则 |
+| `ai/proofread-results.js` | 独占翻译 AI 结果集合、修订交付及落盘生命周期；不接收可变任务状态或计算阶段指标 |
+| `ai/result-store.js` | AI 结果文件的身份校验、原子读写与项目清理；不管理内存修订或落盘时机 |
 
 - 职责模块不得反向依赖 `build-compare.js`；新增领域调用直接引用职责模块，兼容入口只服务已有调用方。
 - 渲染器从默认配置、评分与 `proofread-contract.js` 读取契约，不为配置加载 `ai-proofread.js` 的任务运行状态。
