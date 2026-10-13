@@ -67,7 +67,7 @@ BetweenLines 共享本地、文件型文本处理和分析能力；当前的 Tra
 
 上游材料对齐约定：
 本项目使用的源文件（除台版外）均来自 `index-X` 项目（同级目录 `../index-X` 或环境变量 `INDEX_X_DIR`）的相关产物：
-- 简中文本来自 `index-X` 版本化的解压归档 `EPUB/`，或由它的 `tools/package_cache_epubs.py` 打包出的 `output/epubs/*.epub`（目录与文件名形如 `[S1_01]某魔法的禁书目录 01X`）。`output/` 是构建产物目录，不存在时按 `EPUB/` 取用。
+- 简中文本来自 `index-X` 版本化的解压归档 `EPUB/`，或由它的 `tools/package_cache_epubs.py` 打包出的 `output/epubs/*.epub`（目录与文件名形如 `【S1_01】某魔法的禁书目录 01`）。`output/` 是构建产物目录，不存在时按 `EPUB/` 取用。
 - 日文原文来自 `index-X` 的对齐工作源 `.cache/epub-work/japanese-text/`（或同步镜像）。它是 `bw_preprocess.py` 的**预处理产物**：只保留特殊注音（当て字、外来语），普通读音已被合并丢弃。因此「原文没写某标记」不等于「原版没有」，判注音、傍点、引号一类标记时必须按缺失证据处理，不得反过来当作译文多写的依据。
 - 台版文本作为同级的非原文对照材料，来自独立的台版出版物。
 

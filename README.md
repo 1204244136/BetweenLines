@@ -329,7 +329,7 @@ node scripts/term-prefilter.js --profile demo --all --json --out report.json
 
 ### 用日文原文校验
 
-index-X 缓存的日文原文（`<index-X>/.cache/epub-work/japanese-text/[S3_01]…`）可以校验对齐产物与上述判定，加 `--verify-source` 即可（目录缺省取同级 `../index-X`，或用环境变量 `INDEX_X_DIR` / `--index-x` 指定）：
+index-X 缓存的日文原文（`<index-X>/.cache/epub-work/japanese-text/【S3_01】…`）可以校验对齐产物与上述判定，加 `--verify-source` 即可（目录缺省取同级 `../index-X`，或用环境变量 `INDEX_X_DIR` / `--index-x` 指定）：
 
 ```powershell
 node scripts/speech-habit.js --profile demo --verify-source

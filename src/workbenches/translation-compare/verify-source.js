@@ -12,6 +12,7 @@
  * 原文工作源位于 `<index-X>/.cache/epub-work/japanese-text/[S3_01]…/item/*.xhtml`。
  */
 const fs = require("fs");
+const { workIdFromPath } = require("../../core/work-id");
 const path = require("path");
 const { toCn } = require("../../ingest/text-utils");
 const { stripInlineMarkup } = require("../../core/text-helpers");
@@ -29,10 +30,10 @@ function resolveJapaneseSourceDir({ indexXDir = "", volumeCode = "" } = {}) {
   if (!volumeCode) return { dir: "", base, error: "没有卷号：无法定位日文原文。" };
   if (!fs.existsSync(base)) return { dir: "", base, error: `日文原文目录不存在：${base}（先运行 index-X 的 tools/pull.ps1）。` };
   const match = fs.readdirSync(base, { withFileTypes: true })
-    .filter((item) => item.isDirectory() && item.name.startsWith(`[${volumeCode}]`))
+    .filter((item) => item.isDirectory() && workIdFromPath(item.name) === volumeCode.toUpperCase())
     .map((item) => item.name)
     .sort();
-  if (!match.length) return { dir: "", base, error: `在 ${base} 下找不到 [${volumeCode}] 的日文原文目录。` };
+  if (!match.length) return { dir: "", base, error: `在 ${base} 下找不到 【${volumeCode}】 的日文原文目录。` };
   return { dir: path.join(base, match[0]), base, name: match[0] };
 }
 

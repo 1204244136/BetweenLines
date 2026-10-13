@@ -29,8 +29,8 @@ const { listProfiles, resolveProfile } = require("./ai/proofread-contract");
 const { tableFilesForProfile, tableSourceCandidates } = require("./layer-sources");
 const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerprint");
 
-// 5：同形口癖作为 locked 规则注入，并按角色带上同一角色的全部规则；旧快照必须按新口径重算。
-const LAYER_VERSION = 5;
+// 6：识别全角作品号定界符，旧快照按当前输入重新计算卷级过滤。
+const LAYER_VERSION = 6;
 
 /**
  * 表指纹：文件状态 + 条目数，任一变化都视为过期。

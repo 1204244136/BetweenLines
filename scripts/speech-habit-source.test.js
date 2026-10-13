@@ -300,7 +300,7 @@ test("用日文原文校验：目录解析、章节标记与口癖计数", () =>
   // 找不到卷目录时给出明确错误，而不是抛异常。
   const missing = verifyAgainstSource({ indexXDir: root, volume: { code: "S9_99" }, rows: [], tables });
   assert.equal(missing.ok, false);
-  assert.match(missing.error, /找不到 \[S9_99\]/);
+  assert.match(missing.error, /找不到 【S9_99】/);
 });
 
 test("默认 index-X 目录按同级仓库约定探测", () => {

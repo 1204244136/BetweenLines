@@ -16,6 +16,7 @@
  * - 小说首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
  */
 const path = require("path");
+const { workIdFromPath } = require("../../../core/work-id");
 const { readRecords } = require("../../../core/spreadsheet");
 const { firstColumn } = require("../../../core/text-helpers");
 
@@ -85,8 +86,8 @@ function compareVolume(left, right) {
 /** 从输入文件路径里提取当前卷号：`[S3_01]創約 …` → S3_01。 */
 function volumeKeyFromFiles(files = {}) {
   for (const value of Object.values(files || {})) {
-    const match = String(value || "").match(/\[(S\d+_\d+(?:\.\d+)?)\]/i);
-    if (match) return volumeKey(match[1]);
+    const code = workIdFromPath(value);
+    if (code) return volumeKey(code);
   }
   return null;
 }

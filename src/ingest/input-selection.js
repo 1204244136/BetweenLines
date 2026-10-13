@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { workIdPattern } = require("../core/work-id");
 const os = require("os");
 const path = require("path");
 const readline = require("readline/promises");
@@ -254,8 +255,7 @@ function selectionFromWorkId(source = {}) {
 
   const comparisonMode = normalizeComparisonMode(source.comparisonMode || source["comparison-mode"] || process.env.TRANSCOMPARATOR_COMPARISON_MODE);
   const indexXDir = resolveIndexXCandidateDir(source);
-  const escapedWorkId = workId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`(?:\\[|\\b)${escapedWorkId}(?:\\]|\\b|_|\\s)`, "i");
+  const pattern = workIdPattern(workId);
 
   let cnFile = null;
   let jpFile = null;
@@ -267,8 +267,8 @@ function selectionFromWorkId(source = {}) {
       || findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "packed-epubs", "chinese-text"), pattern)
       || findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "chinese-text"), pattern);
 
-    jpFile = findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "packed-epubs", "japanese-text"), pattern)
-      || findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "japanese-text"), pattern);
+    jpFile = findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "japanese-text"), pattern)
+      || findMatchingEntry(path.join(indexXDir, ".cache", "epub-work", "packed-epubs", "japanese-text"), pattern);
   }
 
   const oneDriveBase = source["onedrive-dir"] || process.env.TRANSCOMPARATOR_ONEDRIVE_DIR || "";
