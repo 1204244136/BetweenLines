@@ -167,6 +167,11 @@ function createClientFixture(html, storage = storageFixture(), options = {}) {
         return Promise.resolve(typeof payload === "function" ? payload(request) : payload)
           .then((result) => ({ ok: result?.ok !== false, json: async () => result }));
       }
+      // 状态请求可由测试延迟落定，与页面清除/启动操作交错；仍运行完整生成脚本。
+      if (options.statusResponse && String(url).startsWith("/api/ai-proofread/status?")) {
+        return Promise.resolve(options.statusResponse(String(url)))
+          .then((result) => ({ ok: result?.ok !== false, json: async () => result }));
+      }
       const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, results: [] } };
       return Promise.resolve({ ok: true, json: async () => payload });
     },

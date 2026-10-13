@@ -246,8 +246,6 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /当前预筛结果共 [\s\S]*?规则通过 [\s\S]*?相似度通过/);
   assert.match(script, /prefilterIds\.confirm\.addEventListener\("click"[\s\S]*?current\.manualDone = true;[\s\S]*?applyFilters\(\{ reset: false \}\)/);
   assert.doesNotMatch(script, /aiIds\.similarity/);
-  assert.match(script, /afterRevision/);
-  assert.match(script, /aiStatusRefreshInFlight/);
   assert.doesNotMatch(script, /aiRequestCache/);
   assert.doesNotMatch(script, /knownRequestId/);
   assert.doesNotMatch(html, /id="aiMonitorSection"/);

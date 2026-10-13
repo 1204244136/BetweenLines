@@ -711,15 +711,12 @@
       }
     }
 
-    const appliedAiResults = new Set();
     const aiActiveIds = new Set();
-    const clearedAiRunIds = new Set();
     const prefilterResultIds = new Set();
     const diffHtmlCache = new Map();
     let filteredRows = allRows;
     let currentPage = 1;
     let activeRowId = "";
-    let lastAiRunId = "";
     let currentAiRunning = false;
     // 本页「预筛结果集」对应的运行号：不只由本页启动的那一轮设置，页面重开后由状态轮询
     // 从服务端上一轮预筛结果里认领（服务端会整轮返回结果），否则 resultIds 为空、
@@ -727,9 +724,32 @@
     let prefilterRunId = "";
     let prefilterResultFilterActive = false;
     let prefilterResultsCatchingUp = false;
-    let lastAiResultRevision = 0;
-    let aiStatusRefreshInFlight = false;
-    let aiCatchupTimer = 0;
+    const aiResultReception = createAiResultReception({
+      projectKey: pageMeta.projectKey,
+      rowsSignature: pageMeta.rowsSignature,
+      signatureFor: (id) => rowsById.get(id)?.signature,
+      ignoredRunIds: pageMeta.notesRecovery?.ignoredRunIds || [],
+      getProfileId: () => aiIds.profile ? aiIds.profile.value : null,
+      async requestStatus(params) {
+        const response = await apiFetch("/api/ai-proofread/status?" + params);
+        return response.json();
+      },
+      async clearResults(payload) {
+        const response = await apiFetch("/api/ai-proofread/results/clear", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "清除 AI 结果失败。");
+      },
+      onStatus: renderAiStatus,
+      onUnavailable() {
+        if (aiCacheCleared) return;
+        reportRuntimeNotice("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
+      },
+      timers: { setTimeout: window.setTimeout.bind(window) },
+    });
     let notesSavePending = false;
     let notesSaveHandle = 0;
     let notesSaveHandleType = "";
@@ -1759,11 +1779,9 @@
     let notifiedFinishedRunId = "";
 
     function clearLocalAiCache() {
-      appliedAiResults.clear();
+      aiResultReception.resetReception();
       aiActiveIds.clear();
       activeRowId = "";
-      lastAiRunId = "";
-      lastAiResultRevision = 0;
       resetStageProgressBars();
       updateRenderedAiActive();
     }
@@ -5034,12 +5052,10 @@
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
       const stageMetricsSummary = stageMetricsSummaryCache;
       const aiRunId = ai.runId || "";
-      if (aiRunId && lastAiRunId && aiRunId !== lastAiRunId) {
-        appliedAiResults.clear();
-        lastAiResultRevision = 0;
+      const receipt = aiResultReception.begin(ai);
+      if (receipt.runChanged) {
         warnedLegacyService = false;
       }
-      if (aiRunId) lastAiRunId = aiRunId;
       // 常驻服务是旧版时不会回报 stageCascade：级联范围无从得知，级联推进也不会发生。
       // 明确提示一次，别让用户对着「配了阶段三却从来不仲裁」「阶段二一直待命」猜原因。
       // 判据要同时看到 stagePipelines（旧版一直有）才成立，避免把精简的状态桩误判成旧服务。
@@ -5047,13 +5063,8 @@
         warnedLegacyService = true;
         showToast("控制台服务未更新（没有回报阶段编排信息），本次不会级联推进后续阶段。请重启控制台服务（start-setup.bat）后重新启动任务。", { tone: "watch", durationMs: 20000 });
       }
-      const sameAiScope = Boolean(
-        ai.projectKey &&
-        ai.rowsSignature &&
-        ai.projectKey === pageMeta.projectKey &&
-        ai.rowsSignature === pageMeta.rowsSignature
-      );
-      if (aiRunId && clearedAiRunIds.has(aiRunId) && !ai.running) {
+      const sameAiScope = receipt.sameScope;
+      if (receipt.cleared) {
         renderClearedAiStatus();
         return;
       }
@@ -5154,23 +5165,8 @@
       for (const id of (ai.active || []).map(String)) aiActiveIds.add(id);
       const nextActive = Array.from(aiActiveIds).join(",");
       if (previousActive !== nextActive) updateRenderedAiActive();
-      let appliedResult = false;
-      let skippedStaleResults = 0;
-      const pendingResults = [];
-      if (sameAiScope) {
-        for (const result of ai.results || []) {
-          if (pendingForgottenAiResultIndexes.has(Number(result.index))) continue;
-          if (pageMeta.notesRecovery?.ignoredRunIds?.includes(result.runId || ai.runId)) continue;
-          const key = result.runId + ":" + result.index + ":" + (result.resultRevision || result.status);
-          if (appliedAiResults.has(key)) continue;
-          appliedAiResults.add(key);
-          const currentRow = rowsById.get(String(result.index));
-          if (currentRow?.signature && result.signature !== currentRow.signature) {
-            skippedStaleResults += 1;
-            continue;
-          }
-          appliedResult = true;
-          pendingResults.push(result);
+      const delivery = aiResultReception.commit(receipt, (pendingResults, summary) => {
+        for (const result of pendingResults) {
           const isRuleOrSimilarityPrefilter = result.status === "rule-prefilter" || result.status === "similarity-prefilter";
           // 预筛结果集不只是「本次运行」的状态：它是重新打开页面后「哪些行已经筛过」的依据。
           // 服务端会整轮返回上一轮预筛的结果，所以这里以运行号为准登记（不要求本页启动过这一轮）——
@@ -5191,14 +5187,14 @@
           saveNotes();
           updateDoneCount();
         }
-        if (skippedStaleResults) {
-          reportRuntimeNotice("已跳过 " + skippedStaleResults + " 条与当前工作台行内容不匹配的自动结果。");
+        if (summary.skippedStale) {
+          reportRuntimeNotice("已跳过 " + summary.skippedStale + " 条与当前工作台行内容不匹配的自动结果。");
         }
-      } else if ((ai.results || []).length && !ai.running) {
-        reportRuntimeNotice("已忽略非当前项目快照的自动结果；当前项目备注保持独立。");
-      }
-      lastAiResultRevision = Math.max(lastAiResultRevision, Number(ai.resultRevision) || 0);
-      if (appliedResult && (prefilterResultFilterActive || query.value.trim() || notesOnly || doneMode !== "all" || aiResultFilter !== "all" || issueSeverityFilter !== "all")) {
+        if (summary.ignoredForeign) {
+          reportRuntimeNotice("已忽略非当前项目快照的自动结果；当前项目备注保持独立。");
+        }
+      });
+      if (delivery.applied && (prefilterResultFilterActive || query.value.trim() || notesOnly || doneMode !== "all" || aiResultFilter !== "all" || issueSeverityFilter !== "all")) {
         if (ai.running) {
           scheduleThrottledApplyFilters();
         } else {
@@ -5208,39 +5204,8 @@
       updatePrefilterConfirmButton(ai);
     }
 
-    async function refreshAiStatus() {
-      if (aiStatusRefreshInFlight) return;
-      aiStatusRefreshInFlight = true;
-      let hasMoreResults = false;
-      try {
-        const params = new URLSearchParams({ compact: "1", resultLimit: "64" });
-        if (aiIds.profile) params.set("profileId", aiIds.profile.value);
-        // 自报项目身份：服务端内存为空时（刚重启、或本轮还没跑过）据此把落盘的结果重新交付，
-        // 刷新页面就能把上一轮的校对成果认领回来，不必依赖随时可能写满的浏览器存储。
-        if (pageMeta.projectKey) params.set("projectKey", pageMeta.projectKey);
-        if (pageMeta.rowsSignature) params.set("rowsSignature", pageMeta.rowsSignature);
-        if (lastAiRunId) {
-          params.set("runId", lastAiRunId);
-          params.set("afterRevision", String(lastAiResultRevision));
-        }
-        const response = await apiFetch("/api/ai-proofread/status?" + params);
-        const data = await response.json();
-        if (data.ok) {
-          renderAiStatus(data.ai);
-          hasMoreResults = Boolean(data.ai?.hasMoreResults);
-        }
-      } catch {
-        if (aiCacheCleared) return;
-        reportRuntimeNotice("未连接到本地控制台服务，AI 校对需要通过 npm run setup 打开工作台。");
-      } finally {
-        aiStatusRefreshInFlight = false;
-        if (hasMoreResults && !aiCatchupTimer) {
-          aiCatchupTimer = window.setTimeout(() => {
-            aiCatchupTimer = 0;
-            refreshAiStatus();
-          }, 16);
-        }
-      }
+    function refreshAiStatus() {
+      return aiResultReception.refresh();
     }
 
     function setModelOptions(models, { selected = aiIds.model.value } = {}) {
@@ -5883,8 +5848,7 @@
       }
       if (clearedCount > 0) {
         forgetPersistedAiResults(clearedIndexes);
-        if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
-        appliedAiResults.clear();
+        aiResultReception.discardCurrentRun();
         aiActiveIds.clear();
         updateRenderedAiActive();
         saveNotes();
@@ -5894,27 +5858,8 @@
       return clearedCount;
     }
 
-    const pendingForgottenAiResultIndexes = new Set();
     function forgetPersistedAiResults(indexes) {
-      const normalized = [...new Set((indexes || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
-      if (!normalized.length) return;
-      normalized.forEach((id) => pendingForgottenAiResultIndexes.add(id));
-      if (!pageMeta.projectKey || !pageMeta.rowsSignature) return;
-      apiFetch("/api/ai-proofread/results/clear", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          projectKey: pageMeta.projectKey,
-          rowsSignature: pageMeta.rowsSignature,
-          forgetResultIndexes: normalized,
-        }),
-      }).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "清除 AI 结果失败。");
-        normalized.forEach((id) => pendingForgottenAiResultIndexes.delete(id));
-      }).catch(() => {
-        // 下一次启动仍会携带待清除行号，避免一次瞬时请求失败把旧结果重新带回页面。
-      });
+      return aiResultReception.forgetRows(indexes);
     }
 
     let latestStagePipelines = null;
@@ -6214,7 +6159,7 @@
         if (item && item.note) rowNotes[id] = item.note;
       }
       baseConfig.rowNotes = rowNotes;
-      const forgetResultIndexes = [...pendingForgottenAiResultIndexes];
+      const forgetResultIndexes = aiResultReception.snapshot().forgottenIndexes;
       baseConfig.forgetResultIndexes = forgetResultIndexes;
 
       if (continueOnly) {
@@ -6279,7 +6224,7 @@
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
-        forgetResultIndexes.forEach((id) => pendingForgottenAiResultIndexes.delete(id));
+        aiResultReception.acknowledgeForgotten(forgetResultIndexes);
         renderAiStatus(data.ai);
         refreshAiStatus();
       } catch (error) {
@@ -6423,14 +6368,14 @@
         }
         if (!confirm("清除 AI 运行记录？备注与人工确认不会被清除。")) return;
         aiIds.clearCache.disabled = true;
-        if (lastAiRunId) clearedAiRunIds.add(lastAiRunId);
+        aiResultReception.ignoreRun(aiResultReception.snapshot().runId);
         clearLocalAiCache();
         renderClearedAiStatus();
         try {
           const response = await apiFetch("/api/ai-proofread/cache/clear", { method: "POST" });
           const data = await response.json();
           if (!response.ok || !data.ok) throw new Error(data.error || "清除失败。");
-          if (data.ai?.runId) clearedAiRunIds.add(data.ai.runId);
+          aiResultReception.ignoreRun(data.ai?.runId);
           renderClearedAiStatus();
           showToast("已清除 AI 运行记录；备注与人工确认已保留。", { tone: "success", durationMs: 9000 });
         } catch (error) {

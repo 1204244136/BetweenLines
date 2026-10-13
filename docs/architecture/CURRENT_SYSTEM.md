@@ -47,6 +47,7 @@
 | 能力识别与请求适配 | `model-capabilities.js` 提供服务端识别与浏览器纯函数注入；传输使用 `src/ai/llm-client.js` |
 | 三阶段执行 | `ai-proofread.js` 持有任务、跨阶段编排与指标；`arbiter.js` 判定仲裁触发，`stage-results.js` 归一阶段输出与指标 |
 | AI 结果 | `proofread-results.js` 持有结果集合、修订交付、恢复与落盘时机；`result-store.js` 处理身份校验及原子文件读写 |
+| 浏览器结果接收 | `ai-result-reception.js` 持有运行号、游标、去重、清除拦截与分页追赶；页面通过两阶段接收写入备注 |
 | 角色消息 | `persona-runtime.js` 为 Gatekeeper、Stylist、Arbiter 构造独立角色消息；推理强度沿用各模型预设并进行合法性归一，不由角色自动覆写 |
 | 模型画像 | `scheduler-profile.js` 提供六维画像与角色选择函数；此函数能力不等同于页面已自动绑定模型预设 |
 | 并发与熔断 | `concurrency-controller.js` 和 `circuit-breaker.js` 提供各阶段的并发调节、退避、冷却探测与终止决策 |

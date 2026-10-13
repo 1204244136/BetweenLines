@@ -54,6 +54,7 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 | `render-workbench.js` | HTML 渲染与渲染时读取静态资源 |
 | `model-options.js`、`notes-recovery.js` | 不依赖 DOM、文件系统或任务状态的纯计算 |
 | `notes-spaces.js`、`notes-storage.js` | 翻译备注恢复规则与注入浏览器的同步无损存储适配器；不加载 AI 运行状态 |
+| `ai-result-reception.js` | 注入翻译页面的 AI 结果接收状态与请求追赶；不持有备注、预筛集合或 DOM，HTTP 与页面应用由调用方适配 |
 | `ai/proofread-defaults.js`、`ai/decision-score.js` | AI 默认配置与纯评分规则 |
 | `ai/proofread-results.js` | 独占翻译 AI 结果集合、修订交付及落盘生命周期；不接收可变任务状态或计算阶段指标 |
 | `ai/result-store.js` | AI 结果文件的身份校验、原子读写与项目清理；不管理内存修订或落盘时机 |
