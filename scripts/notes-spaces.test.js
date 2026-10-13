@@ -128,7 +128,7 @@ test("本地存储写满：警告要写明刷新会丢，「重试保存」重�
   };
 
   ui.run('notes["1"] = { note: "复审结论" }; persistNotes();');
-  assert.equal(ui.run("notesPersistFailed"), true);
+  assert.equal(ui.run("notesPersistence.snapshot().failed"), true);
   assert.equal(ui.element("notesSaveWarning").hidden, false);
   assert.match(ui.element("notesSaveWarning").textContent, /刷新或关闭本页就会丢失/);
   assert.equal(ui.element("retryNotesSave").hidden, false, "写满时要露出「重试保存」");
@@ -246,8 +246,7 @@ test("清空当前备注保留历史，清空历史保留当前空间", async ()
   assert.equal(ui.storage.getItem(key), "{}");
   assert.notEqual(ui.storage.getItem(historyKey), null);
   assert.equal(ui.run("Object.keys(notes).length"), 0);
-  ui.storage.setItem(key, JSON.stringify({ 1: { note: "当前记录" } }));
-  ui.run('notes["1"] = { note: "当前记录" }; lastPersistedNotesRaw = notesStorage.getItem(storageKey); renderNotesSpaces();');
+  ui.run('notes["1"] = { note: "当前记录" }; persistNotes(); renderNotesSpaces();');
   await ui.element("clearHistoryNotes").dispatch("click");
   assert.notEqual(ui.storage.getItem(key), null);
   assert.equal(ui.storage.getItem(historyKey), null);

@@ -25,7 +25,7 @@ test("explicit recovery seed restores the verified backup once and survives relo
   assert.equal(ui.element("metricStage1Passed").textContent, 1);
   assert.equal(ui.element("metricStage1NeedsEdit").textContent, 1);
   assert.equal(ui.element("metricStage1Errors").textContent, 1);
-  assert.equal(ui.run("notesPersistFailed"), false);
+  assert.equal(ui.run("notesPersistence.snapshot().failed"), false);
   assert.equal(storage.getItem("translation-compare-recovery-v1:project:" + seed.id), "saved");
   const reopened = createClientFixture(html(), storage);
   assert.equal(reopened.run("Object.keys(notes).length"), 3);
@@ -59,7 +59,7 @@ test("recovery failure keeps the full backup in page memory and retries after ca
   await ui.element("retryNotesSave").dispatch("click");
   const reopened = createClientFixture(html(), storage);
   assert.equal(reopened.run("Object.keys(notes).length"), 3);
-  assert.equal(reopened.run("notesPersistFailed"), false);
+  assert.equal(reopened.run("notesPersistence.snapshot().failed"), false);
 });
 
 test("recovery validates every row and project before publication and preserves corrupt current data", () => {
@@ -70,7 +70,7 @@ test("recovery validates every row and project before publication and preserves 
   const storage = storageFixture({ [currentKey]: "{broken" });
   const ui = createClientFixture(html(), storage);
   assert.equal(storage.getItem(currentKey), "{broken");
-  assert.equal(ui.run("notesStorageBlocked"), true);
+  assert.equal(ui.run("notesPersistence.snapshot().blocked"), true);
   assert.match(ui.run("notesRecovery.message"), /无法解析/);
 });
 
@@ -94,7 +94,7 @@ test("recovery marker failure does not report the saved notes as unsaved", () =>
     set(key, value);
   };
   const ui = createClientFixture(html(), storage);
-  assert.equal(ui.run("notesPersistFailed"), false);
+  assert.equal(ui.run("notesPersistence.snapshot().failed"), false);
   assert.equal(ui.run("Object.keys(notes).length"), 3);
   assert.match(ui.run("notesRecovery.message"), /已无损压缩保存.*恢复标记未能保存/);
   assert.doesNotMatch(ui.run("notesRecovery.message"), /尚未保存|恢复未完成/);

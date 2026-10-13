@@ -65,8 +65,6 @@
       notesMetricsVersion += 1;
     }
 
-    let notesPersistFailed = false;
-    let notesPersistFailureKind = "";
     const allRows = JSON.parse(document.getElementById("rowData").textContent);
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
     const renderedRowsById = new Map();
@@ -342,8 +340,21 @@
     const initialRaw = notesStorage.getItem(storageKey);
     const initialData = initialRaw === null ? {} : notesTools.parse(initialRaw);
     // 无法解析的当前空间保留原样，防止下一次自动保存抹掉原始数据。
-    let notesStorageBlocked = initialData === null;
-    let lastPersistedNotesRaw = initialRaw;
+    const notesPersistence = createNotesPersistence({
+      storage: notesStorage,
+      key: storageKey,
+      initialRaw,
+      initialBlocked: initialData === null,
+      serialize: serializeNotes,
+      classifyFailure: notesTools.storageFailureKind,
+      onStateChange: updateNotesSaveState,
+      scheduler: {
+        setTimeout: window.setTimeout.bind(window),
+        clearTimeout: window.clearTimeout.bind(window),
+        requestIdleCallback: window.requestIdleCallback?.bind(window),
+        cancelIdleCallback: window.cancelIdleCallback?.bind(window),
+      },
+    });
     for (const [id, value] of notesTools.entries(initialData)) notes[id] = normalizeStoredNote(value);
     // 恢复通告：{ message, tone }——找回成功与「一条都对不上」是两种语气，写在赋值处而不是猜文案。
     let notesRecovery = null;
@@ -390,7 +401,7 @@
         }
       }
       if (restored || healed) {
-        // 与自动找回同一条落盘通道：这一步发生在脚本求值期，saveNotes 的防抖句柄还没就绪。
+        // 初始化恢复直接同步保存，不等待后续交互的延迟保存。
         const saved = persistNotes();
         notesRecovery = {
           tone: "success",
@@ -562,7 +573,7 @@
       const marker = "translation-compare-recovery-v1:" + (pageMeta.projectKey || "") + ":" + seed.id;
       try {
         if (localStorage.getItem(marker) === "saved") return;
-        if (notesStorageBlocked) throw new Error("本页现存记录无法解析，请先导出原始数据。");
+        if (notesPersistence.snapshot().blocked) throw new Error("本页现存记录无法解析，请先导出原始数据。");
         const result = notesTools.restoreSeed(seed, storageKey, allRows, notes, {
           stateFor: stageNoteState,
           userChanged: (item) => Boolean(item.manualDone || (item.note && !isAutomatedNoteText(item.note))
@@ -750,9 +761,6 @@
       },
       timers: { setTimeout: window.setTimeout.bind(window) },
     });
-    let notesSavePending = false;
-    let notesSaveHandle = 0;
-    let notesSaveHandleType = "";
     let filterTimer = 0;
     let severityFilter = "all";
     let aiResultFilter = "all";
@@ -842,9 +850,10 @@
     }
 
     function notesSaveFailureMessage() {
+      const { failureKind } = notesPersistence.snapshot();
       const protection = "这些修改只在当前页面内存里，刷新或关闭本页就会丢失。请先导出本页记录。";
-      if (notesPersistFailureKind === "denied") return "浏览器禁止本地存储写入：" + protection + "请检查站点存储权限，允许存储后重试。";
-      if (notesPersistFailureKind !== "quota") return "本地存储写入失败，原因未明：" + protection + "请点击「重试保存」。";
+      if (failureKind === "denied") return "浏览器禁止本地存储写入：" + protection + "请检查站点存储权限，允许存储后重试。";
+      if (failureKind !== "quota") return "本地存储写入失败，原因未明：" + protection + "请点击「重试保存」。";
       const usage = notesTools.storageUsage(localStorage, storageKey, notesStorage.encode(JSON.stringify(notes)));
       return "备注无损压缩后仍超出浏览器容量：" + protection
         + (usage.available ? usage.historyCount ? "可清理本项目已备份的历史空间。" : "本项目没有历史空间可清理。" : "无法读取存储占用。")
@@ -853,83 +862,34 @@
     }
 
     function updateNotesSaveState() {
+      const state = notesPersistence.snapshot();
       const banner = document.getElementById("notesSaveWarning");
       const badge = document.getElementById("notesSaveState");
-      const failed = notesStorageBlocked || notesPersistFailed;
+      const failed = state.blocked || state.failed;
       if (badge) {
         badge.textContent = failed ? "尚未保存 · 请展开处理" : "保存在此浏览器";
         badge.classList.toggle("is-warn", failed);
       }
       if (!banner) return;
       banner.hidden = !failed;
-      banner.textContent = notesStorageBlocked
+      banner.textContent = state.blocked
         ? "本页空间无法解析或已被其他页面修改，已暂停保存。请先导出本页记录，再刷新页面核对；本地原始数据仍保留。"
         : notesSaveFailureMessage();
       const retry = document.getElementById("retryNotesSave");
-      if (retry) retry.hidden = !notesPersistFailed || notesStorageBlocked;
+      if (retry) retry.hidden = !state.failed || state.blocked;
     }
 
     function persistNotes() {
-      try {
-        if (notesStorageBlocked || notesStorage.getItem(storageKey) !== lastPersistedNotesRaw) {
-          notesStorageBlocked = true;
-          return false;
-        }
-        const raw = serializeNotes();
-        if (raw !== lastPersistedNotesRaw) notesStorage.setItem(storageKey, raw);
-        lastPersistedNotesRaw = raw;
-        notesPersistFailed = false;
-        notesPersistFailureKind = "";
-        return true;
-      } catch (error) {
-        notesPersistFailed = true;
-        notesPersistFailureKind = notesTools.storageFailureKind(error);
-        return false;
-      } finally {
-        updateNotesSaveState();
-      }
-    }
-
-    function cancelScheduledNotesSave() {
-      if (!notesSavePending) return;
-      if (notesSaveHandleType === "idle" && window.cancelIdleCallback) {
-        window.cancelIdleCallback(notesSaveHandle);
-      } else {
-        window.clearTimeout(notesSaveHandle);
-      }
-      notesSavePending = false;
-      notesSaveHandle = 0;
-      notesSaveHandleType = "";
+      return notesPersistence.persist();
     }
 
     function flushNotes() {
-      if (!notesSavePending) return;
-      cancelScheduledNotesSave();
-      persistNotes();
+      notesPersistence.flush();
     }
 
     function saveNotes({ immediate = false } = {}) {
       markNotesDirtyForMetrics();
-      if (immediate) {
-        cancelScheduledNotesSave();
-        persistNotes();
-        return;
-      }
-      if (notesSavePending) return;
-      notesSavePending = true;
-      const commit = () => {
-        notesSavePending = false;
-        notesSaveHandle = 0;
-        notesSaveHandleType = "";
-        persistNotes();
-      };
-      if (window.requestIdleCallback) {
-        notesSaveHandleType = "idle";
-        notesSaveHandle = window.requestIdleCallback(commit, { timeout: 2000 });
-      } else {
-        notesSaveHandleType = "timeout";
-        notesSaveHandle = window.setTimeout(commit, 250);
-      }
+      notesPersistence.save({ immediate });
     }
 
     function parsePercentRatio(value, fallback = 0.92, min = 0.5) {
@@ -5715,7 +5675,8 @@
     // 保存没成功时，这批备注只活在当前页面内存里：刷新、关闭标签页或浏览器回收都会让它们消失。
     // 浏览器只在用户与页面交互过之后才显示这个原生确认框，正常浏览时不会被打扰。
     window.addEventListener("beforeunload", (event) => {
-      if (!notesPersistFailed && !notesStorageBlocked) return;
+      const state = notesPersistence.snapshot();
+      if (!state.failed && !state.blocked) return;
       event.preventDefault();
       event.returnValue = "";
     });
@@ -6456,7 +6417,7 @@
     function notesBackup(spaces) {
       const exported = spaces.slice();
       // 当前损坏/冲突的磁盘版本也随备份保留，不能用空的内存记录替代它。
-      if (notesStorageBlocked && spaces.some((space) => space.current)) {
+      if (notesPersistence.snapshot().blocked && spaces.some((space) => space.current)) {
         const raw = notesStorage.getItem(storageKey);
         if (raw !== null) {
           let key = storageKey + ":import-" + Date.now();
@@ -6569,7 +6530,7 @@
       const plan = recoveryPlan(space, byIndex);
       pendingNotesRecovery = { key: space.key, raw: space.raw, byIndex, plan };
       const action = byIndex ? "按行号找回" : "按内容找回";
-      notesPanelIds.apply.disabled = !plan.pairs.length || notesStorageBlocked;
+      notesPanelIds.apply.disabled = !plan.pairs.length || notesPersistence.snapshot().blocked;
       notesPanelIds.apply.textContent = "找回 " + plan.pairs.length + " 条";
       const samples = plan.pairs.slice(0, 5).map((pair) => {
         const item = space.data[String(pair.from)];
@@ -6632,7 +6593,7 @@
       }
       // 预览期间本页仍可能收到 AI 结果；重新排除已占用的目标行。
       const plan = recoveryPlan(space, pending.byIndex);
-      if (notesStorageBlocked) { notesPanelStatus("请先解决保存冲突，再找回记录。", { tone: "watch" }); return; }
+      if (notesPersistence.snapshot().blocked) { notesPanelStatus("请先解决保存冲突，再找回记录。", { tone: "watch" }); return; }
       applyRecovery(space, plan);
       saveNotes({ immediate: true });
       markNotesDirtyForMetrics();
@@ -6642,8 +6603,8 @@
       notesPanelIds.dialog.close();
       renderNotesSpaces();
       notesPanelStatus("已找回 " + plan.pairs.length + " 条，其中 " + plan.unverified + " 条需逐行核验。"
-        + (notesPersistFailed || notesStorageBlocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"),
-        { tone: notesPersistFailed || notesStorageBlocked ? "watch" : "success" });
+        + (notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"),
+        { tone: notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked ? "watch" : "success" });
     });
     document.getElementById("cancelNotesRecovery").addEventListener("click", () => notesPanelIds.dialog.close());
     notesPanelIds.dialog.addEventListener("close", () => { pendingNotesRecovery = null; });
@@ -6669,14 +6630,11 @@
       try {
         if (pageMeta.notesRecovery) localStorage.setItem("translation-compare-recovery-v1:"
           + (pageMeta.projectKey || "") + ":" + pageMeta.notesRecovery.id, "saved");
-        notesStorage.setItem(storageKey, "{}");
-        for (const id of Object.keys(notes)) delete notes[id];
-        markNotesDirtyForMetrics();
-        updateStageMetricsDashboard(null, {}, false);
-        lastPersistedNotesRaw = "{}";
-        notesPersistFailed = false;
-        notesPersistFailureKind = "";
-        notesStorageBlocked = false;
+        notesPersistence.clearCurrent(() => {
+          for (const id of Object.keys(notes)) delete notes[id];
+          markNotesDirtyForMetrics();
+          updateStageMetricsDashboard(null, {}, false);
+        });
         updateDoneCount();
         applyFilters({ reset: false });
         renderNotesSpaces();
@@ -6721,7 +6679,8 @@
     document.getElementById("retryNotesSave").addEventListener("click", () => {
       saveNotes({ immediate: true });
       renderNotesSpaces();
-      if (!notesPersistFailed && !notesStorageBlocked) {
+      const state = notesPersistence.snapshot();
+      if (!state.failed && !state.blocked) {
         notesPanelStatus("本页记录已保存。", { tone: "success" });
         return;
       }
@@ -6729,7 +6688,7 @@
       // 看不出「这次到底成没成」，很容易以为已经存好、转头去刷新页面——那会把只存在内存里的
       // 这批 AI 结果直接丢掉。
       notesPanelStatus(
-        notesStorageBlocked
+        state.blocked
           ? "仍然无法保存：本页空间已被其他页面修改或无法解析。请先导出本页记录，再刷新页面核对。"
           : "仍然保存失败：" + notesSaveFailureMessage(),
         { tone: "error" });
@@ -6739,8 +6698,7 @@
     });
     window.addEventListener("storage", (event) => {
       if (event.key === storageKey || event.key === null) {
-        notesStorageBlocked = notesStorage.getItem(storageKey) !== lastPersistedNotesRaw;
-        updateNotesSaveState();
+        notesPersistence.observeStorageChange();
       }
       if (notesPanelIds.panel.open) renderNotesSpaces();
     });

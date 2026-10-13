@@ -272,7 +272,6 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /data-revision=/);
   assert.match(script, /writeNote\(String\(result\.index\), result\.note \|\| "", Boolean\(result\.done\), \{ deferCommit: true \}, result\.targetKey \|\| ""\)/);
   assert.match(script, /resultLimit: "64"/);
-  assert.match(script, /requestIdleCallback\(commit, \{ timeout: 2000 \}\)/);
   assert.match(script, /window\.addEventListener\("pagehide", flushNotes\)/);
   assert.match(script, /markEntriesConfirmed\(pending\.map\(\(entry\) => entry\.id\)\);[\s\S]*?applyFilters\(\{ reset: false \}\);[\s\S]*?tableFrame\.scrollTop = 0;/);
   assert.match(script, /function visibleRevisionWriteButtons\(\)[\s\S]*?getClientRects\(\)\.length > 0/);

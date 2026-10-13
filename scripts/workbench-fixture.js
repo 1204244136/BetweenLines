@@ -37,6 +37,16 @@ function createWorkbench(storage = storageFixture(), options = {}) {
 function createClientFixture(html, storage = storageFixture(), options = {}) {
   const elements = new Map();
   const timeouts = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  const registerListener = (listeners, name, callback) => {
+    if (!listeners.has(name)) listeners.set(name, []);
+    listeners.get(name).push(callback);
+  };
+  const dispatchListeners = async (listeners, name, event = {}) => {
+    for (const callback of listeners.get(name) || []) await callback(event);
+    return event;
+  };
   let createdSeq = 0;
   let timeoutSeq = 0;
   const scheduleTimeout = (callback, delay = 0) => {
@@ -145,11 +155,13 @@ function createClientFixture(html, storage = storageFixture(), options = {}) {
       querySelector: element, querySelectorAll() { return []; },
       createElement: (tag) => Object.assign(element("created-" + (++createdSeq)), { tagName: String(tag).toUpperCase() }),
       createElementNS: () => element("ns-" + (++createdSeq)),
-      documentElement: element("html"), body: element("body"), addEventListener() {},
+      documentElement: element("html"), body: element("body"),
+      addEventListener: (name, callback) => registerListener(documentListeners, name, callback),
     },
     localStorage: storage, console, URL, URLSearchParams, TextEncoder, Blob, Event,
     window: {
-      addEventListener() {}, requestAnimationFrame() {},
+      addEventListener: (name, callback) => registerListener(windowListeners, name, callback),
+      requestAnimationFrame() {},
       setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout,
       prompt: options.prompt || ((msg, def) => def || ""),
       confirm: options.confirm || (() => true),
@@ -183,6 +195,8 @@ function createClientFixture(html, storage = storageFixture(), options = {}) {
   vm.runInContext(script, context);
   return {
     html, element, storage, fetches, posts, timeouts,
+    dispatchWindow: (name, event) => dispatchListeners(windowListeners, name, event),
+    dispatchDocument: (name, event) => dispatchListeners(documentListeners, name, event),
     run: (code) => vm.runInContext(code, context),
     settle: async () => { for (let step = 0; step < 24; step += 1) await Promise.resolve(); },
     // 状态轮询是 async + await fetch：把微任务抽干（跨 VM 边界时 await 的延续排在后面）。

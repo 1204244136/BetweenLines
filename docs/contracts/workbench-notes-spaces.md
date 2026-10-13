@@ -23,7 +23,7 @@
 - 备注空间键必须包含当前工作台的 `projectKey`（`translation-compare-notes-v7:<projectKey>:<rowsSignature>`）；`rowsSignature` 只区分同一项目的不同输入快照。浏览器 `localStorage` 虽由多个项目共用，但项目之间的空间必须逻辑隔离。
 - 工作台的历史列表、`备份全部`、`清空历史`、历史找回和载入自愈只读取当前 `projectKey` 的空间（当前空间也必须保留）。其他项目的空间不得出现在当前页面的历史列表、备份结果或批量清理范围内；它们留在浏览器中，用户切换到对应项目后再由对应工作台读取。
 - 跨项目的 JSON 导入必须经过当前项目命名空间校验；导入结果不得让当前工作台直接看到或操作另一个项目的历史空间。若备份包含多个项目，导入器应逐空间保留其项目归属，交由对应项目页面处理，不能把空间改写成当前项目的 key。
-- **其他项目/旧版空间的容量出口**：上一条禁止的是把它们混进本项目的历史列表、`备份全部`、`清空历史` 与找回；但它们与当前项目共用同一份 localStorage 配额，写满时本页备注会直接存不进去（`notesPersistFailed`）。所以页面在历史列表**之外**单独一区列出它们（`notesForeignList` / `collectForeignNotesSpaces()`），只提供导出（单空间按钮与 `导出这些空间`）与删除，**一律不渲染找回入口**（不出 `data-notes-restore` / `data-notes-index`），也不进 `notesSpaceInventory`、`备份全部` 与 `清空历史`。删除必须二次确认并点名所属项目；列出不等于删除。回归：`node --test scripts/notes-foreign-spaces.test.js scripts/notes-spaces.test.js scripts/notes-recovery-merge.test.js`。
+- **其他项目/旧版空间的容量出口**：上一条禁止的是把它们混进本项目的历史列表、`备份全部`、`清空历史` 与找回；但它们与当前项目共用同一份 localStorage 配额，写满时本页备注会直接存不进去（`notesPersistence.snapshot().failed`）。所以页面在历史列表**之外**单独一区列出它们（`notesForeignList` / `collectForeignNotesSpaces()`），只提供导出（单空间按钮与 `导出这些空间`）与删除，**一律不渲染找回入口**（不出 `data-notes-restore` / `data-notes-index`），也不进 `notesSpaceInventory`、`备份全部` 与 `清空历史`。删除必须二次确认并点名所属项目；列出不等于删除。回归：`node --test scripts/notes-foreign-spaces.test.js scripts/notes-spaces.test.js scripts/notes-recovery-merge.test.js`。
 - 备份保留原始数据，导入同名空间只创建副本；找回保留当前行已有记录，不能通过释放来源空间应对配额不足。
 - **未校验记录隔离**：`recoveredUnverified` 记录不能携带当前行的 `rowSig` 或计入人工确认。**按行号找回**与**只剩行序推断的锚点配对**必须保持此标记。
 - **文本证据例外**：配对自带文本证据——记录里的「修改结果」与目标行现在的正文逐字相同（`pair.textConfirmed`）——按 `verified` 处理并保留人工确认。
@@ -34,9 +34,19 @@
 - 历史为空时禁用清理；显式清理包含空和损坏的本项目空间。保存与导入失败必须区分配额、权限和未知异常。占用摘要以底层实际存储串计量，预计保存量以编码后的内容替换当前串计算；UTF-16 估算不是浏览器配额判据，不能用解压后的长度声称存储已满。
 - **明确授权的定向恢复**：渲染期可通过 `notesRecovery` 参数临时注入备份，发布前和浏览器载入时均验证空间键及每条行签名。只补缺失或阶段更完整的记录，保护人工备注、修订编辑、人工确认和更完整的现存结论。恢复参数可列出已知不完整的 `ignoredRunIds`，防止其回包降级已恢复成果；新任务仍正常应用。恢复成功后写入按项目和备份摘要隔离的一次性标记，重复刷新不重做、显式清空不自动找回；保存失败时恢复内容保留在内存并允许导出，标记单独写失败不得误报备注尚未保存。普通构建不携带备份，不将恢复数据写入比较 JSON。
 
+## 备注保存会话（`notes-persistence.js`）
+
+- **状态归属**：`createNotesPersistence` 独占上次成功写入的逻辑内容基线、冲突拦截、写入失败及分类、保存 timer。页面持有备注、行签名序列化、恢复合并规则及文案；`notes-storage.js` 仍负责同步压缩存储。页面只通过 `persist` / `save` / `flush` / `clearCurrent` / `observeStorageChange` / `snapshot` 协作，不直接修改保存基线或标志。
+- **初始化与写入**：实例在解析初始空间之后、自动恢复之前建立，不在 constructor 通知 UI。初始化恢复可直接 `persist`，它先检查冲突与逻辑内容基线，再序列化补签名；冲突时不得触发序列化。成功才更新基线并清失败状态；异常沿用 `notes-spaces.storageFailureKind` 分类，所有保存尝试均按原时序通知 UI，通知异常不额外吞掉。
+- **保存调度**：`persist` 不取消 timer；`save` 合并为首个尚未执行的保存，优先 idle callback（timeout 2000ms），否则等待 250ms，后续请求不延长期限。页面每次请求保存仍使指标失效。立即保存先取消 timer 再写；`flush` 只处理已排队的保存，无 pending 时不重试。页面隐藏或离开调用同一 flush，保存失败的离开提示仍由页面根据快照生成。
+- **清空时序**：显式授权的 `clearCurrent(onClear)` 先写 `{}`，再调用页面清备注与指标，最后认领空基线并复位冲突/失败状态；保留既有 timer，不新增 UI 通知。写入或页面回调抛错原样交给页面处理，不转换成普通保存失败；失败前已发生的副作用不回滚。
+- **跨页变化**：`observeStorageChange` 按当前逻辑内容与基线是否一致重新赋值拦截状态，可因内容回到基线而解除，不能改成永久拦截。它不自动保存、合并或重试；读取失败沿用原传播方式。`snapshot` 只读回报 `blocked`、`failed`、`failureKind`、`pending`，不暴露基线或 timer 句柄。
+- **恢复标记**：标记与恢复规则仍由页面管理，只在保存成功后写标记；标记单独失败不把已经保存的备注误报成未保存。未保存成果保留在页面内存，重试与导出继续走既有入口。
+- **验证**：`node --test scripts/notes-persistence.test.js scripts/notes-persistence-client.test.js scripts/notes-storage.test.js scripts/notes-spaces.test.js scripts/notes-recovery-seed.test.js scripts/notes-recovery-merge.test.js scripts/notes-foreign-spaces.test.js scripts/ai-result-reception-client.test.js`。module 测试使用可控 scheduler 与真实压缩 adapter；生成页面回归执行 storage、pagehide、visibilitychange 与 beforeunload 事件，覆盖 timer、跨页冲突、显式清空及重试。
+
 ## 浏览器 AI 结果接收（`ai-result-reception.js`）
 
-- **状态所有权**：`createAiResultReception` 独占当前运行号、修订游标、去重集合、已清除运行、待遗忘行、状态请求互斥与追赶 timer。预筛结果集合、筛选、阶段看板、Toast 与备注合并/保存仍由页面持有；不向接收实例传整个可变页面状态。
+- **状态所有权**：`createAiResultReception` 独占当前运行号、修订游标、去重集合、已清除运行、待遗忘行、状态请求互斥与追赶 timer。预筛结果集合、筛选、阶段看板、Toast、备注内容与合并仍由页面持有，保存会话归上节；不向接收实例传整个可变页面状态。
 - **两阶段交付**：`begin(ai)` 在原状态渲染位置观察换轮，返回项目身份与清除拦截的只读 receipt，不提前推进游标。`commit(receipt, applyBatch)` 按待遗忘行、恢复忽略运行、去重键及当前行签名准入；页面 adapter 先登记预筛集合，再批量写备注、安排保存并报告拒绝，全部完成后消费游标。去重仍在签名检查前登记，版本键保留 `result.runId + index + (resultRevision || status)` 的口径。
 - **异常时序**：应用或提示抛错时不推进游标，已登记的去重状态保留；存储保存失败不回滚内存成果，也不阻止游标推进。无当前行签名时不新增拒绝条件；错误签名的重复回包只提示一次。
 - **请求 adapter**：`refresh()` 自报项目与行集身份、当前档案、运行号及游标，每批 64 条，一次只允许一个状态请求；结果未收齐时按 16ms 追赶。页面继续每 1.5 秒触发刷新。状态请求沿用 `data.ok` 判据；结果清除同时检查 HTTP 与 `data.ok`，不因共用 adapter 统一成新的错误口径。

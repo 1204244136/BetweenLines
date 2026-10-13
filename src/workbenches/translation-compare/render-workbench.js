@@ -8,6 +8,7 @@ const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createNotesStorage } = require("./notes-storage");
+const { createNotesPersistence } = require("./notes-persistence");
 const { createAiResultReception } = require("./ai-result-reception");
 const { createPresetTools } = require("./ai-presets");
 const { normalizeConnectionConfig } = require("../../ai/connection-config");
@@ -596,6 +597,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${sanitizeModelMetadata.toString()}
     ${createPresetTools.toString()}
     ${createAiResultReception.toString()}
+    ${createNotesPersistence.toString()}
     ${createStageNoteTools.toString()}
     const { latestAiNotePart, stageNoteState, splitAiNoteParts, splitNoteFields } = createStageNoteTools();
     ${normalizeGrade.toString()}
