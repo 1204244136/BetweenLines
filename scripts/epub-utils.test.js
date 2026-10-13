@@ -19,6 +19,17 @@ const { sliceMainDocument, splitParagraphs } = require("./text-utils");
 
 const originalNoteref = '<a class="nodeco" epub:type="noteref" href="S4_03-Note.xhtml#note6"><sup>㊟</sup></a>';
 
+test("结构标题排除数字节号与特殊篇名，保留数字正文与章归属", () => {
+  const text = epubHtmlToText(
+    "<h1>第一章</h1><h2>1（AM00:00）</h2><p>1</p><p>正文。</p><h1>独立篇名</h1><p>后续。</p>",
+    { structuralHeadings: true },
+  );
+  const paragraphs = splitParagraphs(text, "cn");
+  assert.deepEqual(paragraphs.map((p) => p.text), ["1", "正文。", "后续。"]);
+  assert.deepEqual(paragraphs.map((p) => p.chapter), ["第一章", "第一章", "独立篇名"]);
+  assert.equal(JSON.stringify(paragraphs).includes("\uE200"), false);
+});
+
 test("EPUB 转换默认保留完整的 noteref 注释标记", () => {
   const text = epubHtmlToText(`<p>before ${originalNoteref} after</p>`);
 

@@ -162,7 +162,7 @@ npm run layout -- --project=<projectKey>
 
 说话人工作台也可在生成时启用模型推断：添加 `--ai --protocol compatible --base-url <接口地址> --model <模型>`，API Key 可通过 `BETWEENLINES_AI_API_KEY` 设置。`--protocol` 支持 `local`、`claude`、`compatible`，可选 `--provider` 仅用于命名供应商；启用后会调用配置的模型，未添加 `--ai` 时只生成待判断工作台。
 
-配合上游 `index-X` 项目（同级目录 `../index-X`，或用 `INDEX_X_DIR` 指定）时，脚本会自动解析简中译本与日文原文，并支持该项目的正文格式契约（L1-L6 行模板、`heading-lines` 标题、`ruby` 注音、`noteref` 译注标记、引子/尾声章节结构）。具体的作品编号、文件命名与章节边界规范见 `AGENTS.md`。
+配合上游 `index-X` 项目（同级目录 `../index-X`，或用 `INDEX_X_DIR` 指定）时，脚本会自动解析简中译本与日文原文，并支持该项目的正文格式契约（L1-L6 行模板、`heading-lines` 标题、`ruby` 注音、`noteref` 译注标记、引子/尾声章节结构）。具体的作品编号、文件命名与章节边界规范见 `AGENTS.md`。 EPUB 标题按结构排除，包括数字小节号、带时间戳的节号和独立篇名；正文段落中的数字仍会保留。
 
 翻译判定的规范正文同样来自 `index-X` 的 `docs/`：`translation-spec.md` 写成品该写成什么样（标点与字形、注音与译注、语气词与拟声词、译名与证据边界），`translation-name-selection-spec.md` 写译名在候选之间怎么取舍，`translation-name-rulings.md` 是已生效裁定的总表，`x-translation-differences.md` 是与维基译名表的人为固有差异（属取舍，不要回改）。本工作台的 AI 规范档案是同一套规范在提示词层的实现，两边改动要互相同步；口径不一致时以上游规范正文为准。
 

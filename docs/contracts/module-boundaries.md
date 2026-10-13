@@ -45,6 +45,8 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 
 ## 翻译构建边界
 
+EPUB ingest 在 HTML 转纯文本时保留 h1–h6 的临时结构标题标记，供正文边界与段落切分消费；标记不得进入段落、AI 输入或生成物。数字节号不覆盖所属章名；普通 p 中的数字仍为正文。Pandoc 与内置 spine 路径使用同一规则，说话人构建共享该入口。
+
 | 模块（均相对 `src/workbenches/translation-compare/`） | 唯一职责 |
 | --- | --- |
 | `build-compare.js` | CLI、构建流程与快照重渲染入口；旧导出仅转发兼容调用 |

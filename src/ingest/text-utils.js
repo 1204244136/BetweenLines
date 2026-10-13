@@ -46,7 +46,7 @@ const readInputText = (file) => readSelectedInputText(file);
 
 function blockStartPattern(markers) {
   return new RegExp(
-    `(?:^|\\n\\s*\\n)\\s*(?:${markers.map((marker) => marker.source || marker).join("|")})(?:\\s|$|[：:])`,
+    `(?:^|\\n\\s*\\n)\\s*(?:\uE200H[1-6]:)?(?:${markers.map((marker) => marker.source || marker).join("|")})(?:\\s|$|[：:]|\uE201)`,
     "i",
   );
 }
@@ -110,7 +110,7 @@ function sliceMain(text, startMarker, endMarker, options = {}) {
 }
 
 function normalizeBlock(block) {
-  return String(block || "").replace(/\s+/g, " ").trim();
+  return String(block || "").replace(/\uE200H[1-6]:|\uE201/g, "").replace(/\s+/g, " ").trim();
 }
 
 function blockRanges(text) {
@@ -130,7 +130,7 @@ function isFrontMatterBlock(block, lang) {
   const normalized = normalizeBlock(block);
   if (!normalized) return true;
   if (isMediaOnlyBlock(normalized)) return true;
-  if (normalizeTitle(normalized, lang)) return true;
+  if (normalizeTitle(block, lang)) return true;
   if (/^(contents|目錄|目录|ＣＯＮＴＥＮＴＳ|navigation)$/i.test(normalized)) return true;
   if (/^(制作信息|製作信息|网翻|翻译|翻譯|校对|校對|美工|录入|錄入|简介|簡介|彩页|插图|插圖)(?:\s|：|:|$)/i.test(normalized)) return true;
   // 作品标题行：下面这份清单是本项目实际使用的规则，同时作为示范；同一形态的通用写法
@@ -198,7 +198,7 @@ function findBodyStart(text, lang, markers = {}) {
         bodyStartIndex = -1;
         continue;
       }
-      if (normalizeTitle(normalized, lang)) {
+      if (normalizeTitle(range.text, lang)) {
         // 标题已结束简介章节，它本身是结构性边界；紧随其后的块才是候选起点。
         inSynopsis = false;
         bodyStart = null;
@@ -220,7 +220,7 @@ function findBodyStart(text, lang, markers = {}) {
       // 开篇章节标题紧挨正文起点时一并保留，否则会被切掉并把首章降级为「正文」。
       if (bodyStartIndex > 0) {
         const prevRange = ranges[bodyStartIndex - 1];
-        const prevTitle = normalizeTitle(normalizeBlock(prevRange.text), lang);
+        const prevTitle = normalizeTitle(prevRange.text, lang);
         if (prevTitle && isOpeningChapterTitle(prevTitle)) {
           return prevRange.start;
         }
@@ -266,6 +266,8 @@ function sliceMainForInput(text, lang, inputMode = "document", markers = {}) {
 
 function normalizeTitle(line, lang) {
   const trimmed = line.trim();
+  const structural = trimmed.match(/^\uE200H[1-6]:([\s\S]*?)\uE201$/);
+  if (structural) return normalizeBlock(structural[1]) || "标题";
   if (!trimmed) return "";
   const pattern = chapterPatterns[lang];
   if (!pattern) return "";
@@ -292,7 +294,8 @@ function splitParagraphs(text, lang) {
   for (const block of blocks) {
     const title = normalizeTitle(block, lang);
     if (title) {
-      currentChapter = title;
+      // 数字节号属于结构标题，但不替换所属章名。
+      if (!/^\d+(?:\s|[（(:：.]|$)/.test(title)) currentChapter = title;
       continue;
     }
 

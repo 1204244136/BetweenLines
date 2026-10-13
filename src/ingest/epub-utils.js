@@ -140,6 +140,10 @@ function joinHeadingLayers(html) {
 
 function epubHtmlToText(html, options = {}) {
   const keep = normalizeInlineMarkupOptions(options);
+  if (options.structuralHeadings) {
+    html = joinHeadingLayers(html).replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi,
+      (match, level, inner) => `<p>\uE200H${level}:${epubHtmlToText(inner, { ...options, structuralHeadings: false })}\uE201</p>`);
+  }
   const protectedMarkup = protectNoterefMarkup(joinHeadingLayers(html), keep.noteref);
   return normalizePreservedInlineMarkup(
     htmlToTextWithInlineMarkup(protectedMarkup.html),
@@ -422,6 +426,7 @@ async function readEpubTextWithPandoc(file, options = {}) {
 }
 
 async function readPackedEpubTextWithPandoc(file, options = {}) {
+  options = { ...options, structuralHeadings: true };
   let html = await readWithPandoc(file, { from: "epub", to: "html" });
   if (normalizeInlineMarkupOptions(options).noteref) {
     const zip = await JSZip.loadAsync(fs.readFileSync(file));
@@ -443,6 +448,7 @@ async function readEpubSpineDocuments(file, options = {}) {
 }
 
 async function readEpubSpineDocumentsFromArchive(zip, options = {}) {
+  options = { ...options, structuralHeadings: true };
   const containerFile = zip.file("META-INF/container.xml");
   if (!containerFile) throw new Error("Missing META-INF/container.xml in EPUB");
 
