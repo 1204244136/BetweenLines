@@ -227,7 +227,7 @@
 | stage2 | — | 是 | 复审 → 仲裁 |
 | stage3 | — | — | 只跑仲裁 |
 
-阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即把 `s1` 对象**直接**推入 `stage2Pending`（无损，保留 `lowScore` 与完整 decision）；`executeStage2` 判定 `arbCheck.triggered` 即把 `s2` 推入 `stage3Pending`。每个阶段配多个预设时，**每个预设是一条独立并发通道**（`ai/preset-pool.js` 为每条通道读取 `channel.currentConcurrency` 作为配额），阶段可派发量 = 各通道当前允许并发之和，`cleanConfig` 必须原样保住 `presetPool`/`stylistPresets`/`arbiterPresets` 里的连接参数与 `presetId`/`name`；单预设时退化回那一条通道。**运行中增删预设**经 `POST /api/ai-proofread/presets` 进入 `updateStagePresets`：池的版本变化触发整队重算绑定，新预设立刻派活、被删预设的待审行立刻改派，在飞请求不打断；删空回落到该阶段配置。阶段控制器（`s1Ctrl`/`s2Ctrl`/`s3Ctrl`）只保留兜底状态，各预设自己的退避窗口、单行重试计数、并发上探与下调和断路器都落在行所属的通道上（自适应调度与热更新的细则见 [workbench-notes-spaces.md](workbench-notes-spaces.md)「并发上限与内部自适应调度」，与熔断的联动也在那里）；`dispatch()` 每轮按 **stage3 → stage2 → stage1** 的顺序排空，让已经产生的分歧行尽快收口。
+阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即通过 `dispatchers.stage2.enqueue` 把完整 `s1` 交给复审；`executeStage2` 判定 `arbCheck.triggered` 即通过 `dispatchers.stage3.enqueue` 交给仲裁。各阶段内部的预设集合、请求归属、并发/退避与熔断由 `ai/stage-dispatch.js` 持有；每个预设是一条独立通道，阶段配额是各通道之和，`cleanConfig` 保留 `presetPool`/`stylistPresets`/`arbiterPresets` 的连接参数与 `presetId`/`name`。热更新、新旧同 ID 请求隔离及整体终止汇总见下文「阶段派发状态与请求归属」；`dispatch()` 仍按 **stage3 → stage2 → stage1** 顺序派发。
 
 ### 「待人工确认」只能由终审分发
 
@@ -245,10 +245,18 @@
 
 ### 独立阶段二/三的队列来源
 
-`stage2`/`stage3` 起点的队列在 `startProofread` 里按行筛选（`isStage2Candidate` / `isStage3DisputeRow`），行的上一阶段结论有两个来源，**优先内存**：
+`startProofread` 在项目校验、结果与任务初始化之后调用 `ai/stage-inputs.js` 的 `prepareStageInputs`。它接收限定配置、现有 `stagePlan`、最新备注、明确的备注快照存在标志、上一轮可复用结果与本轮结果查询，返回初审候选、完整 `stageItems.stage2`/`stageItems.stage3` 及 `skippedDone` 增量，不共享可变 `status`。术语定案、规则/相似度预筛、日志与网络执行继续归任务入口。
 
-1. **复用上一轮的内存结论**（`reusePreviousResults`）：要求 `targetStage` 是 stage2/stage3、`status.results` 非空、且上一轮的 `projectKey` 与 `rowsSignature` 与本次完全相同；项目或真实行集变化后不得复用，重新发布相同行集不因此失效。逐行还须满足下节的备注快照约束。
-2. **从备注文本反推**（`reconstructStage1Result`/`reconstructStage2Result`）：有损路径——`lowScore` 恒为 `null`、`score` 用 `80` 兜底、`better` 靠「参考/对照」字样反推。服务重启或缺少满足作用域与备注约束的内存结论时走这条。
+行的上一阶段结论有两个来源，**优先内存**：
+
+1. **复用上一轮的内存结论**：任务入口的 `reusePreviousResults` 判断独立 stage2/stage3，或「继续剩下的」且本次覆盖到仲裁，并要求结果实例有同 `projectKey`/`rowsSignature` 的结果；`resetStatus` 从结果实例取得上一轮集合。准备 module 逐行优先读该集合，再读本轮结果，且仍核对最新备注。项目或真实行集变化后不得复用，重新发布相同行集不因此失效。
+2. **从备注文本反推**：准备 module 内部重建初审与复审条目。有损路径保留 `lowScore:null`、评分 `80` 兜底与「参考/对照」的 `better` 反推。服务重启或缺少满足作用域与备注约束的内存结论时走这条。
+
+- 备注快照存在与否由原始请求明确传入：`rowNotes:{}` 仍是有快照，会阻止旧内存复活；缺失/null 不强加吻合校验。不能从清洗后总存在的 `config.rowNotes` 猜测。
+- 内存复审条目浅拷贝 decision 并修正存疑 `better`；继续仲裁且内存带完整 `decision.stylistReview` 时保留原 decision 引用，其余从备注重建。标签与文本保留 `||` fallback；`tw` 仍取原 `row.tw`，不换成 `twCn`。条目与 rows 不冻结，派发随后还会附加预设字段。
+- 跳过统计沿用各起点口径：初审只把 completed 行计入 `skippedDone`，续跑下游和术语定案不计；独立复审/仲裁不计 completed 行，非候选和 continueOnly 下已经完成对应阶段的行才计入，直接续跑仲裁也不计入复审跳过。
+- 术语预处理只在初审起点先运行，再把 `resolvedByTermTable` 交给准备；独立复审/仲裁不新增术语预筛。返回的初审候选继续由入口做规则/相似度预筛，`queued` 仍按最终初审队列加下游条目计算。
+- `isStage2Candidate`、`isStage3DisputeRow` 的现有调用契约保留，由任务模块重导出同一实现；准备 module 不反向加载任务入口。验证：`node --test scripts/stage-inputs.test.js scripts/ai-smart-concurrency.test.js scripts/multi-stage-pipeline.test.js scripts/stage-note-state.test.js scripts/multiline-stage-notes.test.js scripts/translation-module-boundaries.test.js`。
 
 ### 当前轮次备注与待办的唯一判据
 
@@ -271,19 +279,19 @@
 
 验证：`node --test scripts/stage-review-reports.test.js`。
 
-### 级联续跑（`collectResumedStage2`）
+### 级联续跑（`stage-inputs.js`）
 
 从阶段一起步、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
 
 - 判据是 `isStage2Candidate(noteText, memoryResult)` 成立、且 `stageNoteState(noteText).reviewed`、`.arbitrated` 与 `memoryResult?.stylistReview` 均不成立；不能用 `includes("Stylist复审")` 把异常留证或历史块当成已完成。
-- 这些行从初审队列里摘掉（`resumedStage2.indexes`），与初审刚产出的行走**同一个** `stage2Pending`、同一套并发控制器与退避窗口。
+- 准备 module 将这些行放入 `stageItems.stage2` 并从初审候选排除；与初审刚产出的行进入同一个阶段派发实例。
 - 对照表已经直接定案的行（`resolvedByTermTable`）不续跑，否则会白花一次调用。
 - **没有这一步**，界面上「待复审 N 行」只能等初审把它们重新产出一遍，复审并发配得再高也派不出活来（现象：并发 20、实际只有 1 处理中，一行一行慢慢审）。
 - 「从未人工确认处开始」（`continueOnly: false`）不走续跑：前端已经把这些行的备注清掉了，本来就没东西可续。
 
 ### 阶段异常不得静默吞掉
 
-级联续跑时，`collectResumedStage3` 把已有复审结论、仍待仲裁的行直接交给 `stageItems.stage3`，从阶段一或二起步都不得重复上游或跳过它们；初始仲裁队列与其它初始队列一并计入 `status.queued`。仲裁条目优先复用带完整 `decision.stylistReview` 的内存结论；内存只留汇总 `stageResult` 时必须从最新备注重建复审意见与方案，不能把初审方案误当复审稿。`stageNoteState` 的复审候选包括「待终审」，即使初审没有提出改案、摘要也不含「存疑」字样。
+级联续跑时，`prepareStageInputs` 把已有复审结论、仍待仲裁的行直接交给 `stageItems.stage3`，从阶段一或二起步都不得重复上游或跳过它们；初始仲裁队列与其它初始队列一并计入 `status.queued`。仲裁条目优先复用带完整 `decision.stylistReview` 的内存结论；内存只留汇总 `stageResult` 时必须从最新备注重建复审意见与方案，不能把初审方案误当复审稿。`stageNoteState` 的复审候选包括「待终审」，即使初审没有提出改案、摘要也不含「存疑」字样。
 
 `runStage2Stylist` / `runStage3Arbiter` **不在自己内部吞异常**：它们把错误挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 `throw`，再走那两处的标准错误处理——频控时重试、其余计入 `stage2Errors`/`stage3Errors` 并回退到上一阶段的方案。
 

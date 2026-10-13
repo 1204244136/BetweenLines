@@ -46,6 +46,7 @@
 | 提示词与目标列契约 | `proofread-contract.js`、`profiles/`、`term-table.js`、说话习惯与动态上下文模块 |
 | 能力识别与请求适配 | `model-capabilities.js` 提供服务端识别与浏览器纯函数注入；传输使用 `src/ai/llm-client.js` |
 | 三阶段执行 | `ai-proofread.js` 持有任务、跨阶段编排与指标；`arbiter.js` 判定仲裁触发，`stage-results.js` 归一阶段输出与指标 |
+| 起始队列准备 | `stage-inputs.js` 依据最新备注与合格内存结果准备初审候选和完整复审/仲裁条目；任务入口继续预筛及执行 |
 | AI 结果 | `proofread-results.js` 持有结果集合、修订交付、恢复与落盘时机；`result-store.js` 处理身份校验及原子文件读写 |
 | 浏览器结果接收 | `ai-result-reception.js` 持有运行号、游标、去重、清除拦截与分页追赶；页面通过两阶段接收写入备注 |
 | 角色消息 | `persona-runtime.js` 为 Gatekeeper、Stylist、Arbiter 构造独立角色消息；推理强度沿用各模型预设并进行合法性归一，不由角色自动覆写 |

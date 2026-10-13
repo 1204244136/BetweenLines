@@ -11,6 +11,7 @@ test("渲染与纯计算模块可独立导入，不加载 AI 任务服务或构�
     'require("./src/workbenches/translation-compare/render-workbench");',
     'require("./src/workbenches/translation-compare/row-output");',
     'require("./src/workbenches/translation-compare/notes-recovery");',
+    'require("./src/workbenches/translation-compare/ai/stage-inputs");',
     'const loaded = Object.keys(require.cache).map(file => path.basename(file));',
     'for (const name of ["ai-proofread.js", "build-compare.js", "input-server.js"]) assert.equal(loaded.includes(name), false, name);',
   ].join("\n");

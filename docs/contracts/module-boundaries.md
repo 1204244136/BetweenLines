@@ -60,6 +60,7 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 | `ai/proofread-results.js` | 独占翻译 AI 结果集合、修订交付及落盘生命周期；不接收可变任务状态或计算阶段指标 |
 | `ai/result-store.js` | AI 结果文件的身份校验、原子读写与项目清理；不管理内存修订或落盘时机 |
 | `ai/stage-dispatch.js` | 翻译阶段内的待办、预设热更新、请求归属、通道反馈、计数与定时器；不处理领域结果或裁决整体终止 |
+| `ai/stage-inputs.js` | 起始队列的内存/备注选择、候选与完成排除、复审/仲裁条目重建；不加载任务状态、存储或网络，不执行术语/规则预筛 |
 
 - 职责模块不得反向依赖 `build-compare.js`；新增领域调用直接引用职责模块，兼容入口只服务已有调用方。
 - 渲染器从默认配置、评分与 `proofread-contract.js` 读取契约，不为配置加载 `ai-proofread.js` 的任务运行状态。
