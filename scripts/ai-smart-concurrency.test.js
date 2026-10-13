@@ -2544,6 +2544,84 @@ test("多预设热更新：运行中把预设删空会回落到主配置，剩�
   }
 });
 
+for (const oldOutcome of ["success", "failure", "rate-limit"]) {
+  test(`同 id 热重加的真实请求交错：旧 ${oldOutcome} 不归还新请求的配额`, async () => {
+    clearProofreadCache();
+    const { project } = setupMockProject(5, `generation-${oldOutcome}`);
+    const held = new Map();
+    const counts = new Map();
+    let draining = false;
+    const passing = JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      semanticSame: true, needsEdit: false, needsContext: false, better: "target", summary: "无需修改。", score: 95,
+    }) } }] });
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const model = JSON.parse(body).model;
+        counts.set(model, (counts.get(model) || 0) + 1);
+        if (draining) {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(passing);
+        } else held.set(model, response);
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+    const makePreset = (id, model) => ({ presetId: id, name: model, protocol: "compatible", baseUrl, model, concurrency: 1 });
+    const waitForDispatch = async (predicate, message) => {
+      const deadline = Date.now() + 5000;
+      while (!predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 2));
+      assert.ok(predicate(), message);
+    };
+    const finishHeld = (model, status = 200) => {
+      const response = held.get(model);
+      assert.ok(response, `需要已到达的 ${model} 请求`);
+      held.delete(model);
+      response.writeHead(status, { "content-type": "application/json", "retry-after": "0.01" });
+      response.end(status === 200 ? passing : JSON.stringify({ error: { message: status === 429 ? "rate limit" : "server error" } }));
+    };
+    try {
+      await startProofread({
+        protocol: "compatible", baseUrl, model: "fallback-model", concurrency: 1,
+        projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+        presetPool: [makePreset("same", "old-model")],
+      });
+      await waitForDispatch(() => held.has("old-model"), "旧请求应已发出");
+      updateStagePresets({ stage: "stage1", presets: [makePreset("temporary", "temporary-model")] });
+      await waitForDispatch(() => held.has("temporary-model"), "移除旧预设后临时通道接活");
+      updateStagePresets({ stage: "stage1", presets: [makePreset("same", "new-model")] });
+      await waitForDispatch(() => held.has("new-model"), "同 id 的新通道应已发出请求");
+      assert.equal(clientStatus().stagePipelines.stage1.inFlight, 3, "阶段计数包含两条已移除通道");
+      finishHeld("old-model", oldOutcome === "success" ? 200 : oldOutcome === "failure" ? 500 : 429);
+      await waitForDispatch(() => oldOutcome === "rate-limit"
+        ? clientStatus().concurrencyLimits === 1 : clientStatus().latestResultRevision > 0, "旧请求应已返回反馈");
+      const state = clientStatus();
+      assert.equal(state.stagePipelines.stage1.inFlight, 2, "旧请求归还后只剩临时通道和新通道的真实请求");
+      assert.equal(state.running, true, "仍有真实在飞请求时任务不能完成");
+      const current = state.presetPipelines.stage1.find((item) => item.presetId === "same");
+      assert.equal(current.inFlight, 1);
+      assert.equal(current.completed, 0);
+      assert.equal(current.successes, 0);
+      assert.equal(current.failures, 0);
+      assert.equal(current.quota, 1);
+      assert.equal(current.breakerState, "closed");
+      assert.equal(counts.get("new-model"), 1, "旧收尾不能让新通道越过 1 并发");
+      if (oldOutcome === "rate-limit") assert.equal(state.concurrencyLimits, 1, "旧请求仍保留正常重试反馈");
+      draining = true;
+      finishHeld("temporary-model");
+      finishHeld("new-model");
+      await waitForDispatch(() => !clientStatus({ includeResults: false }).running, "释放请求后队列应正常结束");
+      assert.equal(clientStatus().results.length, 5, "旧结果及重试行都能正常交付");
+    } finally {
+      draining = true;
+      stopProofread();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}
+
 test("多预设热更新：任务没在跑时拒绝同步，改动只在下次启动生效", () => {
   clearProofreadCache();
   assert.throws(

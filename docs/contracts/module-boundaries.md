@@ -15,7 +15,7 @@
 | `public/` 或工作台 `client/` | 浏览器交互与表现 | 共享脚本只能持有通用能力；两个构建器各自注入同一份资源 |
 | `docs/contracts/` | 维护者使用的领域细则与故障定位 | 一个主题指定一处详细规范；其他文档保留入口或用户行为说明 |
 
-`src/ai/task-queue.js` 是通用队列原语；翻译多阶段派发仍由翻译工作台的 `ai-proofread.js` 持有，说话人推断使用自己的任务状态。共享队列不统一两种任务的业务结论或并发策略。
+`src/ai/task-queue.js` 是通用队列原语；翻译阶段内派发由翻译工作台的 `ai/stage-dispatch.js` 持有，跨阶段编排及整体终止由 `ai-proofread.js` 持有，说话人推断使用自己的任务状态。共享队列不统一两种任务的业务结论或并发策略。
 
 ## 控制台边界
 
@@ -57,6 +57,7 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 | `ai/proofread-defaults.js`、`ai/decision-score.js` | AI 默认配置与纯评分规则 |
 | `ai/proofread-results.js` | 独占翻译 AI 结果集合、修订交付及落盘生命周期；不接收可变任务状态或计算阶段指标 |
 | `ai/result-store.js` | AI 结果文件的身份校验、原子读写与项目清理；不管理内存修订或落盘时机 |
+| `ai/stage-dispatch.js` | 翻译阶段内的待办、预设热更新、请求归属、通道反馈、计数与定时器；不处理领域结果或裁决整体终止 |
 
 - 职责模块不得反向依赖 `build-compare.js`；新增领域调用直接引用职责模块，兼容入口只服务已有调用方。
 - 渲染器从默认配置、评分与 `proofread-contract.js` 读取契约，不为配置加载 `ai-proofread.js` 的任务运行状态。
@@ -91,4 +92,4 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 - 固定时间和双语/三语合成输入与拆分前 `f9957de` 对比：HTML、CSV 逐字节一致，导出行及客户端行深度一致。移动函数源码后曾因 CRLF 不同失败，统一为原文件 LF 后通过；各本地提交正文记录当时的 `npm test` 与 `git diff --check` 结果。
 - 当时未调整正文过滤、语义对齐算法或真实输入，也未重新处理真实语料或做浏览器截图验证。
 
-仍需先明确状态所有权再拆分的热点包括 `public/workbench-client.js` 的页面状态、`ai/ai-proofread.js` 的调度与运行状态、`src/ingest/writeback.js` 的定位及写入事务。拆分必须保留整体行为验证，不能仅把脚本切成多份来宣称解耦。
+仍需先明确状态所有权再拆分的热点包括 `public/workbench-client.js` 的页面状态、`ai/ai-proofread.js` 的跨阶段编排与任务状态、`src/ingest/writeback.js` 的定位及写入事务。拆分必须保留整体行为验证，不能仅把脚本切成多份来宣称解耦。

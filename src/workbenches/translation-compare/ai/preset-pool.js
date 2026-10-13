@@ -145,8 +145,10 @@ function createPresetPool(value, fallback = null, options = {}) {
       item.inFlight += 1;
       if (!item.activeRows.includes(rowIndex)) item.activeRows.push(rowIndex);
     },
-    finish(presetId, rowIndex, { ok = true, latencyMs = 0 } = {}) {
-      const item = state.get(presetId);
+    finish(presetOrId, rowIndex, { ok = true, latencyMs = 0 } = {}) {
+      // 派发 module 持有实际 item：移除再同 id 加回后，旧请求仍归还旧 item。
+      // 字符串入口保留给既有调用方；统计规则只在这里实现一次。
+      const item = presetOrId && typeof presetOrId === "object" ? presetOrId : state.get(presetOrId);
       if (!item) return;
       item.inFlight = Math.max(0, item.inFlight - 1);
       item.completed += 1;

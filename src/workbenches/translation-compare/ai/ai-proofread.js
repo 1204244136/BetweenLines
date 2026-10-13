@@ -1,17 +1,10 @@
 const { normalizeConnectionConfig } = require("../../../ai/connection-config");
 const { protocolDefaults } = require("./proofread-defaults");
-const { createStageBreaker, describeTrip, describePolicy, formatDuration } = require("./circuit-breaker");
+const { describeTrip, describePolicy } = require("./circuit-breaker");
 const {
   CONCURRENCY_POLICY,
-  createStageController,
-  stepUpOnSuccess,
-  stepDownOnLimit,
-  stepDownOnOverload,
-  collapseForBreaker,
   initialConcurrencyFor,
   describeConcurrencyPolicy,
-  backoffDelayMs,
-  shouldRetryRow,
 } = require("./concurrency-controller");
 const { AI_CONCURRENCY_LIMITS, resolveConcurrencyCap } = require("./concurrency-limits");
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
@@ -111,13 +104,14 @@ const {
   applyArbitrationDecision,
   formatArbitrationNoteLines,
 } = require("./arbiter");
-const { AI_ERROR_KIND_LABELS, classifyAiError, recordAiErrorKind } = require("./error-kinds");
+const { classifyAiError, recordAiErrorKind } = require("./error-kinds");
 const { latestAiNotePart, splitNoteFields, stageNoteState } = require("./stage-note-state");
 const {
   getModelProfile,
   scheduleModels,
 } = require("./scheduler-profile");
-const { normalizePresetPool, createPresetPool, assignPendingPresetIds } = require("./preset-pool");
+const { normalizePresetPool } = require("./preset-pool");
+const { createStageDispatch, MAX_ROW_RETRIES: maxRowRetries } = require("./stage-dispatch");
 const {
   globalFeedbackCollector,
 } = require("./feedback-collector");
@@ -326,13 +320,7 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
 let controllers = new Set();
 // 每行当前结果对 stageMetrics 的贡献快照；行被重写/重跑时按同一份快照整体撤销，保证添加与撤销对称。
 let resultMetricDeltas = new Map();
-// 熔断由 circuit-breaker.js 内部裁决（不接受任何外部开关或阈值）。
-// 每个「阶段 × 预设」各持一个断路器：一个预设失效时只暂停这条通道，
-// 其它预设继续派发；只有阶段选中的预设全部失效，阶段才进入熔断状态。
-let presetBreakers = new Map();
-let presetBreakerTrips = new Map();
-// 当前 runQueue 的阶段/预设拓扑。断路器的纯决策仍在 circuit-breaker.js，
-// 这里仅负责把单通道结果汇总到阶段和整条流水线。
+// 派发 module 持有通道熔断；这里保留参与阶段与整体终止裁决。
 let breakerRuntime = null;
 const STAGE_OUTCOME_LABELS = { stage1: "初审", stage2: "文学复审", stage3: "终审仲裁" };
 
@@ -756,8 +744,6 @@ function resetStatus(config, rowsLength, { reusePrevious = false } = {}) {
   status.logs = [];
   resultMetricDeltas = new Map();
   controllers = new Set();
-  presetBreakers = new Map();
-  presetBreakerTrips = new Map();
   breakerRuntime = null;
   return proofreadResults.begin({
     projectKey: status.projectKey,
@@ -849,8 +835,6 @@ function resetIdleTaskStatus() {
   status.logs = [];
   resultMetricDeltas = new Map();
   controllers = new Set();
-  presetBreakers = new Map();
-  presetBreakerTrips = new Map();
   breakerRuntime = null;
 }
 
@@ -1516,113 +1500,39 @@ function shouldCascadeStages(config = {}) {
 
 async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // 流水线阶段解耦队列（Staged Pipelining Queues）
-  // 各阶段独立并发、独立退避：stage1 初审完一行就把它推给 stage2Pending，
-  // stage2 复审出分歧就推给 stage3Pending，谁都不必等前一阶段整体收尾。
+  // 阶段内派发由各自 module 持有；这里保留初审到复审、复审到仲裁的级联业务。
   const plan = stagePlan(config);
-  const stage1Pending = plan.startsAt === "stage1" ? [...queue] : [];
-  // 阶段二的初始队列：从阶段二起步时是本次筛出的复审行；从阶段一起步且配了复审时，
-  // 是「已有初审结论、只差复审」的续跑行——它们与初审刚产出的行走同一个队列、同一套并发。
-  const stage2Pending = (plan.startsAt === "stage2" || plan.cascadeToStylist) ? [...(stageItems.stage2 || [])] : [];
-  const stage3Pending = (plan.startsAt === "stage3" || plan.cascadeToArbiter) ? [...(stageItems.stage3 || [])] : [];
-
-  let stage1InFlight = 0;
-  let stage2InFlight = 0;
-  let stage3InFlight = 0;
-
-  // 复审完成的实时计数（复审一结束就 +1，不等它仲裁定案）：只服务运行中的实时显示，
-  // 任务结束时 status.stagePipelines 会被 finish() 重置，最终统计仍以 stageMetrics 为准。
+  let dispatchWake = null;
   let stage2ReviewedLive = 0;
   const stage2AttitudesLive = { accept: 0, modify: 0, reject: 0, escalate: 0 };
-
-  const minConcurrency = 1;
-  const maxRowRetries = 3;
-  // 上探最短间隔可被环境变量缩短，仅供回归测试把秒级间隔压到毫秒级；不是运行时开关。
   const policy = {
     ...CONCURRENCY_POLICY,
     minStepIntervalMs: Number(process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL) || CONCURRENCY_POLICY.minStepIntervalMs,
   };
-  // 过载型失败：并发过高时最典型的三种表现。拒答、坏 JSON、认证/配置错误都不是并发造成的，不参与。
-  const overloadKinds = new Set(["timeout", "server_error", "network"]);
-
-  // 各阶段的并发上限来自各自的预设（config.stylistConfig / arbiterConfig 的 concurrency）；没配预设时回落到默认。
-  const createStageCtrl = (stageKey, label, conf, defaultConcurrency) => createStageController({
-    stageKey,
-    label,
-    config: conf,
-    fallbackConcurrency: defaultConcurrency,
-    clampInteger,
-  });
-
-  const s1Ctrl = createStageCtrl("stage1", "初审", config, config.concurrency);
-  const s2Ctrl = createStageCtrl("stage2", "文学复审", config.stylistConfig, config.concurrency);
-  const s3Ctrl = createStageCtrl("stage3", "终审仲裁", config.arbiterConfig, 2);
-  s1Ctrl.presetId = String(config.presetId || "主配置");
-  s2Ctrl.presetId = String(config.stylistConfig?.presetId || "阶段二");
-  s3Ctrl.presetId = String(config.arbiterConfig?.presetId || "阶段三");
-  const stageCtrls = { stage1: s1Ctrl, stage2: s2Ctrl, stage3: s3Ctrl };
-
-  // 每个预设一条独立的并发通道：预设各配各的并发上限，阶段总并发是各通道之和。
-  // 只用一个阶段控制器时，多预设会被「第一个预设（或主配置）的上限」卡住——界面选了 3 个预设、
-  // 每个 3 并发，实际却只有 3 个请求在飞，预设的独立并发等于没生效。
-  // 通道仍承担该预设自己的慢启动、上探、下调与熔断塌缩；阶段控制器只留退避窗口与重试计数。
-  const createStageChannel = (stageKey, label, defaultConcurrency) => (preset, index, total) => {
-    const channel = createStageController({
-      stageKey,
-      label,
-      config: preset,
-      fallbackConcurrency: defaultConcurrency,
-      clampInteger,
-    });
-    // 多预设时并发日志要能区分是哪条连接在升降，否则三行「初审：并发从 3 翻倍至 6」看不出是谁。
-    channel.presetId = String(preset.presetId || "");
-    channel.presetLabel = total > 1 ? String(preset.name || preset.presetId || `预设 ${index + 1}`) : "";
-    return channel;
+  const stageDefinitions = {
+    stage1: {
+      label: "初审",
+      presets: config.presetPool?.length ? config.presetPool : [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }],
+      fallbackConfig: { ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" },
+      fallbackConcurrency: config.concurrency,
+    },
+    stage2: { label: "文学复审", presets: config.stylistPresets, fallbackConfig: config.stylistConfig, fallbackConcurrency: config.concurrency },
+    stage3: { label: "终审仲裁", presets: config.arbiterPresets, fallbackConfig: config.arbiterConfig, fallbackConcurrency: 2 },
   };
-
-  const pools = {
-    stage1: createPresetPool(
-      config.presetPool?.length ? config.presetPool : [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }],
-      config,
-      { createChannel: createStageChannel("stage1", "初审", config.concurrency) }
-    ),
-    stage2: createPresetPool(config.stylistPresets, config.stylistConfig, {
-      createChannel: createStageChannel("stage2", "文学复审", config.concurrency),
-    }),
-    stage3: createPresetPool(config.arbiterPresets, config.arbiterConfig, {
-      createChannel: createStageChannel("stage3", "终审仲裁", 2),
-    }),
-  };
-  for (const stage of Object.keys(pools)) status.presetPipelines[stage] = pools[stage].snapshot();
-
-  const activeBreakerStages = new Set([plan.startsAt]);
-  if (plan.cascadeToStylist) activeBreakerStages.add("stage2");
-  if (plan.cascadeToArbiter) activeBreakerStages.add("stage3");
-  breakerRuntime = {
-    pools,
-    activeStages: activeBreakerStages,
-    brokenStages: new Set(),
-    syncQueues: null,
-  };
-
-  // 这一行的并发通道：派发时按预设绑定，成功/失败都回它自己的通道做升降。
-  const channelFor = (stageKey, presetId) => pools[stageKey].channelOf(presetId) || stageCtrls[stageKey];
-  // 阶段可派发量 = 各预设通道当前允许并发之和（没配预设时退回阶段控制器）。
-  const stageAllowance = (stageKey) => pools[stageKey].totalQuota() || stageCtrls[stageKey].currentConcurrency;
-  const stageAllowanceMax = (stageKey) => pools[stageKey].totalMaxQuota() || stageCtrls[stageKey].maxConcurrency;
-
-  function syncPresetPipelines() {
-    for (const stage of Object.keys(pools)) {
-      status.presetPipelines[stage] = pools[stage].snapshot().map((item) => ({
-        ...item,
-        breakerState: isPresetBreakerTripped(stage, item.presetId)
-          ? "tripped"
-          : stageBreaker(stage, item.presetId).state,
-        breakerTripped: isPresetBreakerTripped(stage, item.presetId),
-      }));
-    }
-  }
-
-  status.concurrency = pools.stage1.totalInitialQuota() || s1Ctrl.initialConcurrency;
+  const dispatchers = Object.fromEntries(Object.entries(stageDefinitions).map(([stageKey, definition]) => [stageKey,
+    createStageDispatch({ ...definition, stageKey, policy, wake: () => dispatchWake?.() }),
+  ]));
+  dispatchers.stage1.enqueue(plan.startsAt === "stage1" ? queue : []);
+  dispatchers.stage2.enqueue((plan.startsAt === "stage2" || plan.cascadeToStylist) ? (stageItems.stage2 || []) : []);
+  dispatchers.stage3.enqueue((plan.startsAt === "stage3" || plan.cascadeToArbiter) ? (stageItems.stage3 || []) : []);
+  const activeStages = new Set([plan.startsAt]);
+  if (plan.cascadeToStylist) activeStages.add("stage2");
+  if (plan.cascadeToArbiter) activeStages.add("stage3");
+  breakerRuntime = { dispatchers, activeStages, brokenStages: new Set(), syncQueues: null };
+  const stageAllowance = (stageKey) => dispatchers[stageKey].snapshot().concurrency;
+  const stageAllowanceMax = (stageKey) => dispatchers[stageKey].snapshot().concurrencyMax;
+  const hasPending = (stageKey, index) => dispatchers[stageKey].snapshot().pendingRows.includes(index);
+  status.concurrency = dispatchers.stage1.snapshot().initialConcurrency;
   status.currentConcurrency = stageAllowance("stage1");
   status.concurrencyMax = stageAllowanceMax("stage1");
   status.peakConcurrency = status.currentConcurrency;
@@ -1630,49 +1540,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
 
-  // 上一次整队分配时各预设池的版本：版本变了（运行中增删过预设）才整队重算绑定，
-  // 稳态下沿用原有绑定，避免每轮派发都无谓地重排。
-  const assignedPoolVersions = { stage1: -1, stage2: -1, stage3: -1 };
-
   function syncStagePipelineQueues() {
-    const queues = { stage1: stage1Pending, stage2: stage2Pending, stage3: stage3Pending };
-    for (const stageKey of Object.keys(queues)) {
-      const pool = pools[stageKey];
-      const reassign = assignedPoolVersions[stageKey] !== pool.version;
-      assignedPoolVersions[stageKey] = pool.version;
-      assignPendingPresetIds(pool, queues[stageKey], {
-        reassign,
-        isEligible: (preset) => !isPresetBreakerTripped(stageKey, preset?.presetId),
-      });
+    for (const [stageKey, dispatcher] of Object.entries(dispatchers)) {
+      const { presets, initialConcurrency, pendingRows, ...pipeline } = dispatcher.snapshot();
+      Object.assign(status.stagePipelines[stageKey], pipeline);
+      status.presetPipelines[stageKey] = presets;
     }
-    // 触顶计数与预设总数：页面据此区分「N/M 触顶」与「全部触顶」，
-    // 不在客户端重算一遍触顶口径。
-    const presetSummary = (stageKey) => ({
-      presetCount: pools[stageKey].presets.length,
-      toppedCount: pools[stageKey].toppedCount(),
-      breakerTrippedCount: currentStagePresetIds(stageKey).filter((id) => isPresetBreakerTripped(stageKey, id)).length,
-      breakerBroken: isStageBreakerBroken(stageKey),
-    });
-    status.stagePipelines.stage1.pending = stage1Pending.length;
-    status.stagePipelines.stage1.inFlight = stage1InFlight;
-    status.stagePipelines.stage1.concurrency = stageAllowance("stage1");
-    status.stagePipelines.stage1.concurrencyMax = stageAllowanceMax("stage1");
-    Object.assign(status.stagePipelines.stage1, presetSummary("stage1"));
-
-    status.stagePipelines.stage2.pending = stage2Pending.length;
-    status.stagePipelines.stage2.inFlight = stage2InFlight;
     status.stagePipelines.stage2.reviewed = stage2ReviewedLive;
     status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
-    status.stagePipelines.stage2.concurrency = stageAllowance("stage2");
-    status.stagePipelines.stage2.concurrencyMax = stageAllowanceMax("stage2");
-    Object.assign(status.stagePipelines.stage2, presetSummary("stage2"));
-
-    status.stagePipelines.stage3.pending = stage3Pending.length;
-    status.stagePipelines.stage3.inFlight = stage3InFlight;
-    status.stagePipelines.stage3.concurrency = stageAllowance("stage3");
-    status.stagePipelines.stage3.concurrencyMax = stageAllowanceMax("stage3");
-    Object.assign(status.stagePipelines.stage3, presetSummary("stage3"));
-    syncPresetPipelines();
   }
   breakerRuntime.syncQueues = syncStagePipelineQueues;
   syncStagePipelineQueues();
@@ -1682,245 +1557,51 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发上限 ${stageAllowanceMax("stage3")}），不等复审整体跑完。`);
   }
 
-  // 并发变了：同步状态接口里的实时并发与峰值（状态接口的 currentConcurrency 只代表初审）。
-  // 多预设时这里是各通道之和，单个预设时就是那一条通道，口径与派发上限一致。
   function syncConcurrency() {
     const total = stageAllowance("stage1");
     status.peakConcurrency = Math.max(status.peakConcurrency, total);
     status.currentConcurrency = total;
   }
 
-  // 运行中增删预设：把新集合应用到池上，立刻重排队列并唤醒派发。
-  // 在飞的请求不打断（已经发出去的结果不浪费），但它不再拿到新活；
-  // 被删预设腾出来的待审行会立刻按积压均衡改派给其余预设，新预设则立刻开始抢活。
   function applyPresetPoolUpdate(stageKey, incomingPresets) {
-    const pool = pools[stageKey];
-    const incoming = normalizePresetPool(incomingPresets);
-    // 删空即回落到该阶段的兜底连接（阶段一 → 主配置，阶段二/三 → 各自的单预设配置）：
-    // 否则这一阶段的队列会悬在半空，任务永远跑不完。
-    const fallbackConf = stageKey === "stage1"
-      ? { ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }
-      : (stageKey === "stage2" ? config.stylistConfig : config.arbiterConfig);
-    const target = incoming.length ? incoming : normalizePresetPool([fallbackConf].filter(Boolean));
-    // 连兜底配置都没有（这一阶段本来就没配过模型）：拒绝这次改动，
-    // 否则这一阶段的队列会悬空，任务永远跑不完。
-    if (!target.length) return { added: [], removed: [], fallback: false, rejected: true };
-    const targetIds = new Set(target.map((item) => item.presetId));
-
-    const removed = [];
-    for (const presetId of [...pool.state.keys()]) {
-      if (targetIds.has(presetId)) continue;
-      if (pool.removePreset(presetId)) {
-        removed.push(presetId);
-        // 熔断状态随预设一起移除：同 id 再加回时应作为全新通道接活，而不是继承旧的熔断记录。
-        breakerTripBucket(stageKey).delete(breakerPresetId(presetId));
-        presetBreakers.delete(`${stageKey}:${breakerPresetId(presetId)}`);
-      }
-    }
-    const added = [];
-    for (const preset of target) {
-      if (pool.state.has(preset.presetId)) continue;
-      if (pool.addPreset(preset)) added.push(preset.presetId);
-    }
-    const fallbackApplied = !incoming.length && target.length > 0;
-    if (!removed.length && !added.length) return { added, removed, fallback: fallbackApplied };
-
-    // 运行中加入健康预设后，阶段不再是「全部熔断」；新预设应立即接手待派发队列。
+    const result = dispatchers[stageKey].updatePresets(incomingPresets);
+    const { added, removed, fallback } = result;
+    if (!added.length && !removed.length) return result;
     if (!isStageBreakerBroken(stageKey)) breakerRuntime?.brokenStages?.delete(stageKey);
-
-    // 池的 version 已变：这次 sync 会整队重算绑定（新预设分到活、被删预设的行让出去），
-    // 再唤醒派发让新增的并发立刻用起来。
     syncStagePipelineQueues();
-    if (typeof currentQueueWakeup === "function") currentQueueWakeup();
+    currentQueueWakeup?.();
     const label = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
-    if (added.length) {
-      pushLog(`[预设池] ${label}：运行中加入 ${added.length} 个预设，立刻参与派发。`);
-    }
-    if (removed.length) {
-      pushLog(`[预设池] ${label}：运行中移除 ${removed.length} 个预设，其待审行已改派给其余预设；在飞的请求跑完即止。`);
-    }
-    if (fallbackApplied) {
-      pushLog(`[预设池] ${label}：预设已全部移除，回落到阶段配置继续跑完剩余行。`);
-    }
-    return { added, removed, fallback: fallbackApplied };
+    if (added.length) pushLog(`[预设池] ${label}：运行中加入 ${added.length} 个预设，立刻参与派发。`);
+    if (removed.length) pushLog(`[预设池] ${label}：运行中移除 ${removed.length} 个预设，其待审行已改派给其余预设；在飞的请求跑完即止。`);
+    if (fallback) pushLog(`[预设池] ${label}：预设已全部移除，回落到阶段配置继续跑完剩余行。`);
+    return result;
   }
-  activePresetPoolUpdater = (stageKey, presets) => applyPresetPoolUpdate(stageKey, presets);
+  activePresetPoolUpdater = applyPresetPoolUpdate;
 
-  // 多预设时日志带上预设名：否则「初审：并发从 3 翻倍至 6」重复出现，分不清是哪条连接。
-  const stageTag = (ctrl) => (ctrl.presetLabel
-    ? `${ctrl.label}·${ctrl.presetLabel}：`
-    : (ctrl.stageKey === "stage1" ? "" : `${ctrl.label}：`));
-
-  // 上游正常应答：喂给该预设自己的调度器判断要不要上探。失败窗口逼近熔断线（pressure）时
-  // 只暂停这一条预设的上探，状态翻转时各记一行日志，让用户看得到「并发为什么停在这儿」。
-  function onStageSuccess(ctrl) {
-    const wasPaused = ctrl.rampPaused;
-    const step = stepUpOnSuccess(ctrl, { pressure: stageBreaker(ctrl.stageKey, ctrl.presetId).pressure, policy });
-    if (ctrl.rampPaused !== wasPaused) {
-      pushLog(ctrl.rampPaused
-        ? `[并发调度] ${stageTag(ctrl)}失败率已逼近熔断线，暂停上探，并发维持 ${ctrl.currentConcurrency}。`
-        : `[并发调度] ${stageTag(ctrl)}失败率回落，恢复上探。`);
-    }
-    if (!step) return;
-    status.concurrencyUps += 1;
-    syncConcurrency();
-    pushLog(step.mode === "slow-start"
-      ? `[并发调度] ${stageTag(ctrl)}一整轮请求全部正常，并发从 ${step.from} 翻倍至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`
-      : `[并发调度] ${stageTag(ctrl)}连续 ${step.successes} 次请求正常，并发从 ${step.from} 上探至 ${step.to}（上限 ${ctrl.maxConcurrency}）。`);
-  }
-
-  // 成功既喂该预设的断路器，也可能顺带解除它设下的冷却（迟到的成功说明上游已经放行）。
-  function noteStageSuccess(channel) {
-    clearCooldownIf(channel, recordStageSuccess(channel.stageKey, channel.presetId));
-    onStageSuccess(channel);
-  }
-
-  // 断路器恢复：撤销冷却窗口，并把退避档位归零。
-  // consecutiveLimits 只由成功清零，若停在最大档，恢复后的下一次 429 仍会按最长退避。
-  function clearCooldownIf(ctrl, recovered) {
-    if (!recovered) return;
-    ctrl.backoffUntil = Math.min(ctrl.backoffUntil, Date.now());
-    ctrl.consecutiveLimits = 0;
-    if (ctrl.backoffTimer) {
-      clearTimeout(ctrl.backoffTimer);
-      ctrl.backoffTimer = null;
-    }
-  }
-
-  let dispatchWake = null;
-
-  // 半开探测期（冷却已过、尚未收到非限流答复）每个预设只放行一个请求；
-  // 健康预设不受这条通道的半开状态影响。
-  function scheduleBackoffWake(stageKey, ctrl) {
-    if (!ctrl || ctrl.backoffTimer) return;
-    const waitMs = Math.max(10, ctrl.backoffUntil - Date.now());
-    if (waitMs <= 0) return;
-    ctrl.backoffTimer = setTimeout(() => {
-      ctrl.backoffTimer = null;
-      dispatchWake?.();
-    }, waitMs);
-  }
-
-  function presetCanDispatch(stageKey, item) {
-    const presetId = item?.presetId;
-    if (!presetId || isPresetBreakerTripped(stageKey, presetId)) return false;
-    const breaker = stageBreaker(stageKey, presetId);
-    const channel = item.channel || stageCtrls[stageKey];
-    if (!channel || Date.now() < channel.backoffUntil) {
-      scheduleBackoffWake(stageKey, channel);
-      return false;
-    }
-    if (breaker.state === "open") {
-      // 断路器冷却由 onStageRateLimit 写入 channel.backoffUntil；这里再兜底一次，
-      // 防止旧任务或迟到结果把通道留在 open 状态却没有定时器唤醒。
-      scheduleBackoffWake(stageKey, channel);
-      return false;
-    }
-    // pool.next 已经按 channel.currentConcurrency 检查在飞数；半开时再收紧到单发。
-    return breaker.state !== "half-open" || item.inFlight < 1;
-  }
-
-  // 过载型失败（超时 / 5xx / 断连）：并发下调一档。这类失败不重试、也不退避，但它们会进熔断的失败窗口，
-  // 提前把并发压下来是为了在「错误率熔断」终止任务之前先把失败率压回去。返回是否属于过载型。
-  function onStageOverload(channel, rowIndex, error, startedAt) {
-    const kind = classifyAiError(error);
-    if (!overloadKinds.has(kind)) return false;
-    const step = stepDownOnOverload(channel, { startedAt, minConcurrency, policy });
-    if (step) {
-      status.concurrencyDowns += 1;
-      syncConcurrency();
-      syncStagePipelineQueues();
-      pushLog(`[并发调度] ${stageTag(channel)}第 ${rowIndex} 行遭遇${AI_ERROR_KIND_LABELS[kind]}，并发从 ${step.from} 下调至 ${step.to}，先缓解上游压力。`);
-    }
-    return true;
-  }
-
-  // channel 负责这一行所属预设的并发升降、退避窗口与单行重试计数；
-  // 不再把某个预设的限流状态写入同阶段共享控制器。
-  function onStageRateLimit(channel, rowIndex, error, pendingQueue, itemToRetry, startedAt, stageCtrl) {
-    const retryCtrl = channel || stageCtrl;
-    status.concurrencyLimits += 1;
-    retryCtrl.consecutiveLimits += 1;
-
-    const step = stepDownOnLimit(channel, { startedAt, minConcurrency, policy });
-    if (step) {
-      status.concurrencyDowns += 1;
-      syncConcurrency();
-    }
-
-    const retries = (retryCtrl.rowRetryCounts.get(rowIndex) || 0) + 1;
-    retryCtrl.rowRetryCounts.set(rowIndex, retries);
-
-    // 生产环境保留随机抖动，避免多个客户端在同一时刻重试；测试可把上限设为 0，
-    // 只验证退避与断路器状态转换而不为随机等待付出时间成本。
-    const jitterLimit = Number(process.env.TRANSCOMPARATOR_RETRY_JITTER_MS);
-    const jitterMs = Number.isFinite(jitterLimit) && jitterLimit >= 0 ? jitterLimit : 500;
-    const delayMs = backoffDelayMs(retryCtrl.consecutiveLimits, error.retryAfter)
-      + (jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0);
-    retryCtrl.backoffUntil = Math.max(retryCtrl.backoffUntil, Date.now() + delayMs);
-    scheduleBackoffWake(channel.stageKey, retryCtrl);
-
-    if (shouldRetryRow(retries, maxRowRetries, status.stopRequested)) {
-      const stageNamePart = channel.stageKey === "stage1" ? "" : `${channel.label}`;
-      pushLog(`[频控退避] 第 ${rowIndex} 行${stageNamePart}遭遇${parseRateLimitReason(error)}，并发下调至 ${stageAllowance(channel.stageKey)}，退避 ${(delayMs / 1000).toFixed(1)} 秒后进行第 ${retries}/${maxRowRetries} 次重试。`);
-      pendingQueue.unshift(itemToRetry);
-      syncStagePipelineQueues();
-      return true;
-    }
-
-    // 单行重试已用尽：交给该预设自己的断路器裁决是「记这一行失败」「该预设冷却」还是「预设熔断」。
-    if (status.stopRequested) return false;
-    const verdict = stageBreaker(channel.stageKey, channel.presetId).recordLimitExhausted();
-    if (verdict.action === "fail") return false;
-    if (verdict.action === "trip") {
-      stopForBreakerTrip(verdict, channel.stageKey, channel.presetId);
-      return false;
-    }
-    // 冷却：这一行没有真正被处理过，不记失败，回到队头等冷却结束；
-    // 重试计数置满，让它成为「单发探测」——再被限流就立刻回报断路器，而不是再烧一轮退避。
-    retryCtrl.rowRetryCounts.set(rowIndex, maxRowRetries);
-    retryCtrl.backoffUntil = Math.max(retryCtrl.backoffUntil, verdict.until);
-    scheduleBackoffWake(channel.stageKey, retryCtrl);
-    pendingQueue.unshift(itemToRetry);
-    if (verdict.opened) {
-      // 联动：只有当前预设的断路器打开时，塌缩当前预设通道；同阶段其它预设保持运行。
-      const collapsedFrom = channel.currentConcurrency;
-      const collapsedTo = collapseForBreaker(channel, { minConcurrency, policy }).to;
-      if (collapsedFrom > collapsedTo) {
-        status.concurrencyDowns += 1;
+  function feedback(stageKey, request, kind, error) {
+    const result = dispatchers[stageKey].feedback(request, {
+      kind, error, stopped: status.stopRequested,
+      rateLimitReason: kind === "rate-limit" ? parseRateLimitReason(error) : "",
+    });
+    for (const event of result.events) {
+      if (event.type === "log") pushLog(event.message);
+      else if (event.type === "trip") stopForBreakerTrip(event.trip, stageKey, event.presetId);
+      else if (event.type === "limit") status.concurrencyLimits += 1;
+      else if (event.type === "concurrency") {
+        if (event.direction === "up") status.concurrencyUps += 1;
+        else status.concurrencyDowns += 1;
         syncConcurrency();
       }
-      const restartTarget = Math.max(0, Number(channel.slowStartThreshold) || 0);
-      const label = presetBreakerLabel(channel.stageKey, channel.presetId);
-      const attempt = `第 ${verdict.cycle}/${verdict.cycles} 档`;
-      pushLog(verdict.cycle === 1
-        ? `[熔断] ${label}：连续多行限流重试用尽，暂停派发 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
-        : `[熔断] ${label}：探测仍被限流，继续冷却 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却）。`);
-      // 只在第一档冷却说明一次：后续档位并发早已是最低，重复播报没有信息量。
-      if (verdict.cycle === 1) {
-        pushLog(`[并发调度] ${label}：熔断冷却，并发降到 ${collapsedTo}（冷却前 ${collapsedFrom}）；恢复后从 ${collapsedTo} 起步慢启动，先爬到 ${restartTarget}，再逐步上探（上限 ${channel.maxConcurrency}）。`);
-      }
     }
     syncStagePipelineQueues();
-    return true;
+    return result.retry;
   }
 
   return new Promise((resolve) => {
     let settled = false;
 
     function clearAllTimers() {
-      const seen = new Set();
-      for (const stageKey of Object.keys(pools)) {
-        const controls = [stageCtrls[stageKey], ...pools[stageKey].channels()];
-        for (const ctrl of controls) {
-          if (!ctrl || seen.has(ctrl)) continue;
-          seen.add(ctrl);
-          if (ctrl.backoffTimer) {
-            clearTimeout(ctrl.backoffTimer);
-            ctrl.backoffTimer = null;
-          }
-        }
-      }
+      for (const dispatcher of Object.values(dispatchers)) dispatcher.cancelWakeups();
     }
 
     // 阶段全部预设熔断后，其待派发行再也派不出去：必须逐行落成异常结果（复审/仲裁回退上一阶段方案），
@@ -1932,8 +1613,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         return error;
       };
       let flushed = 0;
-      if (isStageBreakerBroken("stage3") && stage3Pending.length) {
-        for (const item of stage3Pending.splice(0)) {
+      if (isStageBreakerBroken("stage3") && dispatchers.stage3.snapshot().pending) {
+        for (const item of dispatchers.stage3.drainPending()) {
           const error = breakerError("stage3");
           status.stageMetrics.stage3Errors += 1;
           recordStageError("stage3", item.row.index, error, "");
@@ -1942,8 +1623,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           flushed += 1;
         }
       }
-      if (isStageBreakerBroken("stage2") && stage2Pending.length) {
-        for (const item of stage2Pending.splice(0)) {
+      if (isStageBreakerBroken("stage2") && dispatchers.stage2.snapshot().pending) {
+        for (const item of dispatchers.stage2.drainPending()) {
           const error = breakerError("stage2");
           status.stageMetrics.stage2Errors += 1;
           recordStageError("stage2", item.row.index, error, "");
@@ -1952,8 +1633,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           flushed += 1;
         }
       }
-      if (isStageBreakerBroken("stage1") && stage1Pending.length) {
-        for (const row of stage1Pending.splice(0)) {
+      if (isStageBreakerBroken("stage1") && dispatchers.stage1.snapshot().pending) {
+        for (const row of dispatchers.stage1.drainPending()) {
           const error = breakerError("stage1");
           recordStageError("stage1", row.index, error, "");
           addResult({
@@ -1980,15 +1661,15 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (!status.stopRequested) flushBrokenStagePending();
       // 阶段全部预设熔断后，队列中的剩余行已由 flushBrokenStagePending 落成异常结果；
       // 这里仍等待已经发出的请求收尾，并让其它健康阶段继续运行。
-      const stageDrained = (stageKey, pending, inFlight) =>
-        (pending.length === 0 && inFlight === 0) || (isStageBreakerBroken(stageKey) && inFlight === 0);
-      const allEmpty = stageDrained("stage1", stage1Pending, stage1InFlight)
-        && stageDrained("stage2", stage2Pending, stage2InFlight)
-        && stageDrained("stage3", stage3Pending, stage3InFlight);
+      const stageDrained = (stageKey) => {
+        const state = dispatchers[stageKey].snapshot();
+        return state.inFlight === 0 && (state.pending === 0 || state.breakerBroken);
+      };
+      const allEmpty = ["stage1", "stage2", "stage3"].every(stageDrained);
 
       if (status.stopRequested || allEmpty) {
         settled = true;
-        clearAllTimers();
+        for (const dispatcher of Object.values(dispatchers)) dispatcher.dispose();
         dispatchWake = null;
         currentQueueWakeup = null;
         activePresetPoolUpdater = null;
@@ -2007,65 +1688,31 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         checkDone();
         return;
       }
-
-      // 1. 优先调度 Stage 3 (Arbiter 终审仲裁)，尽快完成已产生分歧的行
-      while (stage3Pending.length > 0 && !status.stopRequested && !settled) {
-        const preset = pools.stage3.next((item) => presetCanDispatch("stage3", item));
-        if (!preset) break;
-        const s2Item = stage3Pending.shift();
-        s2Item.presetId = preset.presetId;
-        s2Item.presetConfig = pools.stage3.presets.find((item) => item.presetId === preset.presetId);
-        pools.stage3.begin(preset.presetId, s2Item.row.index);
-        stage3InFlight += 1;
-        syncStagePipelineQueues();
-        executeStage3(s2Item);
+      const execute = { stage1: executeStage1, stage2: executeStage2, stage3: executeStage3 };
+      // 仍优先终审，再复审，最后初审；每个阶段内部保持可用预设接 FIFO 队头。
+      for (const stageKey of ["stage3", "stage2", "stage1"]) {
+        while (!status.stopRequested && !settled) {
+          const next = dispatchers[stageKey].take();
+          if (!next) break;
+          syncStagePipelineQueues();
+          execute[stageKey](next.item, next.request);
+        }
       }
-
-      // 2. 调度 Stage 2 (Stylist 文学复审)，消费 Stage 1 已经初审完且建议修改的行
-      while (stage2Pending.length > 0 && !status.stopRequested && !settled) {
-        const preset = pools.stage2.next((item) => presetCanDispatch("stage2", item));
-        if (!preset) break;
-        const s1Item = stage2Pending.shift();
-        s1Item.presetId = preset.presetId;
-        s1Item.presetConfig = pools.stage2.presets.find((item) => item.presetId === preset.presetId);
-        pools.stage2.begin(preset.presetId, s1Item.row.index);
-        stage2InFlight += 1;
-        syncStagePipelineQueues();
-        executeStage2(s1Item);
-      }
-
-      // 3. 调度 Stage 1 (Gatekeeper 事实初审)
-      while (stage1Pending.length > 0 && !status.stopRequested && !settled) {
-        const preset = pools.stage1.next((item) => presetCanDispatch("stage1", item));
-        if (!preset) break;
-        const row = stage1Pending.shift();
-        row.presetConfig = pools.stage1.presets.find((item) => item.presetId === preset.presetId);
-        row.presetId = preset.presetId;
-        pools.stage1.begin(preset.presetId, row.index);
-        stage1InFlight += 1;
-        syncStagePipelineQueues();
-        executeStage1(row);
-      }
-
       checkDone();
     }
 
     dispatchWake = dispatch;
 
-    async function executeStage1(row) {
+    async function executeStage1(row, request) {
       status.active.push(row.index);
-      status.stagePipelines.stage1.activeRows.push(row.index);
       syncStagePipelineQueues();
       // 这一行正在被（重新）处理：先撤掉它上一次的初审异常明细，成功就不再补记，失败才重新登记。
       clearStageError("stage1", row.index);
-      // 这一行派给哪个预设，成功/失败就回哪条并发通道做升降（阶段控制器只留退避窗口）。
-      const channel = channelFor("stage1", row.presetId);
-      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
-      const requestStartedAt = Date.now();
+      // 请求句柄固定派发时的通道与时间；反馈不会按同 id 重查后来加入的通道。
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
         if (!status.stopRequested) {
-          noteStageSuccess(channel);
+          feedback("stage1", request, "success");
         }
 
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
@@ -2080,7 +1727,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
           // 提改行与存疑待判行均推入 Stage 2 文学复审队列！
-          stage2Pending.push(s1);
+          dispatchers.stage2.enqueue(s1);
           syncStagePipelineQueues();
           if (isUnclearOrNeedsContext) {
             pushLog(`第 ${row.index} 行：事实初审判定存疑待定，移交 Stage 2 (Stylist 文学复审队列进一步审查)。`);
@@ -2095,14 +1742,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
 
         if (isRefusal) {
-          clearCooldownIf(channel, recordStageNotLimited("stage1", channel.presetId));
+          feedback("stage1", request, "not-limited");
           status.modelRefusals += 1;
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待终审。`);
           status.active = status.active.filter((idx) => idx !== row.index);
         } else if (isRateLimit) {
-          const retried = onStageRateLimit(channel, row.index, error, stage1Pending, row, requestStartedAt, s1Ctrl);
+          const retried = feedback("stage1", request, "rate-limit", error);
           if (!retried) {
             pushLog(`[频控退避] 第 ${row.index} 行连续 ${maxRowRetries} 次触发频控限制，已达到最大重试次数，标记为调用失败。`);
             recordStageError("stage1", row.index, error, "rate_limit");
@@ -2132,30 +1779,23 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) {
             stopForFatalRequestError(error);
           } else if (!status.stopRequested) {
-            onStageOverload(channel, row.index, error, requestStartedAt);
-            clearCooldownIf(channel, recordStageFailure("stage1", channel.presetId));
+            feedback("stage1", request, "failure", error);
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         }
       } finally {
-        pools.stage1.finish(row.presetId, row.index, { ok: !status.stageErrors.stage1[row.index] });
-        status.stagePipelines.stage1.activeRows = status.stagePipelines.stage1.activeRows.filter((idx) => idx !== row.index);
-        stage1InFlight -= 1;
+        dispatchers.stage1.release(request, { ok: !status.stageErrors.stage1[row.index] });
         syncStagePipelineQueues();
         dispatch();
       }
     }
 
-    async function executeStage2(s1Item) {
+    async function executeStage2(s1Item, request) {
       if (!status.active.includes(s1Item.row.index)) status.active.push(s1Item.row.index);
-      status.stagePipelines.stage2.activeRows.push(s1Item.row.index);
       syncStagePipelineQueues();
       // 与初审对称：这一行正在被（重新）复审，先撤掉上一次的复审异常明细，失败才重新登记。
       clearStageError("stage2", s1Item.row.index);
-      // 同理：这一行派给哪个预设，就回哪条通道做升降。
-      const channel = channelFor("stage2", s1Item.presetId);
-      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
-      const requestStartedAt = Date.now();
+      // 反馈与 finally 收尾均使用派发句柄，通道热移除也不会改变归属。
       try {
         const s2 = await runStage2Stylist(s1Item, config, labels, allRows);
         // 复审内部已经把异常回退成「采纳初审方案」，但这一行仍必须走统一错误处理：
@@ -2163,7 +1803,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s2.stageError) throw s2.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          noteStageSuccess(channel);
+          feedback("stage2", request, "success");
         }
         // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
         // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，看起来像「阶段二没干活」。
@@ -2177,7 +1817,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
         if (s2.arbCheck?.triggered && plan.cascadeToArbiter) {
           // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
-          stage3Pending.push(s2);
+          dispatchers.stage3.enqueue(s2);
           syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
@@ -2192,8 +1832,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(channel, s1Item.row.index, error, stage2Pending, s1Item, requestStartedAt, s2Ctrl)) {
-          // 成功推回 stage2Pending 重试
+        if (isRateLimit && feedback("stage2", request, "rate-limit", error)) {
+          // 派发 module 已将本行放回复审队头。
         } else {
           if (isRateLimit) {
             pushLog(`[频控退避] 第 ${s1Item.row.index} 行文学复审连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至初审方案。`);
@@ -2210,36 +1850,29 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
-          else if (isRefusal) clearCooldownIf(channel, recordStageNotLimited("stage2", channel.presetId));
+          else if (isRefusal) feedback("stage2", request, "not-limited");
           else if (!status.stopRequested && !isRateLimit) {
-            onStageOverload(channel, s1Item.row.index, error, requestStartedAt);
-            clearCooldownIf(channel, recordStageFailure("stage2", channel.presetId));
+            feedback("stage2", request, "failure", error);
           }
         }
       } finally {
-        pools.stage2.finish(s1Item.presetId, s1Item.row.index, { ok: !status.stageErrors.stage2[s1Item.row.index] });
-        status.stagePipelines.stage2.activeRows = status.stagePipelines.stage2.activeRows.filter((idx) => idx !== s1Item.row.index);
-        if (!plan.cascadeToArbiter || !stage3Pending.some((item) => item.row.index === s1Item.row.index)) {
-          if (!stage2Pending.some((item) => item.row?.index === s1Item.row.index)) {
+        dispatchers.stage2.release(request, { ok: !status.stageErrors.stage2[s1Item.row.index] });
+        if (!plan.cascadeToArbiter || !hasPending("stage3", s1Item.row.index)) {
+          if (!hasPending("stage2", s1Item.row.index)) {
             status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           }
         }
-        stage2InFlight -= 1;
         syncStagePipelineQueues();
         dispatch();
       }
     }
 
-    async function executeStage3(s2Item) {
+    async function executeStage3(s2Item, request) {
       if (!status.active.includes(s2Item.row.index)) status.active.push(s2Item.row.index);
-      status.stagePipelines.stage3.activeRows.push(s2Item.row.index);
       syncStagePipelineQueues();
       // 同理：先撤掉这一行上一次的仲裁异常明细。
       clearStageError("stage3", s2Item.row.index);
-      // 同理：这一行派给哪个预设，就回哪条通道做升降。
-      const channel = channelFor("stage3", s2Item.presetId);
-      // 请求发出时间：catch 里判断「这次失败是不是下调之前发出的请求」（同一次拥塞事件只下调一次）。
-      const requestStartedAt = Date.now();
+      // 反馈与 finally 收尾均使用派发句柄，通道热移除也不会改变归属。
       try {
         const s3 = await runStage3Arbiter(s2Item, config, labels, allRows);
         // 同理：仲裁失败的行走统一错误处理（频控重试 / 计入仲裁异常 / 回退复审方案），
@@ -2247,7 +1880,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         if (s3.stageError) throw s3.stageError;
         if (!status.stopRequested) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
-          noteStageSuccess(channel);
+          feedback("stage3", request, "success");
         }
         const result = finalizeRowResult(s3, config);
         addResult(result);
@@ -2259,8 +1892,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
-        if (isRateLimit && onStageRateLimit(channel, s2Item.row.index, error, stage3Pending, s2Item, requestStartedAt, s3Ctrl)) {
-          // 成功推回 stage3Pending 重试
+        if (isRateLimit && feedback("stage3", request, "rate-limit", error)) {
+          // 派发 module 已将本行放回仲裁队头。
         } else {
           if (isRateLimit) {
             pushLog(`[频控退避] 第 ${s2Item.row.index} 行终审仲裁连续 ${maxRowRetries} 次触发频控限制，已达重试上限，回退至复审方案。`);
@@ -2276,19 +1909,16 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
-          else if (isRefusal) clearCooldownIf(channel, recordStageNotLimited("stage3", channel.presetId));
+          else if (isRefusal) feedback("stage3", request, "not-limited");
           else if (!status.stopRequested && !isRateLimit) {
-            onStageOverload(channel, s2Item.row.index, error, requestStartedAt);
-            clearCooldownIf(channel, recordStageFailure("stage3", channel.presetId));
+            feedback("stage3", request, "failure", error);
           }
         }
       } finally {
-        pools.stage3.finish(s2Item.presetId, s2Item.row.index, { ok: !status.stageErrors.stage3[s2Item.row.index] });
-        status.stagePipelines.stage3.activeRows = status.stagePipelines.stage3.activeRows.filter((idx) => idx !== s2Item.row.index);
-        if (!stage3Pending.some((item) => item.row?.index === s2Item.row.index)) {
+        dispatchers.stage3.release(request, { ok: !status.stageErrors.stage3[s2Item.row.index] });
+        if (!hasPending("stage3", s2Item.row.index)) {
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
         }
-        stage3InFlight -= 1;
         syncStagePipelineQueues();
         dispatch();
       }
@@ -2457,39 +2087,12 @@ function breakerPresetId(presetId) {
   return String(presetId || "__stage__");
 }
 
-function stageBreaker(stageKey, presetId = "__stage__") {
-  const key = `${stageKey}:${breakerPresetId(presetId)}`;
-  let breaker = presetBreakers.get(key);
-  if (!breaker) {
-    // TRANSCOMPARATOR_BREAKER_TIME_SCALE 只缩放冷却时长，供回归测试把分钟级冷却压到毫秒级；不是运行时开关。
-    breaker = createStageBreaker({ timeScale: Number(process.env.TRANSCOMPARATOR_BREAKER_TIME_SCALE) || 1 });
-    presetBreakers.set(key, breaker);
-  }
-  return breaker;
-}
-
-function breakerTripBucket(stageKey) {
-  let bucket = presetBreakerTrips.get(stageKey);
-  if (!bucket) {
-    bucket = new Map();
-    presetBreakerTrips.set(stageKey, bucket);
-  }
-  return bucket;
-}
-
 function currentStagePresetIds(stageKey) {
-  const presets = breakerRuntime?.pools?.[stageKey]?.presets;
-  if (Array.isArray(presets) && presets.length) return presets.map((item) => String(item.presetId));
-  return [...breakerTripBucket(stageKey).keys()];
-}
-
-function isPresetBreakerTripped(stageKey, presetId) {
-  return breakerTripBucket(stageKey).has(breakerPresetId(presetId));
+  return (breakerRuntime?.dispatchers?.[stageKey]?.snapshot().presets || []).map((item) => String(item.presetId));
 }
 
 function isStageBreakerBroken(stageKey) {
-  const ids = currentStagePresetIds(stageKey);
-  return ids.length > 0 && ids.every((id) => isPresetBreakerTripped(stageKey, id));
+  return Boolean(breakerRuntime?.dispatchers?.[stageKey]?.snapshot().breakerBroken);
 }
 
 function allActiveStagesBroken() {
@@ -2500,7 +2103,7 @@ function allActiveStagesBroken() {
 
 function presetBreakerLabel(stageKey, presetId) {
   const stageLabel = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
-  const presets = breakerRuntime?.pools?.[stageKey]?.presets || [];
+  const presets = breakerRuntime?.dispatchers?.[stageKey]?.snapshot().presets || [];
   if (presets.length <= 1) return stageLabel;
   const preset = presets.find((item) => String(item.presetId) === breakerPresetId(presetId));
   return `${stageLabel}·${preset?.name || preset?.presetId || breakerPresetId(presetId)}`;
@@ -2517,11 +2120,7 @@ function stageTripText(trip, stageKey, presetId, terminal = false) {
 function stopForBreakerTrip(trip, stageKey, presetId) {
   if (!trip || status.stopRequested) return;
   const id = breakerPresetId(presetId);
-  const bucket = breakerTripBucket(stageKey);
-  if (!bucket.has(id)) {
-    bucket.set(id, trip);
-    pushLog(`[熔断] ${stageTripText(trip, stageKey, id)} 其它预设继续运行。`);
-  }
+  pushLog(`[熔断] ${stageTripText(trip, stageKey, id)} 其它预设继续运行。`);
 
   const stageBroken = isStageBreakerBroken(stageKey);
   if (stageBroken && !breakerRuntime?.brokenStages?.has(stageKey)) {
@@ -2548,32 +2147,6 @@ function stopForBreakerTrip(trip, stageKey, presetId) {
     status.breakerWarning = stageTripText(trip, stageKey, id, false);
     status.error = status.breakerWarning;
   }
-}
-
-// 一次成功的模型调用。返回 recovered=true 表示该预设刚从限流冷却中恢复。
-function recordStageSuccess(stageKey, presetId) {
-  if (isPresetBreakerTripped(stageKey, presetId)) return false;
-  const { recovered, trip } = stageBreaker(stageKey, presetId).recordSuccess();
-  if (recovered) pushLog(`[熔断] ${presetBreakerLabel(stageKey, presetId)}：请求重新通过，限流冷却解除，恢复正常派发。`);
-  if (trip) stopForBreakerTrip(trip, stageKey, presetId);
-  return recovered;
-}
-
-// 一次非限流的真实失败（5xx、超时、断连等）。限流耗尽走 onStageRateLimit 里的限流轨，不进这里。
-function recordStageFailure(stageKey, presetId) {
-  if (isPresetBreakerTripped(stageKey, presetId)) return false;
-  const { recovered, trip } = stageBreaker(stageKey, presetId).recordFailure();
-  if (recovered) pushLog(`[熔断] ${presetBreakerLabel(stageKey, presetId)}：请求已拿到非限流的答复，限流冷却解除。`);
-  if (trip) stopForBreakerTrip(trip, stageKey, presetId);
-  return recovered;
-}
-
-// 拒答：上游正常应答，只解除限流轨，不计成败。
-function recordStageNotLimited(stageKey, presetId) {
-  if (isPresetBreakerTripped(stageKey, presetId)) return false;
-  const { recovered } = stageBreaker(stageKey, presetId).recordNotLimited();
-  if (recovered) pushLog(`[熔断] ${presetBreakerLabel(stageKey, presetId)}：请求已拿到非限流的答复，限流冷却解除。`);
-  return recovered;
 }
 
 async function runStage1Gatekeeper(row, allRows, config, labels) {

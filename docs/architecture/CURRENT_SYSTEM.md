@@ -45,11 +45,12 @@
 |---|---|
 | 提示词与目标列契约 | `proofread-contract.js`、`profiles/`、`term-table.js`、说话习惯与动态上下文模块 |
 | 能力识别与请求适配 | `model-capabilities.js` 提供服务端识别与浏览器纯函数注入；传输使用 `src/ai/llm-client.js` |
-| 三阶段执行 | `ai-proofread.js` 持有任务、队列与指标；`arbiter.js` 判定仲裁触发，`stage-results.js` 归一阶段输出与指标 |
+| 三阶段执行 | `ai-proofread.js` 持有任务、跨阶段编排与指标；`arbiter.js` 判定仲裁触发，`stage-results.js` 归一阶段输出与指标 |
 | AI 结果 | `proofread-results.js` 持有结果集合、修订交付、恢复与落盘时机；`result-store.js` 处理身份校验及原子文件读写 |
 | 角色消息 | `persona-runtime.js` 为 Gatekeeper、Stylist、Arbiter 构造独立角色消息；推理强度沿用各模型预设并进行合法性归一，不由角色自动覆写 |
 | 模型画像 | `scheduler-profile.js` 提供六维画像与角色选择函数；此函数能力不等同于页面已自动绑定模型预设 |
 | 并发与熔断 | `concurrency-controller.js` 和 `circuit-breaker.js` 提供各阶段的并发调节、退避、冷却探测与终止决策 |
+| 阶段内派发 | `stage-dispatch.js` 持有待办、预设热更新与请求句柄，固定通道归属并管理反馈、在飞计数及唤醒生命周期 |
 | 低分与查证 | `low-score.js`、`web-lookup.js` 参与初审判定链 |
 | 输出门禁 | `format-guard.js`、`punctuation.js` 与语言护栏在结论产出时约束修订文本 |
 | 阶段状态 | `stage-note-state.js` 提供最新备注块的待办与异常语义；客户端阶段卡片显示状态与统计 |
