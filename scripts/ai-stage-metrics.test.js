@@ -42,7 +42,12 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /驳回:\s*<span id="metricCritiqueReject">/);
   assert.match(html, /升级仲裁:\s*<span id="metricCritiqueEscalate">/);
   assert.match(html, /id="metricStage3Arbitrated"/);
-  assert.match(html, /id="metricStage3Settled"/);
+  assert.doesNotMatch(html, /id="metricStage3Settled"/, "不重复显示与已仲裁同步累计的定案数字");
+  const dashboardMarkup = html.slice(html.indexOf('<div id="aiStageDashboard"'), html.indexOf('<div class="ai-log', html.indexOf('<div id="aiStageDashboard"')));
+  assert.doesNotMatch(dashboardMarkup, /class="ai-stage-flow-arrow"/, "阶段结果分类不用箭头暗示先后关系");
+  for (const [item, metric, label] of [["stage1TotalItem", "metricStage1Total", "已初审"], ["stage2ReviewedItem", "metricStage2Reviewed", "已复审"], ["stage3ArbitratedItem", "metricStage3Arbitrated", "已仲裁"]]) {
+    assert.match(html, new RegExp('id="' + item + '"[^>]*class="ai-stage-card-value ai-stage-metric"[^>]*>\\s*<strong id="' + metric + '">0</strong><span class="ai-stage-unit">' + label));
+  }
   assert.match(html, /id="metricArbGatekeeper"/);
   assert.match(html, /id="metricArbStylist"/);
   assert.match(html, /id="metricArbSynthesis"/);
@@ -72,6 +77,101 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="stage1PresetTags"/);
 });
 
+test("初审直通占比：归属通过行子集，空分母不显示百分比且不保留旧提示", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  const markup = ui.html.split("<script>")[0];
+  const ratePosition = markup.indexOf('id="aiStageFastPassRate"');
+  assert.ok(ratePosition > markup.indexOf('id="stage1Card"') && ratePosition < markup.indexOf('id="stage2Card"'));
+  ui.run("renderStageMetricsDashboard({ stage1Passed: 228, stage1NeedsEdit: 214, fastPassHits: 228 });");
+  assert.equal(ui.element("aiStageFastPassRate").textContent, "通过中: 100%");
+  assert.match(ui.element("aiStageFastPassRate").title, /总直通占比 52%/);
+  ui.run("renderStageMetricsDashboard({});");
+  assert.equal(ui.element("aiStageFastPassRate").textContent, "通过中: —");
+  assert.doesNotMatch(ui.element("aiStageFastPassRate").title, /228|442|100%/);
+});
+
+test("阶段卡片分组：待办与异常只出现在底部运行区，结果分布保持独立", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  const markup = ui.html.split("<script>")[0];
+  for (let stage = 1; stage <= 3; stage++) {
+    const start = markup.indexOf('id="stage' + stage + 'Card"');
+    const end = stage < 3 ? markup.indexOf('id="stage' + (stage + 1) + 'Card"', start) : markup.indexOf('id="aiLog"', start);
+    const card = markup.slice(start, end);
+    const runtimePosition = card.indexOf('class="ai-stage-runtime"');
+    assert.ok(runtimePosition > card.indexOf('class="ai-stage-card-sub"'));
+    assert.ok(card.indexOf('id="stage' + stage + 'ErrorItem"') > runtimePosition);
+    if (stage > 1) assert.ok(card.indexOf('id="stage' + stage + 'PendingItem"') > runtimePosition);
+  }
+});
+
+test("运行信息：无活跃行号也显示队列与容量，停止后清理运行数字", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run("renderStageMetricsDashboard({}, { stage1: { inFlight: 0, pending: 12, concurrency: 10, concurrencyMax: 48, activeRows: [] } }, true);");
+  assert.equal(ui.element("stage1StatusPill").textContent, "排队中");
+  assert.equal(ui.element("stage1RuntimeInfo").hidden, false);
+  assert.equal(ui.element("stage1RuntimeInfo").textContent, "运行 0 行 · 排队 12 行 · 当前配额 10 · 配置上限 48");
+  assert.equal(ui.element("stage1ActiveInfo").hidden, true);
+  ui.run("renderStageMetricsDashboard({});");
+  assert.equal(ui.element("stage1RuntimeInfo").hidden, true);
+  assert.equal(ui.element("stage1RuntimeInfo").textContent, "");
+  assert.equal(ui.element("stage1RuntimeInfo").title || "", "");
+});
+
+test("紧凑看板：零异常不占位，失败与待办出现后保留筛选入口", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run("renderStageMetricsDashboard({});");
+  for (let stage = 1; stage <= 3; stage++) assert.equal(ui.element("stage" + stage + "ErrorItem").hidden, true);
+  ui.run("renderStageMetricsDashboard({ stage1Errors: 2, stage2Reviewed: 1, stage2Errors: 1, stage3Arbitrated: 1, stage3Pending: 3 });");
+  assert.equal(ui.element("stage1ErrorItem").hidden, false);
+  assert.equal(ui.element("stage2ErrorItem").hidden, false);
+  assert.equal(ui.element("stage3ErrorItem").hidden, true);
+  assert.equal(ui.element("stage3PendingItem").hidden, false);
+  assert.equal(ui.element("stage3StatusPill").textContent, "待处理");
+  assert.doesNotMatch(ui.html.split("<script>")[0], /class="ai-stage-group-label"|class="ai-stage-summary-label"/);
+});
+
+test("单阶段运行：空闲阶段只保留配额时不显示运行行，排队与在飞仍显示", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run(`currentStageCascade.toArbiter = true;
+    renderStageMetricsDashboard({ stage1Passed: 3, stage2Reviewed: 2, stage3Arbitrated: 1 }, {
+      stage1: { inFlight: 0, pending: 0, concurrency: 3, concurrencyMax: 32, activeRows: [] },
+      stage2: { inFlight: 0, pending: 0, concurrency: 6, concurrencyMax: 52, activeRows: [] },
+      stage3: { inFlight: 1, pending: 0, concurrency: 6, concurrencyMax: 52, activeRows: [3] }
+    }, true);`);
+  for (const stage of [1, 2]) {
+    assert.equal(ui.element("stage" + stage + "RuntimeInfo").hidden, true);
+    assert.equal(ui.element("stage" + stage + "RuntimeInfo").textContent, "");
+    assert.equal(ui.element("stage" + stage + "ActiveInfo").hidden, true);
+  }
+  assert.equal(ui.element("stage3RuntimeInfo").hidden, false);
+  assert.equal(ui.element("stage3ActiveInfo").hidden, false);
+  ui.run("renderStageMetricsDashboard({ stage1Passed: 3 }, { stage2: { inFlight: 0, pending: 2, concurrency: 6, concurrencyMax: 52, activeRows: [] } }, true);");
+  assert.equal(ui.element("stage2RuntimeInfo").hidden, false);
+  assert.match(ui.element("stage2RuntimeInfo").textContent, /排队 2 行/);
+  assert.equal(ui.element("stage3RuntimeInfo").hidden, true);
+});
+
+test("可见阶段进度：初审覆盖全页，下游当前候选增加时更新分母与无障碍值", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run("renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 10, stage3Arbitrated: 5 });");
+  assert.equal(ui.element("stage1ProgressText").textContent, "全页 33%");
+  assert.equal(ui.element("stage2ProgressText").textContent, "当前候选 100%");
+  assert.equal(ui.element("stage3ProgressText").textContent, "当前候选 100%");
+  ui.run("renderStageMetricsDashboard({ stage2Reviewed: 10, stage2Pending: 2 }, { stage2: { inFlight: 1, pending: 1 } }, true);");
+  assert.equal(ui.element("stage2ProgressText").textContent, "当前候选 83%");
+  const progress = ui.element("stage2ProgressWrap");
+  assert.equal(progress.getAttribute("role"), "progressbar");
+  assert.equal(progress.getAttribute("aria-valuenow"), "10");
+  assert.equal(progress.getAttribute("aria-valuemax"), "12");
+  assert.equal(progress.getAttribute("aria-valuetext"), "已复审 10 / 当前候选 12 行 · 83%");
+  assert.equal(ui.element("stage2ProgressText").title, progress.getAttribute("aria-valuetext"));
+  ui.run("resetStageProgressBars();");
+  assert.equal(ui.element("stage2ProgressText").hidden, true);
+  assert.equal(ui.element("stage2ProgressText").textContent, "");
+  assert.equal(ui.element("stage2ProgressText").title, "");
+  assert.equal(progress.getAttribute("aria-valuenow"), null);
+});
+
 test("阶段预设标签：每个预设位置显示自己的并发与排队信息", () => {
   const storage = storageFixture({
     "translation-compare-ai-presets-v2": JSON.stringify([
@@ -92,9 +192,9 @@ test("阶段预设标签：每个预设位置显示自己的并发与排队信�
 
   const tags = ui.element("stage1PresetTags");
   assert.equal(tags.children.length, 2);
-  assert.equal(tags.children[0].children[1].textContent, "并发 1/3 · 排队 8");
+  assert.equal(tags.children[0].children[1].textContent, "运行 1 · 当前配额 3 · 配置上限 4 · 排队 8");
   assert.match(tags.children[0].children[1].title, /配置并发上限 4/);
-  assert.equal(tags.children[1].children[1].textContent, "并发 0/2 · 排队 5");
+  assert.equal(tags.children[1].children[1].textContent, "运行 0 · 当前配额 2 · 配置上限 9 · 排队 5");
   assert.match(tags.children[1].children[1].title, /配置并发上限 9/);
 });
 
@@ -115,10 +215,10 @@ test("阶段卡片并发后缀：多预设时只有全部预设触顶才标「�
       results: [],
     });
   `);
-  const partialText = ui.element("stage1ActiveRowsText").textContent;
-  assert.match(partialText, /并发 10\/96/, "分母是各预设上限之和");
+  const partialText = ui.element("stage1RuntimeInfo").textContent;
+  assert.match(partialText, /运行 10 行.*配置上限 96/, "分母是各预设上限之和");
   assert.equal(partialText.includes("触顶"), false, "部分预设触顶不等于阶段触顶");
-  assert.match(ui.element("stage1ActiveInfo").title, /已触顶 1\/3 个预设/);
+  assert.match(ui.element("stage1RuntimeInfo").title, /已触顶 1\/3 个预设/);
 
   // 3 个预设全部顶到各自上限：阶段真的加不动了，才升级成「全部触顶」。
   ui.run(`
@@ -134,8 +234,8 @@ test("阶段卡片并发后缀：多预设时只有全部预设触顶才标「�
       results: [],
     });
   `);
-  assert.match(ui.element("stage1ActiveRowsText").textContent, /并发 96\/96 · 全部触顶/);
-  assert.match(ui.element("stage1ActiveInfo").title, /已触顶 3\/3 个预设（全部触顶）/);
+  assert.match(ui.element("stage1RuntimeInfo").textContent, /运行 96 行.*配置上限 96 · 全部触顶/);
+  assert.match(ui.element("stage1RuntimeInfo").title, /已触顶 3\/3 个预设（全部触顶）/);
 });
 
 test("客户端状态渲染：renderAiStatus 实时更新页面内阶段看板指标", () => {
@@ -180,7 +280,7 @@ test("客户端状态渲染：renderAiStatus 实时更新页面内阶段看板�
   assert.equal(elS3.textContent, 1);
 
   const elRate = ui.element("aiStageFastPassRate");
-  assert.equal(elRate.textContent, "快速直通: 70%");
+  assert.equal(elRate.textContent, "通过中: 70%");
 });
 
 test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与激活徽标", () => {
@@ -237,11 +337,11 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   // Check stage pills
   const pill1 = ui.element("stage1StatusPill");
   assert.equal(pill1.dataset.state, "running");
-  assert.match(pill1.textContent, /2处理中 · 150待审/);
+  assert.match(pill1.textContent, /处理中/);
 
   const pill2 = ui.element("stage2StatusPill");
   assert.equal(pill2.dataset.state, "running");
-  assert.match(pill2.textContent, /1处理中 · 2排队/);
+  assert.match(pill2.textContent, /处理中/);
 
   const pill3 = ui.element("stage3StatusPill");
   assert.equal(pill3.dataset.state, "disabled");
@@ -252,10 +352,10 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   // 拿它当分子就会出现「1 处理中 · 并发 32/32」这种看着自相矛盾的画面），只在悬停里说明。
   // 这里正是「队列不足、实际在飞小于许可值」的场景：2/32 而不是 2/4。
   const active1Text = ui.element("stage1ActiveRowsText");
-  assert.equal(active1Text.textContent, "70, 71 · （并发 2/32）");
-  assert.match(ui.element("stage1ActiveInfo").title, /实际在飞 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
+  assert.equal(active1Text.textContent, "70, 71");
+  assert.match(ui.element("stage1RuntimeInfo").title, /实际在飞 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
   const active2Text = ui.element("stage2ActiveRowsText");
-  assert.equal(active2Text.textContent, "68 · （并发 1/32）");
+  assert.equal(active2Text.textContent, "68");
 
   // 跑完后的流水线汇总同样不在状态行重复：阶段卡片上已经有同一组数字。
   // 放在阶段徽标断言之后，避免这一轮渲染把运行态徽标覆盖成 done。
@@ -329,7 +429,7 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("metricStage1NeedsEdit").textContent, 2); // 行3与行4初审建议修改
   assert.equal(ui.element("metricStage1Total").textContent, 4); // 2 + 2 = 4
   assert.equal(ui.element("metricFastPassHits").textContent, 2);
-  assert.equal(ui.element("aiStageFastPassRate").textContent, "快速直通: 100%");
+  assert.equal(ui.element("aiStageFastPassRate").textContent, "通过中: 100%");
   assert.equal(ui.element("metricStage2Reviewed").textContent, 2); // 行3调整 + 行4提交仲裁
   assert.equal(ui.element("metricStage2Diverged").textContent, 2); // 行3调整与行4提交仲裁都算复审分歧
   assert.equal(ui.element("metricCritiqueModify").textContent, 1);
@@ -338,15 +438,14 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("metricStage3Pending").textContent, 1); // 行3已分歧但尚未仲裁
   assert.equal(ui.element("stage3PendingItem").hidden, false, "存在未仲裁的分歧行时必须露出「待仲裁」");
   assert.equal(ui.element("metricArbGatekeeper").textContent, 1); // 行4仲裁采纳初审方案
-  assert.equal(ui.element("metricStage3Settled").textContent, 1);
 
   // Status pills reflect ready state
   assert.equal(ui.element("stage1StatusPill").dataset.state, "done");
-  assert.equal(ui.element("stage1StatusPill").textContent, "就绪");
+  assert.equal(ui.element("stage1StatusPill").textContent, "已完成");
   assert.equal(ui.element("stage2StatusPill").dataset.state, "done");
-  assert.equal(ui.element("stage2StatusPill").textContent, "就绪");
-  assert.equal(ui.element("stage3StatusPill").dataset.state, "done");
-  assert.equal(ui.element("stage3StatusPill").textContent, "就绪");
+  assert.equal(ui.element("stage2StatusPill").textContent, "已完成");
+  assert.equal(ui.element("stage3StatusPill").dataset.state, "queued");
+  assert.equal(ui.element("stage3StatusPill").textContent, "待处理");
 });
 
 test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不得塌回「已仲裁数」", async () => {
@@ -1352,13 +1451,11 @@ test("认知审核流水线指标：数学意义严格闭环与明确流转脉�
 
   // 4. 阶段三终审仲裁：承接阶段二的 42 行分歧
   const s3Arbitrated = Number(ui.element("metricStage3Arbitrated").textContent);
-  const s3Settled = Number(ui.element("metricStage3Settled").textContent);
   const arbGK = Number(ui.element("metricArbGatekeeper").textContent);
   const arbStylist = Number(ui.element("metricArbStylist").textContent);
   const arbSynth = Number(ui.element("metricArbSynthesis").textContent);
   const arbOrig = Number(ui.element("metricArbOriginal").textContent);
   assert.equal(s3Arbitrated, 42, "阶段三仲裁量精确等于阶段二分歧量 (42)");
-  assert.equal(s3Settled, 42);
   assert.equal(arbGK, 10);
   assert.equal(arbStylist, 25);
   assert.equal(arbSynth, 6);
@@ -1367,7 +1464,7 @@ test("认知审核流水线指标：数学意义严格闭环与明确流转脉�
 
   // 5. 快速直通率与状态提示文字
   const rateText = ui.element("aiStageFastPassRate").textContent;
-  assert.match(rateText, /快速直通:\s*100%/);
+  assert.match(rateText, /通过中:\s*100%/);
   const rateTitle = ui.element("aiStageFastPassRate").title;
   assert.match(rateTitle, /207\s*行快速直通/);
   assert.match(rateTitle, /271/);

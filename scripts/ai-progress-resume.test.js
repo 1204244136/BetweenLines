@@ -62,8 +62,9 @@ function assertProgress(ui, done, percent) {
 
 function assertUnreviewedAndFailed(ui) {
   const pill = ui.element("stage1StatusPill");
-  assert.match(pill.textContent, /(?:2\s*行?[^·]*未审|未审[^·]*2)/);
-  assert.match(pill.textContent, /(?:1\s*行?[^·]*异常|异常[^·]*1)/);
+  assert.equal(pill.textContent, "待处理");
+  assert.equal(ui.element("stage1RuntimeInfo").textContent, "未审 2 行");
+  assert.equal(Number(ui.element("metricStage1Errors").textContent), 1);
   assert.match(pill.title, /继续剩下的/);
 }
 
@@ -85,7 +86,7 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
   assert.equal(post.body.rowNotes[3], failed);
   assert.equal(post.body.rowsSignature, "rows");
   assertProgress(ui, 2, 40);
-  assert.equal(ui.element("stage1StatusPill").textContent, "1处理中 · 2待审");
+  assert.equal(ui.element("stage1StatusPill").textContent, "处理中");
   assert.equal(ui.element("metricStage1Errors").textContent, 1);
   assert.equal(ui.storage.getItem(currentKey), storedBeforeStart);
   for (const [id, item] of Object.entries(initialNotes())) {

@@ -1735,9 +1735,111 @@
     .empty-state.visible {
       display: block;
     }
+    /* 紧凑看板：头部一行、指标并排、异常待办与短进度共用一行。 */
+    .ai-stage-dashboard .ai-stage-dashboard-title-group {
+      min-width: 0;
+      flex-shrink: 1;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .ai-stage-dashboard .ai-stage-cards {
+      align-items: start;
+    }
+    .ai-stage-card .ai-stage-card-head {
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+    }
+    .ai-stage-card .ai-stage-card-title-row {
+      justify-content: flex-start;
+      gap: 4px;
+    }
+    .ai-stage-card .ai-stage-card-ctrls {
+      flex: 1 1 260px;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+    .ai-stage-card .ai-stage-card-head .select-combobox {
+      flex: 1 1 0;
+      min-width: 70px;
+    }
     .ai-stage-card .ai-stage-card-body {
       cursor: default;
       transition: none;
+      flex: 0 0 auto;
+      gap: 3px;
+      padding: 1px 0;
+    }
+    .ai-stage-card .ai-stage-card-main {
+      flex-direction: row;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 3px 12px;
+    }
+    .ai-stage-card .ai-stage-card-sub {
+      gap: 3px 8px;
+    }
+    .ai-stage-efficiency {
+      display: inline-flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 3px 6px;
+    }
+    .ai-stage-efficiency-rate,
+    .ai-stage-runtime-info,
+    .ai-stage-progress-text {
+      font-size: 11px;
+      color: var(--ai-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .ai-stage-runtime {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 0;
+    }
+    .ai-stage-runtime-summary {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 3px 8px;
+    }
+    .ai-stage-progress-text {
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    .ai-stage-card .ai-stage-card-value strong {
+      color: var(--ai-text);
+    }
+    .ai-stage-card .ai-stage-sub-item.ai-stage-metric.ai-stage-outcome--pass {
+      color: var(--ai-success-fg);
+    }
+    .ai-stage-card .ai-stage-sub-item.ai-stage-metric.ai-stage-outcome--edit {
+      color: var(--ai-warning-fg);
+    }
+    .ai-stage-card .ai-stage-sub-item [id^="metric"] {
+      color: inherit;
+    }
+    .ai-stage-dashboard .ai-stage-badge--needs-edit {
+      background: var(--ai-warning-bg);
+      color: var(--ai-warning-fg);
+      border-color: var(--ai-warning-border);
+    }
+    .ai-stage-dashboard .ai-stage-badge--needs-edit:hover,
+    .ai-stage-dashboard .ai-stage-badge--needs-edit.is-active {
+      background: var(--ai-warning-fg);
+      color: var(--ai-on-strong);
+      border-color: var(--ai-warning-fg);
+    }
+    .ai-stage-card .ai-stage-applied-menu .ai-stage-preset-tag {
+      flex-wrap: wrap;
+    }
+    .ai-stage-card .ai-stage-applied-menu .ai-stage-preset-runtime {
+      flex: 1 0 100%;
+      order: 2;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .ai-stage-card .ai-stage-card-body:hover {
       background: transparent;

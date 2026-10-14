@@ -286,7 +286,7 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /select\.setAttribute\("aria-hidden", "true"\)/);
   assert.match(script, /const triggerLabel = String\(select\.labels\?\.\[0\]\?\.textContent \|\| ""\)\.trim\(\)/);
   // 阶段指标使用原生按钮；正文不再是整个阶段的筛选入口。
-  assert.match(html, /<button id="stage1PassedItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false"/);
+  assert.match(html, /<button id="stage1TotalItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false"/);
   assert.doesNotMatch(html, /<div class="ai-stage-card-body" role="button"/);
   assert.doesNotMatch(html, /data-filter-stage="/);
   assert.doesNotMatch(script, /activeStageFilter|toggleStageFilter|suppressStageCardFilter/);

@@ -149,7 +149,7 @@ test("初审队列耗尽但仍有异常：运行中和结束后均提示待重�
       stageCascade: { toStylist: true },
       stageMetrics: { stage1Passed: 1971, stage1NeedsEdit: 1042, stage1Total: 3013, stage1Errors: 65 },
       stagePipelines: { stage1: { pending: 0, inFlight: 0 }, stage2: { inFlight: 1 } }, results: [] });`);
-    assert.equal(ui.element("stage1StatusPill").textContent, "65 行异常待重试");
+    assert.equal(ui.element("stage1StatusPill").textContent, "异常待重试");
     assert.equal(ui.element("stage1StatusPill").dataset.state, "queued");
     assert.match(ui.element("stage1StatusPill").title, /继续剩下的/);
     assert.equal(ui.element("stage1Progress").style.width, "98%");
@@ -175,13 +175,13 @@ test("初审异常续跑显示处理中，成功后的最新备注消除异常�
   const key = "translation-compare-notes-v7:project:rows";
   const failure = "[AI校对]\n调用失败：请求超时";
   const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) }), { rows: ROWS.slice(0, 1) });
-  assert.equal(ui.element("stage1StatusPill").textContent, "1 行异常待重试");
+  assert.equal(ui.element("stage1StatusPill").textContent, "异常待重试");
   ui.run("updateStageMetricsDashboard(null, { stage1: { inFlight: 1, activeRows: [1] } }, true)");
-  assert.equal(ui.element("stage1StatusPill").textContent, "1处理中");
+  assert.equal(ui.element("stage1StatusPill").textContent, "处理中");
   ui.run(`notes[1].note += "\\n\\n[AI校对]\\n是否需要修改：否\\nGatekeeper初审：无需修改";
     markNotesDirtyForMetrics(); updateStageMetricsDashboard(null, {}, true);`);
   assert.equal(ui.element("metricStage1Errors").textContent, 0);
-  assert.equal(ui.element("stage1StatusPill").textContent, "初审完毕");
+  assert.equal(ui.element("stage1StatusPill").textContent, "已完成");
   assert.equal(ui.element("stage1Progress").style.width, "100%");
   assert.equal(ui.element("stage1StatusPill").title || "", "");
 });
@@ -207,7 +207,7 @@ for (const [stage, failure, success] of [
       const ui = createWorkbench(storage, options);
       const number = stage.slice(-1);
       assert.equal(ui.element(`metricStage${number}Errors`).textContent, 1);
-      assert.equal(ui.element(`stage${number}StatusPill`).textContent, "1 行异常待重试");
+      assert.equal(ui.element(`stage${number}StatusPill`).textContent, "异常待重试");
       assert.match(ui.element(`${stage}ErrorItem`).title, /请求超时：1 行/);
       if (stage !== "stage1") {
         assert.equal(ui.run('isAiFailureNote(notes[1].note)'), false);

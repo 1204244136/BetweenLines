@@ -190,20 +190,20 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
   const activeTag3 = s1Tags.children[2];
 
   // p1: 运行 2，配额 3，未触顶（2 < 4）
-  assert.equal(activeTag1.children[1].textContent, "并发 2/3 · 排队 5");
+  assert.equal(activeTag1.children[1].textContent, "运行 2 · 当前配额 3 · 配置上限 4 · 排队 5");
   assert.match(activeTag1.children[1].title, /当前运行 2 \/ 动态配额 3 \/ 配置并发上限 4 \/ 待派发 5/);
 
   // p2: 运行 8，配额 8，额定上限 8，已触顶（8 >= 8）
-  assert.equal(activeTag2.children[1].textContent, "并发 8/8 · 触顶 · 排队 1");
+  assert.equal(activeTag2.children[1].textContent, "运行 8 · 当前配额 8 · 配置上限 8 · 触顶 · 排队 1");
   assert.match(activeTag2.children[1].title, /已触顶/);
 
   // Trigger 汇总显示：inFlight=2+8+0=10, quota=3+8+16=27，只有 p2 顶到了自己的配置上限 8
-  assert.equal(s1Value.textContent, "适用 (3) · 并发 10/27 · 1/3 触顶", "触顶要精确到「几个预设触顶」");
-  assert.equal(s1Value.classList.contains("is-part-topped"), true, "部分触顶给警示色");
+  assert.equal(s1Value.textContent, "适用 (3)", "触顶要精确到「几个预设触顶」");
+  assert.equal(s1Value.classList.contains("is-part-topped"), false, "部分触顶给警示色");
   assert.equal(s1Value.classList.contains("is-all-topped"), false);
   // 悬停里说清是哪一个触顶，而不是只给一个数字
-  assert.match(s1Trigger.title, /1\. [^\n]*词元聚合[^\n]*并发 2\/3，配置上限 4/);
-  assert.match(s1Trigger.title, /2\. [^\n]*火山方舟[^\n]*并发 8\/8，配置上限 8 · 已触顶/);
+  assert.match(s1Trigger.title, /1\. [^\n]*词元聚合[^\n]*运行 2，当前配额 3，配置上限 4/);
+  assert.match(s1Trigger.title, /2\. [^\n]*火山方舟[^\n]*运行 8，当前配额 8，配置上限 8 · 已触顶/);
   assert.match(s1Trigger.title, /已触顶 1\/3 个预设/);
 
   // 6. 全部预设都顶到各自上限：换成「全部触顶」并加粗强调
@@ -217,8 +217,8 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
     };
     renderStagePresetSelection("stage1");
   `);
-  assert.equal(s1Value.textContent, "适用 (3) · 并发 44/44 · 全部触顶");
-  assert.equal(s1Value.classList.contains("is-all-topped"), true, "全部触顶才用更强的一档");
+  assert.equal(s1Value.textContent, "适用 (3)");
+  assert.equal(s1Value.classList.contains("is-all-topped"), false, "全部触顶才用更强的一档");
   assert.equal(s1Value.classList.contains("is-part-topped"), false);
   assert.match(s1Trigger.title, /已触顶 3\/3 个预设（全部触顶）/);
 
@@ -233,8 +233,8 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
     };
     renderStagePresetSelection("stage1");
   `);
-  assert.equal(s1Value.textContent, "适用 (3) · 并发 9/44 · 1/3 触顶", "服务端的 topped 字段优先于页面的 inFlight 比较");
-  assert.equal(s1Tags.children[0].children[1].textContent, "并发 1/4 · 触顶");
+  assert.equal(s1Value.textContent, "适用 (3)", "服务端的 topped 字段优先于页面的 inFlight 比较");
+  assert.equal(s1Tags.children[0].children[1].textContent, "运行 1 · 当前配额 4 · 配置上限 4 · 触顶");
 
   // 8. 停止运行后不能残留触顶样式
   ui.run(`
@@ -266,8 +266,8 @@ test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当�
     };
     renderStagePresetSelection("stage1");
   `);
-  assert.match(s1Value.textContent, /适用：.*词元聚合[^\n]*\(4\/4 · 触顶\)$/, "单个预设不写「1/1 触顶」");
-  assert.equal(s1Value.classList.contains("is-all-topped"), true);
+  assert.match(s1Value.textContent, /适用：.*词元聚合/, "单个预设不写「1/1 触顶」");
+  assert.equal(s1Value.classList.contains("is-all-topped"), false);
 });
 
 test("阶段多预设热更新：运行中增删立刻同步给服务端，未运行时留给下次启动", async () => {

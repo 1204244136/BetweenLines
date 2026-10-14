@@ -163,14 +163,6 @@
       return row.configuredConcurrency > 0 && row.inFlight >= row.configuredConcurrency;
     }
 
-    // 触顶摘要：部分触顶给「N/M 触顶」，全部触顶换成更强的「全部触顶」；
-    // 只有一个预设时不写「1/1 触顶」，沿用原来的「触顶」。
-    function stageToppedSummaryText(toppedCount, total) {
-      if (toppedCount <= 0 || total <= 0) return "";
-      if (toppedCount >= total) return total > 1 ? " · 全部触顶" : " · 触顶";
-      return ` · ${toppedCount}/${total} 触顶`;
-    }
-
     function renderStagePresetSelection(stage) {
       const controls = stagePresetControls[stage];
       const tags = aiIds[controls.tags];
@@ -199,10 +191,7 @@
         return row;
       });
 
-      const stageInFlight = rows.reduce((sum, row) => sum + (row.runtime ? row.inFlight : 0), 0);
-      const stageQuota = rows.reduce((sum, row) => sum + (row.runtime ? row.quota : 0), 0);
       const stageToppedCount = rows.filter((row) => row.topped).length;
-      const hasActiveRuntime = rows.some((row) => row.runtime && (row.inFlight > 0 || row.quota > 0 || row.pending > 0));
 
       tags.replaceChildren(...rows.map((row) => {
         const tag = document.createElement("div");
@@ -215,7 +204,7 @@
         const runtimeLabel = document.createElement("span");
         runtimeLabel.className = "ai-stage-preset-runtime";
         if (row.runtime) {
-          runtimeLabel.textContent = `并发 ${row.inFlight}/${row.quota}`
+          runtimeLabel.textContent = `运行 ${row.inFlight} · 当前配额 ${row.quota} · 配置上限 ${row.configuredConcurrency}`
             + (row.topped ? " · 触顶" : "")
             + (row.breakerTripped ? " · 熔断" : "")
             + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
@@ -269,34 +258,16 @@
             valueEl.textContent = "未启用";
             trigger.title = stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设";
           }
-        } else if (ids.length === 1) {
-          const first = rows[0];
-          const runtimeText = hasActiveRuntime && stageInFlight > 0
-            ? ` (${stageInFlight}/${stageQuota}${stageToppedSummaryText(stageToppedCount, 1)})`
-            : "";
-          valueEl.textContent = `适用：${first.label}${runtimeText}`;
-          trigger.title = `当前阶段适用预设：${first.label}` + (first.preset?.concurrency ? `（额定并发上限 ${first.preset.concurrency}）` : "")
-            + (hasActiveRuntime ? `\n当前并发 ${stageInFlight}/${stageQuota}` : "");
-          if (stageToppedCount > 0) valueEl.classList.add("is-all-topped");
         } else {
-          const toppedText = stageToppedSummaryText(stageToppedCount, rows.length);
-          const runtimeText = hasActiveRuntime && stageInFlight > 0
-            ? ` · 并发 ${stageInFlight}/${stageQuota}${toppedText}`
-            : "";
-          valueEl.textContent = `适用 (${rows.length})${runtimeText}`;
-          // 悬停里逐条给出每个预设的并发与触顶状态：摘要只说「几个触顶」，这里说清是哪一个。
+          valueEl.textContent = ids.length === 1 ? "适用：" + rows[0].label : "适用 (" + rows.length + ")";
           const presetList = rows.map((row, index) => {
             const stateText = row.runtime
-              ? `（并发 ${row.inFlight}/${row.quota}，配置上限 ${row.configuredConcurrency}${row.topped ? " · 已触顶" : ""}${row.breakerTripped ? " · 已熔断" : ""}）`
-              : "";
-            return `${index + 1}. ${row.label}${stateText}`;
+              ? "（运行 " + row.inFlight + "，当前配额 " + row.quota + "，配置上限 " + row.configuredConcurrency + (row.topped ? " · 已触顶" : "") + (row.breakerTripped ? " · 已熔断" : "") + "）"
+              : "（配置上限 " + row.configuredConcurrency + "）";
+            return (index + 1) + ". " + row.label + stateText;
           }).join("\n");
-          const toppedSummary = stageToppedCount > 0
-            ? `\n已触顶 ${stageToppedCount}/${rows.length} 个预设${stageToppedCount >= rows.length ? "（全部触顶）" : ""}。`
-            : "";
-          trigger.title = `当前阶段适用预设 (${rows.length})：\n${presetList}${toppedSummary}`;
-          if (stageToppedCount >= rows.length) valueEl.classList.add("is-all-topped");
-          else if (stageToppedCount > 0) valueEl.classList.add("is-part-topped");
+          trigger.title = "当前阶段适用预设：\n" + presetList
+            + (stageToppedCount > 0 ? "\n已触顶 " + stageToppedCount + "/" + rows.length + " 个预设" + (stageToppedCount >= rows.length ? "（全部触顶）" : "") + "。" : "");
         }
       }
     }
@@ -3533,10 +3504,9 @@
         { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审", nativeButton: true },
         { id: "stage2ErrorItem", filter: "stage2Errors", name: "复审异常", nativeButton: true },
         { id: "stage3ArbitratedItem", filter: "stage3Arbitrated", name: "终审仲裁", nativeButton: true },
-        { id: "stage3SettledItem", filter: "stage3Settled", name: "终审定案", nativeButton: true },
-        { id: "stage3GatekeeperItem", filter: "arbitrationGatekeeper", name: "初审胜", nativeButton: true },
-        { id: "stage3StylistItem", filter: "arbitrationStylist", name: "复审胜", nativeButton: true },
-        { id: "stage3SynthesisItem", filter: "arbitrationSynthesis", name: "结合方案", nativeButton: true },
+        { id: "stage3GatekeeperItem", filter: "arbitrationGatekeeper", name: "采用初审方案", nativeButton: true },
+        { id: "stage3StylistItem", filter: "arbitrationStylist", name: "采用复审方案", nativeButton: true },
+        { id: "stage3SynthesisItem", filter: "arbitrationSynthesis", name: "综合方案", nativeButton: true },
         { id: "stage3OriginalItem", filter: "arbitrationOriginal", name: "维持原译", nativeButton: true },
         { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁", nativeButton: true },
         { id: "stage3ErrorItem", filter: "stage3Errors", name: "仲裁异常", nativeButton: true },
@@ -4253,6 +4223,7 @@
       if (item.dataset.defaultTitle === undefined) item.dataset.defaultTitle = item.title || "";
       const entries = sortAiErrorKinds(kinds);
       const kindsTotal = entries.reduce((sum, entry) => sum + entry.count, 0);
+      item.hidden = count <= 0 && kindsTotal <= 0;
       if (count > 0 || kindsTotal > 0) {
         item.title = formatAiErrorHoverTitle(stageLabel, Math.max(count, kindsTotal), kinds);
       } else {
@@ -4260,14 +4231,8 @@
       }
     }
 
-    // 阶段进度条：done 是已完成行数，total 是该阶段覆盖的行数。
-    // 原来右上角那条全局进度条按「模型实际调用数 / 总调用数」走，级联流水线在它上面看不出卡在哪个阶段。
-    // 阶段卡片底部那行「处理中: …」的并发后缀：默认只给「当前并发数/当前并发上限」——
-    // 分子是实际在飞（真的在跑几个请求），分母是面板上预设的并发上限。
-    // stagePipelines.stageN.concurrency 是并发控制器上探出来的**许可值**，队列不足时它不会回落
-    // （控制器只在频控、过载或熔断时下调），拿它当分子会写出「1 处理中 · 并发 32/32」这种自相矛盾的
-    // 画面，所以它只进 tooltip。全部预设都顶到各自上限时才额外标「全部触顶」——
-    // 阶段整体只有在这一刻才真的加不动了；单个预设触顶由该预设的标签自己说。
+    // 阶段运行区分别标出实际在飞、队列、动态配额和配置上限。
+    // 触顶仍以服务端通道反馈为准；旧服务端按实际在飞与配置上限折算。
     function stageConcurrencyText(pipeline, activeInfoEl = null) {
       const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
       const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
@@ -4276,7 +4241,7 @@
       // 分母就是预设上限；旧服务端只回报许可值时退回用它，此时没有预设边界可比，不判触顶。
       const ceiling = cap || allowed;
       if (!ceiling) {
-        if (activeInfoEl) activeInfoEl.removeAttribute("title");
+        if (activeInfoEl) { activeInfoEl.title = ""; activeInfoEl.removeAttribute("title"); }
         return "";
       }
       // 触顶口径来自服务端的 presetCount/toppedCount；旧服务端没有这两个字段时，
@@ -4293,12 +4258,13 @@
           + "；队列待派发 " + pending + " 行。" + toppedDetail
           + "允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
       }
-      return "（并发 " + inFlight + "/" + ceiling + toppedText + "）";
+      return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText;
     }
 
     function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0 } = {}) {
       const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
       const bar = document.getElementById("stage" + stageKey + "Progress");
+      const text = document.getElementById("stage" + stageKey + "ProgressText");
       if (!wrap || !bar) return;
       const safeDone = Math.max(0, Number(done) || 0);
       const safeTotal = Math.max(safeDone, Number(total) || 0);
@@ -4306,25 +4272,37 @@
         wrap.hidden = true;
         bar.style.width = "0%";
         wrap.removeAttribute("title");
+        wrap.removeAttribute("aria-valuenow");
+        wrap.removeAttribute("aria-valuemax");
+        wrap.removeAttribute("aria-valuetext");
+        if (text) { text.hidden = true; text.textContent = ""; text.title = ""; }
         return;
       }
       // 仍有未完成行时，四舍五入也不能把进度画成 100%。
       const percent = Math.min(safeDone < safeTotal ? 99 : 100, Math.round((safeDone / safeTotal) * 100));
       wrap.hidden = false;
       bar.style.width = percent + "%";
+      const action = { "1": "已初审", "2": "已复审", "3": "已仲裁" }[stageKey];
+      const scope = String(stageKey) === "1" ? "全部" : "当前候选";
+      const description = action + " " + safeDone + " / " + scope + " " + safeTotal + " 行 · " + percent + "%";
+      if (text) {
+        text.hidden = false;
+        text.textContent = (scope === "全部" ? "全页" : "当前候选") + " " + percent + "%";
+        text.title = description;
+      }
+      wrap.setAttribute("role", "progressbar");
+      wrap.setAttribute("aria-label", label + (scope === "全部" ? "全页覆盖进度" : "当前候选进度"));
+      wrap.setAttribute("aria-valuemin", "0");
+      wrap.setAttribute("aria-valuemax", String(safeTotal));
+      wrap.setAttribute("aria-valuenow", String(safeDone));
+      wrap.setAttribute("aria-valuetext", description);
       wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
         + (errors > 0 ? "；异常待重试 " + errors + " 行" : "");
     }
 
     function resetStageProgressBars() {
       for (const stageKey of ["1", "2", "3"]) {
-        const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
-        const bar = document.getElementById("stage" + stageKey + "Progress");
-        if (wrap) {
-          wrap.hidden = true;
-          wrap.removeAttribute("title");
-        }
-        if (bar) bar.style.width = "0%";
+        renderStageProgress(stageKey, 0, 0, { enabled: false });
       }
     }
 
@@ -4384,7 +4362,6 @@
       const arbStylist = Math.max(0, Number(stageMetrics.arbitrationStylist) || 0);
       const arbSynth = Math.max(0, Number(stageMetrics.arbitrationSynthesis) || 0);
       const arbOrig = Math.max(0, Number(stageMetrics.arbitrationOriginal) || 0);
-      const s3Settled = Math.max(s3Arbitrated, Number(stageMetrics.stage3Settled) || (arbGK + arbStylist + arbSynth + arbOrig));
       const s3Errors = Math.max(0, Number(stageMetrics.stage3Errors) || 0);
       const finalNeedsEdit = Math.max(0, Number(stageMetrics.finalNeedsEdit) || 0);
       const finalUnchanged = Math.max(0, Number(stageMetrics.finalUnchanged) || 0);
@@ -4419,7 +4396,7 @@
       if (elS1Unclear) elS1Unclear.textContent = s1Unclear;
       const pillS1Unclear = document.getElementById("stage1UnclearPill");
       if (pillS1Unclear) {
-        pillS1Unclear.hidden = s1Unclear === 0;
+        pillS1Unclear.hidden = false;
         pillS1Unclear.title = "初审存疑待定 " + s1Unclear + " 行，流入阶段二文学复审（点击可筛选）";
       }
       const elS1Total = document.getElementById("metricStage1Total");
@@ -4447,13 +4424,11 @@
         : Math.max(0, s1PendingTotal - s2Reviewed);
       const elS2Pending = document.getElementById("metricStage2Pending");
       const itemS2Pending = document.getElementById("stage2PendingItem");
-      const sepS2Pending = document.getElementById("stage2PendingSep");
       if (elS2Pending) elS2Pending.textContent = s2Pending;
       if (itemS2Pending) {
         itemS2Pending.hidden = s2Pending === 0;
         itemS2Pending.title = "最新一轮初审提改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（点击可筛选）。历史轮次不参与待办判断。";
       }
-      if (sepS2Pending) sepS2Pending.hidden = s2Pending === 0;
 
       const elCAccept = document.getElementById("metricCritiqueAccept");
       if (elCAccept) elCAccept.textContent = cAccept;
@@ -4467,8 +4442,6 @@
       // 阶段三
       const elS3 = document.getElementById("metricStage3Arbitrated");
       if (elS3) elS3.textContent = s3Arbitrated;
-      const elS3Settled = document.getElementById("metricStage3Settled");
-      if (elS3Settled) elS3Settled.textContent = s3Settled;
       const localS3Pending = Number.isFinite(Number(stageMetrics.stage3Pending)) && stageMetrics.stage3Pending !== undefined
         ? Math.max(0, Number(stageMetrics.stage3Pending))
         : Math.max(0, s2Diverged - s3Arbitrated);
@@ -4476,13 +4449,11 @@
       const s3Pending = Math.max(localS3Pending, arbiterBacklog);
       const elS3Pending = document.getElementById("metricStage3Pending");
       const itemS3Pending = document.getElementById("stage3PendingItem");
-      const sepS3Pending = document.getElementById("stage3PendingSep");
       if (elS3Pending) elS3Pending.textContent = s3Pending;
       if (itemS3Pending) {
         itemS3Pending.hidden = s3Pending === 0;
         itemS3Pending.title = "最新一轮复审产生分歧、尚未仲裁定案且未人工确认：" + s3Pending + " 行（含正在仲裁的行，点击可筛选）。历史轮次不参与待办判断。";
       }
-      if (sepS3Pending) sepS3Pending.hidden = s3Pending === 0;
       const elArbGK = document.getElementById("metricArbGatekeeper");
       if (elArbGK) elArbGK.textContent = arbGK;
       const elArbStylist = document.getElementById("metricArbStylist");
@@ -4498,11 +4469,13 @@
 
       const elRate = document.getElementById("aiStageFastPassRate");
       if (elRate) {
-        const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) : 0;
-        elRate.textContent = "快速直通: " + rate + "%";
+        const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) + "%" : "—";
+        elRate.textContent = "通过中: " + rate;
+        elRate.title = s1Passed > 0
+          ? "初审放行 " + s1Passed + " 行中 " + fpHits + " 行快速直通 (" + rate + ")\n快速直通数 ÷ 初审通过数；不是全部审核行的通过率。"
+          : "尚无初审通过行，直通占比暂不计算。";
         if (totalAudited > 0) {
-          const overallRate = Math.round((fpHits / totalAudited) * 100);
-          elRate.title = "初审放行 " + s1Passed + " 行中 " + fpHits + " 行快速直通 (" + rate + "%)\n审核总量 " + totalAudited + " 行（总直通占比 " + overallRate + "%）";
+          elRate.title += "\n审核总量 " + totalAudited + " 行（总直通占比 " + Math.round((fpHits / totalAudited) * 100) + "%）";
         }
       }
 
@@ -4526,35 +4499,34 @@
         if (aiRunning && (p1.inFlight > 0 || p1.pending > 0)) {
           if (p1.inFlight > 0) {
             pill1.dataset.state = "running";
-            pill1.textContent = p1.inFlight + "处理中" + (p1.pending > 0 ? " · " + p1.pending + "待审" : "");
+            pill1.textContent = "处理中";
           } else {
             pill1.dataset.state = "queued";
-            pill1.textContent = p1.pending + "排队";
+            pill1.textContent = "排队中";
           }
         } else if (s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0 || aiRunning)) {
           pill1.dataset.state = "queued";
-          pill1.textContent = s1Unreviewed + " 未审" + (s1Errors > 0 ? " · " + s1Errors + " 异常" : "");
+          pill1.textContent = "待处理";
           pill1.title = "当前工作台还有 " + s1Unreviewed + " 行尚未取得初审结论"
             + (s1Errors > 0 ? "，另有 " + s1Errors + " 行异常待重试" : "")
             + "。点阶段一「开始」→「继续剩下的」处理；已有结论保持不变。";
         } else if (s1Errors > 0) {
           // 队列耗尽只代表本轮尝试结束，调用失败的行没有初审结论，仍需续跑。
           pill1.dataset.state = "queued";
-          pill1.textContent = s1Errors + " 行异常待重试";
+          pill1.textContent = "异常待重试";
           pill1.title = "初审仍有 " + s1Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段一「开始」→「继续剩下的」重试。";
         } else if (aiRunning) {
           pill1.dataset.state = "idle";
-          pill1.textContent = "初审完毕";
+          pill1.textContent = "已完成";
         } else {
           pill1.dataset.state = s1Total > 0 ? "done" : "idle";
-          pill1.textContent = s1Total > 0 ? "就绪" : "待命";
+          pill1.textContent = s1Total > 0 ? "已完成" : "待命";
         }
       }
       if (active1 && activeText1) {
         if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
           active1.hidden = false;
-          const concText = stageConcurrencyText(p1, active1);
-          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
+          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "");
         } else {
           active1.hidden = true;
           activeText1.textContent = "";
@@ -4578,25 +4550,27 @@
         } else if (aiRunning && (p2.inFlight > 0 || p2.pending > 0)) {
           if (p2.inFlight > 0) {
             pill2.dataset.state = "running";
-            pill2.textContent = p2.inFlight + "处理中" + (p2.pending > 0 ? " · " + p2.pending + "排队" : "");
+            pill2.textContent = "处理中";
           } else {
             pill2.dataset.state = "queued";
-            pill2.textContent = p2.pending + "排队";
+            pill2.textContent = "排队中";
           }
         } else if (s2Errors > 0) {
           pill2.dataset.state = "queued";
-          pill2.textContent = s2Errors + " 行异常待重试";
+          pill2.textContent = "异常待重试";
           pill2.title = "复审仍有 " + s2Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段二「开始」→「继续剩下的」重试。";
+        } else if (s2Pending > 0) {
+          pill2.dataset.state = "queued";
+          pill2.textContent = "待处理";
         } else {
-          pill2.dataset.state = !aiRunning && s2Reviewed > 0 ? "done" : "idle";
-          pill2.textContent = !aiRunning && s2Reviewed > 0 ? "就绪" : "待命";
+          pill2.dataset.state = s2Reviewed > 0 ? "done" : "idle";
+          pill2.textContent = s2Reviewed > 0 ? (aiRunning ? "当前候选已完成" : "已完成") : (aiRunning ? "等待候选" : "待命");
         }
       }
       if (active2 && activeText2) {
         if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
           active2.hidden = false;
-          const concText = stageConcurrencyText(p2, active2);
-          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
+          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "");
         } else {
           active2.hidden = true;
           activeText2.textContent = "";
@@ -4626,30 +4600,44 @@
         } else if (aiRunning && (p3.inFlight > 0 || p3.pending > 0)) {
           if (p3.inFlight > 0) {
             pill3.dataset.state = "running";
-            pill3.textContent = p3.inFlight + "处理中" + (p3.pending > 0 ? " · " + p3.pending + "排队" : "");
+            pill3.textContent = "处理中";
           } else {
             pill3.dataset.state = "queued";
-            pill3.textContent = p3.pending + "排队";
+            pill3.textContent = "排队中";
           }
         } else if (s3Errors > 0) {
           pill3.dataset.state = "queued";
-          pill3.textContent = s3Errors + " 行异常待重试";
+          pill3.textContent = "异常待重试";
           pill3.title = "仲裁仍有 " + s3Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段三「开始」→「继续剩下的」重试。";
+        } else if (s3Pending > 0) {
+          pill3.dataset.state = "queued";
+          pill3.textContent = "待处理";
         } else {
-          pill3.dataset.state = !aiRunning && s3Arbitrated > 0 ? "done" : "idle";
-          pill3.textContent = !aiRunning && s3Arbitrated > 0 ? "就绪" : "待命";
+          pill3.dataset.state = s3Arbitrated > 0 ? "done" : "idle";
+          pill3.textContent = s3Arbitrated > 0 ? (aiRunning ? "当前候选已完成" : "已完成") : (aiRunning ? "等待候选" : "待命");
         }
       }
       if (active3 && activeText3) {
         if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
           active3.hidden = false;
-          const concText = stageConcurrencyText(p3, active3);
-          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "") + (concText ? " · " + concText : "");
+          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "");
         } else {
           active3.hidden = true;
           activeText3.textContent = "";
           active3.removeAttribute("title");
         }
+      }
+
+      // 运行数字统一归卡片底部，队列没有活跃行时也如实展示。
+      for (const [number, pipeline] of [[1, p1], [2, p2], [3, p3]]) {
+        const info = document.getElementById("stage" + number + "RuntimeInfo");
+        if (!info) continue;
+        const hasRuntime = aiRunning && (pipeline.inFlight > 0 || pipeline.pending > 0);
+        info.hidden = !hasRuntime && !(number === 1 && s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0));
+        info.textContent = hasRuntime
+          ? (stageConcurrencyText(pipeline, info) || "运行 " + (Number(pipeline.inFlight) || 0) + " 行 · 排队 " + (Number(pipeline.pending) || 0) + " 行")
+          : (info.hidden ? "" : "未审 " + s1Unreviewed + " 行");
+        if (!hasRuntime) { info.title = ""; info.removeAttribute("title"); }
       }
 
       // 初审用同一覆盖范围表示累计进度；复审和仲裁只覆盖实际产生的候选行。
