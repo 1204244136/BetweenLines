@@ -69,7 +69,16 @@
     const rowsById = new Map(allRows.map((row) => [String(row.index), row]));
     const renderedRowsById = new Map();
     const notesTools = createNotesTools(alignLegacyNotes);
-    const notesStorage = createNotesStorage(localStorage, LZString);
+    const browserNotesStorage = createNotesStorage(localStorage, LZString);
+    const diskNotesMode = /https?:/.test(window.location.protocol);
+    let diskNotesBootstrap = null;
+    try { diskNotesBootstrap = JSON.parse(document.getElementById("notesDiskData")?.textContent || "null"); }
+    catch { diskNotesBootstrap = { error: "磁盘备注数据无法解析，请保留本页记录并重新打开工作台。" }; }
+    const notesStorage = diskNotesMode ? createDiskNotesStorage({
+      bootstrap: diskNotesBootstrap || { error: "磁盘备注接口尚未就绪，请重启控制台服务并应用新布局。" },
+      browserStorage: browserNotesStorage, request: apiFetch, currentKey: storageKey,
+      onStateChange: () => { updateNotesSaveState(); if (document.getElementById("notesPanel")?.open) renderNotesSpaces(); },
+    }) : browserNotesStorage;
     const presetTools = createPresetTools();
     let currentPresetId = "";
     let latestPresetPipelines = {};
@@ -406,7 +415,7 @@
         notesRecovery = {
           tone: "success",
           message: `已修复旧版找回规则漏掉的记录：补回 ${restored} 条、恢复人工确认 ${healed} 条`
-            + (saved === false ? "（尚未写入浏览器存储，请先导出本页记录）" : "。"),
+            + (saved === false ? (diskNotesMode ? "（正在保存到电脑，请留意保存状态）" : "（尚未写入浏览器存储，请先导出本页记录）") : "。"),
         };
       }
     }
@@ -567,12 +576,18 @@
     // 载入时按同一套内容证据自愈一次；正常的空间（没有未校验记录）不受任何影响。
     if (initialRaw !== null && Object.values(notes).some((item) => item.recoveredUnverified)) selfHealDamagedSpace();
 
-    function restorePageNotesSeed() {
+    async function restorePageNotesSeed() {
       const seed = pageMeta.notesRecovery;
       if (!seed) return;
       const marker = "translation-compare-recovery-v1:" + (pageMeta.projectKey || "") + ":" + seed.id;
       try {
-        if (localStorage.getItem(marker) === "saved") return;
+        if (notesStorage.disk && notesStorage.hasRecovery(seed.id)) return;
+        let browserMarkerSaved = false;
+        try { browserMarkerSaved = localStorage.getItem(marker) === "saved"; } catch {}
+        if (browserMarkerSaved) {
+          if (notesStorage.disk) { persistNotes(); await notesStorage.markRecovery(seed.id); }
+          return;
+        }
         if (notesPersistence.snapshot().blocked) throw new Error("本页现存记录无法解析，请先导出原始数据。");
         const result = notesTools.restoreSeed(seed, storageKey, allRows, notes, {
           stateFor: stageNoteState,
@@ -581,17 +596,23 @@
         });
         for (const id of Object.keys(notes)) notes[id] = normalizeStoredNote(notes[id]);
         markNotesDirtyForMetrics();
-        const saved = persistNotes();
+        let saved = persistNotes();
+        if (notesStorage.disk) {
+          try { await notesStorage.flush(); saved = !notesPersistence.snapshot().failed && !notesPersistence.snapshot().blocked; }
+          catch { saved = false; }
+        }
         let markerSaved = false;
         if (saved) {
-          try { localStorage.setItem(marker, "saved"); markerSaved = true; } catch {}
+          if (notesStorage.disk) markerSaved = await notesStorage.markRecovery(seed.id);
+          else { try { localStorage.setItem(marker, "saved"); markerSaved = true; } catch {} }
         }
         notesRecovery = {
           tone: saved && markerSaved ? "success" : "watch",
           message: "已从核验备份恢复 " + result.restored + " 条，保留本页 " + result.kept + " 条已有记录。"
-            + (saved ? "已无损压缩保存到此浏览器。" : "尚未保存，请保留本页并导出记录。")
+            + (saved ? (diskNotesMode ? "已保存到电脑。" : "已无损压缩保存到此浏览器。") : "尚未保存，请保留本页并导出记录。")
             + (saved && !markerSaved ? "恢复标记未能保存，下次刷新会再次核对备份。" : ""),
         };
+        if (notesStorage.disk) announceNotesRecovery();
       } catch (error) {
         notesRecovery = { tone: "watch", message: "备份恢复未完成：" + error.message + "请保留备份和当前页面。" };
       }
@@ -850,6 +871,8 @@
     }
 
     function notesSaveFailureMessage() {
+      if (notesStorage.disk) return "尚未保存到电脑：" + (notesStorage.snapshot().message || "磁盘写入失败。")
+        + "最新修改仍在本页，请保留页面或导出本页记录；恢复服务或磁盘写入权限后重试。";
       const { failureKind } = notesPersistence.snapshot();
       const protection = "这些修改只在当前页面内存里，刷新或关闭本页就会丢失。请先导出本页记录。";
       if (failureKind === "denied") return "浏览器禁止本地存储写入：" + protection + "请检查站点存储权限，允许存储后重试。";
@@ -863,11 +886,14 @@
 
     function updateNotesSaveState() {
       const state = notesPersistence.snapshot();
+      const disk = notesStorage.disk ? notesStorage.snapshot() : {};
       const banner = document.getElementById("notesSaveWarning");
       const badge = document.getElementById("notesSaveState");
-      const failed = state.blocked || state.failed;
+      const failed = Boolean(state.blocked || state.failed || disk.blocked || disk.failed);
+      const pending = Boolean(state.pending || disk.pending);
       if (badge) {
-        badge.textContent = failed ? "尚未保存 · 请展开处理" : "保存在此浏览器";
+        badge.textContent = failed ? "尚未保存 · 请展开处理" : pending ? "正在保存"
+          : notesStorage.disk ? "已保存到电脑" : "保存在此浏览器";
         badge.classList.toggle("is-warn", failed);
       }
       if (!banner) return;
@@ -876,11 +902,13 @@
         ? "本页空间无法解析或已被其他页面修改，已暂停保存。请先导出本页记录，再刷新页面核对；本地原始数据仍保留。"
         : notesSaveFailureMessage();
       const retry = document.getElementById("retryNotesSave");
-      if (retry) retry.hidden = !state.failed || state.blocked;
+      if (retry) retry.hidden = Boolean(!(state.failed || disk.failed) || state.blocked || disk.blocked);
     }
 
     function persistNotes() {
-      return notesPersistence.persist();
+      const saved = notesPersistence.persist();
+      const disk = notesStorage.disk ? notesStorage.snapshot() : {};
+      return saved && !disk.pending && !disk.failed && !disk.blocked;
     }
 
     function flushNotes() {
@@ -5675,8 +5703,10 @@
     // 保存没成功时，这批备注只活在当前页面内存里：刷新、关闭标签页或浏览器回收都会让它们消失。
     // 浏览器只在用户与页面交互过之后才显示这个原生确认框，正常浏览时不会被打扰。
     window.addEventListener("beforeunload", (event) => {
+      if (notesStorage.disk) flushNotes();
       const state = notesPersistence.snapshot();
-      if (!state.failed && !state.blocked) return;
+      const disk = notesStorage.disk ? notesStorage.snapshot() : {};
+      if (!state.failed && !state.blocked && !disk.failed && !disk.blocked && !disk.pending) return;
       event.preventDefault();
       event.returnValue = "";
     });
@@ -6401,15 +6431,14 @@
       return notesTools.inventory(notesStorage, storageKey, notes);
     }
 
-    // 浏览器的 localStorage 由多个项目共享，但备注空间属于 projectKey。
-    // 当前工作台只对「本项目的空间」做找回，其他项目的历史仍留在浏览器里，
+    // 备注空间按 projectKey 隔离；磁盘归档和旧浏览器存储遵循同一归属。
+    // 当前工作台只对「本项目的空间」做找回，其他项目的历史仍保留，
     // 切换到对应项目后再由它自己的工作台读取，避免跨项目误找回或误清空。
     function collectNotesSpaces() {
       return inventoryAllNotesSpaces().filter((space) => space.current || space.sameProject);
     }
 
-    // 其他项目/旧版空间与当前项目共用同一份浏览器容量：它们写满之后，本页备注就再也存不进去，
-    // 刷新即丢。所以把它们单独列出来，允许导出与删除——但仍然不参与找回。
+    // 其他项目/旧版空间提供独立的归档管理入口，不参与本项目找回。
     function collectForeignNotesSpaces() {
       return inventoryAllNotesSpaces().filter((space) => !space.current && !space.sameProject);
     }
@@ -6472,7 +6501,7 @@
       ].join('');
     }
 
-    // 其他项目/旧版空间单列一区：它们占着同一份浏览器容量，是「本页备注存不进去」的直接原因。
+    // 其他项目/旧版空间单列一区，磁盘模式无需删除它们为本页腾出浏览器容量。
     // 这里只提供导出与删除，找回入口一律不给——跨项目找回会把别的书的记录错嫁到当前行集上。
     function renderForeignNotesSpaces(spaces) {
       const heading = document.getElementById("notesForeignHeading");
@@ -6487,7 +6516,8 @@
         return;
       }
       const totalKb = (spaces.reduce((total, space) => total + space.bytes, 0) / 1024).toFixed(1);
-      if (summary) summary.textContent = spaces.length + " 个空间 · 约 " + totalKb + " KB（删除前请先导出）";
+      if (summary) summary.textContent = spaces.length + " 个空间 · 约 " + totalKb + " KB"
+        + (notesStorage.disk ? "（长期保存在电脑，无需为本页保存腾出浏览器容量）" : "（删除前请先导出）");
       list.innerHTML = spaces.map((space) => notesSpaceMarkup(space, { foreign: true })).join("");
     }
 
@@ -6502,14 +6532,21 @@
       notesPanelIds.current.innerHTML = notesSpaceMarkup(current);
       notesPanelIds.summary.textContent = history.length + " 个本项目历史空间 · 本项目内容约 " + totalKb + " KB（含未保存修改）";
       notesPanelIds.clearHistory.disabled = !history.length;
-      const usage = notesTools.storageUsage(localStorage, storageKey, notesStorage.encode(JSON.stringify(notes)));
       const usageLabel = document.getElementById("notesStorageUsage");
-      const kb = (bytes) => (bytes / 1024).toFixed(1) + " KB";
-      if (usageLabel) usageLabel.textContent = usage.available
-        ? "同源浏览器存储估算：已占用 " + kb(usage.totalBytes) + " · 本页已保存 " + kb(usage.currentBytes)
-          + " · 本项目历史 " + kb(usage.historyBytes) + " · 其他项目或旧版备注 " + usage.otherNotesCount + " 个空间 / " + kb(usage.otherNotesBytes)
-          + " · 其他本地数据 " + kb(usage.otherBytes) + " · 无损压缩保存本页后预计 " + kb(usage.projectedBytes)
-        : "无法读取浏览器存储占用，请检查站点存储权限。";
+      if (usageLabel && notesStorage.disk) {
+        const disk = notesStorage.snapshot();
+        usageLabel.textContent = "磁盘备注目录：" + notesStorage.directory
+          + " · 所有空间长期保留，旧浏览器副本核验成功后自动清理。"
+          + (disk.cleanupWarning ? " " + disk.cleanupWarning : "");
+      } else if (usageLabel) {
+        const usage = notesTools.storageUsage(localStorage, storageKey, notesStorage.encode(JSON.stringify(notes)));
+        const kb = (bytes) => (bytes / 1024).toFixed(1) + " KB";
+        usageLabel.textContent = usage.available
+          ? "同源浏览器存储估算：已占用 " + kb(usage.totalBytes) + " · 本页已保存 " + kb(usage.currentBytes)
+            + " · 本项目历史 " + kb(usage.historyBytes) + " · 其他项目或旧版备注 " + usage.otherNotesCount + " 个空间 / " + kb(usage.otherNotesBytes)
+            + " · 其他本地数据 " + kb(usage.otherBytes) + " · 无损压缩保存本页后预计 " + kb(usage.projectedBytes)
+          : "无法读取浏览器存储占用，请检查站点存储权限。";
+      }
       notesPanelIds.list.innerHTML = history.length
         ? history.map((space) => notesSpaceMarkup(space)).join('')
         : '<div class="notes-space-empty">暂无历史记录。可导入之前导出的 JSON 备份。</div>';
@@ -6567,8 +6604,7 @@
       } else if (action === "notesRestore" || action === "notesIndex") {
         if (!space.current && space.data) previewNotesRecovery(space, action === "notesIndex");
       } else if (!space.current) {
-        // 其他项目/旧版空间是「本页备注存不进去」的直接原因，允许在这里清理；
-        // 但删除的是别的项目的记录，确认文案必须点名，避免误删。
+        // 删除会移除别的项目的长期记录，确认文案必须点名所属项目。
         const foreign = !space.sameProject;
         const foreignNote = foreign
           ? "\n注意：这个空间属于其他项目（" + (space.project || "旧版") + "），删除后那个项目的工作台也看不到这些记录了。"
@@ -6576,12 +6612,13 @@
         if (!(await askConfirm("删除「" + notesSpaceTitle(space) + "」的 " + space.entries + " 条记录？" + foreignNote + "\n删除不可撤销，请确认已经导出备份。", { title: foreign ? "删除其他项目的空间" : "删除历史空间", confirmText: "删除" }))) return;
         try {
           notesStorage.removeItem(space.key);
+          if (notesStorage.disk) await notesStorage.flush();
           renderNotesSpaces();
           notesPanelStatus("已删除所选历史空间。", { tone: "success" });
-        } catch { notesPanelStatus("删除失败，浏览器未允许修改本地存储。", { tone: "error" }); }
+        } catch (error) { notesPanelStatus("删除未完成：" + error.message, { tone: "error" }); }
       }
     });
-    notesPanelIds.apply.addEventListener("click", () => {
+    notesPanelIds.apply.addEventListener("click", async () => {
       const pending = pendingNotesRecovery;
       if (!pending) return;
       const space = freshNotesSpace(pending.key);
@@ -6596,6 +6633,7 @@
       if (notesPersistence.snapshot().blocked) { notesPanelStatus("请先解决保存冲突，再找回记录。", { tone: "watch" }); return; }
       applyRecovery(space, plan);
       saveNotes({ immediate: true });
+      if (notesStorage.disk) { try { await notesStorage.flush(); } catch {} }
       markNotesDirtyForMetrics();
       updateStageMetricsDashboard(null, {}, false);
       updateDoneCount();
@@ -6603,8 +6641,8 @@
       notesPanelIds.dialog.close();
       renderNotesSpaces();
       notesPanelStatus("已找回 " + plan.pairs.length + " 条，其中 " + plan.unverified + " 条需逐行核验。"
-        + (notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"),
-        { tone: notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked ? "watch" : "success" });
+        + (notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked || notesStorage.snapshot?.().failed || notesStorage.snapshot?.().blocked ? "本次尚未保存，请先导出本页记录。" : "已保存到本页空间。"),
+        { tone: notesPersistence.snapshot().failed || notesPersistence.snapshot().blocked || notesStorage.snapshot?.().failed || notesStorage.snapshot?.().blocked ? "watch" : "success" });
     });
     document.getElementById("cancelNotesRecovery").addEventListener("click", () => notesPanelIds.dialog.close());
     notesPanelIds.dialog.addEventListener("close", () => { pendingNotesRecovery = null; });
@@ -6613,7 +6651,7 @@
       notesPanelStatus("已导出本页和全部历史空间。", { tone: "success" });
     });
     // 其他项目/旧版空间不进「备份全部」（当前项目备份不得带出别的项目记录），
-    // 但它们同样占着浏览器容量，清理前需要一个独立出口。
+    // 跨项目归档需要一个独立的备份出口。
     const exportForeignNotes = document.getElementById("exportForeignNotes");
     if (exportForeignNotes) {
       exportForeignNotes.addEventListener("click", () => {
@@ -6628,18 +6666,23 @@
       if (!current?.entries) { notesPanelStatus("本页没有可清空的备注记录。", { tone: "watch" }); return; }
       if (!(await askConfirm("清空本页备注空间中的 " + current.entries + " 条记录？\n这会同时清除人工确认和修改结果，历史空间不会受影响。\n\n建议先备份，再确认清空。", { title: "清空本页备注", confirmText: "清空" }))) return;
       try {
-        if (pageMeta.notesRecovery) localStorage.setItem("translation-compare-recovery-v1:"
-          + (pageMeta.projectKey || "") + ":" + pageMeta.notesRecovery.id, "saved");
+        if (pageMeta.notesRecovery) {
+          if (notesStorage.disk) {
+            if (!await notesStorage.markRecovery(pageMeta.notesRecovery.id)) throw new Error("恢复标记保存失败，清空未执行，请保留页面后重试。");
+          } else localStorage.setItem("translation-compare-recovery-v1:"
+            + (pageMeta.projectKey || "") + ":" + pageMeta.notesRecovery.id, "saved");
+        }
         notesPersistence.clearCurrent(() => {
           for (const id of Object.keys(notes)) delete notes[id];
           markNotesDirtyForMetrics();
           updateStageMetricsDashboard(null, {}, false);
         });
+        if (notesStorage.disk) await notesStorage.flush();
         updateDoneCount();
         applyFilters({ reset: false });
         renderNotesSpaces();
         notesPanelStatus("已清空本页备注空间；历史空间仍保留。", { tone: "success" });
-      } catch { notesPanelStatus("清空失败：浏览器未允许修改本地存储。", { tone: "error" }); }
+      } catch (error) { notesPanelStatus("清空失败：" + error.message, { tone: "error" }); }
     });
     notesPanelIds.clearHistory.addEventListener("click", async () => {
       const history = collectNotesSpaces().filter((space) => !space.current);
@@ -6648,9 +6691,10 @@
       if (!(await askConfirm("清空 " + history.length + " 个历史空间中的 " + count + " 条记录？\n此操作不可撤销，请先点击「备份全部」。", { title: "清空历史空间", confirmText: "清空" }))) return;
       try {
         for (const space of history) notesStorage.removeItem(space.key);
+        if (notesStorage.disk) await notesStorage.flush();
         renderNotesSpaces();
         notesPanelStatus("已清空历史备注空间；本页记录保持不变。", { tone: "success" });
-      } catch { notesPanelStatus("清空历史失败：浏览器未允许修改本地存储。", { tone: "error" }); }
+      } catch (error) { notesPanelStatus("清空历史未完成：" + error.message, { tone: "error" }); }
     });
     notesPanelIds.file.addEventListener("change", async () => {
       const [file] = notesPanelIds.file.files || [];
@@ -6659,7 +6703,10 @@
       try {
         const spaces = notesTools.decodeBackup(JSON.parse(await file.text()));
         if (!(await askConfirm("从备份登记 " + spaces.length + " 个空间？\n相同内容跳过；同名且内容不同会保留为副本。当前项目空间可在历史列表预览，其他项目空间会保留在对应项目中。", { title: "导入备份", confirmText: "导入", danger: false }))) return;
-        const result = notesTools.importBackup(notesStorage, spaces, storageKey);
+        const scopedSpaces = spaces.map((space) => space.key === notesTools.prefix + "legacy-file"
+          ? { ...space, key: notesTools.prefix + "v7:" + pageMeta.projectKey + ":legacy-file" } : space);
+        const result = notesStorage.disk ? await notesStorage.importSpaces(scopedSpaces)
+          : notesTools.importBackup(notesStorage, spaces, storageKey);
         renderNotesSpaces();
         const currentProject = notesTools.identity(storageKey).project;
         const foreignImported = currentProject
@@ -6675,12 +6722,21 @@
           { tone: result.error ? "watch" : "success" });
       } catch (error) { notesPanelStatus("导入失败：" + error.message, { tone: "error" }); }
     });
-    notesPanelIds.refresh.addEventListener("click", renderNotesSpaces);
-    document.getElementById("retryNotesSave").addEventListener("click", () => {
+    notesPanelIds.refresh.addEventListener("click", async () => {
+      if (notesStorage.disk) {
+        flushNotes();
+        try { await notesStorage.refresh(); }
+        catch (error) { notesPanelStatus("刷新未完成：" + error.message, { tone: "error" }); }
+      }
+      renderNotesSpaces();
+    });
+    document.getElementById("retryNotesSave").addEventListener("click", async () => {
       saveNotes({ immediate: true });
+      if (notesStorage.disk) { try { await notesStorage.flush(); } catch {} }
       renderNotesSpaces();
       const state = notesPersistence.snapshot();
-      if (!state.failed && !state.blocked) {
+      const disk = notesStorage.disk ? notesStorage.snapshot() : {};
+      if (!state.failed && !state.blocked && !disk.failed && !disk.blocked && !disk.pending) {
         notesPanelStatus("本页记录已保存。", { tone: "success" });
         return;
       }
@@ -6703,6 +6759,7 @@
       if (notesPanelIds.panel.open) renderNotesSpaces();
     });
     renderNotesSpaces();
+    if (notesStorage.disk) notesStorage.start();
 
     bindDetailsToggle();
     bindPanelGroups();

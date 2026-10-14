@@ -18,6 +18,7 @@ function storageLayout(dataDir = resolveDataDir()) {
     importedInputsDir: path.join(runtimeDir, "imported-inputs"),
     workDir: path.join(runtimeDir, "work"),
     projectsDir: path.join(root, "projects"),
+    notesDir: path.join(root, "notes"),
     stagingDir: path.join(root, ".staging"),
     activeProjectFile: path.join(root, "active-project.json"),
   };

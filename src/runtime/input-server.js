@@ -15,6 +15,8 @@ const { createProjectRoutes } = require("./routes/projects");
 const { createInputRoutes } = require("./routes/inputs");
 const { createGenerationRoutes } = require("./routes/generation");
 const { handleAiRoutes } = require("./routes/ai");
+const { createNotesRoutes } = require("./routes/notes");
+const { createNotesFileStore } = require("../workbenches/translation-compare/notes-file-store");
 
 const rootDir = path.join(__dirname, "..", "..");
 const publicDir = path.join(rootDir, "public");
@@ -26,13 +28,16 @@ const consoleApiVersion = 5;
 const generation = new GenerationPipeline();
 const speaker = createSpeakerRuntime({ runtimeDir: path.join(dataLayout.runtimeDir, "speaker-attribution") });
 const { requestPort, isAllowedRequestSource, requiresApiSessionToken, hasValidApiSessionToken, injectSessionToken } = createRequestSecurity({ host, defaultPort });
-const { serveStatic, serveOutput } = createArtifactResponder({ publicDir, speakerOutputDir: speaker.outputDir, injectSessionToken });
+const notesStore = createNotesFileStore();
+const { serveStatic, serveOutput } = createArtifactResponder({ publicDir, speakerOutputDir: speaker.outputDir,
+  injectSessionToken: (html) => notesStore.inject(injectSessionToken(html)) });
 function runningTaskLabel() {
   return aiProofreadStatus().kind === "prefilter" ? "预筛选" : "AI 校对";
 }
 
 // 路由只返回是否已处理；鉴权和未匹配/异常响应统一由入口负责。
 const apiRoutes = [
+  createNotesRoutes({ store: notesStore }),
   createWritebackRoutes({ speaker, importedInputsDir }),
   createStatusRoutes({ generation, speaker, consoleApiVersion }),
   createProjectRoutes({ generation, consoleApiVersion, runningTaskLabel }),

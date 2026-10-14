@@ -97,7 +97,8 @@ AI 校对判「译文该写成什么样」的规范正文**不在本仓库**，�
 - 表格行与原文段落保持 `1:1`：一张表格行只允许包含一个原文段落，原文不得拆分、合并或跨行复用。
 - 非原文段落可以为对齐、diff 和展示进行拆分或合并，因此一份原文段落仍可对应多段译文。
 - 产物必须按比较模式生成：双语模式的 `input-selection.json`、`paragraphs.json`、`jp-align.json`、`translation-compare.{json,csv,html}`、AI 提示词和控制台日志里都不允许出现第三列（`tw`、`台版`、`参考文本`、`非原文 C`）的键、标签、空占位或 hidden 控件；三语模式则必须完整保留三列。判断依据是"该模式是否真的有这一列"，不是"有没有值"。
-- 上述模式裁剪不得改变 `projectKey`、`rowsSignature` 或 `signature`：它们是浏览器备注与写回定位的键，只能因源文本或对齐结果真实变化而变化。
+- 上述模式裁剪不得改变 `projectKey`、`rowsSignature` 或 `signature`：它们是备注空间与写回定位的键，只能因源文本或对齐结果真实变化而变化。
+- 翻译备注是独立于生成快照的长期用户数据，旧快照淘汰和工作台项目删除均须保留磁盘备注；修改备注存储、迁移、保存状态或删除行为前，读取 [工作台与备注契约](docs/contracts/workbench-notes-spaces.md)。
 - 不要重新引入没有 reuse tracking 的 naive paragraph-number fallback。
 - 不要让同一个原文长段落被 semantic groups 和 fallback 重复使用。
 - 修改 text cleaning、heading detection 或正文过滤后，必须重新生成 `paragraphs.json`、`jp-align.json` 和最终工作台。

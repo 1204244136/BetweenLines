@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `src/core/` | 文本、表格、指纹、项目身份、原子文件与路径等基础能力 | 修改时检查所有工作台及快照调用方；不持有某工作台的 rows、notes 或任务状态 |
 | `src/ingest/` | 输入选择、格式转换、正文准入、段落/派生行提取与源文件局部写回 | 通用转换扩展 `pandoc-utils.js`；格式专属业务准入独立实现；转换层不决定正文边界 |
-| `src/storage/` | 项目 staging、快照发布/保留、活动指针和产物定位 | 发布与重渲染遵守 `AGENTS.md` 的快照不变量；不把浏览器备注空间纳入项目产物模型 |
+| `src/storage/` | 项目 staging、快照发布/保留、活动指针和产物定位 | 发布与重渲染遵守 `AGENTS.md` 的快照不变量；长期备注不纳入生成快照或项目删除范围 |
 | `src/runtime/` | 常驻服务、鉴权、HTTP 路由、任务生命周期与输入持久化 | 子模块不反向依赖服务入口；任务实现仍由各工作台拥有 |
 | `src/ai/` | 共享连接配置、LLM 传输、通用任务队列与基础 JSON 提示契约 | 不引入领域结果模型或任务运行状态；传输安全、超时与重试细则见 [AI 契约](ai-proofread-contract.md#共享传输层的等待预算与错误证据) |
 | `src/workbenches/<name>/` | 该工作台的结果模型、构建器、提示词、缓存与备注空间 | 不用另一工作台的 rows 或 notes 充当自己的数据模型 |
@@ -55,8 +55,10 @@ EPUB ingest 在 HTML 转纯文本时保留 h1–h6 的临时结构标题标记�
 | `row-output.js` | 模式字段裁剪、CSV、导出行、客户端行与展示质量标签阈值；签名调用共享 `project-context.js` |
 | `render-workbench.js` | HTML 渲染与渲染时读取静态资源 |
 | `model-options.js`、`notes-recovery.js` | 不依赖 DOM、文件系统或任务状态的纯计算 |
-| `notes-spaces.js`、`notes-storage.js` | 翻译备注恢复规则与注入浏览器的同步无损存储适配器；不加载 AI 运行状态 |
-| `notes-persistence.js` | 翻译备注保存基线、冲突/失败状态、保存 timer 与显式清空时序；备注及签名由页面序列化，存储编码归 `notes-storage.js` |
+| `notes-spaces.js`、`notes-storage.js` | 翻译备注恢复规则、备份格式与旧浏览器同步压缩适配器；不加载 AI 运行状态 |
+| `notes-file-store.js` | 翻译备注磁盘存储、内容校验、版本写入、备份登记和响应期注入；使用 core 路径与原子文件能力，独立于生成快照和 AI 任务 |
+| `notes-disk-storage.js` | 注入浏览器的同步会话镜像、异步磁盘提交、旧空间迁移和核验后清理；网络由调用方提供，不加载文件系统或任务状态 |
+| `notes-persistence.js` | 翻译备注会话镜像的保存基线、冲突/失败状态、保存 timer 与显式清空时序；页面同时读取磁盘提交状态，排队不等于落盘 |
 | `ai-result-reception.js` | 注入翻译页面的 AI 结果接收状态与请求追赶；不持有备注、预筛集合或 DOM，HTTP 与页面应用由调用方适配 |
 | `ai/proofread-defaults.js`、`ai/decision-score.js` | AI 默认配置与纯评分规则 |
 | `ai/proofread-results.js` | 独占翻译 AI 结果集合、修订交付及落盘生命周期；不接收可变任务状态或计算阶段指标 |

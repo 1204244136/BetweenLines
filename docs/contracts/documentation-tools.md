@@ -57,7 +57,7 @@
 | scripts/term-prefilter.js | CLI | term-table.js、term-layer.js、offline-cli.js | 活动翻译快照与对照表，离线审计；仅 --out 写报告；--from-snapshot 只读文本汇总，禁止 JSON/报告/明细选项组合 |
 | scripts/speech-habit.js | CLI | speech-habit-layer.js、verify-source.js、offline-cli.js | 活动翻译快照与习惯表，离线审计；仅 --out 写指定报告 |
 | src/workbenches/speaker-attribution/build-workbench.js | CLI | speaker-selection.js、预对齐、attention、speaker-inference | 单语或双语源文本，写独立运行时工作台；启用 AI 才调用模型 |
-| src/runtime/input-server.js | CLI | runtime 路由与生命周期模块 | 启动本机服务；用户请求可保存输入、生成、写回及调用 AI |
+| src/runtime/input-server.js | CLI | runtime 路由与生命周期模块 | 启动本机服务；用户请求可保存输入、长期备注、生成、写回及调用 AI；备注路由调用翻译工作台文件存储，工作台响应动态注入磁盘记录 |
 | start-setup.bat | 兼容桥 | npm run setup | 固定启动目录与端口；服务监听后由服务打开控制台 |
 | scripts/build-compare.js | 兼容桥 | src/workbenches/translation-compare/build-compare.js | 旧 require/CLI 入口，副作用由唯一构建实现拥有 |
 | scripts/input-server.js | 兼容桥 | src/runtime/input-server.js | 旧 require/CLI 入口，服务启动由唯一运行时实现拥有 |

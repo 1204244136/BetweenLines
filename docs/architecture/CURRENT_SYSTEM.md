@@ -31,7 +31,7 @@
                                                    → 输出与备注
 
 输出与备注：ensureRevisedText → 格式门禁 → 标点规范化
-           → 语言护栏 → decisionToResult → 浏览器备注
+           → 语言护栏 → decisionToResult → 备注会话 → 磁盘备注空间
 人工确认或编辑 → 显式写回
 ```
 
@@ -58,6 +58,6 @@
 | 阶段状态 | `stage-note-state.js` 提供最新备注块的待办与异常语义；客户端阶段卡片显示状态与统计 |
 | 人工反馈 | `feedback-collector.js` 记录进程内事件并汇总阶段/模型的采纳、修改与拒绝统计；统计本身不代表模型已自动训练或调度权重已更新 |
 | 预设与备注 | `ai-presets.js`、`notes-spaces.js` 分别拥有模型预设与翻译备注空间 |
-| 备注保存 | `notes-persistence.js` 持有保存会话及调度；`notes-storage.js` 处理同步压缩存储，页面保留备注内容与恢复规则 |
+| 备注保存 | `notes-persistence.js` 持有保存会话及调度；`notes-disk-storage.js` 提交会话镜像并迁移旧浏览器空间，`notes-file-store.js` 持有独立长期磁盘记录；`notes-storage.js` 兼容旧浏览器压缩存储 |
 
 历史实施阶段与旧版蓝图见 [AI_REVIEW_HISTORY.md](AI_REVIEW_HISTORY.md)，实现约束不从历史设计稿复制。

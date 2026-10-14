@@ -78,10 +78,10 @@
 ## 备注导入与保存异常
 
 ### 清空当前项目后仍无法导入备份
-- **根因**：历史列表按项目隔离，同源 `localStorage` 却由其他项目、旧版记录和配置共用。清空当前项目仅释放它自己的数据；原始 JSON 导入后又需保留来源与当前空间两份，容量可能仍不足。
-- **当前实现**：`notes-storage.js` 无损压缩新写入的翻译备注，所有读取透明解码，备份仍保留原 JSON。占用摘要读取底层存储串；压缩后仍失败时按异常类型处理，不能把权限问题说成配额不足。
-- **恢复**：保留完整 JSON 与未保存页面，经明确授权可将逐条行签名已核验的备份接入指定项目的新快照，刷新后一次性恢复并压缩保存。保护现存人工修改和更完整的结论，不将没有完成证据的行标成完成。
-- **回归**：`node --test scripts/notes-storage.test.js scripts/notes-recovery-seed.test.js scripts/notes-spaces.test.js scripts/notes-recovery-merge.test.js`，覆盖限额存储、导入与找回双份保留、损坏包、跨页冲突、其他项目不变、恢复与刷新及显式清空。
+- **历史根因**：历史列表按项目隔离，同源 `localStorage` 却由全部项目和配置共用；清空当前项目仍可能不足以容纳备份与当前空间。
+- **当前实现**：控制台页面的完整备注由 `notes-file-store.js` 长期落盘，`notes-disk-storage.js` 迁移全部旧浏览器空间并在回读核验后释放副本。新保存不受浏览器配额限制；直接打开 HTML 仍走旧浏览器模式。空间与快照清理独立，详见 [备注契约](workbench-notes-spaces.md#长期磁盘存储与旧空间迁移)。
+- **恢复**：先保留未保存页面与 JSON。重启控制台服务，应用新布局，再从控制台打开工作台迁移；页面未显示「已保存到电脑」前保留原页。迁移同名冲突保留副本；磁盘写入失败检查服务与目录权限，版本冲突先导出再重新加载，不能删除别的项目来掩盖磁盘失败。已删除的浏览器记录需从现存备份恢复。
+- **回归**：`node --test scripts/notes-disk.test.js scripts/notes-routes.test.js scripts/notes-storage.test.js scripts/notes-recovery-seed.test.js`，覆盖磁盘恢复、迁移失败保护、项目保留、损坏数据、接口鉴权和跨页冲突。
 
 ---
 

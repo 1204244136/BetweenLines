@@ -394,7 +394,7 @@
 
 ## 结果落盘与刷新恢复（`ai/proofread-results.js`、`ai/result-store.js`）
 
-浏览器 localStorage 只有约 10 MB、且同源下所有项目共用一份，写满之后页面上的备注就只活在内存里，刷新即丢。AI 结果是可重新交付的服务端产物，所以不把浏览器存储当作它唯一的落脚点。
+AI 结果是可重新交付的服务端产物，按下述规则保留运行结果。工作台的完整备注（含人工编辑和确认）另由 [备注契约](workbench-notes-spaces.md#长期磁盘存储与旧空间迁移) 的独立磁盘存储长期保存；AI 运行缓存不替代备注空间，清除运行记录不删除磁盘备注。
 
 - **状态所有权**：`createProofreadResults` 的单个实例持有最新结果集合、修订日志、游标、脏行计数与定时器；`ai-proofread.js` 只通过 `begin` / `record` / `get` / `restore` / `read` / `forget` / `reset` / `finish` 使用它。任务运行、领域结果规范化、指标贡献的撤销与累加、异常和日志仍由调度持有；恢复与局部清除不重算阶段指标。实例只保存 `projectKey`、`rowsSignature`、`runId`、`kind`、`total`、`finishedAt` 六项元数据，`result-store.js` 继续拥有文件读写与项目删除。
 - **轮次切换**：`begin` 先按身份取得可复用旧结果的独立集合快照，再初始化本轮；是否符合复审/仲裁续跑条件由调度判断。`begin`、`reset` 与落盘均取消所属轮次的定时器，防止回调跨轮次残留。`restore` 返回任务展示是否需要复位及受限元数据；跨项目时调度先复位旧任务展示，再应用元数据，不再次清除刚恢复的结果。

@@ -178,7 +178,7 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(html, /<details id="prefilterPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">执行规则与相似度预筛，快速过滤无需校对的高一致性文本。<\/p>/s);
   assert.match(html, /<details id="aiPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">配置模型服务与校对规范，深度审查翻译缺陷并提供修改建议。<\/p>/s);
   assert.match(html, /<details id="filterPanel"[^>]*>\s*<summary[^>]*>.*?<\/summary>\s*<p class="panel-desc">按条件检索过滤表格行，控制列显示，并批量确认或写回修改。<\/p>/s);
-  assert.match(html, /<div class="notes-toolbar">\s*<p class="panel-desc">仅显示当前项目的历史备注；切换项目后会自动切换到对应历史。可用 JSON 在浏览器之间备份与迁移。<\/p>/s);
+  assert.match(html, /<div class="notes-toolbar">\s*<p class="panel-desc">从本地控制台打开时，所有备注空间自动保存到电脑并长期保留。仅显示当前项目的历史备注；切换项目后会自动切换到对应历史。可用 JSON 备份与迁移。<\/p>/s);
   assert.doesNotMatch(html, /btn-collapse-panel/, "移除收起面板按钮，点击当前展开标签页即可收起");
   assert.doesNotMatch(html, />收起面板</, "页面模板中不应包含收起面板按钮文本");
 

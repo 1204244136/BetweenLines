@@ -8,6 +8,7 @@ const { normalizeGrade } = require("./ai/decision-score");
 const { buildPersonaSystemPrompt } = require("./ai/persona-runtime");
 const { createNotesTools } = require("./notes-spaces");
 const { createNotesStorage } = require("./notes-storage");
+const { createDiskNotesStorage } = require("./notes-disk-storage");
 const { createNotesPersistence } = require("./notes-persistence");
 const { createAiResultReception } = require("./ai-result-reception");
 const { createPresetTools } = require("./ai-presets");
@@ -503,10 +504,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           </div>
         </details>
         <details id="notesPanel" class="panel-details" aria-label="备注空间与找回">
-          <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">保存在此浏览器</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
+          <summary class="panel-summary"><span>备注空间与找回 <span id="notesSaveState" class="notes-summary-state">正在读取保存状态</span></span><button class="details-toggle" type="button" data-details-toggle aria-label="折叠或展开备注空间"></button></summary>
           <div class="notes-body">
             <div class="notes-toolbar">
-              <p class="panel-desc">仅显示当前项目的历史备注；切换项目后会自动切换到对应历史。可用 JSON 在浏览器之间备份与迁移。</p>
+              <p class="panel-desc">从本地控制台打开时，所有备注空间自动保存到电脑并长期保留。仅显示当前项目的历史备注；切换项目后会自动切换到对应历史。可用 JSON 备份与迁移。</p>
               <div class="notes-actions">
                 <button id="exportAllNotes" class="btn" type="button">备份全部</button>
                 <label class="notes-file-label" for="importNotesFile">导入备份<input id="importNotesFile" class="notes-file" type="file" accept=".json,application/json"></label>
@@ -524,7 +525,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div class="notes-history-heading" id="notesForeignHeading" hidden><strong>其他项目 / 旧版空间</strong><span id="notesForeignSummary"></span><button id="exportForeignNotes" class="btn btn--ghost" type="button">导出这些空间</button></div>
             <div id="notesForeignList" class="notes-space-list" hidden></div>
             <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
-            <p class="notes-hint">历史空间按项目标识隔离：本页只读取当前项目的记录，其他项目的记录会保留在浏览器里，切换到对应项目后再显示。其他项目与旧版空间同样占用浏览器容量，写满时本页备注就存不进去，所以它们在下面单独列出，可以导出或删除，但<strong>不参与找回</strong>。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。迁移标记不属于备注，列表已自动排除；历史空间由你手动删除。</p>
+            <p class="notes-hint">历史空间按项目标识隔离：其他项目与旧版空间单独列出，<strong>不参与本项目找回</strong>。旧浏览器记录会自动迁入电脑，核验成功后释放浏览器副本；同名但内容不同的记录保留为独立空间。磁盘空间不会随重新生成、旧快照清理或删除工作台项目而删除，只有显式清空或删除备注空间才会移除记录。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。直接打开 HTML 时仍只有浏览器保存，需从本地控制台打开才能写入电脑。</p>
           </div>
         </details>
         </div>
@@ -586,6 +587,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
   </div>
   <div id="toastStack" class="toast-stack" role="region" aria-live="polite" aria-label="操作提示"></div>
   <script id="rowData" type="application/json">${rowsJson}</script>
+  <script id="notesDiskData" type="application/json">null</script>
   <script>
     ${resolveModelOptions.toString()}
     ${normalizeApiBaseUrl.toString()}
@@ -621,6 +623,7 @@ ${assets.workbenchShared}
 ${assets.workbenchDiff}
 ${assets.notesCodec}
 ${createNotesStorage.toString()}
+${createDiskNotesStorage.toString()}
 ${assets.workbenchClient}</script>
 </body>
 </html>`;

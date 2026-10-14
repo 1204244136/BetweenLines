@@ -145,6 +145,7 @@ function createClientFixture(html, storage = storageFixture(), options = {}) {
   };
   for (const match of html.matchAll(/\bid="([^"]+)"/g)) element(match[1]);
   element("rowData").textContent = html.match(/<script id="rowData" type="application\/json">([\s\S]*?)<\/script>/)[1];
+  if (options.diskBootstrap) element("notesDiskData").textContent = JSON.stringify(options.diskBootstrap);
   const script = html.match(/<script>\s*([\s\S]*?)<\/script>\s*<\/body>/)[1];
   const statusQueue = options.statusQueue ? options.statusQueue.slice() : [];
   const fetches = [];
