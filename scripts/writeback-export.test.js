@@ -38,11 +38,11 @@ function paragraphTexts(file) {
 }
 
 // 最小项目：登记的原文件就是要写回的 XHTML，行数据与该文件的段落一一对应。
-function createFixture(name) {
+function createFixture(name, paragraphs = PARAGRAPHS) {
   const root = path.join(dataDir, name);
   fs.mkdirSync(root, { recursive: true });
   const source = path.join(root, "chapter.xhtml");
-  fs.writeFileSync(source, `<html><body>\n${PARAGRAPHS.map((text) => `<p>${text}</p>`).join("\n")}\n</body></html>\n`, "utf8");
+  fs.writeFileSync(source, `<html><body>\n${paragraphs.map((text) => `<p>${text}</p>`).join("\n")}\n</body></html>\n`, "utf8");
   const jp = path.join(root, "source.txt");
   fs.writeFileSync(jp, "原文\n", "utf8");
   const staging = createProjectStaging(
@@ -52,7 +52,7 @@ function createFixture(name) {
   fs.writeFileSync(path.join(staging.dir, "translation-compare.json"), JSON.stringify({
     project: { projectKey: staging.projectKey, generatedAt: new Date().toISOString(), rowsSignature: `${name}-rows`, comparisonMode: "bilingual" },
     rowsSignature: `${name}-rows`,
-    rows: PARAGRAPHS.map((text, index) => ({ index: index + 1, jp: "", cn: text })),
+    rows: paragraphs.map((text, index) => ({ index: index + 1, jp: "", cn: text })),
   }), "utf8");
   for (const artifact of projectArtifacts) {
     const file = path.join(staging.dir, artifact);
@@ -139,7 +139,7 @@ test("写回请求带整卷行序：批量写回按目标列发出全部行文�
   assert.equal(Object.prototype.hasOwnProperty.call(post.body.rowTexts, "tw"), false);
 });
 
-test("写回请求带整卷行序：单行写回只发到该行为止", async () => {
+test("写回请求带整卷行序：单行写回附带后文定位上下文", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: { "/api/translation-export": { ok: true, updated: 1, missed: [], ambiguous: [], targets: ["B.txt"] } },
   });
@@ -147,7 +147,52 @@ test("写回请求带整卷行序：单行写回只发到该行为止", async ()
   await ui.run('writebackSingleRevision("2", { disabled: false, textContent: "", classList: { add() {} } })');
 
   assert.equal(ui.posts.length, 1);
-  // 更靠后的行不参与锚点，没必要发——第 2 行只带前两行。
-  assert.deepEqual(ui.posts[0].body.rowTexts, { cn: ["译文一", "译文二"] });
+  // 后文用于界定重复句的位置，不作为待写回条目。
+  assert.deepEqual(ui.posts[0].body.rowTexts, { cn: ROWS.map((row) => row.cn) });
   assert.deepEqual(ui.posts[0].body.entries.map((entry) => entry.id), ["2"]);
+});
+
+test("写回请求只附带有限后文，不扩大单行写入或确认范围", async () => {
+  const rows = Array.from({ length: 80 }, (_, i) => ({ ...ROWS[0], index: i + 1, cn: `译文${i + 1}`, signature: `sig-${i + 1}` }));
+  const ui = createWorkbench(storageFixture(), {
+    rows, apiResponses: { "/api/translation-export": { ok: true, updated: 1, missed: [], ambiguous: [] } },
+  });
+  ui.run('notes["2"] = { revisionText: "第二行改后", revisionTarget: "cn" };');
+  await ui.run('writebackSingleRevision("2", { disabled: false, textContent: "" })');
+  assert.deepEqual(ui.posts[0].body.rowTexts, { cn: rows.slice(0, 34).map(row => row.cn) });
+  assert.deepEqual(ui.posts[0].body.entries.map(entry => entry.id), ["2"]);
+  assert.equal(ui.run('notes["2"].manualDone'), true);
+  assert.equal(ui.run('Object.keys(notes).length'), 1);
+});
+
+test("旧页面行数据经真实单行请求连续写回两处近邻重复句，各自落位", async () => {
+  const original = ["开场。", "「？」", "前文锚点。", "前段旧文。", "重复句。", "中间锚点。", "重复句。", "收场。", "「？」"];
+  const current = [...original];
+  current[1] = "问句已改。";
+  current[3] = "前段已改。";
+  const fixture = createFixture("stale-context", original);
+  fs.writeFileSync(fixture.source, current.map(text => `<p>${text}</p>`).join("\n"));
+  const server = createServer();
+  const port = await listen(server);
+  try {
+    const ui = createWorkbench(storageFixture(), {
+      projectKey: fixture.projectKey, rowsSignature: fixture.rowsSignature,
+      rows: original.map((cn, index) => ({ ...ROWS[0], index: index + 1, cn, signature: `sig-${index + 1}` })),
+      apiResponses: { "/api/translation-export": async request => {
+        const { status, result } = await exportRevisions(port, JSON.parse(request.body));
+        assert.equal(status, 200);
+        assert.equal(result.updated, 1);
+        assert.deepEqual(result.missed, []);
+        assert.deepEqual(result.ambiguous, []);
+        return result;
+      } },
+    });
+    ui.run('notes["5"] = { revisionText: "第一处改。", revisionTarget: "cn" }; notes["7"] = { revisionText: "第二处改。", revisionTarget: "cn" };');
+    for (const id of [5, 7]) await ui.run(`writebackSingleRevision("${id}", { disabled: false, textContent: "" })`);
+    current[4] = "第一处改。";
+    current[6] = "第二处改。";
+    assert.deepEqual(paragraphTexts(fixture.source), current);
+    assert.equal(ui.posts.length, 2);
+    assert.equal(ui.run('notes["5"].manualDone && notes["7"].manualDone'), true);
+  } finally { await close(server); }
 });

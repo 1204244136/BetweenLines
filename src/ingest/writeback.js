@@ -347,11 +347,12 @@ function consecutiveBlockRun(state, first, maxBlock = Infinity) {
  * 都可能把这一行的内容写到别的段落甚至别的文档上；真实回归就是这么把一章的句子写进了另一章。
  */
 function locate(text, state, options = {}) {
+  const minBlock = Number.isInteger(options.minBlock) ? options.minBlock : 0;
   const maxBlock = Number.isInteger(options.maxBlock) ? options.maxBlock : Infinity;
   const candidates = [];
   for (let docIndex = state.docIndex; docIndex < state.documents.length && candidates.length < 2; docIndex += 1) {
     for (const block of state.documents[docIndex].blocks) {
-      if (block.index < state.lastBlock || block.used || !block.comparable) continue;
+      if (block.index < Math.max(state.lastBlock, minBlock) || block.used || !block.comparable) continue;
       // 更靠后的待写回条目已经在这一块或更早处有可用锚点。当前行若越过它，
       // 后面的条目将永远无法从当前锚点回退到自己的位置；同块仍允许先序行占用。
       if (block.index > maxBlock) break;
@@ -362,8 +363,8 @@ function locate(text, state, options = {}) {
   }
   if (!candidates.length) return { hit: null, ambiguous: false };
   const [first, second] = candidates;
-  // 第二处必须紧挨着第一处才算歧义：隔得远的那一处是同一段文字在别处出现，不是同一个位置的两种可能。
-  if (second && second.index - first.index <= NEAR_DUPLICATE_BLOCKS) {
+  // 有上下文边界时，范围内的多个同文候选都算歧义；缺少边界的旧调用方保留近处重复保护。
+  if (second && (options.contextBounded || second.index - first.index <= NEAR_DUPLICATE_BLOCKS)) {
     const clusterLength = consecutiveBlockRun(state, first, maxBlock);
     const duplicateRunLength = Number.isInteger(options.duplicateRunLength) ? options.duplicateRunLength : 0;
     // 行序 1:1：剩下的同文本行数正好等于从 first 起严格连续的同文本块数。两边都严格连续、
@@ -473,6 +474,57 @@ function buildBlockIndex(documents) {
   return index;
 }
 
+// 只用两侧都唯一的完整段落建立上下文边界，不根据行号或段落数量猜位置。
+// 旧短句即使在别章还有同文，也不能越过下一处未修改的唯一上下文。
+// 多段行只参与出现次数统计，不作边界，避免将整行的部分匹配当成完整落点。
+function buildRowBounds(rowTexts, state, blockIndex) {
+  const parts = rowTexts.map((text) => splitParts(text).map((part) => state.comparableText(part)));
+  const counts = new Map();
+  for (const list of parts) {
+    for (const text of list) if (text) counts.set(text, (counts.get(text) || 0) + 1);
+  }
+  const candidates = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const list = parts[index];
+    if (list.length !== 1 || counts.get(list[0]) !== 1) continue;
+    const blocks = blockIndex.get(list[0]);
+    if (blocks?.length !== 1) continue;
+    candidates.push({ row: index, block: blocks[0] });
+  }
+  const anchors = new Map();
+  let lastAnchor = -1;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const current = candidates[index];
+    const next = candidates[index + 1];
+    // 某个旧文本只在后文剩下一处：前后两个顺序一致的上下文足以证明这处不属于当前行。
+    if (next && current.block >= next.block && lastAnchor >= 0 && lastAnchor < next.block) continue;
+    if (current.block <= lastAnchor || (next && current.block >= next.block)) {
+      // 唯一上下文自身发生倒序，无法证明页面行序仍适用于原文件，整份清单拒绝落位。
+      return rowTexts.map(() => ({ minBlock: 0, maxBlock: -1, contextBounded: true }));
+    }
+    anchors.set(current.row, current.block);
+    lastAnchor = current.block;
+  }
+  const bounds = rowTexts.map(() => ({ minBlock: 0, maxBlock: Infinity, contextBounded: false }));
+  let previous = null;
+  for (let index = 0; index < bounds.length; index += 1) {
+    if (previous !== null) {
+      bounds[index].minBlock = previous + 1;
+      bounds[index].contextBounded = true;
+    }
+    if (anchors.has(index)) previous = anchors.get(index);
+  }
+  let next = null;
+  for (let index = bounds.length - 1; index >= 0; index -= 1) {
+    if (next !== null) {
+      bounds[index].maxBlock = next - 1;
+      bounds[index].contextBounded = true;
+    }
+    if (anchors.has(index)) next = anchors.get(index);
+  }
+  return bounds;
+}
+
 function firstBlockAtOrAfter(index, text, lastBlock) {
   const blocks = index.get(text);
   if (!blocks || !blocks.length) return null;
@@ -565,11 +617,11 @@ function noteUnresolved(unresolved, parts, normalize = comparableText, blockLimi
 }
 
 // 「未落地」拦不拦得住这一行：候选落在未落地那一簇里就拦，已经越过就放它去定位。
-function unresolvedBlocksCandidate(unresolved, text, blockIndex, lastBlock) {
+function unresolvedBlocksCandidate(unresolved, text, blockIndex, lastBlock, minBlock = 0) {
   if (!unresolved.has(text)) return false;
   const limit = unresolved.get(text);
   if (limit === Infinity) return true;
-  const candidate = firstBlockAtOrAfter(blockIndex, text, lastBlock);
+  const candidate = firstBlockAtOrAfter(blockIndex, text, Math.max(lastBlock, minBlock));
   return candidate == null || candidate <= limit;
 }
 
@@ -584,7 +636,8 @@ function seekRow(state, text, unresolved, options = {}) {
         unresolved,
         parts.slice(index),
         state.comparableText,
-        located.ambiguous ? (located.clusterEnd ?? Infinity) : Infinity,
+        located.ambiguous ? (located.clusterEnd ?? Infinity)
+          : (parts.length === 1 ? (options.maxBlock ?? Infinity) : Infinity),
       );
       return false;
     }
@@ -647,6 +700,7 @@ function planPlacements(documents, entries, options, strategy) {
     futureAnchors.push({ row, text: state.comparableText(splitParts(strategy.textOf(entry))[0]) });
   }
   const blockIndex = buildBlockIndex(state.documents);
+  const rowBounds = buildRowBounds(rowTexts, state, blockIndex);
   // 行序上的「同文本连续段」：第 i 行还剩几行（含自己）是同文本。近处重复只有在
   // 「剩下的同文本行数 === 从候选起严格连续的同文本块数」时才按行序落位，见 locate。
   const runTails = new Array(rowTexts.length).fill(1);
@@ -664,7 +718,8 @@ function planPlacements(documents, entries, options, strategy) {
         unresolved,
         splitParts(strategy.textOf(entry)),
         state.comparableText,
-        outcome.conflict ? (outcome.conflict.clusterEnd ?? Infinity) : Infinity,
+        outcome.conflict ? (outcome.conflict.clusterEnd ?? Infinity)
+          : (splitParts(strategy.textOf(entry)).length === 1 ? (commitOptions.maxBlock ?? Infinity) : Infinity),
       );
       const target = outcome.conflict ? ambiguous : missed;
       target.push(strategy.report(entry, outcome.conflict ? outcome.conflict.reason : outcome.failed.reason));
@@ -681,16 +736,19 @@ function planPlacements(documents, entries, options, strategy) {
 
   const maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
   for (let row = 1; row <= maxRow; row += 1) {
-    const maxBlock = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
+    const bounds = rowBounds[row - 1] || { minBlock: 0, maxBlock: Infinity };
+    const futureLimit = futureEntryBlockLimit(state, futureAnchors, row, blockIndex);
+    const maxBlock = futureLimit < bounds.minBlock ? bounds.maxBlock : Math.min(bounds.maxBlock, futureLimit);
     const duplicateRunLength = runTails[row - 1] || 1;
+    const locateOptions = { ...bounds, maxBlock, duplicateRunLength };
     const entry = byRow.get(row);
     if (!entry) {
-      seekRow(state, rowTexts[row - 1], unresolved, { maxBlock, duplicateRunLength });
+      seekRow(state, rowTexts[row - 1], unresolved, locateOptions);
       continue;
     }
     const parts = splitParts(strategy.textOf(entry));
     const blocked = parts.find((part) => unresolvedBlocksCandidate(
-      unresolved, state.comparableText(part), blockIndex, state.lastBlock,
+      unresolved, state.comparableText(part), blockIndex, state.lastBlock, bounds.minBlock,
     ));
     if (blocked) {
       const limit = unresolved.get(state.comparableText(blocked));
@@ -698,7 +756,7 @@ function planPlacements(documents, entries, options, strategy) {
       ambiguous.push(strategy.report(entry, strategy.blockedReason(previewText(blocked))));
       continue;
     }
-    commitEntry(entry, { duplicateRunLength });
+    commitEntry(entry, locateOptions);
   }
   for (const entry of loose) commitEntry(entry);
   const byDocument = new Map();

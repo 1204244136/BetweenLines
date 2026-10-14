@@ -639,8 +639,12 @@
   document.getElementById("speakerLastPage").addEventListener("click", () => { currentPage = totalPages(); renderVisibleRows(false); });
   // 写回要带上目标列的**整卷行序**（第 i 行对应下标 i-1）：写回定位按行序推进锚点，
   // 未标注的行也要按自己的文本先占住位置，同一句发话在卷里出现多次时才不会把标记写到前一处。
-  // 只发到要写的最后一行为止——更靠后的行不参与锚点。
+  // 最后一条之后附带最多 32 行上下文，供共享定位器界定重复发话，不增加待标注行。
   function speakerRowTexts(limit) {
+    if (limit > 0) {
+      const lastRow = allRows.reduce((max, row) => Math.max(max, Number(row.index) || 0), 0);
+      limit = Math.min(lastRow, limit + 32);
+    }
     const list = new Array(Math.max(0, limit)).fill("");
     for (const row of allRows) {
       const index = Number(row.index);

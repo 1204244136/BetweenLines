@@ -38,6 +38,90 @@ function epubFixture({ first = [], second = [], extra = {} } = {}) {
 const bodyOf = (dir, name) => fs.readFileSync(path.join(dir, "OEBPS", "Text", name), "utf8");
 const paragraphsOf = (dir, name) => [...bodyOf(dir, name).matchAll(/<p>([\s\S]*?)<\/p>/g)].map((match) => match[1]);
 
+test("写回：旧短句不能越过未修改的上下文去占用后文同句", async () => {
+  const dir = epubFixture({
+    first: ["开场。", "问句已改。", "前文锚点。", "前段已改。", "重复句。", "中间锚点。", "重复句。", "收场。", "「？」"],
+  });
+  try {
+    const result = await applyTextReplacements(dir, [
+      { id: 5, searchText: "重复句。", replaceText: "第一处改。" },
+      { id: 7, searchText: "重复句。", replaceText: "第二处改。" },
+    ], { rowTexts: ["开场。", "「？」", "前文锚点。", "前段旧文。", "重复句。", "中间锚点。", "重复句。", "收场。", "「？」"] });
+    assert.equal(result.updated, 2);
+    assert.deepEqual(result.missed, []);
+    assert.deepEqual(result.ambiguous, []);
+    assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "问句已改。", "前文锚点。", "前段已改。", "第一处改。", "中间锚点。", "第二处改。", "收场。", "「？」"]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("写回：附近重复句通过前后唯一上下文定位，单行与说话人都不误写另一处", async () => {
+  for (const speaker of [false, true]) {
+    const dir = epubFixture({ first: ["开场。", "重复句。", "中间锚点。", "重复句。", "收场。"] });
+    try {
+      const options = { rowTexts: ["开场。", "重复句。", "中间锚点。", "重复句。", "收场。"] };
+      const result = speaker
+        ? await applySpeakerAnnotations(dir, [{ index: 2, text: "重复句。", speaker: "甲" }], options)
+        : await applyTextReplacements(dir, [{ id: 2, searchText: "重复句。", replaceText: "第一处改。" }], options);
+      assert.equal(result.updated, 1);
+      assert.deepEqual(result.missed, []);
+      assert.deepEqual(result.ambiguous, []);
+      assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", speaker ? "<!--Speaker:甲-->重复句。" : "第一处改。", "中间锚点。", "重复句。", "收场。"]);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("写回：源文件段落顺序与唯一上下文相反时拒写", async () => {
+  const dir = epubFixture({ first: ["后文锚点。", "重复句。", "前文锚点。", "重复句。"] });
+  try {
+    const before = bodyOf(dir, "a.xhtml");
+    const result = await applyTextReplacements(dir, [
+      { id: 2, searchText: "重复句。", replaceText: "不应落盘。" },
+    ], { rowTexts: ["前文锚点。", "重复句。", "后文锚点。", "重复句。"] });
+    assert.equal(result.updated, 0);
+    assert.equal(result.missed.length + result.ambiguous.length, 1);
+    assert.equal(bodyOf(dir, "a.xhtml"), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("写回：旧目标在上下文范围内消失时不能替换后方同文", async () => {
+  const dir = epubFixture({ first: ["开场。", "已修改。", "中间锚点。", "目标旧文。", "收场。"] });
+  try {
+    const before = bodyOf(dir, "a.xhtml");
+    const result = await applyTextReplacements(dir, [
+      { id: 2, searchText: "目标旧文。", replaceText: "不应落盘。" },
+    ], { rowTexts: ["开场。", "目标旧文。", "中间锚点。", "目标旧文。", "收场。"] });
+    assert.equal(result.updated, 0);
+    assert.equal(result.missed.length, 1);
+    assert.equal(bodyOf(dir, "a.xhtml"), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("写回：上下文范围内仍有两处相距较远的候选时不猜第一处", async () => {
+  const dir = epubFixture({ first: ["开场。", "重复句。", "甲段已改。", "乙段已改。", "丙段已改。", "重复句。", "收场。"] });
+  try {
+    const before = bodyOf(dir, "a.xhtml");
+    const result = await applyTextReplacements(dir, [
+      { id: 2, searchText: "重复句。", replaceText: "不应落盘。" },
+    ], { rowTexts: ["开场。", "重复句。", "甲段旧文。", "乙段旧文。", "丙段旧文。", "重复句。", "收场。"] });
+    assert.equal(result.updated, 0);
+    assert.equal(result.ambiguous.length, 1);
+    assert.equal(bodyOf(dir, "a.xhtml"), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("写回：源文件新增段落后仍按精确上下文定位，不按段落号偏移", async () => {
+  const dir = epubFixture({ first: ["开场。", "新增段落。", "重复句。", "中间锚点。", "重复句。", "收场。"] });
+  try {
+    const result = await applyTextReplacements(dir, [
+      { id: 4, searchText: "重复句。", replaceText: "第二处改。" },
+    ], { rowTexts: ["开场。", "重复句。", "中间锚点。", "重复句。", "收场。"] });
+    assert.equal(result.updated, 1);
+    assert.deepEqual(result.missed, []);
+    assert.deepEqual(result.ambiguous, []);
+    assert.deepEqual(paragraphsOf(dir, "a.xhtml"), ["开场。", "新增段落。", "重复句。", "中间锚点。", "第二处改。", "收场。"]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("写回：中途定位失败的行不会被嫁接到后面的段落上", async () => {
   // 第二行的原文已被外部改动（页面仍持有旧文本），第三、四行是它后面真正的行。
   const dir = epubFixture({

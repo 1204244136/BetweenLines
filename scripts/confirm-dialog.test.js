@@ -228,6 +228,22 @@ function clickSpeakerRow(ui, button) {
   });
 }
 
+test("说话人单行请求附带最多 32 行后文，但只标注批准的一行", async () => {
+  const ui = createSpeakerFixture(undefined, 80);
+  const button = ui.element("speakerRowWriteback");
+  button.dataset.rowId = "line-2";
+  const pending = clickSpeakerRow(ui, button);
+  await ui.settle();
+  await ui.element("genericConfirmOk").dispatch("click");
+  await pending;
+  await ui.settle();
+  const writes = ui.posts.filter(post => post.url === "/api/speaker-export");
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.row.index, 2);
+  assert.deepEqual(writes[0].body.rowTexts, Array.from({ length: 34 }, (_, index) => `「谁在说话？${index + 1}」`));
+  assert.equal(Object.prototype.hasOwnProperty.call(writes[0].body, "rows"), false);
+});
+
 test("说话人单行写回取消不改状态，批准只发送一次并固定备份设置", async () => {
   const ui = createSpeakerFixture();
   assert.match(ui.html, /\.workbench-confirm-dialog\s*\{/, "说话人页面内联共享确认样式");

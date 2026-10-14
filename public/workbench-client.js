@@ -3785,9 +3785,13 @@
     // 写回要带上目标列的**整卷行序**（第 i 行对应下标 i-1）：写回定位按行序推进锚点，
     // 未改动的行也要按自己的文本先占住位置，同一段文字在别处先出现的行才不会被本行改掉
     // （真实回归：一卷里两处独立成行的 <p>尽管如此。</p>，写回第 2 处却落到第 1 处）。
-    // 只发到要写的最后一行为止——更靠后的行不参与锚点。缺行号的行不生成清单，服务端按旧行为处理。
+    // 最后一条之后附带最多 32 行上下文，供服务端用后文唯一段落界定重复句；这些行不参与写入。
+    // 缺行号的条目不生成清单，服务端按旧行为处理。
     function writebackRowTexts(entries) {
-      const limit = entries.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+      const lastEntry = entries.reduce((max, entry) => Math.max(max, Number(entry.id) || 0), 0);
+      if (!lastEntry) return {};
+      const lastRow = allRows.reduce((max, row) => Math.max(max, Number(row.index) || 0), 0);
+      const limit = Math.min(lastRow, lastEntry + 32);
       const columns = new Set(entries.map((entry) => entry.targetKey));
       const rowTexts = {};
       for (const key of columns) {
