@@ -74,9 +74,10 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.stylistConfig, null);
   assert.equal(config.arbiterConfig, null);
 
-  // 2. 启用 Stage 2（选择 Claude）
+  // 2. 启用 Stage 2（选择并添加 Claude）
   s2Select.value = "preset_claude";
   await s2Select.dispatch("change");
+  ui.element("stage2PresetAdd").click();
 
   // Stage 3 应该被解禁
   assert.equal(s3Select.disabled, false);
@@ -89,9 +90,10 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.arbiterConfig, null);
   assert.equal(config.arbiterEnabled, false); // Stage 3 尚未选预设，不启用仲裁
 
-  // 3. 启用 Stage 3（选择 DeepSeek R1）
+  // 3. 启用 Stage 3（选择并添加 DeepSeek R1）
   s3Select.value = "preset_r1";
   await s3Select.dispatch("change");
+  ui.element("stage3PresetAdd").click();
 
   config = ui.run("aiConfig()");
   assert.equal(config.arbiterEnabled, true);
@@ -99,8 +101,7 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.arbiterConfig.model, "deepseek-reasoner");
 
   // 4. 重置 Stage 2 为未启用：Stage 3 必须自动重置并锁回 disabled
-  s2Select.value = "";
-  await s2Select.dispatch("change");
+  ui.element("stage2PresetTags").children[0].children[2].click();
 
   assert.equal(s3Select.value, "");
   assert.equal(s3Select.disabled, true);
@@ -110,6 +111,89 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.stylistConfig, null);
   assert.equal(config.arbiterConfig, null);
 });
+
+test("阶段预设恢复：旧单值迁入适用列表，显式空数组保持未启用", () => {
+  for (const explicitlyEmpty of [false, true]) {
+    const saved = { stage1PresetId: "legacy", stage2PresetId: "legacy", stage3PresetId: "legacy" };
+    if (explicitlyEmpty) Object.assign(saved, { stage1PresetIds: [], stage2PresetIds: [], stage3PresetIds: [] });
+    const ui = createWorkbench(storageFixture({
+      "translation-compare-ai-presets-v2": JSON.stringify([
+        { id: "legacy", name: "旧预设", protocol: "compatible", model: "legacy-model" },
+      ]),
+      "translation-compare-ai-project-config-v2:project": JSON.stringify(saved),
+    }));
+    for (const stage of ["stage1", "stage2", "stage3"]) {
+      assert.deepEqual([...ui.run(`committedStagePresetIds("${stage}")`)], explicitlyEmpty ? [] : ["legacy"]);
+    }
+    const config = ui.run("aiConfig()");
+    assert.equal(Boolean(config.stylistConfig), !explicitlyEmpty);
+    assert.equal(Boolean(config.arbiterConfig), !explicitlyEmpty);
+  }
+});
+
+for (const stage of ["stage1", "stage2", "stage3"]) {
+  test(`${stage} 候选预设：未添加时不进入启动请求或刷新后的适用配置`, async () => {
+    const ui = createWorkbench(storageFixture({
+      "translation-compare-ai-presets-v2": JSON.stringify([
+        { id: "candidate", name: "候选", protocol: "compatible", model: "candidate-model" },
+      ]),
+    }));
+    ui.run('restoreAiConfig(); aiIds.model.value = "main-model";');
+    if (stage === "stage3") {
+      ui.element("stage2PresetSelect").value = "candidate";
+      ui.element("stage2PresetAdd").click();
+    }
+    ui.element(`${stage}PresetSelect`).value = "candidate";
+    await ui.element(`${stage}PresetSelect`).dispatch("change");
+
+    assert.equal(ui.element(`${stage}AppliedValue`).textContent, stage === "stage1" ? "适用：主配置" : "未启用");
+    if (stage === "stage2") assert.equal(ui.element("stage3PresetSelect").disabled, true);
+    const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-config-v2"));
+    assert.deepEqual(saved[`${stage}PresetIds`], [], "候选不得隐式保存为已应用预设");
+
+    await ui.run('startAiProofread({ stage: "stage1" })');
+    const request = ui.posts.find((post) => post.url === "/api/ai-proofread/start").body;
+    assert.deepEqual(request[stage === "stage1" ? "presetPool" : stage === "stage2" ? "stylistPresets" : "arbiterPresets"], []);
+    if (stage === "stage1") assert.equal(request.model, "main-model");
+    if (stage === "stage2") assert.equal(request.stylistConfig, null);
+    if (stage === "stage3") {
+      assert.equal(request.arbiterConfig, null);
+      assert.equal(request.arbiterEnabled, false);
+    }
+
+    const restored = createWorkbench(ui.storage);
+    restored.run("restoreAiConfig()");
+    assert.deepEqual([...restored.run(`committedStagePresetIds("${stage}")`)], []);
+    assert.equal(restored.element(`${stage}AppliedValue`).textContent, stage === "stage1" ? "适用：主配置" : "未启用");
+  });
+
+  test(`${stage} 移除最后一个适用预设：残留候选不得重新启用或保存`, () => {
+    const ui = createWorkbench(storageFixture({
+      "translation-compare-ai-presets-v2": JSON.stringify([
+        { id: "applied", name: "已应用", protocol: "compatible", model: "applied-model" },
+      ]),
+    }));
+    ui.run("restoreAiConfig()");
+    if (stage === "stage3") {
+      ui.element("stage2PresetSelect").value = "applied";
+      ui.element("stage2PresetAdd").click();
+    }
+    ui.element(`${stage}PresetSelect`).value = "applied";
+    ui.element(`${stage}PresetAdd`).click();
+    // 预设列表重渲染会把已应用的第一项填回候选选择器。
+    ui.run("renderPresetOptions()");
+    assert.equal(ui.element(`${stage}PresetSelect`).value, "applied");
+    ui.element(`${stage}PresetTags`).children[0].children[2].click();
+
+    assert.deepEqual([...ui.run(`committedStagePresetIds("${stage}")`)], []);
+    assert.deepEqual([...ui.run(`stagePresetsFor("${stage}")`)], []);
+    const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-project-config-v2:project"));
+    assert.deepEqual(saved[`${stage}PresetIds`], []);
+    const restored = createWorkbench(ui.storage);
+    restored.run("restoreAiConfig()");
+    assert.deepEqual([...restored.run(`committedStagePresetIds("${stage}")`)], []);
+  });
+}
 
 test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当前并发上限/触顶规则", async () => {
   const ui = createWorkbench();

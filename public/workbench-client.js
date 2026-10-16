@@ -141,10 +141,8 @@
     }
 
     function committedStagePresetIds(stage) {
-      const ids = stagePresetSelections[stage] || [];
-      if (ids.length) return [...ids];
-      const select = aiIds[stagePresetControls[stage].select];
-      return select?.value ? [select.value] : [];
+      // 候选选择器只用于「添加」；执行与保存都必须和适用预设列表一致。
+      return [...(stagePresetSelections[stage] || [])];
     }
 
     // 该阶段当前选中的预设（含完整连接参数与 presetId）：启动时随请求体发送，
@@ -1300,13 +1298,13 @@
           aiIds.stage3Preset.disabled = true;
           if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = true;
           if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = true;
-          aiIds.stage3Preset.title = "需先在阶段二选择预设启用后，方可配置阶段三";
+          aiIds.stage3Preset.title = "需先在阶段二添加适用预设，方可配置阶段三";
           aiIds.stage3Card?.classList.add("is-disabled");
         } else {
           aiIds.stage3Preset.disabled = false;
           if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
           if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = false;
-          aiIds.stage3Preset.title = "选择阶段三模型预设（不填代表不启用）";
+          aiIds.stage3Preset.title = "选择阶段三候选预设，点击添加后启用";
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
       }

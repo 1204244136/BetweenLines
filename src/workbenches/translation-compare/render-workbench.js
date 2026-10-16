@@ -303,7 +303,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <span id="stage1StatusPill" class="ai-stage-status-pill" data-state="idle">待命</span>
                   </div>
                   <div class="ai-stage-card-ctrls">
-                    <select id="stage1PresetSelect" class="ai-stage-preset-select" title="阶段一模型预设（默认使用主配置）">
+                    <select id="stage1PresetSelect" class="ai-stage-preset-select" title="选择阶段一候选预设，点击添加后适用（默认使用主配置）">
                       <option value="">使用主配置</option>
                     </select>
                     <button id="stage1PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段一">添加</button>
@@ -356,7 +356,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <span id="stage2StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
                   </div>
                   <div class="ai-stage-card-ctrls">
-                    <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二模型预设（不填代表不启用）">
+                    <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二候选预设，点击添加后启用">
                       <option value="">未启用</option>
                     </select>
                     <button id="stage2PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段二">添加</button>
@@ -409,7 +409,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <span id="stage3StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
                   </div>
                   <div class="ai-stage-card-ctrls">
-                    <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二选择预设启用后，方可配置阶段三">
+                    <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二添加适用预设，方可配置阶段三">
                       <option value="">未启用</option>
                     </select>
                     <button id="stage3PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段三">添加</button>

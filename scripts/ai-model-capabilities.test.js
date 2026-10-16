@@ -300,7 +300,10 @@ test("端点专属档位随配置和预设保存，刷新后经各阶段进入�
   const refreshed = createWorkbench(storage);
   assert.deepEqual(Array.from(refreshed.element("aiReasoningEffort").children, (item) => item.value), ["", "low", "high"]);
   assert.equal(refreshed.element("aiReasoningEffort").value, "high");
-  for (const stage of ["stage1PresetSelect", "stage2PresetSelect", "stage3PresetSelect"]) refreshed.element(stage).value = presetId;
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    refreshed.element(`${stage}PresetSelect`).value = presetId;
+    refreshed.element(`${stage}PresetAdd`).click();
+  }
   const config = cleanConfig(refreshed.run("aiConfig()"));
   for (const stage of [config, config.stylistConfig, config.arbiterConfig]) {
     assert.equal(stage.reasoningEffort, "high");

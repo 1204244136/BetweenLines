@@ -1008,7 +1008,7 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
         { id: "latest-s2", name: "复审", protocol: "compatible", baseUrl, model: "stylist-model" },
       ]));
       ui.run(`Object.assign(notes, ${JSON.stringify(records)}); restoreAiConfig();
-        aiIds.stage2Preset.value = "latest-s2";
+        stagePresetSelections.stage2 = ["latest-s2"];
         aiIds.protocol.value = "compatible"; aiIds.baseUrl.value = ${JSON.stringify(baseUrl)};
         aiIds.model.value = "test-model"; saveNotes(); updateStageMetricsDashboard();`);
       assert.equal(Number(ui.element("metricStage2Pending").textContent), 20);

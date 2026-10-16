@@ -140,7 +140,7 @@ function setupCascadeDialogWorkbench() {
     { id: "preset_s2", name: "Gemini 复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
   ]));
   ui.run("restoreAiConfig()");
-  ui.run('aiIds.stage2Preset.value = "preset_s2";');
+  ui.run('stagePresetSelections.stage2 = ["preset_s2"];');
   ui.run(`
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：不同\\n是否需要修改：是\\n分析：漏译。\\n修改结果：修订一",
@@ -184,15 +184,15 @@ test("起点语义：确认弹窗「从未人工确认处开始」同样只报�
   assert.ok(post.body.stylistConfig);
 });
 
-test("起点语义：阶段二预设取不到时（下拉残留旧 id）不算配了下游，不谎报会走到复审", async () => {
+test("起点语义：阶段二预设取不到时（适用列表残留旧 id）不算配了下游，不谎报会走到复审", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stale-preset", stageMode: "stage1", stageCascade: { toStylist: false, toArbiter: false }, results: [] } },
     },
   });
 
-  // 下拉里留着一个本地已经不存在的预设 id。
-  ui.run('aiIds.stage2Preset.value = "preset_gone";');
+  // 适用列表里留着一个本地已经不存在的预设 id。
+  ui.run('stagePresetSelections.stage2 = ["preset_gone"];');
   const plan = ui.run("cascadeFromStage('stage1')");
   assert.equal(plan.toStylist, false, "取不到预设就等于那一段没启用");
   assert.equal(plan.toArbiter, false);
@@ -271,7 +271,7 @@ test("阶段三终审仲裁完全结束后，点击阶段3「开始」弹出确�
 
   // 配置阶段三预设，并设置两行分歧行：均已完成阶段三仲裁，但未人工确认，且文本中无「提交仲裁/分歧/escalate」字样
   ui.run(`
-    aiIds.stage3Preset.value = "preset-s3";
+    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\nArbiter仲裁[初审方案]：采纳初审方案\\n仲裁改案：初审案1\\n修改结果：初审案1",
       revisionText: "初审案1",

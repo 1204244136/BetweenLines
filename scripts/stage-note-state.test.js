@@ -55,7 +55,7 @@ test("从初审继续剩下的：失败、终止及空备注行在单阶段和�
       ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
         { id: "retry-stylist", name: "复审", protocol: "compatible", model: "test-stylist", baseUrl: "http://localhost:1234/v1" },
       ]));
-      ui.run('aiIds.stage2Preset.value = "retry-stylist"');
+      ui.run('stagePresetSelections.stage2 = ["retry-stylist"]');
     }
     await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');
     const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
@@ -79,7 +79,7 @@ test("待复审统计、点击筛选、启动弹窗及请求跳过列表同源�
   assert.equal(Number(ui.element("metricStage2Pending").textContent), 2);
   await ui.element("stage2PendingItem").dispatch("click");
   assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1, 2]);
-  ui.run('aiIds.stage2Preset.value = "test-preset"');
+  ui.run('stagePresetSelections.stage2 = ["test-preset"]');
   await ui.element("stage2Start").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, true);
   assert.match(ui.element("aiConfirmMessage").innerHTML, /<strong>1<\/strong> 条文学复审方案.*<strong>2<\/strong> 条初审建议待复审/);
@@ -95,7 +95,7 @@ test("待复审统计、点击筛选、启动弹窗及请求跳过列表同源�
 
 test("全部旧轮次已复审但本轮待复审时，点击阶段二直接启动且不跳过", async () => {
   const ui = fixture({ 1: { note: reviewed + "\n\n" + initial } });
-  ui.run('aiIds.stage2Preset.value = "test-preset"');
+  ui.run('stagePresetSelections.stage2 = ["test-preset"]');
   await ui.element("stage2Start").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, false);
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
@@ -113,7 +113,7 @@ test("仲裁待办按本轮逐行计数，已人工确认的历史定案不抵�
   assert.equal(Number(ui.element("metricStage3Pending").textContent), 1);
   await ui.element("stage3PendingItem").dispatch("click");
   assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1]);
-  ui.run('aiIds.stage3Preset.value = "test-preset"');
+  ui.run('stagePresetSelections.stage3 = ["test-preset"]');
   await ui.element("stage3Start").dispatch("click");
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post);
@@ -182,7 +182,7 @@ test("从阶段一或二级联续跑：复审已调整但仲裁失败的行不�
       { id: "stylist", name: "复审", protocol: "compatible", baseUrl: "http://localhost:1234/v1", model: "stylist" },
       { id: "arbiter", name: "仲裁", protocol: "compatible", baseUrl: "http://localhost:1234/v1", model: "arbiter" },
     ]));
-    ui.run('aiIds.stage2Preset.value = "stylist"; aiIds.stage3Preset.value = "arbiter"');
+    ui.run('stagePresetSelections.stage2 = ["stylist"]; stagePresetSelections.stage3 = ["arbiter"]');
     await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
     const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
     assert.ok(post.body.arbiterConfig);

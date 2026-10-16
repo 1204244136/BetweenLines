@@ -458,7 +458,7 @@ test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不�
   // 4 行复审分歧：2 行「调整」+ 1 行「升级仲裁」尚未仲裁，1 行已仲裁定案。
   // 仲裁队列此刻是空的——分歧数只能从备注里读出来，不能靠队列实时计数兜。
   ui.run(`
-    aiIds.stage3Preset.value = "preset-s3";
+    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\n修改结果：复审案1",
       revisionText: "复审案1",
@@ -844,7 +844,7 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
 
   // 模拟阶段一产出建议行，且阶段二配置了预设
   ui.run(`
-    aiIds.stage2Preset.value = "preset-s2";
+    stagePresetSelections.stage2 = ["preset-s2"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\n修改结果：改案A",
       revisionText: "改案A",
@@ -861,7 +861,7 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
 
   // 模拟阶段二产出分歧行，且阶段三配置了预设
   ui.run(`
-    aiIds.stage3Preset.value = "preset-s3";
+    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：改案B\\n修改结果：改案A",
       revisionText: "改案A",
@@ -972,7 +972,7 @@ test("阶段流水线契约：保留复审实时计数与立场分布，缺省�
 test("旧版常驻服务：没有回报 stageCascade 时明确提示重启，并让阶段三显示「未接入」", () => {
   const ui = createWorkbench();
 
-  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
   ui.run(`
     renderAiStatus({
       kind: "ai",
@@ -1048,7 +1048,7 @@ test("起点语义：三个「开始」只报起点，往下走到哪一段由�
     },
   });
 
-  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
   const fromStage1 = ui.run("cascadeFromStage('stage1')");
   assert.equal(fromStage1.toStylist, true);
   assert.equal(fromStage1.toArbiter, true);
@@ -1064,7 +1064,7 @@ test("起点语义：三个「开始」只报起点，往下走到哪一段由�
   assert.equal(ui.posts.at(-1).body.stage, "stage1");
 
   // 只配阶段二时，从阶段二起步也不会再往下走。
-  ui.run('aiIds.stage3Preset.value = "";');
+  ui.run('stagePresetSelections.stage3 = [];');
   const soloStage2 = ui.run("cascadeFromStage('stage2')");
   assert.equal(soloStage2.toStylist, false);
   assert.equal(soloStage2.toArbiter, false);
@@ -1080,7 +1080,7 @@ test("起点语义：级联运行中三个「开始」全禁用、三个「停�
     statusQueue: [runningAi, runningAi, runningAi, runningAi],
   });
 
-  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
   await ui.element("stage1Start").dispatch("click");
   // 启动后紧接着的状态轮询是异步的：先把它抽干，避免它把本地状态冲掉。
   for (let step = 0; step < 24; step += 1) await Promise.resolve();
@@ -1105,7 +1105,7 @@ test("起点语义：当前流水线已覆盖下游时，点阶段二/三只提�
     statusQueue: [runningAi, runningAi, runningAi, runningAi],
   });
 
-  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
   await ui.element("stage1Start").dispatch("click");
   for (let step = 0; step < 24; step += 1) await Promise.resolve();
   const postsBefore = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
@@ -1128,7 +1128,7 @@ test("起点语义：流水线跑完直接回报收尾，不走排队接力", as
     statusQueue: [runningAi, runningAi, runningAi, runningAi],
   });
 
-  ui.run('aiIds.stage2Preset.value = "preset-s2"; aiIds.stage3Preset.value = "preset-s3";');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
   await ui.element("stage1Start").dispatch("click");
   for (let step = 0; step < 24; step += 1) await Promise.resolve();
 
@@ -1224,7 +1224,7 @@ test("阶段等待与接力：阶段一运行中点击阶段二进入「等待�
   });
 
   // 配置阶段二预设
-  ui.run('aiIds.stage2Preset.value = "preset-s2"');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]');
 
   // 1. 启动阶段一
   await ui.element("stage1Start").dispatch("click");
@@ -1294,7 +1294,7 @@ test("阶段等待与接力：已有建议行时在阶段一运行中点击阶�
 
   // 2. 模拟阶段一在运行过程中产出了初审建议行，并配置了阶段二预设
   ui.run(`
-    aiIds.stage2Preset.value = "preset-s2";
+    stagePresetSelections.stage2 = ["preset-s2"];
     notes["1"] = {
       note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：建议修改\\n初审改案：新方案",
       manualDone: false,
@@ -1815,7 +1815,7 @@ test("多阶段控制：阶段一执行时阶段二与阶段三开始按钮状�
   assert.equal(s3Stop.disabled, true, "阶段三停止按钮依然保持禁用");
 
   // 3. 配置阶段二预设，点击阶段二「开始」进行安全排队
-  ui.run('aiIds.stage2Preset.value = "preset-s2"');
+  ui.run('stagePresetSelections.stage2 = ["preset-s2"]');
   await s2Start.dispatch("click");
   assert.equal(ui.run("stage2WaitingForStage1"), true, "阶段二进入排队状态");
   assert.equal(s2Start.disabled, true, "排队中的阶段二开始按钮被禁用");

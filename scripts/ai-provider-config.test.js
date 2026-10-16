@@ -107,8 +107,11 @@ test("阶段请求：同名模型取各自协议、供应商、地址与 Key，�
   ui.element("aiApiKey").value = "main-key";
   ui.element("aiReasoningEffort").value = "high";
   ui.element("stage1PresetSelect").value = a.id;
+  ui.element("stage1PresetAdd").click();
   ui.element("stage2PresetSelect").value = b.id;
+  ui.element("stage2PresetAdd").click();
   ui.element("stage3PresetSelect").value = c.id;
+  ui.element("stage3PresetAdd").click();
   const config = ui.run("aiConfig()");
   assert.equal(config.protocol, "compatible");
   assert.equal(config.provider, "服务甲");
@@ -130,7 +133,9 @@ test("保存修改后更换提供商保持 ID 与阶段绑定；冲突时保留�
   ui.element("aiPresetSelect").value = a.id;
   await ui.element("aiPresetSelect").dispatch("change");
   ui.element("stage2PresetSelect").value = a.id;
+  ui.element("stage2PresetAdd").click();
   ui.element("stage3PresetSelect").value = b.id;
+  ui.element("stage3PresetAdd").click();
   ui.element("aiProvider").value = "服务乙";
   await ui.element("aiPresetSave").dispatch("click");
   assert.equal(presetTools.getPreset(storage, a.id).provider, "服务甲");
