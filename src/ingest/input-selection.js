@@ -69,6 +69,19 @@ function roleLabels(comparisonMode = "trilingual") {
   return normalizeComparisonMode(comparisonMode) === "bilingual" ? bilingualLabels : labels;
 }
 
+// 辅助表属于生成输入；空数组明确表示不挂载，不从档案或环境变量补入。
+function normalizeTableSelection(value) {
+  const paths = (Array.isArray(value) ? value : [value])
+    .flatMap((item) => String(item || "").split(/[;\n]/))
+    .map(normalizePath).filter(Boolean);
+  const unique = [...new Map(paths.map((file) => [process.platform === "win32" ? file.toLowerCase() : file, file])).values()];
+  for (const file of unique) {
+    if (!/\.(xlsx|csv|tsv|json)$/i.test(file)) throw new Error(`不支持的辅助表格式：${file}`);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`辅助表文件不存在：${file}`);
+  }
+  return unique;
+}
+
 function validateSelection(selection) {
   if (!selection?.files) throw new Error("Input selection is missing files.");
   const comparisonMode = normalizeComparisonMode(selection.comparisonMode);
@@ -103,6 +116,8 @@ function validateSelection(selection) {
     startMarkers,
     inlineMarkup: normalizeInlineMarkup(selection.inlineMarkup),
     writebackBackup: Boolean(selection.writebackBackup),
+    termTables: normalizeTableSelection(selection.termTables),
+    speechTables: normalizeTableSelection(selection.speechTables),
     glossaryFile: selection.glossaryFile ? path.resolve(selection.glossaryFile) : (process.env.TRANSCOMPARATOR_GLOSSARY_FILE ? normalizePath(process.env.TRANSCOMPARATOR_GLOSSARY_FILE) : ""),
   };
 }
@@ -159,6 +174,8 @@ function selectionFromExplicitFiles(source) {
     inputMode: source.mode || process.env.TRANSCOMPARATOR_INPUT_MODE || inferInputMode(files),
     startMarkers: startMarkersFromSource(source),
     glossaryFile: source.glossary || source["glossary-file"] || process.env.TRANSCOMPARATOR_GLOSSARY_FILE || "",
+    termTables: source.termTables || source["term-tables"] || [],
+    speechTables: source.speechTables || source["speech-tables"] || [],
   });
 }
 
@@ -429,6 +446,7 @@ async function resolveInputSelection(options = {}) {
 }
 
 module.exports = {
+  normalizeTableSelection,
   activeLangs,
   guessLangOrder,
   inferInputMode,

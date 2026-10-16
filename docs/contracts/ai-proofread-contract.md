@@ -156,6 +156,15 @@
 
 ## 译名对照表与注音口径（`ai/term-table.js`）
 
+### 生成前挂载与项目边界
+
+- 控制台 `public/setup.html` 在生成前登记两类可选辅助表，`input-selection.json` 的 `termTables` / `speechTables` 保存归一化后的路径数组。空数组明确禁用对应表，不得回落到档案或环境变量；两项互不依赖。
+- 新生成项目的构建层与 AI 校对/预筛均只用该快照的选择；请求体不能替换它，切换特化规范不改变挂载。表层仍按档案槽位组织，作用范围由档案决定，但表来源由项目决定。辅助表不参与 `projectKey`、`rowsSignature` 或行签名。
+- 两类表均只接收外部 XLSX / CSV / TSV / JSON，不提供内置数据或 JavaScript 模块读取路径。旧快照缺少这两个字段时保留旧档案/环境变量解析口径。离线脚本默认读取项目选择，显式 `--table` 可临时替换用于诊断。
+- 应用布局保留项目选择，旧版表层重算使用同一份选择；不能因数组为空重新启用档案表。原路径仅保存在服务端输入选择与本机状态中，浏览器内嵌的表层仍仅存文件名。
+
+验证：`node --test scripts/auxiliary-tables.test.js scripts/input-selection.test.js scripts/term-layer.test.js scripts/speech-habit-layer.test.js scripts/setup-import.test.js`。
+
 对照表由 `ai/term-table.js` 在预处理阶段查表，按 `evaluateTermRow` 四类结论分流：
 1. **`term-only`**：整行只有术语，直接出结果，**跳过模型**。
 2. **`consistent`**：术语一致但整行不止术语，注入术语后交模型。
@@ -197,7 +206,7 @@
 - 章级判定与模型无关，构建期算一次落盘到 `translation-compare.json` 顶层 `speechHabits` 块；指纹过期才回退现算。改动判定语义递增 `LAYER_VERSION`（当前为 **5**）。
 - **按角色收窄**（`speechHabitBlockForRow`）：单行提示词只带“本行提到了该角色”或“本行原文出现了其任一口癖”的角色规则。收窄单位为角色而非单条口癖。
 - **口癖位置判据**（`hasHabitOccurrence`）：句末语气词必须落在句末；单字汉字口癖必须落在词首；判定前先剥掉注音标记。
-- 说话习惯表支持表格文件与内化模块两种形态，示范档案内化在 `profiles/demo.js` 中。`-` 是明确不作特殊处理，保留为 `noSpecialHandling`。
+- 说话习惯表与对照表统一经 `core/spreadsheet.js` 读取外部表格；档案只持有规范和作用范围，不持有表条目。`-` 是明确不作特殊处理，保留为 `noSpecialHandling`。
 - 说话人判断段里“只作线索”的候选按真实原因（`clue-only`、`none`、`locked`）分组说明。
 
 ---

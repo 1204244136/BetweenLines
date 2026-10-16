@@ -7,7 +7,7 @@
  * 其说话习惯就很可能出现在这一章的台词里——所以判定单位是章（或整卷）。
  *
  * 用法：
- *   node scripts/speech-habit.js                          # 用默认特化档案声明的表，按章汇总
+ *   node scripts/speech-habit.js                          # 用当前项目生成前选择的表，按章汇总
  *   node scripts/speech-habit.js --profile demo --all      # 列出全部章与疑似流失行明细
  *   node scripts/speech-habit.js --by volume               # 按整卷汇总
  *   node scripts/speech-habit.js --table D:\habits.xlsx --json --out report.json
@@ -17,7 +17,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const { getActiveProject, resolveProjectArtifact } = require("./project-store");
+const { getActiveProject, resolveProjectArtifact, readProjectSelection } = require("./project-store");
 const { loadActiveCompareData } = require("./lib/offline-cli");
 const {
   loadSpeechTables,
@@ -55,8 +55,8 @@ function usage() {
     "",
     "  node scripts/speech-habit.js [--table <文件>]... [--profile <id>] [--by chapter|volume] [--limit N] [--all] [--live] [--verify-source] [--json] [--out <文件>]",
     "",
-    "  --table    说话习惯表（xlsx/csv/tsv/json），可重复；缺省取特化档案声明的表",
-    "  --profile  特化档案 id（决定默认表与作用范围）",
+    "  --table    说话习惯表（xlsx/csv/tsv/json），可重复；缺省取当前项目生成前选择的表",
+    "  --profile  特化档案 id（决定规范与作用范围）",
     "  --by       判定单位：chapter（默认，按章命中人名）或 volume（整卷）",
     "  --all      输出所有章的明细（默认只列有启用角色或疑似流失的章）",
     "  --live     忽略快照里构建期算好的结果，按当前表重算（默认直接用构建期结果，与页面/AI 同源）",
@@ -85,13 +85,14 @@ function main() {
   }
 
   const profile = resolveProfile(options.profileId || undefined);
-  const tables = normalizeSpeechTablePaths([
-    ...options.tables,
+  const { project, file, rows, speechHabits } = loadRows();
+  const selection = readProjectSelection(project.projectKey);
+  const tables = normalizeSpeechTablePaths(options.tables.length ? options.tables : (selection.speechTables ?? [
     ...(profile.speechTables || []),
     ...String(process.env.TRANSCOMPARATOR_SPEECH_TABLES || "").split(/[;\n]/),
-  ]);
+  ]));
   if (!tables.length) {
-    console.error(`没有可用的说话习惯表：特化档案「${profile.name}」没有声明 speechTables，也没有 --table / TRANSCOMPARATOR_SPEECH_TABLES。`);
+    console.error("没有可用的说话习惯表：请在控制台选择后重新生成，或用 --table 临时指定。");
     return 1;
   }
 
@@ -102,7 +103,6 @@ function main() {
     return 1;
   }
 
-  const { project, file, rows, speechHabits } = loadRows();
   const volume = volumeKeyFromFiles(project.files);
   // 默认消费构建期算好的结果：页面、AI 任务与这个脚本看到的是同一份结论，避免三处各算一遍。
   // 指纹按本次实际加载的表重算（落盘块里只有文件名，本机路径不回读产物）。
@@ -127,7 +127,7 @@ function main() {
     if (layerMatch && layerMatch.stale) {
       console.warn("提示：说话习惯表在构建之后被修改过，本次按最新表重算；重新构建工作台可让页面同步。");
     } else if (!speechHabits) {
-      console.warn("提示：当前快照里没有说话习惯层（老快照或构建时该档案还没声明表）；本次按最新表现算，重新构建工作台可让页面也显示。");
+      console.warn("提示：当前快照里没有说话习惯层（老快照或构建时未挂载表）；本次按最新表现算，重新构建工作台可让页面也显示。");
     }
     chapters = summarizeChapters({ rows, tables: loaded, volume, scope: options.scope });
   }

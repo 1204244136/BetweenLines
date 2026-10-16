@@ -116,12 +116,13 @@ function compactChapter(summary, dictionary) {
  * 构建期：为每个声明了说话习惯表的档案算出章级判定块。
  * @returns {{ version: number, generatedAt: string, byProfile: Record<string, object>, errors: string[] }}
  */
-function buildSpeechHabitLayer({ rows = [], projectFiles = {}, profiles = null, envTables = [] } = {}) {
+function buildSpeechHabitLayer({ rows = [], projectFiles = {}, profiles = null, envTables = [], selectedTables = null } = {}) {
   const byProfile = {};
   const errors = [];
   const candidates = tableSourceCandidates({
     profiles: profiles || listProfiles().map((item) => resolveProfile(item.id)),
     envTables,
+    selectedTables,
     tableKey: "speechTables",
     normalize: normalizeSpeechTablePaths,
     envName: "环境变量指定的说话习惯表",

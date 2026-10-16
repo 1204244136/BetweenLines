@@ -279,8 +279,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   </select>
                 </div>
                 <div class="ai-field ai-field--wide">
-                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
-                  <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
+                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
+                  <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="控制台生成前选择的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
                 </div>
               </div>
             </section>

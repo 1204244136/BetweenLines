@@ -9,6 +9,7 @@ const {
 const { AI_CONCURRENCY_LIMITS, resolveConcurrencyCap } = require("./concurrency-limits");
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
 const fs = require("fs");
+const path = require("path");
 const { diffWordsWithSpace, diffChars } = require("diff");
 const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
@@ -34,7 +35,7 @@ const {
 } = require("./speech-habit");
 const { rowSignature, sameProjectSnapshot } = require("../../../core/project-context");
 const { toPathList } = require("../layer-sources");
-const { resolveProjectArtifact } = require("../../../storage/project-store");
+const { resolveProjectArtifact, readProjectSelection } = require("../../../storage/project-store");
 const {
   detectModelCapabilities,
   isReasoningModel,
@@ -337,6 +338,7 @@ function pushLog(line) {
 }
 
 function clientStatus(options = {}) {
+  const tableSelection = options.includeTermTables === false ? null : projectTableSelection(options);
   // 页面刷新、控制台重启之后内存里可能一条结果都没有：按请求方自报的项目身份
   // 把落盘的结果装回来，让工作台还能把成果重新认领回去，而不是只剩浏览器内存那一份。
   adoptPersistedResults(options.projectKey, options.rowsSignature);
@@ -410,8 +412,8 @@ function clientStatus(options = {}) {
     lowScoreShifted: status.lowScoreShifted,
     lowScoreCauses: status.lowScoreCauses,
     termTables: status.termTables,
-    termTableStatus: options.includeTermTables === false ? null : termTableStatusFor(options.profileId || status.profileId),
-    speechHabitStatus: options.includeTermTables === false ? null : speechHabitStatusFor(options.profileId || status.profileId),
+    termTableStatus: options.includeTermTables === false ? null : termTableStatusFor(options.profileId || status.profileId, tableSelection),
+    speechHabitStatus: options.includeTermTables === false ? null : speechHabitStatusFor(options.profileId || status.profileId, tableSelection),
     speechHabitChapters: status.speechHabitChapters,
     speechHabitCharacters: status.speechHabitCharacters,
     skippedDone: status.skippedDone,
@@ -446,6 +448,10 @@ function readRows(inputProject = {}) {
     rowsSignature: inputProject.rowsSignature,
   });
   const data = JSON.parse(fs.readFileSync(compareJsonFile, "utf8"));
+  const selectionFile = path.join(path.dirname(compareJsonFile), "input-selection.json");
+  const selection = fs.existsSync(selectionFile) ? JSON.parse(fs.readFileSync(selectionFile, "utf8")) : {};
+  // 快照的显式选择优先于请求、档案和环境变量；空数组同样是有效选择。
+  applyTableSelection(inputProject, selection);
   return {
     // 构建期算好的说话习惯层（可能有，也可能没有：老快照或该档案没声明表）。
     speechHabits: data.speechHabits || null,
@@ -455,6 +461,22 @@ function readRows(inputProject = {}) {
     rows: data.rows || [],
     labels: data.labels || {},
   };
+}
+
+function applyTableSelection(config, selection) {
+  if (Object.hasOwn(selection, "termTables")) config.termTables = normalizeTermTablePaths(toPathList(selection.termTables));
+  if (Object.hasOwn(selection, "speechTables")) config.speechTables = normalizeSpeechTablePaths(toPathList(selection.speechTables));
+}
+
+function projectTableSelection(options) {
+  const projectKey = options.projectKey || status.projectKey;
+  if (!projectKey) return null;
+  try {
+    const selection = readProjectSelection(projectKey, { rowsSignature: options.rowsSignature || status.rowsSignature });
+    return selection || { termTables: [], speechTables: [] };
+  } catch {
+    return { termTables: [], speechTables: [] };
+  }
 }
 
 function requireMatchingProjectSnapshot(inputProject, currentProject) {
@@ -496,7 +518,7 @@ function cleanConfig(input = {}) {
   const modelMeta = detectModelCapabilities(model, provider, null,
     input.modelMeta?.id === model ? input.modelMeta : (Array.isArray(input.modelMetadata) ? input.modelMetadata.find((item) => item?.id === model) : null));
   // 特化侧档案：未知 id 一律回落到默认档案，避免旧客户端或手填值把提示词打空。
-  // 档案决定默认提示词与两类辅助数据表，这里只解析一次。
+  // 档案决定默认提示词；这里的表来源仅作旧快照兼容，readRows 会覆盖为项目选择。
   const profile = resolveProfile(input.profileId);
   const profileId = profile.id;
   // 线上查证的官方站点：显式传入（测试/临时）> 环境变量（换站点）> 档案声明；顺序就是查询顺序。
@@ -2578,8 +2600,8 @@ function termTablesFor(config) {
  * 界面用的对照表状态：当前特化档案（加环境变量）声明了哪些表、能解析出多少条。
  * 不写日志，供状态轮询调用。
  */
-function termTableStatusFor(profileId) {
-  const files = normalizeTermTablePaths([
+function termTableStatusFor(profileId, selection = null) {
+  const files = normalizeTermTablePaths(selection && Object.hasOwn(selection, "termTables") ? toPathList(selection.termTables) : [
     ...toPathList(resolveProfile(profileId).termTables),
     ...toPathList(process.env.TRANSCOMPARATOR_TERM_TABLES),
   ]);
@@ -2608,9 +2630,9 @@ function loadSpeechTablesCached(files) {
   return tables;
 }
 
-function speechHabitStatusFor(profileId) {
+function speechHabitStatusFor(profileId, selection = null) {
   const profile = resolveProfile(profileId);
-  const files = normalizeSpeechTablePaths([
+  const files = normalizeSpeechTablePaths(selection && Object.hasOwn(selection, "speechTables") ? toPathList(selection.speechTables) : [
     ...toPathList(profile.speechTables),
     ...toPathList(process.env.TRANSCOMPARATOR_SPEECH_TABLES),
   ]);

@@ -564,6 +564,9 @@
       gap: 8px;
       align-items: end;
     }
+    #translationTablesPanel .row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
     .stack {
       display: grid;
       gap: 12px;
@@ -1008,6 +1011,27 @@
         </div>
       </div>
 
+      <div class="panel stack" id="translationTablesPanel">
+        <h2>辅助表格 <span class="section-kicker">可选</span></h2>
+        <div class="subtle">生成前选择；留空即不挂载。支持 XLSX、CSV、TSV、JSON，多个路径用分号分隔。</div>
+        <div class="field">
+          <label class="field__label" for="termTables">对照表</label>
+          <div class="row">
+            <input id="termTables" type="text" placeholder="未挂载" aria-label="对照表路径">
+            <button id="termTablesPick" class="btn" type="button">选择文件</button>
+            <button id="termTablesClear" class="btn" type="button">清空</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field__label" for="speechTables">说话习惯</label>
+          <div class="row">
+            <input id="speechTables" type="text" placeholder="未挂载" aria-label="说话习惯表路径">
+            <button id="speechTablesPick" class="btn" type="button">选择文件</button>
+            <button id="speechTablesClear" class="btn" type="button">清空</button>
+          </div>
+        </div>
+      </div>
+
       <div class="panel stack" id="translationWritebackPanel">
         <h2>写回选项</h2>
         <div class="check-grid">
@@ -1099,7 +1123,7 @@
   </dialog>
 
   <script>
-    const minimumApiVersion = 5;
+    const minimumApiVersion = 6;
     const state = {
       roleFiles: { jp: null, cn: null, tw: null },
       workbenchMode: localStorage.getItem("between-lines:workbench-mode") === "speaker-attribution"
@@ -1193,7 +1217,11 @@
       preserveBold: document.getElementById("preserveBold"),
       preserveNoteref: document.getElementById("preserveNoteref"),
       writebackBackup: document.getElementById("writebackBackup"),
+      translationTablesPanel: document.getElementById("translationTablesPanel"),
     };
+    for (const key of ["termTables", "speechTables"]) {
+      for (const suffix of ["", "Pick", "Clear"]) ids[key + suffix] = document.getElementById(key + suffix);
+    }
     for (const role of ["jp", "cn", "tw"]) {
       for (const suffix of ["PickMenu", "LocalButton", "LocalRow", "LocalPath", "LocalApply", "NativeFileButton", "NativeFolderButton", "ImportStatus"]) {
         ids[`${role}${suffix}`] = document.getElementById(`${role}${suffix}`);
@@ -1452,6 +1480,7 @@
       ids.speakerBilingualScope.setAttribute("aria-pressed", String(speakerBilingual));
       ids.speakerMonolingualScope.setAttribute("aria-pressed", String(!speakerBilingual));
       ids.translationMarkupPanel.hidden = speaker;
+      ids.translationTablesPanel.hidden = speaker;
       renderImportPanel();
       ids.generateKicker.textContent = speaker
         ? (speakerBilingual ? "说话人归属 · 双语" : "说话人归属 · 单语")
@@ -1700,6 +1729,8 @@
             noteref: ids.preserveNoteref.checked,
           },
           writebackBackup: ids.writebackBackup ? ids.writebackBackup.checked : false,
+          termTables: tablePaths("termTables"),
+          speechTables: tablePaths("speechTables"),
         }),
       });
       const data = await response.json();
@@ -1776,6 +1807,7 @@
       ids.preserveBold.checked = saved.inlineMarkup?.bold !== false;
       ids.preserveNoteref.checked = saved.inlineMarkup?.noteref !== false;
       if (ids.writebackBackup) ids.writebackBackup.checked = Boolean(saved.writebackBackup);
+      for (const key of ["termTables", "speechTables"]) ids[key].value = (saved[key] || []).join("; ");
       state.saved = validateUnique();
       state.savedSettingsLoaded = true;
     }
@@ -1820,6 +1852,12 @@
         if (data.ok) {
           state.serverApiVersion = Number(data.apiVersion) || 0;
           const nativePicker = Boolean(data.nativePicker);
+          for (const key of ["termTables", "speechTables"]) {
+            ids[key + "Pick"].hidden = !nativePicker;
+            for (const suffix of ["", "Pick", "Clear"]) {
+              ids[key + suffix].disabled = Boolean(data.pipeline?.running) || state.uploading.size > 0;
+            }
+          }
           for (const role of ["jp", "cn", "tw"]) {
             ids[`${role}NativeFileButton`].hidden = !nativePicker;
             ids[`${role}NativeFolderButton`].hidden = !nativePicker;
@@ -2111,6 +2149,48 @@
         validateUnique();
         setRunStatus("EPUB 标记保留设置已变更，请重新生成。", "warn");
       });
+    }
+    function tablePaths(key) {
+      return ids[key].value.split(/[;\n]/).map((value) => value.trim()).filter(Boolean);
+    }
+
+    function tablesChanged() {
+      state.saved = false;
+      setRunStatus("辅助表格已变更，重新生成后生效。", "warn");
+    }
+
+    for (const key of ["termTables", "speechTables"]) {
+      ids[key].addEventListener("input", tablesChanged);
+      ids[key + "Clear"].addEventListener("click", () => { ids[key].value = ""; tablesChanged(); });
+      ids[key + "Pick"].addEventListener("click", () => pickTable(key));
+    }
+
+    async function pickTable(key) {
+      if (state.uploading.size || state.pipelineRunning) return;
+      state.uploading.add(key);
+      validateUnique();
+      ids[key + "Pick"].disabled = true;
+      setRunStatus("请在系统窗口中选择辅助表格。", "warn");
+      try {
+        const response = await apiFetch("/api/pick-table", {
+          method: "POST",
+          body: JSON.stringify({ kind: key, currentPath: tablePaths(key)[0] || "" }),
+        });
+        const data = await response.json();
+        if (!data.ok) throw new Error(data.error);
+        if (!data.canceled) {
+          ids[key].value = [...new Set([...tablePaths(key), data.file.path])].join("; ");
+          tablesChanged();
+        } else {
+          setRunStatus("已取消选择，保留原挂载。", "");
+        }
+      } catch (error) {
+        setRunStatus(error.message, "error");
+      } finally {
+        state.uploading.delete(key);
+        ids[key + "Pick"].disabled = false;
+        validateUnique();
+      }
     }
     if (ids.writebackBackup) {
       ids.writebackBackup.addEventListener("change", async () => {

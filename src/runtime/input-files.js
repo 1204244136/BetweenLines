@@ -54,6 +54,7 @@ function pickNativePath(mode, options = {}) {
     "-Mode", mode === "folder" ? "folder" : "file",
     "-ClientGuid", roleClientGuid(options.role),
   ];
+  if (options.tables) args.push("-Tables");
   if (options.initialDir && fs.existsSync(options.initialDir)) {
     args.push("-InitialDir", options.initialDir);
   }
@@ -166,6 +167,8 @@ function saveInputSelection(payload) {
       ...(payload.inlineMarkup || {}),
     },
     writebackBackup: Boolean(payload.writebackBackup),
+    termTables: payload.termTables,
+    speechTables: payload.speechTables,
   });
   saveSelection(selection);
   return { selection, selectionFile };

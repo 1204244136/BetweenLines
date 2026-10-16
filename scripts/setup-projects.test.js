@@ -118,7 +118,7 @@ test("轮询 /api/status 后自动切到新发布的项目", async () => {
   ui.context.fetch = async () => ({
     json: async () => ({
       ok: true,
-      apiVersion: 5,
+      apiVersion: 6,
       projects: [generated, { ...previous, active: false }],
       activeProjectKey: "s3-06",
       saved: null,

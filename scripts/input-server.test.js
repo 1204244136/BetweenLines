@@ -63,7 +63,7 @@ test("状态接口暴露项目 API 版本与已完成项目槽位", async () => 
     const response = await fetch(`http://${host}:${address.port}/api/status`);
     const data = await response.json();
     assert.equal(response.status, 200);
-    assert.equal(data.apiVersion, 5);
+    assert.equal(data.apiVersion, 6);
     assert.ok(Array.isArray(data.projects));
     assert.ok(Object.hasOwn(data.pipeline, "completedProject"));
     assert.ok(Object.hasOwn(data, "speaker"));

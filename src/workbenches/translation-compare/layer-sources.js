@@ -1,5 +1,6 @@
 /**
- * 构建期「表层」的公共部分：从特化档案声明 + 环境变量解析出要算哪些表。
+ * 构建期「表层」的公共部分：优先使用生成前显式选择的项目表。
+ * selectedTables 为 [] 时没有候选，不回落；null 仅保留旧快照/离线调用的档案兼容。
  *
  * 说话习惯层与对照表层的取表口径必须一致，否则同一张表在两层里会被判成不同的来源：
  * - 顺序固定为「档案声明 → 环境变量」，同一路径只算一次（大小写与相对写法归一后再去重）；
@@ -33,6 +34,7 @@ function tableFilesForProfile(profile, { tableKey, envTables = [], normalize = (
 function tableSourceCandidates({
   profiles = null,
   envTables = [],
+  selectedTables = null,
   tableKey,
   normalize,
   envName,
@@ -40,11 +42,13 @@ function tableSourceCandidates({
 } = {}) {
   const candidates = [];
   for (const profile of profiles) {
-    const files = tableFilesForProfile(profile, { tableKey, envTables, normalize });
+    const files = selectedTables === null
+      ? tableFilesForProfile(profile, { tableKey, envTables, normalize })
+      : normalize(toPathList(selectedTables));
     if (!files.length) continue;
     candidates.push({ id: profile.id, name: profile.name, files, ...decorate(profile) });
   }
-  const envFiles = normalize(toPathList(envTables));
+  const envFiles = selectedTables === null ? normalize(toPathList(envTables)) : [];
   if (envFiles.length && !candidates.some((item) => item.id === "env")) {
     candidates.push({ id: "env", name: envName, files: envFiles, ...decorate(null) });
   }

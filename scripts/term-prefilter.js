@@ -4,7 +4,7 @@
  * 不调用任何模型。用途是在真正跑 AI 之前先确认表格命中率与冲突是否可信。
  *
  * 用法：
- *   node scripts/term-prefilter.js                        # 用默认特化档案声明的表
+ *   node scripts/term-prefilter.js                        # 用当前项目生成前选择的表
  *   node scripts/term-prefilter.js --table D:\t.xlsx      # 指定表（可重复）
  *   node scripts/term-prefilter.js --profile demo         # 指定特化档案（用档案 id；本机叠加档案沿用基底 id）
  *   node scripts/term-prefilter.js --target tw            # 三语下指定目标列（默认 cn，与运行期一致）
@@ -17,7 +17,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const { getActiveProject, resolveProjectArtifact } = require("./project-store");
+const { getActiveProject, resolveProjectArtifact, readProjectSelection } = require("./project-store");
 const { loadActiveCompareData } = require("./lib/offline-cli");
 const { loadTermTables, evaluateTermRow, describeTermHit, displayTermPair, termTableSummary, normalizeTermTablePaths } = require("../src/workbenches/translation-compare/ai/term-table");
 const { termTargetKeyFor, conflictAnalysisHead } = require("../src/workbenches/translation-compare/ai/term-prefilter");
@@ -47,8 +47,8 @@ function usage() {
     "",
     "  node scripts/term-prefilter.js [--table <文件>]... [--profile <id>] [--target cn|tw] [--from-snapshot] [--limit N] [--all] [--json] [--out <文件>]",
     "",
-    "  --table          对照表文件（xlsx/csv/tsv/json），可重复；缺省取特化档案声明的表",
-    "  --profile        特化档案 id（决定默认对照表与提示词口径）",
+    "  --table          对照表文件（xlsx/csv/tsv/json），可重复；缺省取当前项目生成前选择的表",
+    "  --profile        特化档案 id（决定规范与提示词口径）",
     "  --target         目标列：三语下 cn（非原文 B）或 tw（非原文 C）；双语恒为 cn",
     "  --from-snapshot  只输出构建期落盘的文本汇总（与页面徽标同源），不重新查表",
     "                   不能与 --json、--out、--limit、--all 组合（-o、-n 同样不支持）",
@@ -112,12 +112,11 @@ function main() {
   const bilingual = project.comparisonMode === "bilingual";
   const proofreadMode = bilingual ? "bilingual" : "trilingual";
   const targetKey = termTargetKeyFor(proofreadMode, options.target);
-  // 本次实际要用的表：--table 优先，其次档案声明，最后环境变量。与构建期同一口径。
-  const tables = normalizeTermTablePaths([
-    ...options.tables,
+  const selection = readProjectSelection(project.projectKey);
+  const tables = normalizeTermTablePaths(options.tables.length ? options.tables : (selection.termTables ?? [
     ...(profile.termTables || []),
     ...String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
-  ]);
+  ]));
 
   if (options.fromSnapshot) {
     return reportFromSnapshot({
@@ -130,7 +129,7 @@ function main() {
   }
 
   if (!tables.length) {
-    console.error(`没有可用的对照表：特化档案「${profile.name}」没有声明 termTables，也没有 --table / TRANSCOMPARATOR_TERM_TABLES。`);
+    console.error("没有可用的对照表：请在控制台选择后重新生成，或用 --table 临时指定。");
     return 1;
   }
 

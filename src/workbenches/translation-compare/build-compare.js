@@ -35,7 +35,7 @@ async function main() {
   const speechHabits = buildSpeechHabitLayer({
     rows: exportRows(rows, comparisonMode),
     projectFiles: scopedSelection.files || {},
-    envTables: String(process.env.TRANSCOMPARATOR_SPEECH_TABLES || "").split(/[;\n]/),
+    selectedTables: selection.speechTables,
   });
   for (const [profileId, entry] of Object.entries(speechHabits.byProfile || {})) {
     console.log(`说话习惯（构建期）${profileId}：${entry.summary.chapters} 章 / ${entry.summary.activatedChapters} 章命中 ${entry.summary.activatedCharacters.length} 个角色 / ${entry.summary.missRows} 行疑似流失`);
@@ -46,7 +46,7 @@ async function main() {
   reportProgress(67, "计算对照表层");
   const termPrefilter = buildTermLayer({
     rows: exportRows(rows, comparisonMode),
-    envTables: String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
+    selectedTables: selection.termTables,
     comparisonMode,
   });
   for (const [profileId, entry] of Object.entries(termPrefilter.byProfile || {})) {
@@ -139,16 +139,17 @@ function rebuildCompareHtmlFromSnapshot(snapshotDir, options = {}) {
   const projectContext = compareData.project
     || createProjectContext({ ...selection, comparisonMode }, compareData.rows || []);
   // 对照表层有版本语义：展示口径或命中口径升级后，旧快照里的术语对不能继续原样复用。
-  // 这里按当前档案里的表重新计算一次；算不出任何表时保留旧块，避免把页面退化成“无对照表”。
+  // 新项目按生成前选择重算（空数组也生效）；旧快照沿用档案来源与缺表兼容。
   let termPrefilter = compareData.termPrefilter || null;
   if ((termPrefilter?.version || 0) !== TERM_LAYER_VERSION && Array.isArray(compareData.rows) && compareData.rows.length) {
     const rebuiltTerms = buildTermLayer({
       rows: compareData.rows,
       profiles: options.profiles || null,
       envTables: String(process.env.TRANSCOMPARATOR_TERM_TABLES || "").split(/[;\n]/),
+      selectedTables: selection.termTables ?? null,
       comparisonMode,
     });
-    if (Object.keys(rebuiltTerms.byProfile || {}).length) {
+    if (Object.hasOwn(selection, "termTables") || Object.keys(rebuiltTerms.byProfile || {}).length) {
       termPrefilter = rebuiltTerms;
       compareData.termPrefilter = rebuiltTerms;
       fs.writeFileSync(jsonFile, JSON.stringify(compareData, null, 2), "utf8");

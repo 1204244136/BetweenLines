@@ -45,7 +45,6 @@ const { buildMessages, clientStatus } = require("./ai-proofread");
 const { makeHtml } = require("./build-compare");
 const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
 const { TERM_BLOCK_PREFIX, termGuidanceFor } = require("../src/workbenches/translation-compare/ai/term-prefilter");
-const { loadSpeechTables } = require("../src/workbenches/translation-compare/ai/speech-habit");
 
 const testProfileName = "作品专有档案（测试）";
 const testProfileMarker = `【成品校对规范：${testProfileName}】`;
@@ -222,12 +221,12 @@ test("仓库自带的示范档案展示作品专有档案的写法", () => {
   assert.match(demoPrompt, /某魔法的禁书目录/);
   // 示范档案只为一个「离开那个名字就无从谈起的专有规则」开 `characters` 例外：茵蒂克丝的科技盲学舌
   // （上游 index-X `docs/translation-spec.md` 五.9，取值见该档案的「本作品专有事实」）。普通角色规则走
-  // 说话习惯表（表就内化在该档案自己身上），不得再为口癖一类条目开实体条目；实体闸门本身的覆盖由
+  // 控制台挂载的外部说话习惯表，不得再为口癖一类条目开实体条目；实体闸门本身的覆盖由
   // 探针档案负责（proofread-prompt-layers.test.js）。
   assert.deepEqual(profileEntities(demo).map((entity) => entity.id), ["茵蒂克丝"]);
-  const demoTable = loadSpeechTables(demo.speechTables);
-  assert.deepEqual(demoTable.errors, []);
-  assert.equal(demoTable.entries.length > 0, true, "示范档案的说话习惯表内化在档案文件里");
+  const builtInDemo = require("../src/workbenches/translation-compare/ai/profiles/demo");
+  assert.equal(Object.hasOwn(builtInDemo, "speechTables"), false);
+  assert.equal(Object.hasOwn(builtInDemo, "entries"), false);
 });
 
 test("自定义提示词与特化档案合并时不会出现两套规范或两份输出约定", () => {
@@ -297,7 +296,7 @@ test("AI 面板按注册表渲染特化规范下拉，并按档案嵌入默认�
   assert.match(html, /<label for="aiProfile">特化规范<\/label>/);
   // 面板上能看到对照表状态，一眼确认表有没有生效。
   assert.match(html, /id="aiTermTableHint"/);
-  assert.match(html, /特化规范里声明的译名对照表/);
+  assert.match(html, /控制台生成前选择的译名对照表/);
   assert.match(html, /<option value="novel" selected>小说成品（简中 EPUB）<\/option>/);
   assert.match(html, new RegExp(`<option value="test-profile">${testProfileName}</option>`));
 

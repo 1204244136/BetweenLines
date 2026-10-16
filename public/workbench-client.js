@@ -4155,7 +4155,7 @@
       if (!status) {
         hint.dataset.state = builtSummary ? "ok" : "pending";
         hint.textContent = builtSummary ? "说话习惯：构建期 " + builtSummary : "说话习惯：检测中…";
-        hint.title = "特化规范里声明的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。";
+        hint.title = "控制台生成前选择的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。";
         return;
       }
       const files = status.files || [];
@@ -4164,8 +4164,8 @@
       const scopeLabel = status.scope === "volume" ? "按卷" : "按章";
       if (!files.length) {
         hint.dataset.state = "off";
-        hint.textContent = "说话习惯：未声明";
-        hint.title = "当前特化规范没有声明 speechTables。可在该档案里加 speechTables 路径，或用环境变量 TRANSCOMPARATOR_SPEECH_TABLES 指向表格文件。";
+        hint.textContent = "说话习惯：未挂载";
+        hint.title = "本项目没有挂载说话习惯表。可在控制台选择辅助表格后重新生成。";
         return;
       }
       if (!status.entries) {
@@ -4187,7 +4187,7 @@
         // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
         hint.dataset.state = built ? "ok" : "pending";
         hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
-        hint.title = "特化规范里声明的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。";
+        hint.title = "控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。";
         return;
       }
       const files = status.files || [];
@@ -4195,8 +4195,8 @@
       const names = files.map((file) => String(file).split(/[\\/]/).pop()).join("、");
       if (!files.length) {
         hint.dataset.state = "off";
-        hint.textContent = "对照表：未声明";
-        hint.title = "当前特化规范没有声明 termTables。可在该档案里加 termTables 路径，或用环境变量 TRANSCOMPARATOR_TERM_TABLES 指向表格文件。";
+        hint.textContent = "对照表：未挂载";
+        hint.title = "本项目没有挂载对照表。可在控制台选择辅助表格后重新生成。";
         return;
       }
       if (!status.entries) {

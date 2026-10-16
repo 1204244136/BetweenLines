@@ -143,44 +143,9 @@ function normalizeSpeechEntry(record) {
   return entry;
 }
 
-/**
- * 内化的说话习惯表：一个被 require 的模块，直接给出条目数组。
- * 表可以长在自己的档案文件里（示范档案就是这么做的：`speechTables: [require.resolve(__filename)]`
- * ——角色数据与规范正文收在同一个文件，不再为数据另开文件），也可以是仓库内单独的数据模块。
- * 与表格路径共用同一条消费链——指纹照旧按该文件的 mtime/size 算，因此改条目后运行期会判过期并提示重建。
- * 形态判定：导出对象带 `entries` 数组即视为内化表；带路径的表格仍走 `readRecords`。
- */
-function loadSpeechModule(file) {
-  const resolved = path.resolve(file);
-  // 先清掉本模块的缓存再 require：同一进程里表被改过时（运行期按指纹发现过期后重算）能读到新内容。
-  delete require.cache[resolved];
-  const module = require(resolved);
-  if (!module || !Array.isArray(module.entries)) {
-    throw new Error(`内化的说话习惯表必须导出 { entries: [...] }：${file}`);
-  }
-  const entries = module.entries.map((item) => normalizeSpeechEntry({
-    ...item,
-    // 内化表用的是字段名而不是表头，这里转成 readRecords 的记录形态，保证两条路径的归一化只有一份实现。
-    角色: item.character,
-    口癖: item.habit,
-    类型: item.type,
-    x版: item.versions?.x,
-    网翻: item.versions?.net,
-    "台版（转简中）": item.versions?.tw,
-    备注: item.memo,
-    小说首次出现: item.firstWork,
-  })).filter(Boolean);
-  if (!entries.length) throw new Error(`内化的说话习惯表没有可用条目（需要 entries[].character）：${file}`);
-  // 内化表可以直接长在档案文件里（示范档案就是这么做的：`speechTables: [require.resolve(__filename)]`），
-  // 那种情况下没有 `sheet`/`name` 可借，退回文件名——它只用于状态显示与日志，不参与判定。
-  const sheet = module.sheet || module.tableName || path.basename(resolved);
-  return { file: resolved, sheet, entries };
-}
-
 function loadSpeechTable(file) {
   const text = String(file || "").trim();
   if (!text) throw new Error("说话习惯表路径为空。");
-  if (/\.(js|cjs|mjs)$/i.test(text)) return loadSpeechModule(text);
   const { sheet, records } = readRecords(text);
   const entries = records.map(normalizeSpeechEntry).filter(Boolean);
   if (!entries.length) throw new Error(`说话习惯表没有可用条目（需要“角色”列）：${file}`);

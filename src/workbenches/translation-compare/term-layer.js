@@ -149,12 +149,13 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
  * 构建期：为每个声明了对照表的档案算出各变体下的命中判定。
  * @returns {{ version: number, generatedAt: string, byProfile: Record<string, object>, errors: string[] }}
  */
-function buildTermLayer({ rows = [], profiles = null, envTables = [], comparisonMode = "bilingual" } = {}) {
+function buildTermLayer({ rows = [], profiles = null, envTables = [], selectedTables = null, comparisonMode = "bilingual" } = {}) {
   const byProfile = {};
   const errors = [];
   const candidates = tableSourceCandidates({
     profiles: profiles || listProfiles().map((item) => resolveProfile(item.id)),
     envTables,
+    selectedTables,
     tableKey: "termTables",
     normalize: normalizeTermTablePaths,
     envName: "环境变量指定的对照表",

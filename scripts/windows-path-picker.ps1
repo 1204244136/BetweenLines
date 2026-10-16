@@ -1,6 +1,7 @@
 ﻿param(
   [ValidateSet("file", "folder")]
   [string]$Mode = "file",
+  [switch]$Tables,
   # 起始目录：调用方按导入入口（原文 / 主文本 / 参考文本）各自推导，空值表示沿用系统记忆。
   [string]$InitialDir = "",
   # 每个导入入口一个稳定 GUID，让 Windows 自身记住的「上次位置」也按入口分开。
@@ -132,7 +133,7 @@ namespace BetweenLines.NativePathPicker
             }
         }
 
-        public static string Pick(string mode, string initialDir, string clientGuid, bool check)
+        public static string Pick(string mode, string initialDir, string clientGuid, bool tables, bool check)
         {
             IFileDialog dialog = (IFileDialog)new FileOpenDialog();
             IShellItem result = null;
@@ -156,7 +157,9 @@ namespace BetweenLines.NativePathPicker
                 if (!pickFolder)
                 {
                     FilterSpec[] filters = new FilterSpec[] {
-                        new FilterSpec("支持的文本文件", "*.txt;*.epub;*.docx;*.html;*.htm;*.odt;*.md;*.markdown;*.rtf"),
+                        tables
+                            ? new FilterSpec("辅助表格", "*.xlsx;*.csv;*.tsv;*.json")
+                            : new FilterSpec("支持的文本文件", "*.txt;*.epub;*.docx;*.html;*.htm;*.odt;*.md;*.markdown;*.rtf"),
                         new FilterSpec("所有文件", "*.*")
                     };
                     dialog.SetFileTypes((uint)filters.Length, filters);
@@ -200,7 +203,7 @@ namespace BetweenLines.NativePathPicker
 # Windows PowerShell 5.1 needs this file saved as UTF-8 with BOM for localized labels.
 Add-Type -TypeDefinition $source -Language CSharp
 
-$selectedPath = [BetweenLines.NativePathPicker.Picker]::Pick($Mode, $InitialDir, $ClientGuid, $Check.IsPresent)
+$selectedPath = [BetweenLines.NativePathPicker.Picker]::Pick($Mode, $InitialDir, $ClientGuid, $Tables.IsPresent, $Check.IsPresent)
 if ($selectedPath) {
   [Console]::Out.Write($selectedPath)
 }

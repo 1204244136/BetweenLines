@@ -1,5 +1,6 @@
 const { sendJson, readJson } = require("../http-json");
-const { normalizePath } = require("../../ingest/input-selection");
+const path = require("path");
+const { normalizePath, normalizeTableSelection } = require("../../ingest/input-selection");
 const { filePayload, pickDirForRole, pickNativePath, rememberPickedDir, validateLocalInputPath, scanDirectory, saveInputSelection } = require("../input-files");
 
 // pickPath 可注入：系统选择窗口只能在 Windows 本机弹出，路由测试用假实现替掉它。
@@ -47,6 +48,19 @@ function createInputRoutes({ speaker, pickPath = pickNativePath }) {
       const target = normalizePath(picked);
       validateLocalInputPath(target);
       rememberPickedDir(role, target);
+      sendJson(res, 200, { ok: true, file: filePayload(target) });
+      return true;
+    }
+
+    if (req.method === "POST" && pathname === "/api/pick-table") {
+      const payload = await readJson(req);
+      const currentPath = typeof payload.currentPath === "string" ? normalizePath(payload.currentPath) : "";
+      const picked = await pickPath("file", { tables: true, initialDir: currentPath ? path.dirname(currentPath) : "" });
+      if (!picked) {
+        sendJson(res, 200, { ok: true, canceled: true });
+        return true;
+      }
+      const [target] = normalizeTableSelection([picked]);
       sendJson(res, 200, { ok: true, file: filePayload(target) });
       return true;
     }
