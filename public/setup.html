@@ -89,12 +89,20 @@
     main {
       display: grid;
       grid-template-columns: minmax(460px, 600px) minmax(0, 1fr);
-      gap: 28px;
-      padding: 18px 22px 28px;
-      align-items: start;
+      gap: 20px;
+      padding: 16px 22px 22px;
+      align-items: stretch;
     }
     section {
       min-width: 0;
+    }
+    .console-column {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .console-column > * {
+      flex: 0 0 auto;
     }
     .col-head {
       display: flex;
@@ -126,13 +134,16 @@
       overflow: hidden;
     }
     .panel {
-      padding: var(--space-4);
+      padding: 12px 14px;
+    }
+    .panel.stack > h2 {
+      margin: 0;
     }
     .work-panel {
       padding: 18px;
     }
     .scope-panel {
-      padding: 14px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface-subtle);
@@ -142,7 +153,7 @@
       align-items: baseline;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 10px;
+      margin-bottom: 6px;
     }
     .scope-head h2 {
       margin: 0;
@@ -161,8 +172,8 @@
       appearance: none;
       width: 100%;
       min-width: 0;
-      min-height: 108px;
-      padding: 10px;
+      min-height: 64px;
+      padding: 8px 10px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface);
@@ -176,7 +187,7 @@
       flex-direction: column;
       align-items: flex-start;
       justify-content: flex-start;
-      gap: 7px;
+      gap: 3px;
       transition: opacity 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
     }
     .scope-item:hover {
@@ -195,8 +206,8 @@
     .scope-item p {
       margin: 0;
       color: var(--muted);
-      font-size: 13px;
-      line-height: 1.55;
+      font-size: 12px;
+      line-height: 1.4;
       text-wrap: pretty;
     }
     .scope-item.trilingual,
@@ -210,7 +221,11 @@
       box-shadow: inset 3px 0 0 var(--focus), 0 0 0 1px color-mix(in srgb, var(--focus) 18%, transparent);
     }
     .import-panel {
-      padding: 18px;
+      padding: 12px 14px;
+      gap: 8px;
+    }
+    .import-panel .scope-head {
+      margin-bottom: 0;
     }
     .import-intro {
       margin: -2px 0 2px;
@@ -254,9 +269,9 @@
       white-space: nowrap;
     }
     .dropzone {
-      min-height: 116px;
+      min-height: 80px;
       height: auto;
-      padding: 12px 10px;
+      padding: 8px;
       border: 1px dashed var(--line-strong);
       border-radius: var(--radius);
       background: var(--surface);
@@ -342,11 +357,13 @@
       background: var(--surface);
     }
     .import-actions {
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      min-height: 30px;
+    }
+    .import-actions:has(> :not([hidden])) {
+      display: flex;
     }
     .import-actions .file-remove {
       flex: 0 0 auto;
@@ -567,6 +584,18 @@
     #translationTablesPanel .row {
       grid-template-columns: minmax(0, 1fr) auto auto;
     }
+    #translationTablesPanel .field {
+      grid-template-columns: 60px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+    }
+    #translationTablesPanel input {
+      min-width: 0;
+    }
+    #translationTablesPanel .btn {
+      width: auto;
+      font-size: 12px;
+    }
     .stack {
       display: grid;
       gap: 12px;
@@ -662,6 +691,23 @@
       display: grid;
       gap: 8px;
     }
+    #translationMarkupPanel .check-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    #translationMarkupPanel .check-item {
+      align-items: center;
+      gap: 6px;
+      padding: 8px;
+    }
+    #translationMarkupPanel .check-item input {
+      margin: 0;
+    }
+    #translationMarkupPanel .check-item label {
+      font-size: 13px;
+    }
+    #translationWritebackPanel {
+      margin-top: auto;
+    }
     .check-item {
       display: grid;
       grid-template-columns: 18px minmax(0, 1fr);
@@ -722,6 +768,19 @@
       color: var(--text);
       border-color: var(--line);
       line-height: 1.55;
+    }
+    #generatePanel {
+      flex: 1 1 auto;
+      grid-template-rows: repeat(6, max-content) minmax(160px, 1fr);
+    }
+    #generatePanel .scope-head {
+      margin-bottom: 0;
+    }
+    #generatePanel .log {
+      height: auto;
+      min-height: 160px;
+      /* 日志内容不参与两列的固有高度；超出分配空间后在框内滚动。 */
+      contain: size;
     }
     .log-head {
       display: flex;
@@ -836,6 +895,9 @@
       main {
         grid-template-columns: 1fr;
       }
+      #translationWritebackPanel {
+        margin-top: 0;
+      }
     }
     @media (max-width: 620px) {
       .scope-grid {
@@ -864,25 +926,24 @@
     <div class="subtle">管理输入文件与生成流程；逐行校对、AI 校对与说话人确认都在工作台中完成。</div>
   </header>
   <main>
-    <section class="stack">
+    <section class="console-column">
       <div class="col-head">
         <h2>输入配置</h2>
-        <span class="col-hint">扫描目录、分配角色、设定正文范围</span>
+        <span class="col-hint">选择工作台、输入文件与辅助表格</span>
       </div>
 
       <div class="scope-panel" aria-label="工作台类型" id="workbenchScopePanel">
         <div class="scope-head">
           <h2>工作台类型</h2>
-          <span class="subtle">选择输入与生成目标</span>
         </div>
         <div class="scope-grid">
           <button id="translationWorkbench" class="scope-item trilingual is-selected" type="button" aria-pressed="true">
             <strong>翻译比较</strong>
-            <p>对齐原文与多个非原文版本，逐行比较翻译差异。</p>
+            <p>对齐原文与译文，逐行校对。</p>
           </button>
           <button id="speakerWorkbench" class="scope-item bilingual" type="button" aria-pressed="false">
             <strong>说话人归属</strong>
-            <p>从单语或已预对齐的双语输入中确认每行说话人。</p>
+            <p>确认单语或双语输入中的说话人。</p>
           </button>
         </div>
       </div>
@@ -894,11 +955,11 @@
         <div class="scope-grid">
           <button id="trilingualScope" class="scope-item trilingual is-selected" type="button" aria-pressed="true">
             <strong>三语模式</strong>
-            <p>原文 + 主文本（待修改文本） + 参考文本。AI 修改主文本（待修改文本），并对照原文与参考文本。</p>
+            <p title="AI 修改主文本，并对照原文与参考文本。">原文 + 主文本 + 参考文本</p>
           </button>
           <button id="bilingualScope" class="scope-item bilingual" type="button" aria-pressed="false">
             <strong>双语模式</strong>
-            <p>原文 + 主文本（待修改文本）。AI 固定修改主文本（待修改文本），并对照原文。</p>
+            <p title="AI 修改主文本，并对照原文。">原文 + 主文本</p>
           </button>
         </div>
       </div>
@@ -906,30 +967,29 @@
       <div class="scope-panel" aria-label="说话人归属输入范围" id="speakerScopePanel" hidden>
         <div class="scope-head">
           <h2>输入范围</h2>
-          <span class="subtle">选择原文和主文本（待修改文本）的组合</span>
         </div>
         <div class="scope-grid">
           <button id="speakerBilingualScope" class="scope-item bilingual is-selected" type="button" aria-pressed="true">
-            <strong>原文 + 主文本（待修改文本）</strong>
-            <p>双语输入。原文用于参考，主文本（待修改文本）用于确认说话人；生成前会先自动预对齐。</p>
+            <strong>原文 + 主文本</strong>
+            <p title="原文用于参考，主文本用于确认说话人。">双语输入，生成前自动预对齐。</p>
           </button>
           <button id="speakerMonolingualScope" class="scope-item trilingual" type="button" aria-pressed="false">
-            <strong>只有主文本（待修改文本）</strong>
-            <p>单语输入。直接在主文本（待修改文本）上确认说话人，不执行双语预对齐。</p>
+            <strong>只有主文本</strong>
+            <p>单语输入，直接确认说话人。</p>
           </button>
         </div>
       </div>
 
-        <div class="panel stack import-panel" id="importPanel">
+      <div class="panel stack import-panel" id="importPanel">
         <div class="scope-head">
           <h2>导入文件</h2>
           <span id="importKicker" class="section-kicker">三语需要 3 个文件</span>
         </div>
-        <p id="importHint" class="import-intro">点击卡片直接登记本机文件或解压 EPUB 目录的原始路径；校对写回会直接修改原始文件。不再需要浏览器上传。</p>
+        <p id="importHint" class="import-intro">选择本机文件或解压的 EPUB 文件夹，写回直接修改原文件。</p>
         <div id="importGrid" class="import-grid" data-count="3">
           <div id="jpImportCard" class="import-card">
             <div class="import-card-head"><strong id="jpImportTitle">原文</strong><small id="jpImportRequired">必需</small></div>
-            <button id="jpDropzone" class="dropzone" type="button" aria-label="导入原文" aria-controls="jpPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <button id="jpDropzone" class="dropzone" type="button" aria-label="导入原文" aria-controls="jpPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="jpPickMenu" class="pick-menu" hidden>
               <div class="pick-menu-label">选择导入方式</div>
               <button id="jpNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
@@ -947,7 +1007,7 @@
           </div>
           <div id="cnImportCard" class="import-card">
             <div class="import-card-head"><strong id="cnImportTitle">主文本（待修改文本）</strong><small id="cnImportRequired">必需</small></div>
-            <button id="cnDropzone" class="dropzone" type="button" aria-label="导入主文本（待修改文本）" aria-controls="cnPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <button id="cnDropzone" class="dropzone" type="button" aria-label="导入主文本（待修改文本）" aria-controls="cnPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="cnPickMenu" class="pick-menu" hidden>
               <div class="pick-menu-label">选择导入方式</div>
               <button id="cnNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
@@ -965,7 +1025,7 @@
           </div>
           <div id="twImportCard" class="import-card">
             <div class="import-card-head"><strong id="twImportTitle">参考文本</strong><small>必需</small></div>
-            <button id="twDropzone" class="dropzone" type="button" aria-label="导入参考文本" aria-controls="twPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small></button>
+            <button id="twDropzone" class="dropzone" type="button" aria-label="导入参考文本" aria-controls="twPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="twPickMenu" class="pick-menu" hidden>
               <div class="pick-menu-label">选择导入方式</div>
               <button id="twNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
@@ -989,31 +1049,22 @@
         <div class="check-grid">
           <div class="check-item">
             <input id="preserveRuby" type="checkbox" checked>
-            <label for="preserveRuby">
-              保留注音标记
-              <small>&lt;ruby&gt;A&lt;rt&gt;B&lt;/rt&gt;&lt;/ruby&gt;</small>
-            </label>
+            <label for="preserveRuby" title="保留 &lt;ruby&gt;A&lt;rt&gt;B&lt;/rt&gt;&lt;/ruby&gt; 注音标记">保留注音</label>
           </div>
           <div class="check-item">
             <input id="preserveBold" type="checkbox" checked>
-            <label for="preserveBold">
-              保留加粗标记
-              <small>&lt;b&gt;A&lt;/b&gt;</small>
-            </label>
+            <label for="preserveBold" title="保留 &lt;b&gt;A&lt;/b&gt; 加粗标记">保留加粗</label>
           </div>
           <div class="check-item">
             <input id="preserveNoteref" type="checkbox" checked>
-            <label for="preserveNoteref">
-              保留注释标记
-              <small>&lt;a epub:type="noteref" ...&gt;&lt;sup&gt;㊟&lt;/sup&gt;&lt;/a&gt;</small>
-            </label>
+            <label for="preserveNoteref" title="保留译注链接及其上标标记">保留注释</label>
           </div>
         </div>
       </div>
 
       <div class="panel stack" id="translationTablesPanel">
         <h2>辅助表格 <span class="section-kicker">可选</span></h2>
-        <div class="subtle">生成前选择；留空即不挂载。支持 XLSX、CSV、TSV、JSON，多个路径用分号分隔。</div>
+        <div class="subtle" title="生成前选择；留空即不挂载，多个路径用分号分隔。">XLSX / CSV / TSV / JSON；多文件用分号分隔。</div>
         <div class="field">
           <label class="field__label" for="termTables">对照表</label>
           <div class="row">
@@ -1037,16 +1088,15 @@
         <div class="check-grid">
           <div class="check-item">
             <input id="writebackBackup" type="checkbox">
-            <label for="writebackBackup">
+            <label for="writebackBackup" title="写回前为原文件生成 .bak 备份副本；与项目绑定，默认关闭。">
               写回自动备份
-              <small>写回修改时先为原文件生成 .bak 备份副本；与项目绑定，默认关闭</small>
             </label>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="stack">
+    <section class="console-column">
       <div class="col-head">
         <h2>生成与运行</h2>
         <span class="col-hint">查看文件、生成工作台</span>
@@ -1457,13 +1507,7 @@
       ids.importKicker.textContent = speaker
         ? (speakerBilingual ? "双语需要 2 个文件" : "单语需要 1 个文件")
         : (state.comparisonMode === "bilingual" ? "双语需要 2 个文件" : "三语需要 3 个文件");
-      ids.importHint.textContent = speaker
-        ? (speakerBilingual
-          ? "导入原文和主文本（待修改文本）；支持 EPUB 压缩包或解压后的 EPUB 文件夹。"
-          : "只导入主文本（待修改文本）；支持 EPUB 压缩包或解压后的 EPUB 文件夹。")
-        : (state.comparisonMode === "bilingual"
-          ? "分别导入原文和主文本（待修改文本）；支持文件、EPUB 压缩包或解压后的 EPUB 文件夹。"
-          : "分别导入原文、主文本（待修改文本）和参考文本；支持文件、EPUB 压缩包或解压后的 EPUB 文件夹。");
+      ids.importHint.textContent = "选择本机文件或解压的 EPUB 文件夹，写回直接修改原文件。";
     }
 
     function renderWorkbenchMode() {
@@ -1684,7 +1728,7 @@
             : "写回已导入副本";
           dropzone.innerHTML = `<span class="import-selection-kind">${inputKindLabel(file)}</span><strong>${escapeHtml(file.name)}</strong><small>${formatSize(file.size)} · ${writebackLabel}</small>`;
         } else {
-          dropzone.innerHTML = "<span>选择文件或 EPUB 文件夹</span><small>两种方式使用相同的导入和写回流程</small>";
+          dropzone.innerHTML = "<span>选择文件或 EPUB 文件夹</span>";
         }
         // 卡片不再整行显示本机地址，完整路径改为悬停时由浏览器提示。
         dropzone.title = (file && !uploading) ? (file.path || "") : "";
