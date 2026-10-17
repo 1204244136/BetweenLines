@@ -1307,6 +1307,7 @@
           aiIds.stage3Preset.title = "选择阶段三候选预设，点击添加后启用";
           aiIds.stage3Card?.classList.remove("is-disabled");
         }
+        syncEnhancedSelect(aiIds.stage3Preset);
       }
       const pill2 = document.getElementById("stage2StatusPill");
       if (pill2 && pill2.dataset.state !== "running") {

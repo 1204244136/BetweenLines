@@ -112,6 +112,58 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.equal(config.arbiterConfig, null);
 });
 
+test("阶段三级联：可见模型下拉随阶段二添加、移除和恢复同步解锁", async () => {
+  const ui = createWorkbench(storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify([
+      { id: "review", name: "复审", protocol: "compatible", model: "review-model" },
+      { id: "arbiter", name: "仲裁", protocol: "compatible", model: "arbiter-model" },
+    ]),
+  }));
+  ui.run("restoreAiConfig()");
+  const select = ui.element("stage3PresetSelect");
+  // VM 夹具不解析父节点与 options；补齐挂载信息，实际增强、同步及交互仍运行页面脚本。
+  select.parentNode = { insertBefore() {} };
+  Object.defineProperty(select, "options", {
+    get: () => select.children.flatMap((child) => child.tagName === "OPTGROUP" ? child.children : [child]),
+  });
+  Object.defineProperty(select, "selectedIndex", {
+    get: () => select.options.findIndex((option) => option.value === select.value),
+  });
+  ui.run("enhanceSelect(aiIds.stage3Preset)");
+  const [, trigger, menu] = select.parentNode.children;
+  assert.equal(trigger.disabled, true);
+
+  ui.element("stage2PresetSelect").value = "review";
+  ui.element("stage2PresetAdd").click();
+  assert.equal(select.disabled, false);
+  assert.equal(trigger.disabled, false, "底层解锁时，可见按钮也必须立即解锁");
+  trigger.click();
+  assert.equal(menu.hidden, false, "可见下拉可以打开");
+  const option = menu.children.find((item) => item.dataset.value === "arbiter");
+  assert.ok(option, "下拉包含可添加的仲裁预设");
+  await menu.dispatch("click", { target: { closest: () => option } });
+  assert.equal(select.value, "arbiter");
+  assert.match(trigger.children[0].textContent, /仲裁/);
+  assert.equal(ui.run("aiConfig().arbiterConfig"), null, "仅切换候选仍不得启用阶段三");
+
+  ui.element("stage2PresetTags").children[0].children[2].click();
+  assert.equal(select.disabled, true);
+  assert.equal(select.value, "");
+  assert.equal(trigger.disabled, true, "移除阶段二最后一项时，可见按钮重新锁定");
+  assert.equal(trigger.children[0].textContent, "选择预设", "可见候选文案同步清空");
+  trigger.click();
+  assert.equal(menu.hidden, true);
+
+  ui.element("stage2PresetSelect").value = "review";
+  ui.element("stage2PresetAdd").click();
+  assert.equal(trigger.disabled, false, "重新添加阶段二后再次解锁");
+  ui.run("restoreAiConfig()");
+  assert.equal(select.disabled, false);
+  assert.equal(trigger.disabled, false, "恢复阶段二配置时，可见下拉不能残留中间禁用状态");
+  trigger.click();
+  assert.equal(menu.hidden, false);
+});
+
 test("阶段预设恢复：旧单值迁入适用列表，显式空数组保持未启用", () => {
   for (const explicitlyEmpty of [false, true]) {
     const saved = { stage1PresetId: "legacy", stage2PresetId: "legacy", stage3PresetId: "legacy" };
