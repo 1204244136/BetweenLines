@@ -29,8 +29,17 @@ function protectedTokens(text) {
   return canonicalText(text).match(/[a-z]+|\p{N}+/gu) || [];
 }
 
+function protectedPunctuation(text) {
+  return Array.from(
+    canonicalText(text).matchAll(/[\p{P}\p{S}]/gu),
+    (match) => [match.index, match[0]],
+  );
+}
+
 function canUseSimilarityPrefilter(left, right) {
   if (isStructuredText(left) || isStructuredText(right)) return false;
+  // 正文相似度会移除标点与符号；它们的增删、替换或移位必须先拦住，满分 score 也不能放行。
+  if (JSON.stringify(protectedPunctuation(left)) !== JSON.stringify(protectedPunctuation(right))) return false;
   const leftText = similarityText(left);
   const rightText = similarityText(right);
   const leftLength = Array.from(leftText).length;

@@ -17,6 +17,38 @@ const {
   publishProject,
 } = require("./project-store");
 
+const punctuationBody = "这是一段用于校验标点差异必须留给模型判断的足够长的正文内容";
+const punctuationDifferences = [
+  ["直角双引号改单引号", `『${punctuationBody}。』`, `「${punctuationBody}。」`],
+  ["西文双引号改单引号", `"${punctuationBody}。"`, `'${punctuationBody}。'`],
+  ["弯双引号改直双引号", `“${punctuationBody}。”`, `"${punctuationBody}。"`],
+  ["弯单引号改直单引号", `‘${punctuationBody}。’`, `'${punctuationBody}。'`],
+  ["西文正文的引号改变", "『Please review the information stored in the local reference library.』", "「Please review the information stored in the local reference library.」"],
+  ["句末点号改变", `${punctuationBody}。`, `${punctuationBody}？`],
+  ["标点增加", punctuationBody, `${punctuationBody}！`],
+  ["标点删除", `${punctuationBody}……`, punctuationBody],
+  ["标点数量改变", `${punctuationBody}……`, `${punctuationBody}…`],
+  ["同序标点位置改变", `这是一段，${punctuationBody}。`, `这是一段${punctuationBody}，。`],
+  ["符号改变", `${punctuationBody}☆`, `${punctuationBody}★`],
+];
+
+function publishRows(rows, selection, dataDir) {
+  const project = createProjectContext(selection, rows);
+  const staging = createProjectStaging(selection, { dataDir });
+  fs.writeFileSync(
+    path.join(staging.dir, "translation-compare.json"),
+    JSON.stringify({ project, rowsSignature: project.rowsSignature, rows }),
+    "utf8",
+  );
+  for (const name of projectArtifacts) {
+    const file = path.join(staging.dir, name);
+    if (fs.existsSync(file)) continue;
+    fs.writeFileSync(file, name.endsWith(".json") ? "{}" : "", "utf8");
+  }
+  publishProject(staging.dir, { dataDir });
+  return project;
+}
+
 test("canonicalText 规范化全半角、空白与不可见字符", () => {
   assert.equal(canonicalText("\uFEFF ３\u200B "), "3");
 });
@@ -53,6 +85,29 @@ test("短文本的标点差异不视为确定性相等", () => {
   assert.equal(classifyPrefilter({ left: "哇！", right: "哇。", score: 1 }, 0.92), null);
 });
 
+for (const [name, left, right] of punctuationDifferences) {
+  test(`相似度预筛拒绝${name}，即使行相似度为满分`, () => {
+    assert.equal(canUseSimilarityPrefilter(left, right), false);
+    for (const score of [0, 1]) {
+      assert.equal(classifyPrefilter({ left, right, score }, 0.92), null);
+    }
+  });
+}
+
+test("标点相同且位置不变的正文仍可使用相似度预筛", () => {
+  const left = `「${punctuationBody}甲。」`;
+  const right = `「${punctuationBody}乙。」`;
+  assert.equal(canUseSimilarityPrefilter(left, right), true);
+  assert.equal(classifyPrefilter({ left, right, score: 1 }, 0.92)?.kind, "similarity");
+});
+
+test("全半角与空白归一化仍保留确定性等价规则", () => {
+  assert.equal(
+    classifyPrefilter({ left: "「Ｈｅｌｌｏ，　ｗｏｒｌｄ！」", right: "「Hello, world!」" }, 0.92)?.kind,
+    "rule-equivalent",
+  );
+});
+
 test("相似度预筛拒绝包含变更数字词元的行", () => {
   const left = "这是用于校验第3章节编号是否一致的一段较长正文内容";
   const right = "这是用于校验第4章节编号是否一致的一段较长正文内容";
@@ -72,23 +127,6 @@ test("startPrefilter 在无模型或 Base URL 时对规则等价行直接完成�
   const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
   process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
 
-  function publishRows(rows, selection) {
-    const project = createProjectContext(selection, rows);
-    const staging = createProjectStaging(selection, { dataDir });
-    fs.writeFileSync(
-      path.join(staging.dir, "translation-compare.json"),
-      JSON.stringify({ project, rowsSignature: project.rowsSignature, rows }),
-      "utf8",
-    );
-    for (const name of projectArtifacts) {
-      const file = path.join(staging.dir, name);
-      if (fs.existsSync(file)) continue;
-      fs.writeFileSync(file, name.endsWith(".json") ? "{}" : "", "utf8");
-    }
-    publishProject(staging.dir, { dataDir });
-    return project;
-  }
-
   try {
     clearProofreadCache();
     const selection = {
@@ -101,7 +139,7 @@ test("startPrefilter 在无模型或 Base URL 时对规则等价行直接完成�
       const text = "完全相同的规则预筛文本 " + (offset + 1);
       return { index: offset + 1, jp: text, cn: text, tw: "", twCn: "", score: 1 };
     });
-    const project = publishRows(rows, selection);
+    const project = publishRows(rows, selection, dataDir);
 
     const started = await startPrefilter({
       similarityThreshold: 0.92,
@@ -123,6 +161,53 @@ test("startPrefilter 在无模型或 Base URL 时对规则等价行直接完成�
     assert.match(first.note, /^\[规则预筛\]/);
     assert.equal(first.done, true);
   } finally {
+    if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
+    else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startPrefilter 在双语和三语模式中都将标点差异行留待 AI 校对", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-prefilter-punctuation-"));
+  const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+  process.env.TRANSCOMPARATOR_DATA_DIR = dataDir;
+
+  try {
+    for (const comparisonMode of ["bilingual", "trilingual"]) {
+      clearProofreadCache();
+      const selection = {
+        comparisonMode,
+        inputMode: "txt",
+        files: {
+          jp: path.join(dataDir, "source.txt"),
+          cn: path.join(dataDir, "translation.txt"),
+          ...(comparisonMode === "trilingual" ? { tw: path.join(dataDir, "parallel.txt") } : {}),
+        },
+        termTables: [],
+        speechTables: [],
+      };
+      const rows = punctuationDifferences.map(([, left, right], offset) => ({
+        index: offset + 1,
+        jp: comparisonMode === "bilingual" ? left : punctuationBody,
+        cn: comparisonMode === "bilingual" ? right : left,
+        ...(comparisonMode === "trilingual" ? { tw: right, twCn: right } : {}),
+        score: 1,
+      }));
+      const project = publishRows(rows, selection, dataDir);
+      const started = await startPrefilter({
+        similarityThreshold: 0.92,
+        projectKey: project.projectKey,
+        rowsSignature: project.rowsSignature,
+      });
+      assert.equal(started.running, false);
+      assert.equal(started.total, rows.length);
+      assert.equal(started.prefiltered, 0);
+      assert.equal(started.queued, rows.length);
+      assert.equal(started.modelProcessed, 0);
+      assert.deepEqual(clientStatus().results, []);
+    }
+  } finally {
+    clearProofreadCache();
     if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
     else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
     fs.rmSync(dataDir, { recursive: true, force: true });
