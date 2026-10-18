@@ -4049,6 +4049,7 @@
       }
       saveNotes();
       updateDoneCount();
+      prefilterResultFilterActive = false;
       applyFilters({ reset: false });
       showToast("已将 " + rows.length + " 条预筛结果标记为人工确认。", { tone: "success", durationMs: 7000 });
       tableFrame.scrollTop = 0;

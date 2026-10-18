@@ -100,7 +100,7 @@
 - 服务端 `clientStatus` 返回上一轮预筛结果。
 - `renderAiStatus` 登记结果时以**运行号**（`prefilterRunId`）为准：遇到 `kind === "prefilter"` 且 `runId` 变化就整体替换 `prefilterResultIds`，不再要求必须在本页启动。
 - 作用域限制在 `sameAiScope`（`projectKey` + `rowsSignature`）；项目或行集签名变化时不认领旧结果，仅重新发布相同行集不改变这一作用域。
-- `updatePrefilterConfirmButton` 统一同步结果开关的 `disabled` / `checked`：认领运行号后即可查看，启动预筛自动勾选；清筛选只取消勾选，清运行记录同时清空运行号并禁用。确认仍仅作用于当前筛选范围内尚未人工确认且不需重新核验的预筛通过行，运行中或分页结果未收齐时禁用。
+- `updatePrefilterConfirmButton` 统一同步结果开关的 `disabled` / `checked`：认领运行号后即可查看，启动预筛自动勾选；清筛选只取消勾选，清运行记录同时清空运行号并禁用。确认仍仅作用于当前筛选范围内尚未人工确认且不需重新核验的预筛通过行，运行中或分页结果未收齐时禁用。确认完成后关闭预筛结果筛选并重新应用其他筛选条件，保留本轮结果集；取消确认不改变筛选状态。
 
 ---
 

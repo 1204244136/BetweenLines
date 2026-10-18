@@ -149,6 +149,11 @@ test("确认预筛只处理搜索范围内的待确认行，排除已确认与�
   assert.equal(ui.run('notes["2"].recoveredUnverified'), true);
   assert.equal(ui.run('notes["3"].manualDone'), true);
   assert.equal(ui.run('Boolean(notes["4"].manualDone)'), false, "搜索范围外的结果不可被确认");
+  assert.equal(resultFilter.checked, false, "确认后自动取消仅看预筛结果");
+  assert.equal(ui.run("prefilterResultFilterActive"), false);
+  assert.equal(ui.element("query").value, "范围内", "保留其他筛选条件");
+  assert.equal(ui.run('filteredRows.map((row) => row.index).join(",")'), "1,2,3");
+  assert.equal(ui.run("prefilterResultIds.size"), 4, "仍可重新查看本轮预筛结果");
   assert.equal(ui.element("prefilterConfirm").disabled, true, "当前范围已无待确认结果");
 });
 
