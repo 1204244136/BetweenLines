@@ -145,6 +145,17 @@ function scanDirectory(dir, comparisonMode = "trilingual") {
   };
 }
 
+// 写回自动备份开关只由工作台页面维护（控制台不再提供重复开关）：控制台保存输入选择时
+// 没有该字段，必须沿用项目已有取值，否则每次改输入都会把用户打开的开关静默重置为关闭。
+function resolveWritebackBackup(payload) {
+  if (typeof payload.writebackBackup === "boolean") return payload.writebackBackup;
+  try {
+    return Boolean(loadSavedSelection(resolveSelectionFile())?.writebackBackup);
+  } catch {
+    return false;
+  }
+}
+
 function saveInputSelection(payload) {
   const files = {
     jp: normalizePath(payload.files?.jp),
@@ -166,7 +177,7 @@ function saveInputSelection(payload) {
       ...defaultInlineMarkup,
       ...(payload.inlineMarkup || {}),
     },
-    writebackBackup: Boolean(payload.writebackBackup),
+    writebackBackup: resolveWritebackBackup(payload),
     termTables: payload.termTables,
     speechTables: payload.speechTables,
   });

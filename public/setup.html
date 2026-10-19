@@ -705,9 +705,6 @@
     #translationMarkupPanel .check-item label {
       font-size: 13px;
     }
-    #translationWritebackPanel {
-      margin-top: auto;
-    }
     .check-item {
       display: grid;
       grid-template-columns: 18px minmax(0, 1fr);
@@ -895,9 +892,6 @@
       main {
         grid-template-columns: 1fr;
       }
-      #translationWritebackPanel {
-        margin-top: 0;
-      }
     }
     @media (max-width: 620px) {
       .scope-grid {
@@ -1082,18 +1076,6 @@
           </div>
         </div>
       </div>
-
-      <div class="panel stack" id="translationWritebackPanel">
-        <h2>写回选项</h2>
-        <div class="check-grid">
-          <div class="check-item">
-            <input id="writebackBackup" type="checkbox">
-            <label for="writebackBackup" title="写回前为原文件生成 .bak 备份副本；与项目绑定，默认关闭。">
-              写回自动备份
-            </label>
-          </div>
-        </div>
-      </div>
     </section>
 
     <section class="console-column">
@@ -1266,7 +1248,6 @@
       preserveRuby: document.getElementById("preserveRuby"),
       preserveBold: document.getElementById("preserveBold"),
       preserveNoteref: document.getElementById("preserveNoteref"),
-      writebackBackup: document.getElementById("writebackBackup"),
       translationTablesPanel: document.getElementById("translationTablesPanel"),
     };
     for (const key of ["termTables", "speechTables"]) {
@@ -1772,7 +1753,6 @@
             bold: ids.preserveBold.checked,
             noteref: ids.preserveNoteref.checked,
           },
-          writebackBackup: ids.writebackBackup ? ids.writebackBackup.checked : false,
           termTables: tablePaths("termTables"),
           speechTables: tablePaths("speechTables"),
         }),
@@ -1850,7 +1830,6 @@
       ids.preserveRuby.checked = saved.inlineMarkup?.ruby !== false;
       ids.preserveBold.checked = saved.inlineMarkup?.bold !== false;
       ids.preserveNoteref.checked = saved.inlineMarkup?.noteref !== false;
-      if (ids.writebackBackup) ids.writebackBackup.checked = Boolean(saved.writebackBackup);
       for (const key of ["termTables", "speechTables"]) ids[key].value = (saved[key] || []).join("; ");
       state.saved = validateUnique();
       state.savedSettingsLoaded = true;
@@ -2235,22 +2214,6 @@
         ids[key + "Pick"].disabled = false;
         validateUnique();
       }
-    }
-    if (ids.writebackBackup) {
-      ids.writebackBackup.addEventListener("change", async () => {
-        const activeProjectKey = state.activeProjectKey || state.projects.find((p) => p.active)?.id;
-        if (activeProjectKey) {
-          try {
-            await apiFetch(`/api/projects/${encodeURIComponent(activeProjectKey)}/settings`, {
-              method: "POST",
-              body: JSON.stringify({ writebackBackup: ids.writebackBackup.checked }),
-            });
-          } catch {}
-        }
-        if (state.inputsReady) {
-          saveInputSelection().catch(() => {});
-        }
-      });
     }
     renderComparisonMode();
     renderRoleFiles();
