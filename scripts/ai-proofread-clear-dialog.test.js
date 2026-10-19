@@ -128,8 +128,7 @@ test("弹窗中选择「从未人工确认处开始」，清空未确认的 AI �
   assert.deepEqual(toastMessages(ui), ["已清空 2 条未人工确认的 AI 校对信息。"]);
 });
 
-// 有未确认记录时点「开始」必经确认弹窗。弹窗只负责选「清空重跑 / 继续剩下的」，
-// 它不改变起点与级联范围：往下走到哪一段由阶段二/三配没配预设决定，服务端说了算。
+// 同一组配置分别从阶段按钮和总按钮启动，确认弹窗必须保留用户选择的运行范围。
 function setupCascadeDialogWorkbench() {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
@@ -154,37 +153,39 @@ function setupCascadeDialogWorkbench() {
   return ui;
 }
 
-test("起点语义：确认弹窗「继续剩下的」只报起点，并如实说明会走到哪一段", async () => {
+test("独立初审：确认弹窗「继续剩下的」保留阶段范围，配置复审也不自动串联", async () => {
   const ui = setupCascadeDialogWorkbench();
   const plan = ui.run("cascadeFromStage('stage1')");
-  assert.equal(plan.toStylist, true, "配了阶段二就应如实报出会走到复审");
+  assert.equal(plan.toStylist, false);
+  assert.equal(plan.toArbiter, false);
 
   await ui.element("aiStart").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, true, "有未确认记录时仍应先弹确认弹窗");
-  assert.match(ui.element("aiConfirmMessage").innerHTML, /初审 → 复审/, "弹窗应说明本次会一路推进到哪一段");
+  assert.doesNotMatch(ui.element("aiConfirmMessage").innerHTML, /初审 → 复审/, "单阶段弹窗不得宣称推进下游");
 
   await ui.element("aiConfirmKeep").dispatch("click");
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post, "发起启动请求");
-  assert.equal(post.body.stage, "stage1", "弹窗只报起点，级联由服务端按下游配置决定");
-  assert.ok(post.body.stylistConfig, "起点请求要带上阶段二预设配置，服务端据此才知道该级联");
-  assert.match(toastMessages(ui).join("|"), /本次会一路推进：初审 → 复审/);
+  assert.equal(post.body.stage, "stage1");
+  assert.ok(post.body.stylistConfig, "保存的下游配置可以随请求传送，但只有 all 才有权级联");
+  assert.doesNotMatch(toastMessages(ui).join("|"), /本次会一路推进：初审 → 复审/);
 });
 
-test("起点语义：确认弹窗「从未人工确认处开始」同样只报起点", async () => {
+test("一键开始：确认弹窗「从未人工确认处开始」保留 all 范围并说明已配置阶段", async () => {
   const ui = setupCascadeDialogWorkbench();
 
-  await ui.element("aiStart").dispatch("click");
+  await ui.element("aiStartAll").dispatch("click");
   assert.equal(ui.element("aiConfirmDialog").open, true);
+  assert.match(ui.element("aiConfirmMessage").innerHTML, /初审 → 复审/);
 
   await ui.element("aiConfirmClear").dispatch("click");
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post, "发起启动请求");
-  assert.equal(post.body.stage, "stage1", "清空重跑同样只报起点");
+  assert.equal(post.body.stage, "all", "清空重跑也必须保留一键开始范围");
   assert.ok(post.body.stylistConfig);
 });
 
-test("起点语义：阶段二预设取不到时（适用列表残留旧 id）不算配了下游，不谎报会走到复审", async () => {
+test("一键开始：阶段二预设取不到时不谎报会走到复审", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stale-preset", stageMode: "stage1", stageCascade: { toStylist: false, toArbiter: false }, results: [] } },
@@ -193,13 +194,13 @@ test("起点语义：阶段二预设取不到时（适用列表残留旧 id）�
 
   // 适用列表里留着一个本地已经不存在的预设 id。
   ui.run('stagePresetSelections.stage2 = ["preset_gone"];');
-  const plan = ui.run("cascadeFromStage('stage1')");
+  const plan = ui.run("cascadeFromStage('all')");
   assert.equal(plan.toStylist, false, "取不到预设就等于那一段没启用");
   assert.equal(plan.toArbiter, false);
 
-  await ui.element("aiStart").dispatch("click");
+  await ui.element("aiStartAll").dispatch("click");
   const post = ui.posts.at(-1);
-  assert.equal(post.body.stage, "stage1");
+  assert.equal(post.body.stage, "all");
   assert.equal(post.body.stylistConfig, null, "取不到预设就不会带上阶段二配置，服务端也就不会级联");
 });
 

@@ -228,25 +228,23 @@
 
 ---
 
-## 阶段编排：起点 + 下游配置（`stagePlan` / `runQueue`）
+## 阶段编排：独立启停与一键流水线（`stagePlan` / `runQueue`）
 
-三阶段（Gatekeeper 初审 → Stylist 文学复审 → Arbiter 终审仲裁）的编排只有两个输入，都由 `stagePlan` 归一：
+三阶段（Gatekeeper 初审、Stylist 文学复审、Arbiter 终审仲裁）的启停范围由请求明确指定，`stagePlan` 归一执行范围：
 
-- **起点**：`targetStage` = `stage1`/`stage2`/`stage3`。`all` 是旧客户端的兼容别名，等同 `stage1`。
-- **这条流水线有几段**：配了 `stylistConfig`（或 `singleModelPersona`）才有复审段；配了 `arbiterConfig`（或 `singleModelPersona`）且 `arbiterEnabled !== false` 才有仲裁段。仲裁只能接在复审后面，所以从阶段一起步时必须先有复审，才谈得上仲裁。
+- **单阶段**：`targetStage` = `stage1`/`stage2`/`stage3` 时，只执行对应阶段，不因下游配置齐全而扩大执行范围。阶段二/三只消费启动时最新备注快照中的已有候选，不接收其它独立阶段随后产生的结果。
+- **一键流水线**：`targetStage: "all"` 才将全部已启用阶段连成逐行流水线。配了 `stylistConfig`（或 `singleModelPersona`）才启用复审；配了 `arbiterConfig`（或 `singleModelPersona`）且 `arbiterEnabled !== false` 才启用仲裁。阶段三配置不依赖阶段二；未启用复审时，仲裁只处理已有复审分歧，不把初审直接接成仲裁输入。
 
-行为统一为**「从起点一路推进到已启用的尽头」**，没有「级联 / 不级联」的模式开关：
+执行范围如下：
 
-| 起点 | 配了复审 | 配了仲裁 | 实际行为 |
-| --- | --- | --- | --- |
-| stage1 | 否 | — | 只跑初审 |
-| stage1 | 是 | 否 | 初审 → 复审 |
-| stage1 | 是 | 是 | 初审 → 复审 → 仲裁 |
-| stage2 | — | 否 | 只跑复审 |
-| stage2 | — | 是 | 复审 → 仲裁 |
-| stage3 | — | — | 只跑仲裁 |
+| 请求阶段 | 执行范围 | 队列来源 |
+| --- | --- | --- |
+| stage1 | 只跑初审 | 本次初审候选 |
+| stage2 | 只跑复审 | 启动时已有的初审候选 |
+| stage3 | 只跑仲裁 | 启动时已有的复审分歧 |
+| all | 初审及已启用的复审/仲裁 | 已有待办与本次上游逐行产出 |
 
-阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 即通过 `dispatchers.stage2.enqueue` 把完整 `s1` 交给复审；`executeStage2` 判定 `arbCheck.triggered` 即通过 `dispatchers.stage3.enqueue` 交给仲裁。各阶段内部的预设集合、请求归属、并发/退避与熔断由 `ai/stage-dispatch.js` 持有；每个预设是一条独立通道，阶段配额是各通道之和，`cleanConfig` 保留 `presetPool`/`stylistPresets`/`arbiterPresets` 的连接参数与 `presetId`/`name`。热更新、新旧同 ID 请求隔离及整体终止汇总见下文「阶段派发状态与请求归属」；`dispatch()` 仍按 **stage3 → stage2 → stage1** 顺序派发。
+一键流水线的阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 且复审仍启用时，通过 `dispatchers.stage2.enqueue` 把完整 `s1` 交给复审；`executeStage2` 判定 `arbCheck.triggered` 且仲裁仍启用时，通过 `dispatchers.stage3.enqueue` 交给仲裁。定向停止某阶段后不再向它派发或追加候选，其它已运行阶段继续处理自己的队列。各阶段内部的预设集合、请求归属、并发/退避与熔断由 `ai/stage-dispatch.js` 持有；每个预设是一条独立通道，阶段配额是各通道之和，`cleanConfig` 保留 `presetPool`/`stylistPresets`/`arbiterPresets` 的连接参数与 `presetId`/`name`。热更新、新旧同 ID 请求隔离及整体终止汇总见下文「阶段派发状态与请求归属」；`dispatch()` 仍按 **stage3 → stage2 → stage1** 顺序派发。
 
 ### 「待人工确认」只能由终审分发
 
@@ -298,9 +296,9 @@
 
 验证：`node --test scripts/stage-review-reports.test.js`。
 
-### 级联续跑（`stage-inputs.js`）
+### 一键流水线续跑（`stage-inputs.js`）
 
-从阶段一起步、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
+一键开始、配了复审、且本次是「继续剩下的」（`continueOnly`）时，**已经有初审结论、只差复审的行直接进复审队列**，不再重跑初审：
 
 - 判据是 `isStage2Candidate(noteText, memoryResult)` 成立、且 `stageNoteState(noteText).reviewed`、`.arbitrated` 与 `memoryResult?.stylistReview` 均不成立；不能用 `includes("Stylist复审")` 把异常留证或历史块当成已完成。
 - 准备 module 将这些行放入 `stageItems.stage2` 并从初审候选排除；与初审刚产出的行进入同一个阶段派发实例。
@@ -310,7 +308,7 @@
 
 ### 阶段异常不得静默吞掉
 
-级联续跑时，`prepareStageInputs` 把已有复审结论、仍待仲裁的行直接交给 `stageItems.stage3`，从阶段一或二起步都不得重复上游或跳过它们；初始仲裁队列与其它初始队列一并计入 `status.queued`。仲裁条目优先复用带完整 `decision.stylistReview` 的内存结论；内存只留汇总 `stageResult` 时必须从最新备注重建复审意见与方案，不能把初审方案误当复审稿。`stageNoteState` 的复审候选包括「待终审」，即使初审没有提出改案、摘要也不含「存疑」字样。
+一键流水线续跑时，`prepareStageInputs` 把已有复审结论、仍待仲裁的行直接交给已启用的 `stageItems.stage3`，不得重复上游或跳过它们；初始仲裁队列与其它初始队列一并计入 `status.queued`。单独开始复审不处理这些仲裁待办，单独开始仲裁则只准备当时已有的仲裁候选。仲裁条目优先复用带完整 `decision.stylistReview` 的内存结论；内存只留汇总 `stageResult` 时必须从最新备注重建复审意见与方案，不能把初审方案误当复审稿。`stageNoteState` 的复审候选包括「待终审」，即使初审没有提出改案、摘要也不含「存疑」字样。
 
 `runStage2Stylist` / `runStage3Arbiter` **不在自己内部吞异常**：它们把错误挂在返回值的 `stageError` 上，由 `executeStage2` / `executeStage3` 统一 `throw`，再走那两处的标准错误处理——频控时重试、其余计入 `stage2Errors`/`stage3Errors` 并回退到上一阶段的方案。
 
@@ -336,7 +334,7 @@
 
 「计入异常」只解决了可见性，还必须有东西**拦住它**，否则一次配置错误就是一行行刷到队列尽头：
 
-1. **致命请求错误当场终止**：`executeStage2` / `executeStage3` 与 `executeStage1` 一样判 `isFatalRequestError`（400/401/403/404/405/415/422 与非 JSON 响应），命中即 `stopForFatalRequestError`。缺这一条时，同一个配置错误在阶段一会立刻停下、在阶段二/三却会一直刷。
+1. **致命请求错误当场终止该阶段**：`executeStage2` / `executeStage3` 与 `executeStage1` 一样判 `isFatalRequestError`（400/401/403/404/405/415/422 与非 JSON 响应），命中即 `stopForFatalRequestError`，按当前请求所属阶段定向停止，其它阶段继续运行。缺这一条时，同一个配置错误在阶段一会立刻停下、在阶段二/三却会一直刷。
 2. **非频控失败进熔断采样**：`stage-dispatch.feedback(request, { kind: "failure", error })`；成功路径同样反馈 `kind: "success"`，否则窗口里只剩失败样本，错误率虚高到 100%。限流耗尽的行不进这个窗口（见下节的限流轨）。
 3. **熔断器按通道隔离**：阶段派发实例为每次加入的预设通道持有独立 `createStageBreaker()`；一个预设失败或持续限流时，只暂停该通道并把待派发行改派给健康预设。只有当前阶段选择的所有预设都熔断，阶段才进入熔断状态；只有本次流水线参与的所有阶段都进入该状态，才由 `ai-proofread.js` 设置 `stopRequested` 终止整条任务。
 
@@ -373,7 +371,7 @@
 - **限流轨的解除条件是「拿到非限流的答复」**，不只是成功：探测得到普通失败（进失败窗口）或拒答（`recordNotLimited`，不进窗口）同样解除，否则半开会停在并发 1 上。恢复时由派发实例撤销 `backoffUntil` 并清零 `consecutiveLimits`（固定并发下它原本只增不减，恢复后的下一次 429 仍按最长退避）。
 - 冷却期内到达的迟到结果（发出时断路器还没打开）只回队，不推进阶梯；冷却期内的迟到成功说明上游已放行，提前恢复并撤销 `backoffUntil`。
 - 阶梯用尽时限流反馈返回 `retry:false`，让这一行沿用原有「记失败 / 回退上一阶段方案」收尾；派发实例标记通道熔断，调度消费熔断事件并汇总阶段与整体任务是否终止。
-- 拒答与致命配置错误不进失败窗口：前者是上游的正常应答，后者当场终止。三个阶段一致：拒答反馈 `kind: "not-limited"`（只解除限流轨，不计成败）。阶段一标记待终审；阶段二/三回退到上一阶段方案，且仍如实计入 `stageNErrors`（指标口径不变，只是不再喂熔断——此前阶段二/三的拒答会被当成失败样本，一批敏感内容就能把整条流水线熔断掉）。
+- 拒答与致命配置错误不进失败窗口：前者是上游的正常应答，后者当场终止所属阶段。三个阶段一致：拒答反馈 `kind: "not-limited"`（只解除限流轨，不计成败）。阶段一标记待终审；阶段二/三回退到上一阶段方案，且仍如实计入 `stageNErrors`（指标口径不变，只是不再喂熔断——此前阶段二/三的拒答会被当成失败样本，一批敏感内容就能把整条流水线熔断掉）。
 - `TRANSCOMPARATOR_BREAKER_TIME_SCALE` 只缩放冷却时长，供回归测试把分钟级冷却压到毫秒级，不是运行时开关。
 - **冷却阶梯的取值依据**（`BREAKER_POLICY.limit.cooldownsMs`，只在这一处定义，测试与文案均从它推算）：被限流的请求由上游直接拒掉、不计费，等待只花时间不花钱，而过早放弃要人工点「继续剩下的」，所以整体宁长勿短。30s：单行退避重试用尽时已过去约 10~20 秒，再等 30 秒正好盖过常见的 1 分钟速率窗口；90s：覆盖一个完整分钟窗口再加抖动；4min、10min：中转渠道自动熔断与上游过载（503/529）常按分钟级恢复。累计约 16 分钟仍被限流，基本是额度耗尽或长时间故障，继续等没有意义。档间比约 3，探测频率随时间指数衰减。约束由 `scripts/circuit-breaker.test.js` 锁住：逐档变长、首档不低于 30s、末档不超过 10 分钟、累计不超过 20 分钟。
 - 冷却时长文案统一走 `formatDuration`（不足 1 分钟按秒，整分钟按分钟，其余分秒并列），日志、终止原因与策略摘要口径一致。
@@ -387,23 +385,23 @@
 
 验证：`node --test scripts/circuit-breaker.test.js scripts/ai-smart-concurrency.test.js scripts/ai-proofread-status.test.js`。
 
-### `stageCascade` 的语义：本次覆盖到仲裁，不是「有没有下游」
+### 执行范围与阶段控制状态
 
-`stagePlan().cascadeToArbiter` 表示**本次流水线是否覆盖到仲裁**，客户端据此决定阶段三卡片显示「处理中」还是「未接入」：
+`stagePlan` 描述本次执行范围与一键流水线的衔接关系；`clientStatus().stageControls` 按阶段回报 `{ running, stopRequested }`，是客户端启停按钮与运行状态的依据：
 
-- 从阶段一起步 = 配了复审且配了仲裁；从阶段二起步 = 配了仲裁；**从阶段三起步 = 本次跑的就是仲裁**（按 `hasArbiter` 判，与"有没有下游"无关）。
-- 早期实现把「从阶段三起步」也算成 `false`，于是客户端会在**仲裁正在跑**的同时显示「未接入（本次不会执行仲裁）」——文案与事实相反。
-- `runQueue` 在 `startsAt === "stage3"` 时直接按 `stageItems.stage3` 灌队列，不看这个标志，所以该字段只影响显示、不影响执行；两者必须一致。
+- 每个阶段有独立运行与停止状态；停止请求只取消对应阶段的在飞请求并停止该阶段派发，不能借同一个任务的全局取消信号终止其它阶段。
+- 一键流水线是否衔接下游与某阶段是否正在独立运行是不同信息。客户端不得用 `stageMode` 或 `stageCascade` 推断三个阶段的启停状态，避免单独仲裁运行时显示「未接入」。
+- 页面刷新后仍从服务端恢复阶段状态；本地最后点击的按钮、预设是否配置和聚合 `running` 都不能替代阶段状态。
 
 ### 旧版常驻服务的可观测性
 
-`clientStatus().stageCascade` 是 2bb3c69 之后才有的字段。客户端在「任务在跑 + 服务端回报了 `stagePipelines`（旧版一直有）+ 没有 `stageCascade`」时，判定常驻服务是旧版，**提示一次**重启控制台服务，并让阶段三卡片显示「未接入」而不是静默的「待命」——否则用户只会看到「配了阶段三却从来不仲裁」。判据要求同时看到 `stagePipelines`，避免把精简的状态桩误判成旧服务。
+任务运行中，服务端回报了 `stagePipelines` 却没有 `stageControls` 时，客户端提示重启控制台服务，不能继续按旧版「三个开始共用起点、三个停止均全停」的语义解释按钮。判据要求同时看到运行信息，避免把精简的状态桩误判成旧服务。
 
-### 单任务互斥与客户端契约
+### 运行作用域与客户端契约
 
-- **服务端同一时刻只允许一个 AI 任务**：`startProofread` 遇到 `status.running` 直接抛 `RUNNING`（HTTP 409）。所以「阶段二不必等阶段一整体结束」只能靠**同一个任务内的队列级联**实现，无法在中途把阶段二追加到正在跑的初审任务上；客户端也不得退回到「排队等前一阶段收尾、再起第二个任务」的默认路径。
-- **客户端三个「开始」按钮只报起点**，级联范围由服务端算。`clientStatus()` 如实回报 `stageMode`（起点）与 `stageCascade`（`{ toStylist, toArbiter }`）；客户端刷新页面后本地状态会丢，按钮态一律以这两个字段为准——级联运行中三个「开始」全禁用、三个「停止」全可用（停的都是同一条流水线）。
-- 当前流水线已经覆盖某个下游时，客户端再点那一段只提示「已包含在当前流水线中」，不进入排队。
+- **同一项目与行集可同时启用多个独立阶段**：单阶段开始可加入当前运行作用域，保留其它阶段的队列、在飞请求、运行结果与统计；不同项目、行集或目标文本不得混入。重复启动同一运行阶段，或候选行与其它阶段的待派发/在飞行重叠时，拒绝本次启动，不能创建重复派发或覆盖同一行结果。
+- **三个卡片按钮只控制自身**：开始发送对应阶段，停止发送对应阶段的定向停止请求；其它阶段运行时仍可启动空闲阶段。有阶段正在运行或等待启动时，`canClearStageForRestart` 拒绝任意阶段的清空重跑，保持备注和用户选择不变；用户可另选「继续剩下的」，不能由客户端自动改选或全页重置。
+- **总控按钮**：`#aiStartAll` 发送 `stage: "all"`，仅全部阶段空闲时可用；`#aiStopAll` 请求全部停止。总控不在已有运行中重新创建流水线。各卡片开始/停止与总控按钮都依据 `stageControls`，定向停止进入 `stopRequested` 后不得重复发送。
 - `continueOnly` 的跳过口径随覆盖范围变化：**一路推进时**整行必须走完从起点往下的所有阶段才算处理过——已终审、复审已定案、初审明确通过且非复审候选都算走完；`提交仲裁`/`升级仲裁` 是复审的**中途态不是结论**，有分歧却还没仲裁的行、初审提改却还没复审的行都必须留在流水线里。只跑单阶段时才用「本阶段已处理」的宽松口径。
 - 运行中的「复审数 / 立场分布」用 `stagePipelines.stage2.reviewed` 与 `.attitudes` 的**实时计数**显示（复审一结束就 +1，不等仲裁定案），否则会出现「阶段二只复审 1 行、阶段三却在仲裁 4 行」的假象；任务结束后流水线重置，自动回落到 `stageMetrics` 的最终值。
 

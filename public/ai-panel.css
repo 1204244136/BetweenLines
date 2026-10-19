@@ -651,6 +651,14 @@ details[open] > summary .details-toggle::before {
   flex-shrink: 0;
 }
 
+.ai-stage-dashboard-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
 .ai-stage-dashboard-title {
   font-size: 11px;
   font-weight: 700;

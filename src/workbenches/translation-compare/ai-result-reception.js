@@ -12,6 +12,7 @@ function createAiResultReception({
   let runId = "";
   let revision = 0;
   let refreshInFlight = false;
+  let statusGeneration = 0;
   let catchupTimer = 0;
 
   function acknowledgeForgotten(indexes) {
@@ -73,6 +74,7 @@ function createAiResultReception({
   async function refresh() {
     if (refreshInFlight) return;
     refreshInFlight = true;
+    const requestedGeneration = statusGeneration;
     let hasMoreResults = false;
     try {
       const params = new URLSearchParams({ compact: "1", resultLimit: "64" });
@@ -85,13 +87,20 @@ function createAiResultReception({
         params.set("afterRevision", String(revision));
       }
       const data = await requestStatus(params);
+      // 启停请求改变运行状态后，先前发出的轮询不能覆盖新状态。
+      // 不消费旧页结果或游标；收尾后重取，仍由服务端从原游标交付完整结果。
+      if (requestedGeneration !== statusGeneration) {
+        hasMoreResults = true;
+        return;
+      }
       // status 原本只检查 data.ok；HTTP 状态由各请求 adapter 按原口径处理。
       if (data.ok) {
         onStatus(data.ai);
         hasMoreResults = Boolean(data.ai?.hasMoreResults);
       }
     } catch {
-      onUnavailable();
+      if (requestedGeneration === statusGeneration) onUnavailable();
+      else hasMoreResults = true;
     } finally {
       refreshInFlight = false;
       if (hasMoreResults && !catchupTimer) {
@@ -118,6 +127,7 @@ function createAiResultReception({
 
   return {
     begin, commit, refresh, forgetRows, acknowledgeForgotten,
+    invalidateStatusRequests() { statusGeneration += 1; },
     resetReception() {
       received.clear();
       runId = "";

@@ -1293,20 +1293,11 @@
     function updateStagePresetDependencies() {
       const hasStage2 = committedStagePresetIds("stage2").length > 0;
       if (aiIds.stage3Preset) {
-        if (!hasStage2) {
-          aiIds.stage3Preset.value = "";
-          aiIds.stage3Preset.disabled = true;
-          if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = true;
-          if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = true;
-          aiIds.stage3Preset.title = "需先在阶段二添加适用预设，方可配置阶段三";
-          aiIds.stage3Card?.classList.add("is-disabled");
-        } else {
-          aiIds.stage3Preset.disabled = false;
-          if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
-          if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = false;
-          aiIds.stage3Preset.title = "选择阶段三候选预设，点击添加后启用";
-          aiIds.stage3Card?.classList.remove("is-disabled");
-        }
+        aiIds.stage3Preset.disabled = false;
+        if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
+        if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = false;
+        aiIds.stage3Preset.title = "选择阶段三候选预设，点击添加后启用";
+        aiIds.stage3Card?.classList.remove("is-disabled");
         syncEnhancedSelect(aiIds.stage3Preset);
       }
       const pill2 = document.getElementById("stage2StatusPill");
@@ -1316,7 +1307,7 @@
       }
       const pill3 = document.getElementById("stage3StatusPill");
       if (pill3 && pill3.dataset.state !== "running") {
-        const hasStage3 = hasStage2 && committedStagePresetIds("stage3").length > 0;
+        const hasStage3 = committedStagePresetIds("stage3").length > 0;
         pill3.dataset.state = hasStage3 ? "idle" : "disabled";
         pill3.textContent = hasStage3 ? "待命" : "未启用";
       }
@@ -4087,12 +4078,12 @@
         }
       }
 
-      // 不填代表不启用；启用前阶段才能启动后阶段
+      // 预设只表示各阶段可用的配置；是否运行由独立启停或总控决定。
       const multiStageEnabled = Boolean(s2PresetId);
       const challengerEnabled = Boolean(s2PresetId);
       const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
-      const arbiterEnabled = Boolean(s2PresetId && s3PresetId);
-      const arbiterConfig = (s2PresetId && s3PresetId) ? presetTools.getPreset(localStorage, s3PresetId) : null;
+      const arbiterEnabled = Boolean(s3PresetId);
+      const arbiterConfig = s3PresetId ? presetTools.getPreset(localStorage, s3PresetId) : null;
       const stage2Presets = stagePresetsFor("stage2");
       const stage3Presets = stagePresetsFor("stage3");
 
@@ -4401,7 +4392,7 @@
       const pillS1Unclear = document.getElementById("stage1UnclearPill");
       if (pillS1Unclear) {
         pillS1Unclear.hidden = false;
-        pillS1Unclear.title = "初审存疑待定 " + s1Unclear + " 行，流入阶段二文学复审（点击可筛选）";
+        pillS1Unclear.title = "初审存疑待定 " + s1Unclear + " 行，可交给阶段二文学复审（点击可筛选）";
       }
       const elS1Total = document.getElementById("metricStage1Total");
       if (elS1Total) elS1Total.textContent = s1Total;
@@ -4487,6 +4478,7 @@
       const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
       const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
       const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
+      const activeStages = getStageActiveStates(aiRunning, stagePipelines);
       for (const stage of ["stage1", "stage2", "stage3"]) renderStagePresetSelection(stage);
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
       const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
@@ -4500,7 +4492,10 @@
       const activeText1 = document.getElementById("stage1ActiveRowsText");
       if (pill1) {
         pill1.title = "";
-        if (aiRunning && (p1.inFlight > 0 || p1.pending > 0)) {
+        if (latestStageControls?.stage1?.stopRequested) {
+          pill1.dataset.state = "queued";
+          pill1.textContent = activeStages.stage1 ? "停止中" : "已停止";
+        } else if (aiRunning && (p1.inFlight > 0 || p1.pending > 0)) {
           if (p1.inFlight > 0) {
             pill1.dataset.state = "running";
             pill1.textContent = "处理中";
@@ -4519,7 +4514,7 @@
           pill1.dataset.state = "queued";
           pill1.textContent = "异常待重试";
           pill1.title = "初审仍有 " + s1Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段一「开始」→「继续剩下的」重试。";
-        } else if (aiRunning) {
+        } else if (activeStages.stage1) {
           pill1.dataset.state = "idle";
           pill1.textContent = "已完成";
         } else {
@@ -4539,7 +4534,7 @@
       }
 
       // Stage 2
-      const s2Enabled = Boolean(committedStagePresetIds("stage2").length || s2Reviewed > 0 || s2Errors > 0 || p2.inFlight > 0 || p2.pending > 0 || stage2WaitingForStage1);
+      const s2Enabled = Boolean(committedStagePresetIds("stage2").length || s2Reviewed > 0 || s2Errors > 0 || activeStages.stage2 || p2.inFlight > 0 || p2.pending > 0);
       const pill2 = document.getElementById("stage2StatusPill");
       const active2 = document.getElementById("stage2ActiveInfo");
       const activeText2 = document.getElementById("stage2ActiveRowsText");
@@ -4548,9 +4543,9 @@
         if (!s2Enabled) {
           pill2.dataset.state = "disabled";
           pill2.textContent = "未启用";
-        } else if (stage2WaitingForStage1) {
+        } else if (latestStageControls?.stage2?.stopRequested) {
           pill2.dataset.state = "queued";
-          pill2.textContent = "等待阶段一";
+          pill2.textContent = activeStages.stage2 ? "停止中" : "已停止";
         } else if (aiRunning && (p2.inFlight > 0 || p2.pending > 0)) {
           if (p2.inFlight > 0) {
             pill2.dataset.state = "running";
@@ -4568,7 +4563,7 @@
           pill2.textContent = "待处理";
         } else {
           pill2.dataset.state = s2Reviewed > 0 ? "done" : "idle";
-          pill2.textContent = s2Reviewed > 0 ? (aiRunning ? "当前候选已完成" : "已完成") : (aiRunning ? "等待候选" : "待命");
+          pill2.textContent = s2Reviewed > 0 ? (activeStages.stage2 ? "当前候选已完成" : "已完成") : (activeStages.stage2 ? "等待候选" : "待命");
         }
       }
       if (active2 && activeText2) {
@@ -4583,7 +4578,7 @@
       }
 
       // Stage 3
-      const s3Enabled = Boolean((committedStagePresetIds("stage3").length && s2Enabled) || s3Arbitrated > 0 || s3Errors > 0 || p3.inFlight > 0 || p3.pending > 0 || stage3WaitingForStage2);
+      const s3Enabled = Boolean(committedStagePresetIds("stage3").length || s3Arbitrated > 0 || s3Errors > 0 || activeStages.stage3 || p3.inFlight > 0 || p3.pending > 0);
       const pill3 = document.getElementById("stage3StatusPill");
       const active3 = document.getElementById("stage3ActiveInfo");
       const activeText3 = document.getElementById("stage3ActiveRowsText");
@@ -4592,15 +4587,9 @@
         if (!s3Enabled) {
           pill3.dataset.state = "disabled";
           pill3.textContent = "未启用";
-        } else if (stage3WaitingForStage2) {
+        } else if (latestStageControls?.stage3?.stopRequested) {
           pill3.dataset.state = "queued";
-          pill3.textContent = "等待阶段二";
-        } else if (aiRunning && !currentStageCascade.toArbiter) {
-          // 配了阶段三、本次流水线却没有接入仲裁：任务启动时阶段三预设还没配、或那个预设已失效。
-          // 明确说出来，否则用户只会看到「处理了很多行却一直只有 1 定案」。
-          pill3.dataset.state = "queued";
-          pill3.textContent = "未接入";
-          pill3.title = "本次任务启动时没有接入终审仲裁（启动时阶段三预设未配置，或该预设已失效）。本次不会执行仲裁；要让它生效，请停掉任务、确认阶段三预设后重新启动。";
+          pill3.textContent = activeStages.stage3 ? "停止中" : "已停止";
         } else if (aiRunning && (p3.inFlight > 0 || p3.pending > 0)) {
           if (p3.inFlight > 0) {
             pill3.dataset.state = "running";
@@ -4618,7 +4607,7 @@
           pill3.textContent = "待处理";
         } else {
           pill3.dataset.state = s3Arbitrated > 0 ? "done" : "idle";
-          pill3.textContent = s3Arbitrated > 0 ? (aiRunning ? "当前候选已完成" : "已完成") : (aiRunning ? "等待候选" : "待命");
+          pill3.textContent = s3Arbitrated > 0 ? (activeStages.stage3 ? "当前候选已完成" : "已完成") : (activeStages.stage3 ? "等待候选" : "待命");
         }
       }
       if (active3 && activeText3) {
@@ -4964,68 +4953,16 @@
 
     function renderAiStatus(ai) {
       if (!ai) return;
-      const previousRunning = currentAiRunning;
       currentAiRunning = Boolean(ai.running);
-      const isRunning = Boolean(ai.running);
-      // 刷新页面后本地 runningAiStage 会丢：用服务端回报的起点与级联范围恢复按钮态，
-      // 否则级联运行中三个「开始」按钮会退回到可点状态。
-      if (isRunning && !runningAiStage && ai.stageMode) {
-        runningAiStage = ai.stageMode;
-      }
-      const reportedCascade = {
-        toStylist: Boolean(ai.stageCascade?.toStylist),
-        toArbiter: Boolean(ai.stageCascade?.toArbiter),
+      const isRunning = currentAiRunning;
+      runningAiStage = isRunning ? (ai.stageMode || runningAiStage) : null;
+      latestStageControls = ai.stageControls || null;
+      latestAiStopRequested = isRunning && Boolean(ai.stopRequested);
+      latestStagePipelines = isRunning ? (ai.stagePipelines || null) : null;
+      currentStageCascade = {
+        toStylist: isRunning && Boolean(ai.stageCascade?.toStylist),
+        toArbiter: isRunning && Boolean(ai.stageCascade?.toArbiter),
       };
-
-      if (!isRunning && (previousRunning || runningAiStage)) {
-        const finishedStage = runningAiStage;
-        const finishedCascade = currentStageCascade;
-        runningAiStage = null;
-        currentStageCascade = { toStylist: false, toArbiter: false };
-        if (finishedCascade.toStylist || finishedCascade.toArbiter) {
-          // 级联任务在一次运行里自己跑完下游，不需要任何排队接力。
-          stage2WaitingForStage1 = false;
-          stage3WaitingForStage2 = false;
-          const tail = finishedCascade.toStylist
-            ? (finishedCascade.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
-            : "复审 → 仲裁";
-          showToast(ai.stopRequested
-            ? `流水线已终止（${tail}）。`
-            : `流水线已完成：${tail} 全部收尾。`,
-          { tone: ai.stopRequested ? "info" : "success", durationMs: 7000 });
-        } else if (finishedStage === "stage1" && stage2WaitingForStage1) {
-          stage2WaitingForStage1 = false;
-          const hasStage1Suggestions = Object.values(notes).some((item) => {
-            const text = String(item?.note || "");
-            return !item.manualDone && (text.includes("是否需要修改：是") || text.includes("初审改案") || text.includes("Gatekeeper初审：建议修改"));
-          });
-          if (hasStage1Suggestions) {
-            showToast("阶段一初审已完成，自动接力启动阶段二文学复审...", { tone: "info", durationMs: 4000 });
-            setTimeout(() => { promptAndStartAi("stage2"); }, 300);
-          } else {
-            showToast("阶段一事实初审全部通过，无需要文学复审的行。", { tone: "success", durationMs: 6000 });
-            if (stage3WaitingForStage2) {
-              stage3WaitingForStage2 = false;
-              showToast("无需要终审仲裁的行。", { tone: "info", durationMs: 5000 });
-            }
-          }
-        } else if (finishedStage === "stage2" && stage3WaitingForStage2) {
-          stage3WaitingForStage2 = false;
-          const hasDisputes = Object.values(notes).some((item) => {
-            const s = getStage3RowStatus(item);
-            return s.isPending || s.isArbitrated;
-          });
-          if (hasDisputes) {
-            showToast("阶段二复审已完成，自动接力启动阶段三终审仲裁...", { tone: "info", durationMs: 4000 });
-            setTimeout(() => { promptAndStartAi("stage3"); }, 300);
-          } else {
-            showToast("阶段二文学复审已定案，无需要终审仲裁的分歧行。", { tone: "success", durationMs: 6000 });
-          }
-        }
-      } else if (isRunning) {
-        // 运行中一律以服务端回报的级联范围为准：刷新页面后本地状态已丢，只有它知道这条流水线覆盖到哪。
-        currentStageCascade = reportedCascade;
-      }
 
       latestPresetPipelines = ai.presetPipelines || {};
       window.__transComparatorAiPresetPipelines = latestPresetPipelines;
@@ -5036,12 +4973,10 @@
       if (receipt.runChanged) {
         warnedLegacyService = false;
       }
-      // 常驻服务是旧版时不会回报 stageCascade：级联范围无从得知，级联推进也不会发生。
-      // 明确提示一次，别让用户对着「配了阶段三却从来不仲裁」「阶段二一直待命」猜原因。
-      // 判据要同时看到 stagePipelines（旧版一直有）才成立，避免把精简的状态桩误判成旧服务。
-      if (isRunning && ai.stagePipelines && !ai.stageCascade && !warnedLegacyService) {
+      // 旧服务仍将单阶段按钮解释成整条流水线，提示用户更新常驻进程。
+      if (isRunning && ai.stagePipelines && !ai.stageControls && !warnedLegacyService) {
         warnedLegacyService = true;
-        showToast("控制台服务未更新（没有回报阶段编排信息），本次不会级联推进后续阶段。请重启控制台服务（start-setup.bat）后重新启动任务。", { tone: "watch", durationMs: 20000 });
+        showToast("控制台服务未更新（没有回报独立阶段启停信息），本次无法独立控制各阶段。请重启控制台服务（start-setup.bat）后重新启动任务。", { tone: "watch", durationMs: 20000 });
       }
       const sameAiScope = receipt.sameScope;
       if (receipt.cleared) {
@@ -5092,7 +5027,8 @@
         (stageMetrics && (stageMetrics.stage2Reviewed > 0 || stageMetrics.stage3Arbitrated > 0)) ||
         committedStagePresetIds("stage2").length > 0
       );
-      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : "AI 校对完成：") + "实际调用 " + queueText + "，") +
+      const hasStoppedStage = Object.values(ai.stageControls || {}).some((control) => control.stopRequested);
+      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : (hasStoppedStage ? "AI 校对已结束（含已停止阶段）：" : "AI 校对完成：")) + "实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
         (isMultiStage
           ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
@@ -5108,7 +5044,7 @@
         } else if (ai.finishedAt) {
           aiIds.panelState.textContent = isPrefilter
             ? (ai.stopRequested ? "预筛选已终止" : "预筛选完成")
-            : (ai.stopRequested ? "已终止" : "校对完成");
+            : (ai.stopRequested ? "已终止" : (hasStoppedStage ? "校对已结束" : "校对完成"));
           aiIds.panelState.className = "ai-status-badge";
         } else if (ai.error && !ai.breakerWarning) {
           aiIds.panelState.textContent = "调用异常";
@@ -5136,7 +5072,7 @@
         notifiedFinishedRunId = finishedRunId;
         // 失败轮次优先报错因（固定状态行只给统计数字），原因比数字更可行动。
         showToast(ai.error || ai.breakerWarning || finishedStatus, {
-          tone: ai.error && !ai.breakerWarning ? "error" : (ai.breakerWarning || ai.stopRequested ? "watch" : "success"),
+          tone: ai.error && !ai.breakerWarning ? "error" : (ai.breakerWarning || ai.stopRequested ? "watch" : (hasStoppedStage ? "info" : "success")),
           durationMs: ai.error ? 15000 : 12000,
         });
       }
@@ -5846,127 +5782,76 @@
     }
 
     let latestStagePipelines = null;
+    let latestStageControls = null;
     let runningAiStage = null;
-    let stage2WaitingForStage1 = false;
-    let stage3WaitingForStage2 = false;
-    // 当前这条流水线会不会往下游走：由服务端如实回报（起点 + 下游配没配模型），客户端不自己猜。
-    // 三个「开始」按钮只表示起点，行为统一是「从起点一路推进到已启用的尽头」。
     let currentStageCascade = { toStylist: false, toArbiter: false };
-    // 旧版常驻服务不回报 stageCascade：级联范围无从得知，只提示一次，别刷屏。
+    let latestAiStopRequested = false;
+    let pendingStopAll = false;
     let warnedLegacyService = false;
+    const pendingStageStarts = new Set();
+    const pendingStageStops = new Set();
 
-    // 启动前自己算一份同样的判定，用来把「这次会跑到哪」告诉用户——它不参与调度决策。
-    // 预设被删掉时下拉框里可能还残留旧 id，取不到预设就等于那一段没启用。
-    function downstreamPlan() {
-      const stylistIds = committedStagePresetIds("stage2");
-      const arbiterIds = committedStagePresetIds("stage3");
-      const hasStylist = stylistIds.some((id) => Boolean(presetTools.getPreset(localStorage, id)));
-      const hasArbiter = hasStylist && arbiterIds.some((id) => Boolean(presetTools.getPreset(localStorage, id)));
-      return { hasStylist, hasArbiter };
-    }
-
-    // 从某个起点出发，这条流水线覆盖到哪一段。
     function cascadeFromStage(stage) {
-      const plan = downstreamPlan();
-      if (stage === "stage1") return { toStylist: plan.hasStylist, toArbiter: plan.hasStylist && plan.hasArbiter };
-      if (stage === "stage2") return { toStylist: false, toArbiter: plan.hasArbiter };
-      return { toStylist: false, toArbiter: false };
+      if (stage !== "all") return { toStylist: false, toArbiter: false };
+      return {
+        toStylist: stagePresetsFor("stage2").length > 0,
+        toArbiter: stagePresetsFor("stage3").length > 0,
+      };
     }
 
     function getStageActiveStates(running, stagePipelines = null) {
       const isRunning = running != null ? Boolean(running) : currentAiRunning;
-      if (!isRunning) {
-        return { stage1: false, stage2: false, stage3: false };
-      }
-      const pipelines = (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0)
-        ? stagePipelines
-        : (latestStagePipelines || {});
-      const p1 = pipelines.stage1 || {};
-      const p2 = pipelines.stage2 || {};
-      const p3 = pipelines.stage3 || {};
-
-      const p1HasWork = Boolean((Number(p1.inFlight) || 0) > 0 || (Number(p1.pending) || 0) > 0);
-      const p2HasWork = Boolean((Number(p2.inFlight) || 0) > 0 || (Number(p2.pending) || 0) > 0);
-      const p3HasWork = Boolean((Number(p3.inFlight) || 0) > 0 || (Number(p3.pending) || 0) > 0);
-      const hasPipelineInfo = p1HasWork || p2HasWork || p3HasWork;
-
-      let s1Active = false;
-      let s2Active = false;
-      let s3Active = false;
-
-      if (runningAiStage === "stage1") {
-        s1Active = true;
-      } else if (runningAiStage === "stage2") {
-        s2Active = true;
-      } else if (runningAiStage === "stage3") {
-        s3Active = true;
-      } else if (hasPipelineInfo) {
-        s1Active = p1HasWork;
-        s2Active = p2HasWork;
-        s3Active = p3HasWork;
-      } else {
-        s1Active = true;
-      }
-
-      return { stage1: s1Active, stage2: s2Active, stage3: s3Active };
+      const pipelines = stagePipelines || latestStagePipelines || {};
+      const hasPipelineWork = Object.values(pipelines).some((pipeline) => Number(pipeline.inFlight) > 0 || Number(pipeline.pending) > 0);
+      return Object.fromEntries(["stage1", "stage2", "stage3"].map((stage) => {
+        const pipeline = pipelines[stage] || {};
+        const legacyActive = runningAiStage === stage
+          || Number(pipeline.inFlight) > 0 || Number(pipeline.pending) > 0
+          || (stage === "stage2" && currentStageCascade.toStylist)
+          || (stage === "stage3" && currentStageCascade.toArbiter);
+        const active = isRunning && (latestStageControls
+          ? Boolean(latestStageControls[stage]?.running)
+          : legacyActive || (!runningAiStage && !hasPipelineWork && stage === "stage1"));
+        return [stage, active || pendingStageStarts.has(stage)];
+      }));
     }
 
     function setAllStageButtonsRunning(running = null, stagePipelines = null) {
-      if (stagePipelines && typeof stagePipelines === "object" && Object.keys(stagePipelines).length > 0) {
-        latestStagePipelines = stagePipelines;
+      if (stagePipelines) latestStagePipelines = stagePipelines;
+      const active = getStageActiveStates(running, stagePipelines);
+      for (const stage of ["stage1", "stage2", "stage3"]) {
+        const start = document.getElementById(stage + "Start") || (stage === "stage1" ? aiIds.start : null);
+        const stop = document.getElementById(stage + "Stop") || (stage === "stage1" ? aiIds.stop : null);
+        const stopping = pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested;
+        if (start) start.disabled = active[stage] || pendingStageStops.has(stage) || pendingStopAll || latestAiStopRequested;
+        if (stop) stop.disabled = !active[stage] || Boolean(stopping) || pendingStageStarts.has(stage);
       }
-      const isRunning = running != null ? Boolean(running) : currentAiRunning;
-      const active = getStageActiveStates(isRunning, stagePipelines || latestStagePipelines);
-      // 级联流水线是一个整体任务：三个「开始」一律禁用（无法中途插入单阶段），
-      // 三个「停止」一律可用（任意一个停的都是这条流水线），避免出现停不掉的死角。
-      const cascading = isRunning && (currentStageCascade.toStylist || currentStageCascade.toArbiter);
-
-      const s1Start = document.getElementById("stage1Start") || aiIds.start;
-      const s1Stop = document.getElementById("stage1Stop") || aiIds.stop;
-      const s2Start = document.getElementById("stage2Start");
-      const s2Stop = document.getElementById("stage2Stop");
-      const s3Start = document.getElementById("stage3Start");
-      const s3Stop = document.getElementById("stage3Stop");
-
-      if (s1Start) s1Start.disabled = active.stage1 || cascading;
-      if (s1Stop) s1Stop.disabled = !active.stage1 && !cascading;
-
-      if (s2Start) s2Start.disabled = active.stage2 || stage2WaitingForStage1 || cascading;
-      if (s2Stop) s2Stop.disabled = !active.stage2 && !stage2WaitingForStage1 && !cascading;
-
-      if (s3Start) s3Start.disabled = active.stage3 || stage3WaitingForStage2 || cascading;
-      if (s3Stop) s3Stop.disabled = !active.stage3 && !stage3WaitingForStage2 && !cascading;
+      const anyRunning = (running ?? currentAiRunning) || Object.values(active).some(Boolean);
+      const startAll = document.getElementById("aiStartAll");
+      const stopAll = document.getElementById("aiStopAll");
+      if (startAll) startAll.disabled = Boolean(anyRunning) || pendingStageStops.size > 0 || pendingStopAll;
+      if (stopAll) stopAll.disabled = !anyRunning || pendingStageStarts.size > 0 || pendingStopAll || Object.entries(active).every(([stage, enabled]) =>
+        !enabled || pendingStageStarts.has(stage) || pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested);
     }
     setAllStageButtonsRunning(false);
 
     let pendingStartStage = "stage1";
 
+    function canClearStageForRestart() {
+      if (!currentAiRunning && pendingStageStarts.size === 0) return true;
+      showToast("仍有阶段正在运行，请先停止后再清空重跑；也可选择继续剩下的。", { tone: "watch", durationMs: 6000 });
+      return false;
+    }
+
     async function promptAndStartAi(stage = "stage1") {
+      const active = getStageActiveStates(currentAiRunning);
+      if (pendingStopAll || latestAiStopRequested || pendingStageStops.has(stage) || active[stage]
+        || (stage === "all" && (currentAiRunning || pendingStageStarts.size || pendingStageStops.size))) return;
       pendingStartStage = stage;
 
       if (stage === "stage2") {
         if (!committedStagePresetIds("stage2").length) {
           showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
-          return;
-        }
-        // 当前这条流水线本来就会走到复审（从阶段一起步且配了复审），再点阶段二是多余的：
-        // 它已经在自动推进，不需要排队等一次。
-        const stage2AlreadyCovered = currentAiRunning
-          && (runningAiStage === "stage2" || (runningAiStage === "stage1" && currentStageCascade.toStylist));
-        if (stage2AlreadyCovered) {
-          showToast("阶段二已包含在当前流水线中：初审产出的行会立即自动移交复审，无需单独启动。", { tone: "info", durationMs: 6000 });
-          return;
-        }
-        if (currentAiRunning || runningAiStage === "stage1") {
-          stage2WaitingForStage1 = true;
-          setAllStageButtonsRunning(currentAiRunning);
-          updateStageMetricsDashboard();
-          const hasSuggestionsNow = Object.values(notes).some((item) => {
-            return getStage2RowStatus(item).isPending;
-          });
-          showToast(hasSuggestionsNow
-            ? "已排队：当前已有初审建议，等待阶段一全部完成后自动启动文学复审。"
-            : "已排队：当前暂无初审修改建议，等待阶段一产出建议后自动启动文学复审。", { tone: "info", durationMs: 5000 });
           return;
         }
         const hasStage1Suggestions = Object.values(notes).some((item) => {
@@ -5996,6 +5881,7 @@
           if (confirm(`检测到已有 ${reviewedCount} 条文学复审方案${pendingCount > 0 ? `，${pendingCount} 条待复审` : ""}。\n\n点击「确定」：继续复审剩余待处理行（保留已有 ${reviewedCount} 条方案，推荐）\n点击「取消」：全部重新复审（清空已有复审方案重新执行）`)) {
             await startAiProofread({ continueOnly: true, stage: "stage2" });
           } else {
+            if (!canClearStageForRestart()) return;
             const cleared = clearUnconfirmedStageNotes("stage2");
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的文学复审方案。`, { tone: "info", durationMs: 6000 });
@@ -6011,33 +5897,12 @@
           showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
           return;
         }
-        // 当前这条流水线本来就会走到仲裁时，再点阶段三同样是多余的。
-        const stage3AlreadyCovered = currentAiRunning && (
-          runningAiStage === "stage3"
-          || ((runningAiStage === "stage1" || runningAiStage === "stage2") && currentStageCascade.toArbiter)
-        );
-        if (stage3AlreadyCovered) {
-          showToast("阶段三已包含在当前流水线中：复审产生分歧的行会立即自动移交仲裁，无需单独启动。", { tone: "info", durationMs: 6000 });
-          return;
-        }
-
         let arbitratedCount = 0;
         let pendingArbCount = 0;
         for (const [id, item] of Object.entries(notes)) {
           const s = getStage3RowStatus(item);
           if (s.isArbitrated) arbitratedCount += 1;
           else if (s.isPending) pendingArbCount += 1;
-        }
-
-        if (currentAiRunning || stage2WaitingForStage1 || runningAiStage === "stage1" || runningAiStage === "stage2") {
-          stage3WaitingForStage2 = true;
-          setAllStageButtonsRunning(currentAiRunning);
-          updateStageMetricsDashboard();
-          const hasDisputesNow = (arbitratedCount > 0 || pendingArbCount > 0);
-          showToast(hasDisputesNow
-            ? "已排队：当前已有分歧行，等待前序阶段全部完成后自动启动终审仲裁。"
-            : "已排队：当前暂无分歧行，等待阶段二复审产生分歧后自动启动终审仲裁。", { tone: "info", durationMs: 5000 });
-          return;
         }
 
         if (arbitratedCount === 0 && pendingArbCount === 0) {
@@ -6066,6 +5931,7 @@
             }
             await startAiProofread({ continueOnly: true, stage: "stage3" });
           } else {
+            if (!canClearStageForRestart()) return;
             const cleared = clearUnconfirmedStageNotes("stage3");
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的终审仲裁方案。`, { tone: "info", durationMs: 6000 });
@@ -6078,22 +5944,21 @@
         return;
       }
 
-      if (stage === "stage1") {
-        // 按钮只表示起点；这条流水线往下走到哪，由阶段二/三配没配预设决定。
-        // 走到下游在同一个任务里完成，客户端不再排队等阶段一收尾。
-        const plan = cascadeFromStage("stage1");
+      if (stage === "stage1" || stage === "all") {
+        // 一键开始才推进配置好的下游，单独初审只消费初审队列。
+        const plan = cascadeFromStage(stage);
         const tailText = plan.toStylist
           ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
-          : "";
+          : (plan.toArbiter ? "初审；仲裁处理已有分歧" : "");
         const cascadeNote = tailText ? `\n\n本次会一路推进：${tailText}。` : "";
         // 配了阶段三预设却取不到（预设被删、下拉残留旧 id）时明确说一声：
         // 否则用户只会看到「配了仲裁却从来不仲裁」，而且阶段三卡片会一直停在很小的定案数上。
-        if (plan.toStylist && committedStagePresetIds("stage3").length && !plan.toArbiter) {
+        if (stage === "all" && committedStagePresetIds("stage3").length && !plan.toArbiter) {
           showToast("阶段三预设已失效（本地找不到该预设），本次不会走到终审仲裁；请重新选择阶段三预设。", { tone: "watch", durationMs: 15000 });
         }
-        // 阶段二同理：取不到预设就等于这条流水线只有一段。
-        if (committedStagePresetIds("stage2").length && !plan.toStylist) {
-          showToast("阶段二预设已失效（本地找不到该预设），本次只会跑阶段一；请重新选择阶段二预设。", { tone: "watch", durationMs: 15000 });
+        // 阶段二同理：取不到预设便不能接收初审的新候选。
+        if (stage === "all" && committedStagePresetIds("stage2").length && !plan.toStylist) {
+          showToast("阶段二预设已失效（本地找不到该预设），本次不会执行文学复审；请重新选择阶段二预设。", { tone: "watch", durationMs: 15000 });
         }
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
@@ -6111,25 +5976,32 @@
             ? "\n点击「取消」：继续剩下的（保留已有方案；已有初审结论、只差复审的行直接进复审，其余行继续校对）"
             : "\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）";
           if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）${resumeHint}${cascadeNote}`)) {
+            if (!canClearStageForRestart()) return;
             const cleared = clearUnconfirmedAiProofreadNotes();
             if (cleared > 0) {
               showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
             }
-            await startAiProofread({ continueOnly: false, stage: "stage1" });
+            await startAiProofread({ continueOnly: false, stage });
           } else {
-            await startAiProofread({ continueOnly: true, stage: "stage1" });
+            await startAiProofread({ continueOnly: true, stage });
           }
           return;
         }
-        await startAiProofread({ continueOnly: false, stage: "stage1" });
+        await startAiProofread({ continueOnly: false, stage });
       } else {
         await startAiProofread({ continueOnly: false, stage });
       }
     }
 
     async function startAiProofread({ continueOnly = false, stage = "stage1" } = {}) {
-      runningAiStage = stage;
-      setAllStageButtonsRunning(true);
+      const plan = cascadeFromStage(stage);
+      const startingStages = stage === "all"
+        ? ["stage1", ...(plan.toStylist ? ["stage2"] : []), ...(plan.toArbiter ? ["stage3"] : [])]
+        : [stage];
+      if (pendingStopAll || latestAiStopRequested || startingStages.some((key) => pendingStageStarts.has(key) || pendingStageStops.has(key))) return;
+      startingStages.forEach((key) => pendingStageStarts.add(key));
+      aiResultReception.invalidateStatusRequests();
+      setAllStageButtonsRunning();
       aiCacheCleared = false;
       if (aiIds.panel) aiIds.panel.open = true;
 
@@ -6148,9 +6020,9 @@
       if (continueOnly) {
         // 跳过口径取决于本次是「从起点一路推进到尽头」还是「只跑这一段」：
         // 级联时整行必须走完从起点往下的所有阶段才算处理过，单阶段时只看本阶段有没有结论。
-        const cascadeToStylist = stage === "stage1"
+        const cascadeToStylist = stage === "all"
           && Boolean(baseConfig.stylistConfig || baseConfig.singleModelPersona);
-        const cascadeToArbiter = (cascadeToStylist || stage === "stage2")
+        const cascadeToArbiter = stage === "all"
           && Boolean(baseConfig.arbiterConfig || baseConfig.singleModelPersona)
           && baseConfig.arbiterEnabled !== false;
         const completedSet = new Set(baseConfig.completedIndexes || []);
@@ -6165,7 +6037,7 @@
           const noteText = latestAiNotePart(item.note).trim();
           // 初审续跑必须先有可用结论才可跳过。失败/终止/空备注不属于复审候选，
           // 但不能因此被下面的「无需复审」分支误判为整行已经完成。
-          if (stage === "stage1" && !hasAutomatedDecisionNote(noteText)) {
+          if ((stage === "stage1" || stage === "all") && !hasAutomatedDecisionNote(noteText)) {
             completedSet.delete(num);
             continue;
           }
@@ -6183,7 +6055,7 @@
               ? (stage3Done || stage2Settled || stage1Clear)
               : (stage2Settled || stage1Clear);
             if (settled) completedSet.add(num);
-          } else if (stage === "stage1") {
+          } else if (stage === "stage1" || stage === "all") {
             if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
           } else if (stage === "stage2") {
             if (!getStage2RowStatus(item).isPending) {
@@ -6207,13 +6079,15 @@
         });
         const data = await response.json();
         if (!data.ok) throw new Error(data.error);
+        aiResultReception.invalidateStatusRequests();
         aiResultReception.acknowledgeForgotten(forgetResultIndexes);
-        renderAiStatus(data.ai);
+        renderAiStatus({ ...data.ai, stageMode: data.ai?.stageMode || (stage === "all" ? "stage1" : stage) });
         refreshAiStatus();
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
-        runningAiStage = null;
-        setAllStageButtonsRunning(false);
+      } finally {
+        startingStages.forEach((key) => pendingStageStarts.delete(key));
+        setAllStageButtonsRunning();
       }
     }
 
@@ -6225,40 +6099,30 @@
       return stageNoteState(noteText).candidate;
     }
 
-    async function stopAiProofread(targetBtnStage = "") {
-      if (targetBtnStage === "stage2" && stage2WaitingForStage1) {
-        stage2WaitingForStage1 = false;
-        setAllStageButtonsRunning(currentAiRunning);
-        updateStageMetricsDashboard();
-        showToast("已取消阶段二文学复审的排队等待。", { tone: "info", durationMs: 4000 });
-        return;
-      }
-      if (targetBtnStage === "stage3" && stage3WaitingForStage2) {
-        stage3WaitingForStage2 = false;
-        setAllStageButtonsRunning(currentAiRunning);
-        updateStageMetricsDashboard();
-        showToast("已取消阶段三终审仲裁的排队等待。", { tone: "info", durationMs: 4000 });
-        return;
-      }
-
-      stage2WaitingForStage1 = false;
-      stage3WaitingForStage2 = false;
-      const stopButtons = [
-        document.getElementById("stage1Stop"),
-        document.getElementById("stage2Stop"),
-        document.getElementById("stage3Stop"),
-        aiIds.stop,
-      ].filter(Boolean);
-      stopButtons.forEach((btn) => { btn.disabled = true; });
+    async function stopAiProofread(stage = "all") {
+      if (pendingStopAll || (stage === "all" ? pendingStageStarts.size > 0 : pendingStageStarts.has(stage) || pendingStageStops.has(stage))) return;
+      if (stage === "all") pendingStopAll = true;
+      const stages = stage === "all" ? ["stage1", "stage2", "stage3"] : [stage];
+      stages.forEach((key) => pendingStageStops.add(key));
+      aiResultReception.invalidateStatusRequests();
+      setAllStageButtonsRunning();
       try {
-        const response = await apiFetch("/api/ai-proofread/stop", { method: "POST" });
+        const response = await apiFetch("/api/ai-proofread/stop", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ stage: stage || "all" }),
+        });
         const data = await response.json();
-        if (data.ok) {
-          renderAiStatus(data.ai);
-          refreshAiStatus();
-        }
+        if (!data.ok) throw new Error(data.error || "停止失败");
+        aiResultReception.invalidateStatusRequests();
+        renderAiStatus(data.ai);
+        refreshAiStatus();
       } catch (error) {
         showToast(error.message, { tone: "error", durationMs: 12000 });
+      } finally {
+        if (stage === "all") pendingStopAll = false;
+        stages.forEach((key) => pendingStageStops.delete(key));
+        setAllStageButtonsRunning();
       }
     }
 
@@ -6266,9 +6130,10 @@
       if (aiConfirmIds.clear) {
         aiConfirmIds.clear.addEventListener("click", async () => {
           aiConfirmIds.dialog.close();
-          const cleared = clearUnconfirmedStageNotes(pendingStartStage);
+          if (!canClearStageForRestart()) return;
+          const cleared = clearUnconfirmedStageNotes(pendingStartStage === "all" ? "stage1" : pendingStartStage);
           if (cleared > 0) {
-            const msg = pendingStartStage === "stage1"
+            const msg = (pendingStartStage === "stage1" || pendingStartStage === "all")
               ? `已清空 ${cleared} 条未人工确认的 AI 校对信息。`
               : (pendingStartStage === "stage3"
                 ? `已清空 ${cleared} 条未人工确认的终审仲裁方案。`
@@ -6277,8 +6142,7 @@
                   : `已清空 ${cleared} 条未人工确认的方案。`));
             showToast(msg, { tone: "info", durationMs: 6000 });
           }
-          // 清空的是哪个阶段的记录，和本次从哪里起步是两件事：这里只传起点，
-          // 往下走到哪一段由服务端按「下游配没配模型」决定，弹窗不会改变它。
+          // 弹窗只选择重跑方式，保留独立阶段或一键开始的范围。
           await startAiProofread({ continueOnly: false, stage: pendingStartStage });
         });
       }
@@ -6298,7 +6162,7 @@
           const plan = cascadeFromStage(pendingStartStage);
           const tailText = plan.toStylist
             ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
-            : (plan.toArbiter ? "复审 → 仲裁" : "");
+            : (plan.toArbiter ? "初审；仲裁处理已有分歧" : "");
           const resumeText = plan.toStylist
             ? "已有初审结论、只差复审的行直接进复审，其余行继续校对。"
             : "仅校对剩余未处理行。";
@@ -6333,6 +6197,9 @@
       aiIds.start.addEventListener("click", async () => { await promptAndStartAi("stage1"); });
     }
 
+    document.getElementById("aiStartAll")?.addEventListener("click", () => promptAndStartAi("all"));
+    document.getElementById("aiStopAll")?.addEventListener("click", () => stopAiProofread("all"));
+
     const stage1StopEl = document.getElementById("stage1Stop");
     if (stage1StopEl) stage1StopEl.addEventListener("click", () => stopAiProofread("stage1"));
     const stage2StopEl = document.getElementById("stage2Stop");
@@ -6345,7 +6212,7 @@
 
     if (aiIds.clearCache) {
       aiIds.clearCache.addEventListener("click", async () => {
-        if (aiIds.stop && aiIds.stop.disabled === false) {
+        if (currentAiRunning || pendingStageStarts.size > 0 || pendingStageStops.size > 0) {
           showToast("AI 校对仍在运行，请先停止任务再清除 AI 记录。", { tone: "watch", durationMs: 8000 });
           return;
         }

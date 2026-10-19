@@ -150,7 +150,7 @@ function prepareStageInputs({
       }
     }
   } else {
-    const resumedStage3 = plan.cascadeToArbiter && config.continueOnly
+    const resumedStage3 = plan.cascadeToArbiter && (config.continueOnly || !plan.cascadeToStylist)
       ? collectResumedStage3(resolvedByTermTable) : { resumed: [], indexes: new Set() };
     const resumedStage2 = plan.cascadeToStylist && config.continueOnly
       ? collectResumedStage2(resolvedByTermTable) : { resumed: [], indexes: new Set() };

@@ -23,6 +23,7 @@ function initialNotes() {
 }
 
 function status(running, overrides = {}) {
+  const stage = overrides.stageMode || "stage1";
   return {
     kind: "proofread",
     projectKey: "project",
@@ -30,6 +31,7 @@ function status(running, overrides = {}) {
     runId: "resume-run",
     stageMode: "stage1",
     stageCascade: { toStylist: false, toArbiter: false },
+    stageControls: Object.fromEntries(["stage1", "stage2", "stage3"].map((key) => [key, { running: running && key === stage, stopRequested: false }])),
     running,
     total: 5,
     queued: 3,

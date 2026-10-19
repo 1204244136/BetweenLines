@@ -294,6 +294,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="需要人工确认的存疑行数" role="button" tabindex="0" hidden>待人工确认: <strong id="metricFinalNeedsCheck">0</strong></span>
                 <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="流水线尚未走到终审仲裁的存疑行数——「待人工确认」只能由终审分发，这些行还等着终审定案（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
               </div>
+              <div class="ai-stage-dashboard-actions" role="group" aria-label="全部审核阶段操作">
+                <button id="aiStartAll" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动全部已启用阶段，逐行衔接初审、复审与仲裁">一键开始</button>
+                <button id="aiStopAll" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止全部正在运行的审核阶段">一键停止</button>
+              </div>
             </div>
             <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" title="阶段一 事实初审：事实性硬伤审查与直接通过">
@@ -319,8 +323,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       </div>
                     </div>
                     <div class="ai-stage-card-actions">
-                      <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段一事实初审">开始</button>
-                      <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段一任务">停止</button>
+                      <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段一事实初审">开始</button>
+                      <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段一事实初审">停止</button>
                     </div>
                   </div>
                 </div>
@@ -329,8 +333,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <button id="stage1TotalItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false" title="已取得初审结论的行数（通过 + 提改 + 存疑，不含调用异常）"><strong id="metricStage1Total">0</strong><span class="ai-stage-unit">已初审</span></button>
                     <div class="ai-stage-card-sub" aria-label="初审结论">
                       <button id="stage1PassedItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--pass" aria-pressed="false" title="初审直接合格放行行数">通过: <span id="metricStage1Passed">0</span></button>
-                      <button id="stage1NeedsEditItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" aria-pressed="false" title="初审建议修改行数（流入复审）">修改: <span id="metricStage1NeedsEdit">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" id="stage1UnclearPill" type="button" aria-pressed="false" title="初审存疑待定行数（流入复审）">存疑: <span id="metricStage1Unclear">0</span></button>
+                      <button id="stage1NeedsEditItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" aria-pressed="false" title="初审建议修改行数（可进入复审）">修改: <span id="metricStage1NeedsEdit">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" id="stage1UnclearPill" type="button" aria-pressed="false" title="初审存疑待定行数（可进入复审）">存疑: <span id="metricStage1Unclear">0</span></button>
                     </div>
                     <div class="ai-stage-efficiency" aria-label="初审通过方式">
                       <button id="stage1FastPassItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审通过行中的快速直通子集，包含预筛放行与模型高置信通过">直通: <span id="metricFastPassHits">0</span></button>
@@ -372,8 +376,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       </div>
                     </div>
                     <div class="ai-stage-card-actions">
-                      <button id="stage2Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段二文学复审">开始</button>
-                      <button id="stage2Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段二任务">停止</button>
+                      <button id="stage2Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段二文学复审，处理当前已有的初审候选">开始</button>
+                      <button id="stage2Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段二文学复审">停止</button>
                     </div>
                   </div>
                 </div>
@@ -425,8 +429,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       </div>
                     </div>
                     <div class="ai-stage-card-actions">
-                      <button id="stage3Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动阶段三终审仲裁">开始</button>
-                      <button id="stage3Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止阶段三任务">停止</button>
+                      <button id="stage3Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段三终审仲裁，处理当前已有的复审分歧">开始</button>
+                      <button id="stage3Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段三终审仲裁">停止</button>
                     </div>
                   </div>
                 </div>

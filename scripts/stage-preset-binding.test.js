@@ -28,7 +28,7 @@ test("工作台构建：在阶段卡片内渲染预设选择下拉框", () => {
   assert.match(html, /id="stage3PresetSelect"/);
 });
 
-test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () => {
+test("客户端阶段预设绑定：独立启用与 AI 配置组装", async () => {
   const presetTools = createPresetTools();
   const ui = createWorkbench();
 
@@ -63,9 +63,9 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.ok(s2Select);
   assert.ok(s3Select);
 
-  // 1. 默认状态：Stage 2 未启用，Stage 3 必须为 disabled
+  // 阶段三可以处理已有复审结果，不依赖阶段二当前是否配置模型。
   assert.equal(s2Select.value, "");
-  assert.equal(s3Select.disabled, true);
+  assert.equal(s3Select.disabled, false);
 
   // 初始时未启用 Stage 2，aiConfig() 为经典单阶段模式
   let config = ui.run("aiConfig()");
@@ -100,19 +100,21 @@ test("客户端阶段预设绑定：级联激活与 AI 配置组装", async () =
   assert.ok(config.arbiterConfig);
   assert.equal(config.arbiterConfig.model, "deepseek-reasoner");
 
-  // 4. 重置 Stage 2 为未启用：Stage 3 必须自动重置并锁回 disabled
+  // 移除阶段二只关闭复审配置，已应用的仲裁配置独立保留。
+  const stage3Candidate = s3Select.value;
   ui.element("stage2PresetTags").children[0].children[2].click();
 
-  assert.equal(s3Select.value, "");
-  assert.equal(s3Select.disabled, true);
+  assert.equal(s3Select.value, stage3Candidate, "移除阶段二不改变阶段三候选状态");
+  assert.equal(s3Select.disabled, false);
 
   config = ui.run("aiConfig()");
-  assert.equal(config.multiStageEnabled, false);
   assert.equal(config.stylistConfig, null);
-  assert.equal(config.arbiterConfig, null);
+  assert.equal(config.arbiterEnabled, true);
+  assert.equal(config.arbiterConfig.model, "deepseek-reasoner");
+  assert.deepEqual([...ui.run('committedStagePresetIds("stage3")')], ["preset_r1"]);
 });
 
-test("阶段三级联：可见模型下拉随阶段二添加、移除和恢复同步解锁", async () => {
+test("阶段三预设：可见模型下拉在阶段二未配置、移除和恢复后始终独立可用", async () => {
   const ui = createWorkbench(storageFixture({
     "translation-compare-ai-presets-v2": JSON.stringify([
       { id: "review", name: "复审", protocol: "compatible", model: "review-model" },
@@ -131,12 +133,8 @@ test("阶段三级联：可见模型下拉随阶段二添加、移除和恢复�
   });
   ui.run("enhanceSelect(aiIds.stage3Preset)");
   const [, trigger, menu] = select.parentNode.children;
-  assert.equal(trigger.disabled, true);
-
-  ui.element("stage2PresetSelect").value = "review";
-  ui.element("stage2PresetAdd").click();
+  assert.equal(trigger.disabled, false, "阶段二未配置时即可选择仲裁预设");
   assert.equal(select.disabled, false);
-  assert.equal(trigger.disabled, false, "底层解锁时，可见按钮也必须立即解锁");
   trigger.click();
   assert.equal(menu.hidden, false, "可见下拉可以打开");
   const option = menu.children.find((item) => item.dataset.value === "arbiter");
@@ -145,21 +143,25 @@ test("阶段三级联：可见模型下拉随阶段二添加、移除和恢复�
   assert.equal(select.value, "arbiter");
   assert.match(trigger.children[0].textContent, /仲裁/);
   assert.equal(ui.run("aiConfig().arbiterConfig"), null, "仅切换候选仍不得启用阶段三");
-
-  ui.element("stage2PresetTags").children[0].children[2].click();
-  assert.equal(select.disabled, true);
-  assert.equal(select.value, "");
-  assert.equal(trigger.disabled, true, "移除阶段二最后一项时，可见按钮重新锁定");
-  assert.equal(trigger.children[0].textContent, "选择预设", "可见候选文案同步清空");
-  trigger.click();
-  assert.equal(menu.hidden, true);
+  ui.element("stage3PresetAdd").click();
 
   ui.element("stage2PresetSelect").value = "review";
   ui.element("stage2PresetAdd").click();
-  assert.equal(trigger.disabled, false, "重新添加阶段二后再次解锁");
+  const candidateBeforeRemove = select.value;
+  const triggerBeforeRemove = trigger.children[0].textContent;
+
+  ui.element("stage2PresetTags").children[0].children[2].click();
+  assert.equal(select.disabled, false);
+  assert.equal(select.value, candidateBeforeRemove);
+  assert.equal(trigger.disabled, false, "移除阶段二不能锁定阶段三可见按钮");
+  assert.equal(trigger.children[0].textContent, triggerBeforeRemove);
+  assert.match(ui.element("stage3AppliedValue").textContent, /仲裁/);
+  assert.equal(ui.run("aiConfig().arbiterConfig.model"), "arbiter-model");
+
   ui.run("restoreAiConfig()");
   assert.equal(select.disabled, false);
-  assert.equal(trigger.disabled, false, "恢复阶段二配置时，可见下拉不能残留中间禁用状态");
+  assert.equal(trigger.disabled, false, "恢复仅阶段三配置时，可见下拉仍可操作");
+  assert.deepEqual([...ui.run('committedStagePresetIds("stage3")')], ["arbiter"]);
   trigger.click();
   assert.equal(menu.hidden, false);
 });
@@ -199,7 +201,7 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
     await ui.element(`${stage}PresetSelect`).dispatch("change");
 
     assert.equal(ui.element(`${stage}AppliedValue`).textContent, stage === "stage1" ? "适用：主配置" : "未启用");
-    if (stage === "stage2") assert.equal(ui.element("stage3PresetSelect").disabled, true);
+    if (stage === "stage2") assert.equal(ui.element("stage3PresetSelect").disabled, false);
     const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-config-v2"));
     assert.deepEqual(saved[`${stage}PresetIds`], [], "候选不得隐式保存为已应用预设");
 

@@ -601,66 +601,23 @@ test("多阶段独立并发：各子阶段预设的并发上限各自保留，�
   assert.equal(legacy.arbiterConfig.concurrency, 2, "关闭智能并发的旧预设，concurrencyMax 从不生效");
 });
 
-test("起点语义：三个「开始」只表示起点，往下走到哪一段由下游配没配模型决定", () => {
-  // 客户端契约：前端只报起点，级联范围由服务端算。
-  assert.equal(cleanConfig({ stage: "all" }).targetStage, "all", "旧客户端的 all 继续被接受");
-  assert.equal(cleanConfig({ stage: "stage1" }).targetStage, "stage1");
-  assert.equal(cleanConfig({ stage: "stage2" }).targetStage, "stage2");
-  assert.equal(cleanConfig({ stage: "stage3" }).targetStage, "stage3");
-
-  const stylist = { protocol: "compatible", model: "gemini-3.8-flash" };
-  const arbiter = { protocol: "compatible", model: "kimi-k3" };
-
-  // 从阶段一起步：配了复审才往下走，配了仲裁才走到仲裁（仲裁只能接在复审后面）。
-  const soloStage1 = stagePlan(cleanConfig({ stage: "stage1" }));
-  assert.equal(soloStage1.startsAt, "stage1");
-  assert.equal(soloStage1.cascadeToStylist, false, "没配阶段二就是纯初审");
-  assert.equal(soloStage1.cascadeToArbiter, false);
-
-  const withStylist = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist }));
-  assert.equal(withStylist.cascadeToStylist, true);
-  assert.equal(withStylist.cascadeToArbiter, false, "没配仲裁就停在复审");
-
-  const withBoth = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist, arbiterConfig: arbiter }));
-  assert.equal(withBoth.cascadeToStylist, true);
-  assert.equal(withBoth.cascadeToArbiter, true);
-
-  // 从阶段二起步：不会再回到复审，但分歧照样往下走到仲裁。
-  const fromStage2 = stagePlan(cleanConfig({ stage: "stage2", stylistConfig: stylist, arbiterConfig: arbiter }));
-  assert.equal(fromStage2.startsAt, "stage2");
-  assert.equal(fromStage2.cascadeToStylist, false);
-  assert.equal(fromStage2.cascadeToArbiter, true, "独立阶段二复审出分歧必须能进仲裁");
-
-  const stage2NoArbiter = stagePlan(cleanConfig({ stage: "stage2", stylistConfig: stylist }));
-  assert.equal(stage2NoArbiter.cascadeToArbiter, false, "没配仲裁就停在复审");
-
-  // 从阶段三起步：本次流水线本身就是仲裁，没有「下游」可言。
-  // cascadeToArbiter 的语义是「本次覆盖到仲裁」，客户端据此决定阶段三卡片显示「处理中」还是「未接入」；
-  // 这里报 false 会让卡片显示「未接入（本次不会执行仲裁）」，而仲裁其实正在一行行跑。
-  const stage3 = stagePlan(cleanConfig({ stage: "stage3", arbiterConfig: arbiter }));
-  assert.equal(stage3.cascadeToStylist, false);
-  assert.equal(stage3.cascadeToArbiter, true, "从阶段三起步时本次跑的就是仲裁，不能报成「未接入」");
-
-  const stage3NoArbiter = stagePlan(cleanConfig({ stage: "stage3" }));
-  assert.equal(stage3NoArbiter.cascadeToArbiter, false, "没配仲裁预设时不算接入仲裁");
-
-  const stage3ArbiterOff = stagePlan(cleanConfig({ stage: "stage3", arbiterConfig: arbiter, arbiterEnabled: false }));
-  assert.equal(stage3ArbiterOff.cascadeToArbiter, false, "显式关闸时不算接入仲裁");
-
-  // 旧客户端的 all 语义等同「从阶段一起步」。
-  const legacyAll = stagePlan(cleanConfig({ stage: "all", stylistConfig: stylist, arbiterConfig: arbiter }));
-  assert.equal(legacyAll.startsAt, "stage1");
-  assert.equal(legacyAll.cascadeToStylist, true);
-  assert.equal(legacyAll.cascadeToArbiter, true);
-
-  // arbiterEnabled=false 是显式关闸：即使配了仲裁预设也不往下走。
-  const arbiterOff = stagePlan(cleanConfig({ stage: "stage1", stylistConfig: stylist, arbiterConfig: arbiter, arbiterEnabled: false }));
-  assert.equal(arbiterOff.cascadeToArbiter, false);
-
-  // 兼容入口：shouldCascadeStages 现在就是「会不会走到复审」。
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1", stylistConfig: stylist })), true);
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage1" })), false);
-  assert.equal(shouldCascadeStages(cleanConfig({ stage: "stage2", stylistConfig: stylist })), false);
+test("阶段启停解耦：单阶段不因下游配置而级联，all 明确开启已配置阶段", () => {
+  const stylistConfig = { protocol: "compatible", model: "stylist-model" };
+  const arbiterConfig = { protocol: "compatible", model: "arbiter-model" };
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    const config = cleanConfig({ stage, stylistConfig, arbiterConfig });
+    assert.equal(config.targetStage, stage);
+    assert.deepEqual(stagePlan(config), { startsAt: stage, cascadeToStylist: false, cascadeToArbiter: false });
+    assert.equal(shouldCascadeStages(config), false);
+  }
+  assert.deepEqual(stagePlan(cleanConfig({ stage: "all", stylistConfig, arbiterConfig })), {
+    startsAt: "stage1", cascadeToStylist: true, cascadeToArbiter: true,
+  });
+  assert.deepEqual(stagePlan(cleanConfig({ stage: "all", arbiterConfig })), {
+    startsAt: "stage1", cascadeToStylist: false, cascadeToArbiter: true,
+  }, "仲裁可独立消费已有复审分歧，不要求本次同时启动复审");
+  assert.equal(stagePlan(cleanConfig({ stage: "all", stylistConfig, arbiterConfig, arbiterEnabled: false })).cascadeToArbiter, false);
+  assert.equal(shouldCascadeStages(cleanConfig({ stage: "all", stylistConfig })), true);
 });
 
 test("起点语义：状态接口如实回报起点与级联范围，供刷新后恢复按钮态", () => {
@@ -670,7 +627,7 @@ test("起点语义：状态接口如实回报起点与级联范围，供刷新�
   assert.deepEqual(idle.stageCascade, { toStylist: false, toArbiter: false });
 });
 
-test("起点语义：从阶段一起步且配了复审时，初审提改行立即移交复审，不等阶段一整体跑完", async () => {
+test("一键开始：配了复审时，初审提改行立即移交复审，不等阶段一整体跑完", async () => {
   clearProofreadCache();
   const totalRows = 6;
   const { project } = setupMockProject(totalRows, "cascade");
@@ -719,7 +676,7 @@ test("起点语义：从阶段一起步且配了复审时，初审提改行立�
       proofreadMode: "bilingual",
       concurrency: 2,
       // 前端只报起点：配了 stylistConfig 就等于这条流水线有第二阶段，服务端据此级联。
-      stage: "stage1",
+      stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterEnabled: false,
       projectKey: project.projectKey,
@@ -756,7 +713,7 @@ test("起点语义：从阶段一起步且配了复审时，初审提改行立�
   }
 });
 
-test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的进仲裁（不再被直接吞掉）", async () => {
+test("独立复审：配了仲裁也仅跑复审，显式启动仲裁才消费分歧", async () => {
   clearProofreadCache();
   const totalRows = 3;
   const { project } = setupMockProject(totalRows, "stage2cascade");
@@ -819,7 +776,7 @@ test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的�
       if (result?.note) rowNotes[result.index] = result.note;
     }
 
-    // 第二轮：从阶段二起步 + 配了仲裁 → 分歧必须继续往下走到仲裁。
+    // 第二轮：仅启动阶段二，即使配置了仲裁也保留分歧、等待显式启动仲裁。
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
       proofreadMode: "bilingual", concurrency: 2, stage: "stage2",
@@ -831,12 +788,20 @@ test("起点语义：从阶段二起步且配了仲裁时，复审分歧真的�
 
     const live = clientStatus({ includeResults: false });
     assert.equal(live.stageMode, "stage2", "状态接口应回报起点是阶段二");
-    assert.deepEqual(live.stageCascade, { toStylist: false, toArbiter: true }, "从阶段二起步应能级联到仲裁");
+    assert.deepEqual(live.stageCascade, { toStylist: false, toArbiter: false }, "独立复审不自动运行仲裁");
 
     await waitDone();
 
     assert.equal(stylistRequests, totalRows, "每一行初审提改都要复审");
-    assert.ok(arbiterRequests > 0, "复审明确请求仲裁时，分歧必须真的进仲裁，不能被直接采纳复审结论吞掉");
+    assert.equal(arbiterRequests, 0, "复审分歧保留为仲裁待办，独立启动不能产生下游请求");
+    const reviewedNotes = Object.fromEntries(clientStatus().results.map((result) => [result.index, result.note]));
+    await startProofread({
+      protocol: "compatible", baseUrl, model: "test-model", stage: "stage3",
+      arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
+      rowNotes: reviewedNotes, projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    await waitDone();
+    assert.equal(arbiterRequests, totalRows, "显式启动仲裁后消费全部复审分歧");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -880,7 +845,7 @@ test("独立阶段二复用内存结论：只在同一项目快照上复用，�
     // 普通初审重跑不复用；级联续跑中的仲裁待办可复用同一快照。
     assert.equal(reusePreviousResults({ ...sameSnapshot, targetStage: "stage1" }), false);
     assert.equal(reusePreviousResults({
-      ...sameSnapshot, targetStage: "stage1", continueOnly: true,
+      ...sameSnapshot, targetStage: "all", continueOnly: true,
       stylistConfig: { model: "stylist-model" }, arbiterConfig: { model: "arbiter-model" },
     }), true);
   } finally {
@@ -949,7 +914,7 @@ test("级联续跑：已有初审结论、只差复审的行直接进复审队�
     // 修之前它们会先被重新初审一遍，复审只能等初审逐行产出，界面上就是「待复审 N 行但只有 1 处理中」。
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 3, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 3, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       continueOnly: true,
       rowNotes,
@@ -999,7 +964,7 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
     // 第二次独立复审故意保留上一轮内存结果，验证换备注后不能误用旧完成标记。
-    for (const stage of ["stage2", "stage2", "stage1"]) {
+    for (const stage of ["stage2", "stage2", "all"]) {
       const ui = createWorkbench(undefined, {
         rows, projectKey: project.projectKey, rowsSignature: project.rowsSignature,
         apiResponses: { "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "round", results: [] } } },
@@ -1014,7 +979,7 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
       assert.equal(Number(ui.element("metricStage2Pending").textContent), 20);
       await ui.element("stage2PendingItem").dispatch("click");
       assert.equal(ui.run("filteredRows.length"), 20);
-      await ui.element(stage + "Start").dispatch("click");
+      await ui.element(stage === "all" ? "aiStartAll" : stage + "Start").dispatch("click");
       await ui.element("aiConfirmKeep").dispatch("click");
       const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
       assert.ok(post);
@@ -1089,7 +1054,7 @@ test("阶段三异常不再静默：仲裁调用失败要计入仲裁异常并�
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -1154,7 +1119,7 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -1179,7 +1144,7 @@ test("阶段三异常参与熔断：仲裁持续 5xx 时不再一行行刷满整
   }
 });
 
-test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷到队列尽头", async () => {
+test("阶段三致命请求错误立刻终止仲裁，不再逐行把异常刷到队列尽头", async () => {
   clearProofreadCache();
   const totalRows = 12;
   const { project } = setupMockProject(totalRows, "arbfatal");
@@ -1195,7 +1160,7 @@ test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷�
       const isStylist = !isArbiter && userText.includes("gatekeeperReview");
 
       if (isArbiter) {
-        // 400 属于配置类致命错误（模型名/参数不被接口接受），必须当场终止整条流水线。
+        // 400 属于配置类致命错误（模型名/参数不被接口接受），必须当场终止所属阶段。
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "invalid model" } }));
         return;
@@ -1214,7 +1179,7 @@ test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷�
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -1227,7 +1192,7 @@ test("阶段三致命请求错误立刻终止任务，不再逐行把异常刷�
 
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.match(finished.error, /AI 接口配置或响应异常/, "400 是配置类致命错误，必须终止任务");
+    assert.match(finished.error, /终审仲裁接口配置或响应异常/, "400 立即终止仲裁阶段，健康上游继续收尾");
     assert.ok(
       finished.stageMetrics.stage3Errors < totalRows,
       `致命错误必须在刷满 ${totalRows} 行之前终止，实际异常 ${finished.stageMetrics.stage3Errors} 行`,
@@ -1264,7 +1229,7 @@ test("复审分歧计数：复审出分歧但没有下游仲裁时，「分歧�
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       // 只配复审、不配仲裁：复审出的分歧没有下游可去，分歧数依然必须如实统计，
       // 否则「分歧」会退化成「已仲裁数」= 0，与弹窗按备注数出的待仲裁行数打架。
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
@@ -1614,7 +1579,7 @@ test("阶段三模型拒答不计入熔断：仲裁全部拒答时任务跑完�
     const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -1782,11 +1747,11 @@ for (const stage of ["stage2", "stage3"]) {
       return finished;
     };
     try {
-      const retryStarts = stage === "stage3" ? ["stage3", "stage1", "stage2"] : ["stage2"];
+      const retryStarts = [stage, "all"];
       const retryCases = retryStarts.flatMap((retryStart) => [true, false].map((useMemory) => ({ retryStart, useMemory })));
       for (const { retryStart, useMemory } of retryCases) {
         healthy = false;
-        const failed = await runToEnd({ stage: "stage1" });
+        const failed = await runToEnd({ stage: "all" });
         assert.equal(failed.stageMetrics[`${stage}Errors`], 1);
         assert.equal(failed.stageErrors[stage].server_error.count, 1);
         const note = failed.results[0].note;
@@ -1847,7 +1812,7 @@ for (const stage of ["stage2", "stage3"]) {
     try {
       const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
       await startProofread({
-        protocol: "compatible", baseUrl, model: "test-model", proofreadMode: "bilingual", concurrency: 1, stage: "stage1",
+        protocol: "compatible", baseUrl, model: "test-model", proofreadMode: "bilingual", concurrency: 1, stage: "all",
         stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
         ...(stage === "stage3" ? { arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" } } : {}),
         projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -1976,7 +1941,7 @@ test("异常明细不跨任务残留：上一次运行的失败行，在新任�
   const runToEnd = async (baseUrl) => {
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model",
-      proofreadMode: "bilingual", concurrency: 2, stage: "stage1",
+      proofreadMode: "bilingual", concurrency: 2, stage: "all",
       stylistConfig: { protocol: "compatible", baseUrl, model: "stylist-model" },
       arbiterConfig: { protocol: "compatible", baseUrl, model: "arbiter-model" },
       projectKey: project.projectKey, rowsSignature: project.rowsSignature,
@@ -2309,6 +2274,7 @@ test("熔断按预设隔离：阶段一单个预设熔断时，健康预设与�
       concurrency: 1,
     });
     await startProofread({
+      stage: "all",
       protocol: "compatible",
       baseUrl: `http://127.0.0.1:${port}/main/v1`,
       model: "main-model",

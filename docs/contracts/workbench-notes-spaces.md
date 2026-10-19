@@ -58,6 +58,7 @@
 ## 浏览器 AI 结果接收（`ai-result-reception.js`）
 
 - **状态所有权**：`createAiResultReception` 独占当前运行号、修订游标、去重集合、已清除运行、待遗忘行、状态请求互斥与追赶 timer。预筛结果集合、筛选、阶段看板、Toast、备注内容与合并仍由页面持有，保存会话归上节；不向接收实例传整个可变页面状态。
+- **启停与轮询时序**：阶段启停请求前及成功回包后调用 `invalidateStatusRequests`；此前发出的状态查询不得覆盖新的控制状态，也不消费旧回包的结果或推进游标。接收模块在该查询收尾后补取状态，仍按原游标交付结果。启动应答前禁用总停止，总停止应答前禁止加入新阶段，避免交叉请求使停止后又出现新运行。
 - **两阶段交付**：`begin(ai)` 在原状态渲染位置观察换轮，返回项目身份与清除拦截的只读 receipt，不提前推进游标。`commit(receipt, applyBatch)` 按待遗忘行、恢复忽略运行、去重键及当前行签名准入；页面 adapter 先登记预筛集合，再批量写备注、安排保存并报告拒绝，全部完成后消费游标。去重仍在签名检查前登记，版本键保留 `result.runId + index + (resultRevision || status)` 的口径。
 - **异常时序**：应用或提示抛错时不推进游标，已登记的去重状态保留；存储保存失败不回滚内存成果，也不阻止游标推进。无当前行签名时不新增拒绝条件；错误签名的重复回包只提示一次。
 - **请求 adapter**：`refresh()` 自报项目与行集身份、当前档案、运行号及游标，每批 64 条，一次只允许一个状态请求；结果未收齐时按 16ms 追赶。页面继续每 1.5 秒触发刷新。状态请求沿用 `data.ok` 判据；结果清除同时检查 HTTP 与 `data.ok`，不因共用 adapter 统一成新的错误口径。
@@ -133,7 +134,8 @@
 - 存储键：`translation-compare-ai-presets-v2`。
 - 包含完整连接与模型参数（`protocol`、`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`modelMetadata`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。`modelMetadata` 只保存能力白名单，恢复预设时与模型 ID 对应，避免丢失端点专属思考档位。`protocol` 只表示接口类型（`local` / `claude` / `compatible`）；`provider` 是可选的供应商名称，不参与传输协议选择。缺少 `protocol` 却携带 `provider` 的请求直接拒绝，运行路径不得将旧 `provider` 当接口类型。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
 - 当前预设 ID 保存在 `translation-compare-ai-config-v2` 与 `translation-compare-ai-project-config-v2:<projectKey>` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。共享传输层、模型列表、连通性测试、任务状态和子阶段配置均使用新字段，接口默认配置统一名为 `protocolDefaults`。
-- 阶段适用预设以 `stagePresetSelections` 为唯一配置来源；`committedStagePresetIds` 不得回退读取候选选择器。候选须经「添加」进入列表，显示、依赖解锁、启动请求、热更新及 `stageNPresetIds` 持久化均读取同一列表。空列表表示阶段一用主配置、阶段二/三未启用；移除最后一项后，残留候选不得重新加入配置。旧 `stageNPresetId` 仅由恢复入口迁入列表，显式的空数组优先于旧字段。
+- 阶段适用预设以 `stagePresetSelections` 为唯一配置来源；`committedStagePresetIds` 不得回退读取候选选择器。候选须经「添加」进入列表，显示、启动请求、热更新及 `stageNPresetIds` 持久化均读取同一列表。空列表表示阶段一用主配置、阶段二/三未启用；移除最后一项后，残留候选不得重新加入配置。阶段三的候选选择、添加与适用列表不依赖阶段二是否配置，执行仲裁仍要求已有复审分歧。旧 `stageNPresetId` 仅由恢复入口迁入列表，显式的空数组优先于旧字段。
+- 三张阶段卡片的开始/停止只控制自身；单阶段启动以当次最新备注快照准备候选，不自动接收上游后续结果。不同阶段可以同时运行；有阶段运行或等待启动时，`canClearStageForRestart` 拒绝任何阶段清空重跑，不清备注也不擅自改选「继续剩下的」。统计标题右侧的 `#aiStartAll` / `#aiStopAll` 分别提供一键流水线启动与全部停止，总控开始仅在全部阶段空闲时可用。按钮态从服务端 `stageControls` 恢复，不能由本地最后点击的阶段推断；阶段编排与定向停止见 [AI 校对契约](ai-proofread-contract.md#阶段编排独立启停与一键流水线stageplan--runqueue)。
 - 预设按「供应商身份 + 名称」判重：有名称时 trim 后忽略大小写；未命名时使用协议与规范化地址。展示地址不包含 URL 凭证、查询串或片段。不同供应商同名预设保持独立 ID；按 ID 修改供应商时遇到同名冲突必须拒绝，不得合并 ID 或改变已有阶段引用。
 - 主预设与三个阶段使用同一分组及标签函数；增强下拉必须保留原生 `optgroup` 分组提示。阶段一读取预设时完整使用预设连接参数，空 API Key 与默认推理强度也不能借用主配置。切换预设时清空旧模型能力缓存，异步模型列表与测试回包须核对协议、供应商、地址和 Key，避免同名模型跨连接污染。
 - 提供商名称使用可输入 combobox，复用工作台的 `select-menu` / `select-option` 与箭头样式；不得使用浏览器原生 `datalist` 弹层。支持输入筛选、鼠标选择、方向键和 Enter 确认、Escape/Tab/失焦关闭；公共下拉关闭逻辑须同步清理 `aria-expanded` 与 `aria-activedescendant`。

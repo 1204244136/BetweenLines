@@ -160,7 +160,8 @@ test("遭遇致命鉴权失败响应时 AI 队列立即停止", async () => {
     }
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.equal(finished.stopRequested, true);
+    assert.equal(finished.stopRequested, false, "致命请求只停止所属阶段");
+    assert.equal(finished.stageControls.stage1.stopRequested, true);
     assert.equal(finished.errors, 1);
     assert.match(finished.error, /HTTP 401.*USER_INACTIVE/);
     assert.equal(requestCount <= 4, true);
@@ -234,7 +235,8 @@ test("端点返回 HTML 页面而非 JSON 时 AI 队列立即停止", async () =
     }
     const finished = clientStatus();
     assert.equal(finished.running, false);
-    assert.equal(finished.stopRequested, true);
+    assert.equal(finished.stopRequested, false, "致命请求只停止所属阶段");
+    assert.equal(finished.stageControls.stage1.stopRequested, true);
     assert.equal(finished.errors, 1);
     assert.match(finished.error, /配置或响应异常.*非 JSON 响应.*text\/html/);
     assert.equal(requestCount <= 4, true);

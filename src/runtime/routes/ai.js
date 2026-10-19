@@ -49,7 +49,14 @@ async function handleAiRoutes(req, res, pathname, searchParams) {
   }
 
   if (req.method === "POST" && pathname === "/api/ai-proofread/stop") {
-    sendJson(res, 200, { ok: true, ai: stopProofread() });
+    // 旧页面的预筛停止仍发送空 POST；带阶段参数的新请求才读取 JSON。
+    const hasBody = Number(req.headers["content-length"]) > 0 || Boolean(req.headers["transfer-encoding"]);
+    const payload = hasBody ? await readJson(req) : {};
+    try {
+      sendJson(res, 200, { ok: true, ai: stopProofread(payload) });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message, ai: aiProofreadStatus() });
+    }
     return true;
   }
 

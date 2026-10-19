@@ -10,6 +10,7 @@ const { AI_CONCURRENCY_LIMITS, resolveConcurrencyCap } = require("./concurrency-
 const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeverity } = require("./decision-score");
 const fs = require("fs");
 const path = require("path");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const { diffWordsWithSpace, diffChars } = require("diff");
 const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
@@ -170,6 +171,10 @@ function createStageErrors() {
   return { stage1: {}, stage2: {}, stage3: {} };
 }
 
+function createStageControls() {
+  return Object.fromEntries(["stage1", "stage2", "stage3"].map((stage) => [stage, { running: false, stopRequested: false }]));
+}
+
 function recordStageError(stage, rowIndex, error, forcedKind = "") {
   const bucket = status.stageErrors?.[stage];
   if (!bucket) return;
@@ -227,10 +232,10 @@ const status = {
   reasoningEffort: "",
   projectKey: "",
   rowsSignature: "",
-  // 本次任务从哪一段起步（stage1/stage2/stage3），以及这条流水线会往下走到哪：
-  // 「起点 + 下游配置」决定一切，客户端刷新页面后靠这两个字段恢复按钮与徽标状态。
+  // 保留起始阶段与一键流水线覆盖范围；独立阶段的实时启停以 stageControls 为准。
   stageMode: "stage1",
   stageCascade: { toStylist: false, toArbiter: false },
+  stageControls: createStageControls(),
   total: 0,
   queued: 0,
   processed: 0,
@@ -320,6 +325,13 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
 }
 
 let controllers = new Set();
+const requestStageContext = new AsyncLocalStorage();
+const stageControllers = { stage1: new Set(), stage2: new Set(), stage3: new Set() };
+let activeStageRuntime = null;
+
+function isStageStopped(stage = requestStageContext.getStore()) {
+  return status.stopRequested || Boolean(stage && status.stageControls[stage]?.stopRequested);
+}
 // 每行当前结果对 stageMetrics 的贡献快照；行被重写/重跑时按同一份快照整体撤销，保证添加与撤销对称。
 let resultMetricDeltas = new Map();
 // 派发 module 持有通道熔断；这里保留参与阶段与整体终止裁决。
@@ -362,6 +374,7 @@ function clientStatus(options = {}) {
     rowsSignature: status.rowsSignature,
     stageMode: status.stageMode,
     stageCascade: { ...status.stageCascade },
+    stageControls: Object.fromEntries(Object.entries(status.stageControls).map(([stage, control]) => [stage, { ...control }])),
     total: status.total,
     queued: status.queued,
     processed: status.processed,
@@ -754,6 +767,7 @@ function resetStatus(config, rowsLength, { reusePrevious = false } = {}) {
   status.stageMetrics = createStageMetrics();
   status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
+  status.stageControls = createStageControls();
   status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
   status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
   status.metrics = {
@@ -969,29 +983,56 @@ async function startPrefilter(input) {
 }
 
 async function startProofread(input) {
-  if (status.running) {
+  const joining = status.running;
+  const config = cleanConfig(input);
+  if (joining && (status.kind === "prefilter" || status.stopRequested || config.targetStage === "all" || !activeStageRuntime)) {
     const error = new Error("AI 校对正在运行。");
     error.code = "RUNNING";
     throw error;
   }
 
-  const config = cleanConfig(input);
-  if (!config.model) throw new Error("请输入模型名称。");
-  if (!config.baseUrl) throw new Error("请输入接口地址。");
+  const plan = stagePlan(config);
+  const connectionsFor = (stage) => {
+    const pool = stage === "stage1" ? config.presetPool : (stage === "stage2" ? config.stylistPresets : config.arbiterPresets);
+    const fallback = stage === "stage1" ? config
+      : (stage === "stage2" ? config.stylistConfig : config.arbiterConfig) || (config.singleModelPersona ? config : null);
+    return pool.length ? pool : [fallback].filter(Boolean);
+  };
+  const stages = new Set([plan.startsAt]);
+  if (plan.cascadeToStylist) stages.add("stage2");
+  if (plan.cascadeToArbiter) stages.add("stage3");
+  for (const stage of stages) {
+    const connections = connectionsFor(stage);
+    if (!connections.length) {
+      const error = new Error(`请先在${stage === "stage2" ? "阶段二" : "阶段三"}选择模型预设以启用${STAGE_OUTCOME_LABELS[stage]}。`);
+      error.code = stage === "stage2" ? "STAGE2_CONFIG_MISSING" : "STAGE3_CONFIG_MISSING";
+      throw error;
+    }
+    for (const connection of connections) {
+      if (!connection.model) throw new Error("请输入模型名称。");
+      if (!connection.baseUrl) throw new Error("请输入接口地址。");
+    }
+  }
 
   const { project, rows, speechHabits: snapshotSpeechHabits, termPrefilter } = readRows(config);
   requireMatchingProjectSnapshot(config, project);
-  forgetRequestedResultIndexes(config);
   config.proofreadMode = project.comparisonMode === "bilingual" ? "bilingual" : "trilingual";
   config.termLayer = termPrefilter;
   if (!String(input.systemPrompt || "").trim()) {
     config.systemPrompt = proofreadPromptFor(config.proofreadMode, config.profileId).system;
   }
   if (config.proofreadMode === "bilingual") config.target = "cn";
+  if (joining && (!sameProjectSnapshot(config, status) || config.target !== status.target)) {
+    const error = new Error("运行中的阶段属于另一项目快照或目标文本，请先停止该任务。");
+    error.code = "RUNNING";
+    throw error;
+  }
+  if (!joining) forgetRequestedResultIndexes(config);
   // 独立复审/仲裁及级联续跑由结果模块先取同快照的完整结果，再初始化本轮。
-  const reusableResults = resetStatus(config, rows.length, { reusePrevious: reusePreviousResults(config) });
+  const reusableResults = joining ? new Map()
+    : resetStatus(config, rows.length, { reusePrevious: reusePreviousResults(config) });
   // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
-  resetPromptTrim();
+  if (!joining) resetPromptTrim();
   // 状态接口如实显示本次任务用的查证站点顺序（未声明/已关闭时为空数组，前端据此说明这一层未启用）。
   status.webLookupSites = config.webLookup ? config.wikiSites.map((site) => site.label) : [];
   const labels = {
@@ -1010,7 +1051,6 @@ async function startProofread(input) {
     status.speechHabitCharacters = activatedCharacters;
     pushLog(`${speechTableSummary(tables)}：按${scope === "volume" ? "卷" : "章"}命中 ${activatedChapters} ${scope === "volume" ? "卷" : "章"} / ${activatedCharacters.length} 个角色${volume?.code ? `（${volume.code}）` : ""}，这些角色的说话特色不会被判为翻译错误。`);
   }
-  const plan = stagePlan(config);
   const prepareInputs = (resolvedByTermTable = new Set()) => prepareStageInputs({
     rows, labels, plan, reusableResults, resolvedByTermTable,
     config: {
@@ -1021,59 +1061,57 @@ async function startProofread(input) {
     currentResultFor: (index) => proofreadResults.get(index),
   });
   let stageItems = { stage2: [], stage3: [] };
+  if (joining) {
+    const prepared = prepareInputs();
+    activeStageRuntime.assertStart(config, config.targetStage === "stage1"
+      ? prepared.stage1Rows : prepared.stageItems[config.targetStage]);
+  }
+  // 先通过阶段/行冲突校验，再清除显式重跑行的旧结果。
+  if (joining) forgetRequestedResultIndexes(config);
+  const launchQueue = () => {
+    if (joining) activeStageRuntime.start(config, labels, queue, stageItems);
+    else runQueue(queue, rows, config, labels, stageItems).catch((error) => {
+      status.error = error.message || String(error);
+      pushLog(status.error);
+      finish();
+    });
+    return clientStatus({ includeResults: false });
+  };
 
   if (config.targetStage === "stage2") {
-    if (!config.stylistConfig && !config.singleModelPersona) {
-      const error = new Error("请先在阶段二选择模型预设以启用文学复审。");
-      error.code = "STAGE2_CONFIG_MISSING";
-      throw error;
-    }
     const prepared = prepareInputs();
     stageItems = prepared.stageItems;
     status.skippedDone += prepared.skippedDone;
     const items = stageItems.stage2;
     const resumedStage3Count = stageItems.stage3.length;
-    status.queued = items.length + resumedStage3Count;
+    if (joining) status.queued += items.length + resumedStage3Count;
+    else status.queued = items.length + resumedStage3Count;
     pushLog(`阶段二 文学复审：共 ${items.length} 行初审修改建议与存疑行进入复审队列。`);
     if (resumedStage3Count) {
       pushLog(`级联续跑：${resumedStage3Count} 行已有复审结论、只差仲裁，直接进入仲裁队列（不再重跑复审）。`);
     }
-    if (status.queued === 0) {
+    if (items.length + resumedStage3Count === 0) {
       pushLog("阶段二 文学复审：当前没有需要复审的初审修改建议或存疑行。");
-      finish();
+      if (!joining) finish();
       return clientStatus({ includeResults: false });
     }
-    runQueue([], rows, config, labels, stageItems).catch((error) => {
-      status.error = error.message || String(error);
-      pushLog(status.error);
-      finish();
-    });
-    return clientStatus({ includeResults: false });
+    return launchQueue();
   }
 
   if (config.targetStage === "stage3") {
-    if (!config.arbiterConfig && !config.singleModelPersona) {
-      const error = new Error("请先在阶段三选择模型预设以启用终审仲裁。");
-      error.code = "STAGE3_CONFIG_MISSING";
-      throw error;
-    }
     const prepared = prepareInputs();
     stageItems = prepared.stageItems;
     status.skippedDone += prepared.skippedDone;
     const items = stageItems.stage3;
-    status.queued = items.length;
+    if (joining) status.queued += items.length;
+    else status.queued = items.length;
     pushLog(`阶段三 终审仲裁：共 ${items.length} 行复审分歧进入仲裁队列。`);
     if (items.length === 0) {
       pushLog("阶段三 终审仲裁：当前没有需要终审仲裁的分歧行。");
-      finish();
+      if (!joining) finish();
       return clientStatus({ includeResults: false });
     }
-    runQueue([], rows, config, labels, stageItems).catch((error) => {
-      status.error = error.message || String(error);
-      pushLog(status.error);
-      finish();
-    });
-    return clientStatus({ includeResults: false });
+    return launchQueue();
   }
 
   // 对照表预处理：先于规则/相似度预筛运行——命中的行直接用表里的内容判定，不再交给模型。
@@ -1112,16 +1150,12 @@ async function startProofread(input) {
     queue.push(row);
   }
 
-  status.queued = queue.length + resumedStage2Count + resumedStage3Count;
+  if (joining) status.queued += queue.length + resumedStage2Count + resumedStage3Count;
+  else status.queued = queue.length + resumedStage2Count + resumedStage3Count;
   pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2Count ? `；另有 ${resumedStage2Count} 行续跑复审` : ""}${resumedStage3Count ? `；另有 ${resumedStage3Count} 行续跑仲裁` : ""}。`);
   pushLog(describeConcurrencyPolicy(config.concurrency));
   pushLog(describePolicy());
-  runQueue(queue, rows, config, labels, stageItems).catch((error) => {
-    status.error = error.message || String(error);
-    pushLog(status.error);
-    finish();
-  });
-  return clientStatus({ includeResults: false });
+  return launchQueue();
 }
 
 async function listModels(input = {}) {
@@ -1228,9 +1262,23 @@ function modelFallbackForBaseUrl(baseUrl) {
   return fallback ? fallback.models : [];
 }
 
-function stopProofread() {
+function stopProofread(payload = {}) {
+  const invalidPayload = payload === null || (typeof payload !== "string" && (typeof payload !== "object" || Array.isArray(payload)));
+  const stage = !invalidPayload && (typeof payload === "string" ? payload : payload.stage);
+  if (invalidPayload || (stage !== undefined && !["all", "stage1", "stage2", "stage3"].includes(stage))) {
+    const error = new Error("停止请求的阶段必须是 stage1、stage2、stage3 或 all。");
+    error.code = "INVALID_STAGE";
+    throw error;
+  }
   if (!status.running) return clientStatus({ includeResults: false });
+  if (["stage1", "stage2", "stage3"].includes(stage) && status.kind !== "prefilter") {
+    activeStageRuntime?.stop(stage);
+    return clientStatus({ includeResults: false });
+  }
   status.stopRequested = true;
+  for (const control of Object.values(status.stageControls)) {
+    if (control.running) control.stopRequested = true;
+  }
   pushLog(status.kind === "prefilter" ? "收到终止请求，正在停止预筛选。" : "收到终止请求，正在停止新的 AI 调用。");
   for (const controller of controllers) controller.abort();
   if (typeof currentQueueWakeup === "function") {
@@ -1347,28 +1395,20 @@ function parseRateLimitReason(error) {
   return "接口频控限制";
 }
 
-// all 模式只有在阶段二真的配了模型时才级联：否则 runStage2Stylist 会回落主配置，
-// 等于背着用户多跑一轮复审。抽成纯函数是为了让这条前提能被直接断言。
-// 阶段编排只有两个输入：从哪一段起步（targetStage），以及这条流水线到底有几段（下游配没配模型）。
-// 行为统一为「从起点一路推进到已启用的尽头」——只跑单阶段就是下游没配模型，
-// 不再有「级联 / 不级联」的模式开关：那会让「阶段一 开始」这一个按钮同时表示两件事。
+// 单阶段启动只运行自身；只有一键开始的 all 明确启用已配置的下游流水线。
 function stagePlan(config = {}) {
   const persona = Boolean(config.singleModelPersona);
-  const hasStylist = Boolean(config.stylistConfig) || persona;
-  const hasArbiter = (Boolean(config.arbiterConfig) || persona) && config.arbiterEnabled !== false;
-  // "all" 是旧客户端传来的兼容值，语义等同「从阶段一起步」。
+  const hasStylist = Boolean(config.stylistConfig || config.stylistPresets?.length) || persona;
+  const hasArbiter = (Boolean(config.arbiterConfig || config.arbiterPresets?.length) || persona) && config.arbiterEnabled !== false;
+  const cascade = config.targetStage === "all";
   const startsAt = config.targetStage === "stage2" ? "stage2"
     : (config.targetStage === "stage3" ? "stage3" : "stage1");
   return {
     startsAt,
-    // 从阶段一起步时初审产出的行继续往下走；从阶段二起步时复审产生的分歧继续往下走。
-    // 仲裁只能接在复审后面，所以从阶段一起步时必须先有复审才谈得上仲裁。
-    cascadeToStylist: startsAt === "stage1" && hasStylist,
-    // 语义是「本次流水线覆盖到仲裁」，不是「有没有下游可级联」：从阶段三起步时本次跑的就是仲裁，
-    // 报 false 会让客户端把阶段三卡片误显示成「未接入」，而仲裁其实正在一行行跑。
-    cascadeToArbiter: startsAt === "stage3"
-      ? hasArbiter
-      : ((startsAt === "stage1" ? hasStylist : startsAt === "stage2") && hasArbiter),
+    // 一键开始独立纳入已配置的阶段；只有复审同时开启时，才有初审→复审→仲裁的新行移交。
+    // 单独纳入仲裁时只消费已有复审分歧，不允许初审跳过复审直达仲裁。
+    cascadeToStylist: cascade && hasStylist,
+    cascadeToArbiter: cascade && hasArbiter,
   };
 }
 
@@ -1380,6 +1420,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // 流水线阶段解耦队列（Staged Pipelining Queues）
   // 阶段内派发由各自 module 持有；这里保留初审到复审、复审到仲裁的级联业务。
   const plan = stagePlan(config);
+  const stageConfigs = { stage1: config, stage2: config, stage3: config };
+  const stageLabels = { stage1: labels, stage2: labels, stage3: labels };
+  const links = { stage2: plan.cascadeToStylist, stage3: plan.cascadeToStylist && plan.cascadeToArbiter };
   let dispatchWake = null;
   let stage2ReviewedLive = 0;
   const stage2AttitudesLive = { accept: 0, modify: 0, reject: 0, escalate: 0 };
@@ -1387,17 +1430,17 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     ...CONCURRENCY_POLICY,
     minStepIntervalMs: Number(process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL) || CONCURRENCY_POLICY.minStepIntervalMs,
   };
-  const stageDefinitions = {
+  const stageDefinitionsFor = (stageConfig) => ({
     stage1: {
       label: "初审",
-      presets: config.presetPool?.length ? config.presetPool : [{ ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" }],
-      fallbackConfig: { ...config, presetId: config.presetId || "主配置", name: config.presetName || "主配置" },
-      fallbackConcurrency: config.concurrency,
+      presets: stageConfig.presetPool?.length ? stageConfig.presetPool : [{ ...stageConfig, presetId: stageConfig.presetId || "主配置", name: stageConfig.presetName || "主配置" }],
+      fallbackConfig: { ...stageConfig, presetId: stageConfig.presetId || "主配置", name: stageConfig.presetName || "主配置" },
+      fallbackConcurrency: stageConfig.concurrency,
     },
-    stage2: { label: "文学复审", presets: config.stylistPresets, fallbackConfig: config.stylistConfig, fallbackConcurrency: config.concurrency },
-    stage3: { label: "终审仲裁", presets: config.arbiterPresets, fallbackConfig: config.arbiterConfig, fallbackConcurrency: 2 },
-  };
-  const dispatchers = Object.fromEntries(Object.entries(stageDefinitions).map(([stageKey, definition]) => [stageKey,
+    stage2: { label: "文学复审", presets: stageConfig.stylistPresets, fallbackConfig: stageConfig.stylistConfig, fallbackConcurrency: stageConfig.concurrency },
+    stage3: { label: "终审仲裁", presets: stageConfig.arbiterPresets, fallbackConfig: stageConfig.arbiterConfig, fallbackConcurrency: 2 },
+  });
+  const dispatchers = Object.fromEntries(Object.entries(stageDefinitionsFor(config)).map(([stageKey, definition]) => [stageKey,
     createStageDispatch({ ...definition, stageKey, policy, wake: () => dispatchWake?.() }),
   ]));
   dispatchers.stage1.enqueue(plan.startsAt === "stage1" ? queue : []);
@@ -1406,6 +1449,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const activeStages = new Set([plan.startsAt]);
   if (plan.cascadeToStylist) activeStages.add("stage2");
   if (plan.cascadeToArbiter) activeStages.add("stage3");
+  for (const stage of activeStages) status.stageControls[stage] = { running: true, stopRequested: false };
   breakerRuntime = { dispatchers, activeStages, brokenStages: new Set(), syncQueues: null };
   const stageAllowance = (stageKey) => dispatchers[stageKey].snapshot().concurrency;
   const stageAllowanceMax = (stageKey) => dispatchers[stageKey].snapshot().concurrencyMax;
@@ -1426,13 +1470,20 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
     status.stagePipelines.stage2.reviewed = stage2ReviewedLive;
     status.stagePipelines.stage2.attitudes = { ...stage2AttitudesLive };
+    for (const stage of ["stage1", "stage2", "stage3"]) {
+      const control = status.stageControls[stage];
+      const state = status.stagePipelines[stage];
+      const upstream = stage === "stage2" ? "stage1" : (stage === "stage3" ? "stage2" : "");
+      const waiting = upstream && links[stage] && status.stageControls[upstream].running;
+      control.running = Boolean(state.inFlight || (!control.stopRequested && activeStages.has(stage) && (state.pending || waiting)));
+    }
   }
   breakerRuntime.syncQueues = syncStagePipelineQueues;
   syncStagePipelineQueues();
   if (plan.cascadeToStylist) {
     pushLog(`级联流水线：从阶段一起步，初审完一行立即移交复审（并发上限 ${stageAllowanceMax("stage2")}）${plan.cascadeToArbiter ? `，复审出分歧立即移交仲裁（并发上限 ${stageAllowanceMax("stage3")}）` : "，阶段三终审仲裁未启用"}，不等前一阶段整体跑完。`);
   } else if (plan.cascadeToArbiter) {
-    pushLog(`级联流水线：从阶段二起步，复审出分歧立即移交仲裁（并发上限 ${stageAllowanceMax("stage3")}），不等复审整体跑完。`);
+    pushLog(`一键开始：初审独立运行，仲裁仅处理已有复审分歧（并发上限 ${stageAllowanceMax("stage3")}）；本次未开启复审，初审结果不会直接移交仲裁。`);
   }
 
   function syncConcurrency() {
@@ -1458,7 +1509,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
   function feedback(stageKey, request, kind, error) {
     const result = dispatchers[stageKey].feedback(request, {
-      kind, error, stopped: status.stopRequested,
+      kind, error, stopped: status.stopRequested || status.stageControls[stageKey].stopRequested,
       rateLimitReason: kind === "rate-limit" ? parseRateLimitReason(error) : "",
     });
     for (const event of result.events) {
@@ -1545,12 +1596,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       };
       const allEmpty = ["stage1", "stage2", "stage3"].every(stageDrained);
 
-      if (status.stopRequested || allEmpty) {
+      const noInFlight = Object.values(dispatchers).every((dispatcher) => dispatcher.snapshot().inFlight === 0);
+      if (allEmpty || (status.stopRequested && noInFlight)) {
         settled = true;
         for (const dispatcher of Object.values(dispatchers)) dispatcher.dispose();
         dispatchWake = null;
         currentQueueWakeup = null;
         activePresetPoolUpdater = null;
+        activeStageRuntime = null;
         finish();
         resolve();
       }
@@ -1561,6 +1614,72 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       dispatch();
     };
 
+    activeStageRuntime = {
+      assertStart(nextConfig, items = []) {
+        const stage = nextConfig.targetStage;
+        if (status.stageControls[stage].running) {
+          const error = new Error(`${STAGE_OUTCOME_LABELS[stage]}正在运行或正在停止，请等待其收尾。`);
+          error.code = "RUNNING";
+          throw error;
+        }
+        const indexes = new Set(items.map((item) => Number(item.row?.index ?? item.index)));
+        const conflicts = new Set();
+        for (const [otherStage, dispatcher] of Object.entries(dispatchers)) {
+          if (otherStage === stage) continue;
+          const state = dispatcher.snapshot();
+          for (const index of [...state.pendingRows, ...state.activeRows]) {
+            if (indexes.has(Number(index))) conflicts.add(index);
+          }
+        }
+        if (conflicts.size) {
+          const error = new Error(`有 ${conflicts.size} 行正在其他阶段处理（${[...conflicts].slice(0, 8).join("、")}），请待这些行完成后再启动，避免覆盖审核结果。`);
+          error.code = "RUNNING";
+          throw error;
+        }
+      },
+      start(nextConfig, nextLabels, nextQueue, nextStageItems) {
+        const stage = nextConfig.targetStage;
+        dispatchers[stage].dispose();
+        dispatchers[stage] = createStageDispatch({
+          ...stageDefinitionsFor(nextConfig)[stage], stageKey: stage, policy, wake: () => dispatchWake?.(),
+        });
+        stageConfigs[stage] = nextConfig;
+        stageLabels[stage] = nextLabels;
+        status.stageControls[stage] = { running: true, stopRequested: false };
+        activeStages.add(stage);
+        breakerRuntime.brokenStages.delete(stage);
+        if (stage === "stage1") links.stage2 = false;
+        else if (stage === "stage2") { links.stage2 = false; links.stage3 = false; }
+        else links.stage3 = false;
+        status.stageCascade = { toStylist: links.stage2, toArbiter: links.stage3 };
+        dispatchers[stage].enqueue(stage === "stage1" ? nextQueue : nextStageItems[stage]);
+        syncStagePipelineQueues();
+        dispatch();
+      },
+      stop(stage) {
+        const control = status.stageControls[stage];
+        if (!control.running) return;
+        control.stopRequested = true;
+        activeStages.delete(stage);
+        if (stage === "stage1") links.stage2 = false;
+        else if (stage === "stage2") { links.stage2 = false; links.stage3 = false; }
+        else links.stage3 = false;
+        status.stageCascade = { toStylist: links.stage2, toArbiter: links.stage3 };
+        const error = Object.assign(new Error("审核阶段已终止。"), { code: "ABORTED" });
+        for (const item of dispatchers[stage].drainPending()) {
+          if (stage !== "stage1") {
+            recordStageError(stage, item.row.index, error, "stopped");
+            addResult(withStageFailureNote(finalizeRowResult(item, stageConfigs[stage]), stage, error, { stopped: true, refusal: false }));
+          }
+        }
+        dispatchers[stage].cancelWakeups();
+        for (const controller of stageControllers[stage]) controller.abort();
+        pushLog(`收到${STAGE_OUTCOME_LABELS[stage]}终止请求，仅停止本阶段，其他阶段继续运行。`);
+        syncStagePipelineQueues();
+        dispatch();
+      },
+    };
+
     function dispatch() {
       if (status.stopRequested || settled) {
         checkDone();
@@ -1569,11 +1688,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       const execute = { stage1: executeStage1, stage2: executeStage2, stage3: executeStage3 };
       // 仍优先终审，再复审，最后初审；每个阶段内部保持可用预设接 FIFO 队头。
       for (const stageKey of ["stage3", "stage2", "stage1"]) {
-        while (!status.stopRequested && !settled) {
+        while (!status.stopRequested && !settled && !status.stageControls[stageKey].stopRequested) {
           const next = dispatchers[stageKey].take();
           if (!next) break;
           syncStagePipelineQueues();
-          execute[stageKey](next.item, next.request);
+          requestStageContext.run(stageKey, () => execute[stageKey](next.item, next.request));
         }
       }
       checkDone();
@@ -1582,6 +1701,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     dispatchWake = dispatch;
 
     async function executeStage1(row, request) {
+      const config = stageConfigs.stage1;
+      const labels = stageLabels.stage1;
       status.active.push(row.index);
       syncStagePipelineQueues();
       // 这一行正在被（重新）处理：先撤掉它上一次的初审异常明细，成功就不再补记，失败才重新登记。
@@ -1589,14 +1710,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       // 请求句柄固定派发时的通道与时间；反馈不会按同 id 重查后来加入的通道。
       try {
         const s1 = await runStage1Gatekeeper(row, allRows, config, labels);
-        if (!status.stopRequested) {
+        if (!isStageStopped("stage1")) {
           feedback("stage1", request, "success");
         }
 
         const isNeedsEdit = Boolean(s1.decision?.needsEdit && (s1.decision?.revisedText || s1.decision?.better === "counterpart" || s1.decision?.better === "neither"));
         const isUnclearOrNeedsContext = s1.decision?.needsContext === true || s1.decision?.better === "unclear" || s1.decision?.decision === "unclear";
         // 认知审核新契约：无需修改且非存疑行 Fast Pass 放行直接完成；提改行与存疑待判行在级联模式下均流入 Stage 2！
-        const canCascadeToStage2 = plan.cascadeToStylist && (isNeedsEdit || isUnclearOrNeedsContext);
+        const canCascadeToStage2 = links.stage2 && !isStageStopped("stage2") && (isNeedsEdit || isUnclearOrNeedsContext);
 
         if (!canCascadeToStage2) {
           // 命中无需修改直通放行，或这条流水线没有下游：无需 Stage 2，直接完成输出
@@ -1616,8 +1737,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
         // 频控识别与并发调度无关：任何并发上限下 429 都要退避重试，不能当成普通失败一路刷到队列尽头。
-        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
-        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage1");
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage1");
 
         if (isRefusal) {
           feedback("stage1", request, "not-limited");
@@ -1643,7 +1764,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           }
           status.active = status.active.filter((idx) => idx !== row.index);
         } else {
-          const isStopped = status.stopRequested && !fatalRequestError;
+          const isStopped = isStageStopped("stage1") && !fatalRequestError;
           recordStageError("stage1", row.index, error, isStopped ? "stopped" : "");
           addResult({
             runId: status.runId,
@@ -1656,7 +1777,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           });
           if (fatalRequestError) {
             stopForFatalRequestError(error);
-          } else if (!status.stopRequested) {
+          } else if (!isStageStopped("stage1")) {
             feedback("stage1", request, "failure", error);
           }
           status.active = status.active.filter((idx) => idx !== row.index);
@@ -1669,6 +1790,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
 
     async function executeStage2(s1Item, request) {
+      const config = stageConfigs.stage2;
+      const labels = stageLabels.stage2;
       if (!status.active.includes(s1Item.row.index)) status.active.push(s1Item.row.index);
       syncStagePipelineQueues();
       // 与初审对称：这一行正在被（重新）复审，先撤掉上一次的复审异常明细，失败才重新登记。
@@ -1679,7 +1802,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 复审内部已经把异常回退成「采纳初审方案」，但这一行仍必须走统一错误处理：
         // 频控时重试、其余计入复审异常；静默吞掉的话它在指标上会凭空消失。
         if (s2.stageError) throw s2.stageError;
-        if (!status.stopRequested) {
+        if (!isStageStopped("stage2")) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
           feedback("stage2", request, "success");
         }
@@ -1693,7 +1816,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             stage2AttitudesLive[liveAttitude] += 1;
           }
         }
-        if (s2.arbCheck?.triggered && plan.cascadeToArbiter) {
+        if (s2.arbCheck?.triggered && links.stage3 && !isStageStopped("stage3")) {
           // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
           dispatchers.stage3.enqueue(s2);
           syncStagePipelineQueues();
@@ -1706,10 +1829,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage2");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
-        // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
-        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
+        // 必须立刻终止所属阶段；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage2");
         if (isRateLimit && feedback("stage2", request, "rate-limit", error)) {
           // 派发 module 已将本行放回复审队头。
         } else {
@@ -1720,7 +1843,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           } else {
             pushLog(`第 ${s1Item.row.index} 行：Stylist 异常（${error.message}），回退至初审方案。`);
           }
-          const isStopped = status.stopRequested && !fatalRequestError;
+          const isStopped = isStageStopped("stage2") && !fatalRequestError;
           status.stageMetrics.stage2Errors += 1;
           recordStageError("stage2", s1Item.row.index, error, isStopped ? "stopped" : (isRateLimit ? "rate_limit" : (isRefusal ? "refusal" : "")));
           const result = withStageFailureNote(finalizeRowResult(s1Item, config), "stage2", error, { stopped: isStopped, refusal: isRefusal });
@@ -1729,13 +1852,13 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           if (fatalRequestError) stopForFatalRequestError(error);
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
           else if (isRefusal) feedback("stage2", request, "not-limited");
-          else if (!status.stopRequested && !isRateLimit) {
+          else if (!isStageStopped("stage2") && !isRateLimit) {
             feedback("stage2", request, "failure", error);
           }
         }
       } finally {
         dispatchers.stage2.release(request, { ok: !status.stageErrors.stage2[s1Item.row.index] });
-        if (!plan.cascadeToArbiter || !hasPending("stage3", s1Item.row.index)) {
+        if (!links.stage3 || !hasPending("stage3", s1Item.row.index)) {
           if (!hasPending("stage2", s1Item.row.index)) {
             status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           }
@@ -1746,6 +1869,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     }
 
     async function executeStage3(s2Item, request) {
+      const config = stageConfigs.stage3;
+      const labels = stageLabels.stage3;
       if (!status.active.includes(s2Item.row.index)) status.active.push(s2Item.row.index);
       syncStagePipelineQueues();
       // 同理：先撤掉这一行上一次的仲裁异常明细。
@@ -1756,7 +1881,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 同理：仲裁失败的行走统一错误处理（频控重试 / 计入仲裁异常 / 回退复审方案），
         // 别让「处理了却不定案」变成静默。
         if (s3.stageError) throw s3.stageError;
-        if (!status.stopRequested) {
+        if (!isStageStopped("stage3")) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
           feedback("stage3", request, "success");
         }
@@ -1765,11 +1890,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         status.active = status.active.filter((idx) => idx !== s2Item.row.index);
       } catch (error) {
         const isRefusal = isModelRefusalError(error);
-        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !status.stopRequested;
+        const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage3");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
-        // 必须立刻终止整条流水线；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
+        // 必须立刻终止所属阶段；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
-        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !status.stopRequested;
+        const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage3");
         if (isRateLimit && feedback("stage3", request, "rate-limit", error)) {
           // 派发 module 已将本行放回仲裁队头。
         } else {
@@ -1780,7 +1905,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           } else {
             pushLog(`第 ${s2Item.row.index} 行：Arbiter 异常（${error.message}），回退至复审方案。`);
           }
-          const isStopped = status.stopRequested && !fatalRequestError;
+          const isStopped = isStageStopped("stage3") && !fatalRequestError;
           status.stageMetrics.stage3Errors += 1;
           recordStageError("stage3", s2Item.row.index, error, isStopped ? "stopped" : (isRateLimit ? "rate_limit" : (isRefusal ? "refusal" : "")));
           const result = withStageFailureNote(finalizeRowResult(s2Item, config), "stage3", error, { stopped: isStopped, refusal: isRefusal });
@@ -1788,7 +1913,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) stopForFatalRequestError(error);
           else if (isRefusal) feedback("stage3", request, "not-limited");
-          else if (!status.stopRequested && !isRateLimit) {
+          else if (!isStageStopped("stage3") && !isRateLimit) {
             feedback("stage3", request, "failure", error);
           }
         }
@@ -1812,6 +1937,8 @@ function finish() {
   status.finishedAt = new Date().toISOString();
   status.active = [];
   status.stagePipelines = createStagePipelines();
+  for (const control of Object.values(status.stageControls)) control.running = false;
+  activeStageRuntime = null;
   // 收尾时立即落盘、不等节流：这是刷新页面后能把本轮成果重新交付出去的关键一份。
   proofreadResults.finish(status.finishedAt);
   const isPrefilter = status.kind === "prefilter";
@@ -1856,6 +1983,8 @@ function finish() {
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
+  } else if (!isPrefilter && Object.values(status.stageControls).some((control) => control.stopRequested)) {
+    pushLog("AI 校对已结束（含已停止阶段）。");
   } else {
     pushLog(isPrefilter ? "预筛选完成。" : "AI 校对完成。");
   }
@@ -1955,6 +2084,13 @@ function isFatalRequestError(error) {
 }
 
 function stopForFatalRequestError(error) {
+  const stage = requestStageContext.getStore();
+  if (stage && activeStageRuntime) {
+    status.error = `${STAGE_OUTCOME_LABELS[stage]}接口配置或响应异常，该阶段已自动终止：${error.message || String(error)}`;
+    pushLog(status.error);
+    activeStageRuntime.stop(stage);
+    return;
+  }
   status.stopRequested = true;
   status.error = `AI 接口配置或响应异常，任务已自动终止：${error.message || String(error)}`;
   pushLog(status.error);
@@ -3559,7 +3695,7 @@ async function callClaude(messages, config) {
 // 请求体构造与 JSON 传输以共享传输层 (src/ai/llm-client.js) 为唯一事实来源：
 // 那里负责出站地址校验（拒绝云元数据 / link-local）、禁止自动跟随重定向与超时。
 // AI 校对只在两点上做领域包装：GPT 系列放行任意合法推理档位（normalizeReasoningEffort），
-// 以及把本轮请求登记到 `controllers` 以便「停止」时整体中止。
+// 以及按当前阶段登记请求控制器，以支持定向停止与整体停止。
 
 function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
   return buildSharedChatCompletionBody(messages, config, modelMeta, { effortNormalizer: normalizeReasoningEffort });
@@ -3567,15 +3703,30 @@ function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
 
 async function fetchJson(url, options, fetchOptions = {}) {
   const track = fetchOptions.track !== false;
+  const stage = requestStageContext.getStore();
+  const abortIfStopped = () => {
+    if (track && stage && isStageStopped(stage)) {
+      throw Object.assign(new Error("审核阶段已终止。"), { code: "ABORTED" });
+    }
+  };
+  abortIfStopped();
   const controller = new AbortController();
-  if (track) controllers.add(controller);
+  if (track) {
+    controllers.add(controller);
+    if (stage) stageControllers[stage].add(controller);
+  }
   try {
-    return await sharedFetchJson(url, options, {
+    const result = await sharedFetchJson(url, options, {
       timeoutMs: fetchOptions.timeoutMs || 90000,
       signal: controller.signal,
     });
+    abortIfStopped();
+    return result;
   } finally {
-    if (track) controllers.delete(controller);
+    if (track) {
+      controllers.delete(controller);
+      if (stage) stageControllers[stage].delete(controller);
+    }
   }
 }
 

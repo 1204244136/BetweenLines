@@ -969,7 +969,7 @@ test("阶段流水线契约：保留复审实时计数与立场分布，缺省�
   assert.equal(dirty.stage2.attitudes.modify, 0);
 });
 
-test("旧版常驻服务：没有回报 stageCascade 时明确提示重启，并让阶段三显示「未接入」", () => {
+test("旧版常驻服务：没有回报 stageControls 时明确提示重启，未活动阶段保持待命", () => {
   const ui = createWorkbench();
 
   ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
@@ -991,11 +991,10 @@ test("旧版常驻服务：没有回报 stageCascade 时明确提示重启，并
     });
   `);
 
-  // 旧版服务不回报 stageCascade：级联范围无从得知，必须明说，别让用户对着
-  // 「配了阶段三却从来不仲裁」猜原因。
-  assert.match(toastMessages(ui).join("|"), /控制台服务未更新/, "缺 stageCascade 时必须提示重启服务");
-  assert.equal(ui.element("stage3StatusPill").textContent, "未接入", "配了阶段三却没接入本次流水线时要显式标出");
-  assert.match(ui.element("stage3StatusPill").title, /没有接入终审仲裁/);
+  assert.match(toastMessages(ui).join("|"), /控制台服务未更新/, "缺阶段独立启停状态时必须提示重启服务");
+  assert.equal(ui.element("stage3StatusPill").textContent, "待命", "配置仲裁模型不代表当前已启动仲裁");
+  assert.equal(ui.element("stage3Start").disabled, false);
+  assert.equal(ui.element("stage3Stop").disabled, true);
 });
 
 test("旧版常驻服务：提示一轮只发一次，不刷屏", () => {
@@ -1019,165 +1018,6 @@ test("旧版常驻服务：提示一轮只发一次，不刷屏", () => {
 
   const hits = toastMessages(ui).filter((text) => /控制台服务未更新/.test(text));
   assert.equal(hits.length, 1, "同一轮里只提示一次");
-});
-
-// 级联回归用的工作台：下游配没配模型由预设决定——只把下拉框 value 设成一个不存在的 id
-// 不算「配了阶段二」，取不到预设就等于那一段没启用。
-function createCascadeWorkbench(options = {}) {
-  const ui = createWorkbench(storageFixture({}), options);
-  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
-    { id: "preset-s2", name: "Gemini 复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "gemini-3.8-flash" },
-    { id: "preset-s3", name: "Kimi 仲裁", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "kimi-k3" },
-  ]));
-  ui.run("restoreAiConfig()");
-  return ui;
-}
-
-// 服务端如实回报的「起点 + 级联范围」：客户端所有按钮态与文案都以它为准。
-function cascadeStatus(runId, { toStylist = true, toArbiter = true } = {}) {
-  return {
-    ok: true,
-    ai: { kind: "ai", running: true, runId, stageMode: "stage1", stageCascade: { toStylist, toArbiter }, results: [] },
-  };
-}
-
-test("起点语义：三个「开始」只报起点，往下走到哪一段由下游配置决定", async () => {
-  const ui = createCascadeWorkbench({
-    apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-origin", results: [] } },
-    },
-  });
-
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
-  const fromStage1 = ui.run("cascadeFromStage('stage1')");
-  assert.equal(fromStage1.toStylist, true);
-  assert.equal(fromStage1.toArbiter, true);
-  const fromStage2 = ui.run("cascadeFromStage('stage2')");
-  assert.equal(fromStage2.toStylist, false, "从阶段二起步不会再回到阶段二");
-  assert.equal(fromStage2.toArbiter, true);
-  const fromStage3 = ui.run("cascadeFromStage('stage3')");
-  assert.equal(fromStage3.toStylist, false);
-  assert.equal(fromStage3.toArbiter, false, "阶段三是尽头，没有下游");
-
-  // 前端只报起点，级联由服务端按「下游配没配模型」决定。
-  await ui.element("stage1Start").dispatch("click");
-  assert.equal(ui.posts.at(-1).body.stage, "stage1");
-
-  // 只配阶段二时，从阶段二起步也不会再往下走。
-  ui.run('stagePresetSelections.stage3 = [];');
-  const soloStage2 = ui.run("cascadeFromStage('stage2')");
-  assert.equal(soloStage2.toStylist, false);
-  assert.equal(soloStage2.toArbiter, false);
-  const soloStage1 = ui.run("cascadeFromStage('stage1')");
-  assert.equal(soloStage1.toStylist, true);
-  assert.equal(soloStage1.toArbiter, false, "没配仲裁就不该报会走到仲裁");
-});
-
-test("起点语义：级联运行中三个「开始」全禁用、三个「停止」全可用（停的是同一条流水线）", async () => {
-  const runningAi = cascadeStatus("run-cascade");
-  const ui = createCascadeWorkbench({
-    apiResponses: { "/api/ai-proofread/start": runningAi },
-    statusQueue: [runningAi, runningAi, runningAi, runningAi],
-  });
-
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
-  await ui.element("stage1Start").dispatch("click");
-  // 启动后紧接着的状态轮询是异步的：先把它抽干，避免它把本地状态冲掉。
-  for (let step = 0; step < 24; step += 1) await Promise.resolve();
-
-  assert.equal(ui.run("runningAiStage"), "stage1", "起点仍是阶段一");
-  const live = ui.run("currentStageCascade");
-  assert.equal(live.toStylist, true, "级联范围以服务端回报为准");
-  assert.equal(live.toArbiter, true);
-
-  assert.equal(ui.element("stage1Start").disabled, true);
-  assert.equal(ui.element("stage2Start").disabled, true);
-  assert.equal(ui.element("stage3Start").disabled, true);
-  assert.equal(ui.element("stage1Stop").disabled, false);
-  assert.equal(ui.element("stage2Stop").disabled, false, "级联中任意停止按钮停的都是整条流水线，不能出现停不掉的死角");
-  assert.equal(ui.element("stage3Stop").disabled, false);
-});
-
-test("起点语义：当前流水线已覆盖下游时，点阶段二/三只提示已包含，不再排队", async () => {
-  const runningAi = cascadeStatus("run-cascade-live");
-  const ui = createCascadeWorkbench({
-    apiResponses: { "/api/ai-proofread/start": runningAi },
-    statusQueue: [runningAi, runningAi, runningAi, runningAi],
-  });
-
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
-  await ui.element("stage1Start").dispatch("click");
-  for (let step = 0; step < 24; step += 1) await Promise.resolve();
-  const postsBefore = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
-
-  await ui.element("stage2Start").dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), false, "已覆盖时不再退回排队等待");
-  assert.match(toastMessages(ui).join("|"), /阶段二已包含在当前流水线中/);
-
-  await ui.element("stage3Start").dispatch("click");
-  assert.equal(ui.run("stage3WaitingForStage2"), false);
-  assert.match(toastMessages(ui).join("|"), /阶段三已包含在当前流水线中/);
-
-  assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, postsBefore, "绝不发起并发的 start 请求");
-});
-
-test("起点语义：流水线跑完直接回报收尾，不走排队接力", async () => {
-  const runningAi = cascadeStatus("run-cascade-done");
-  const ui = createCascadeWorkbench({
-    apiResponses: { "/api/ai-proofread/start": runningAi },
-    statusQueue: [runningAi, runningAi, runningAi, runningAi],
-  });
-
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
-  await ui.element("stage1Start").dispatch("click");
-  for (let step = 0; step < 24; step += 1) await Promise.resolve();
-
-  ui.run(`
-    renderAiStatus({
-      kind: "ai",
-      running: false,
-      stopRequested: false,
-      finishedAt: new Date().toISOString(),
-      runId: "run-cascade-done",
-      stageMode: "stage1",
-      stageCascade: { toStylist: true, toArbiter: true },
-      results: [],
-    });
-  `);
-
-  assert.equal(ui.run("runningAiStage"), null);
-  const after = ui.run("currentStageCascade");
-  assert.equal(after.toStylist, false, "任务结束后级联范围必须清零");
-  assert.equal(after.toArbiter, false);
-  assert.match(toastMessages(ui).join("|"), /流水线已完成：初审 → 复审 → 仲裁/);
-});
-
-test("起点语义：页面刷新后按服务端回报的起点与级联范围恢复按钮态", async () => {
-  const ui = createWorkbench(storageFixture({}), {
-    apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-idle", results: [] } },
-    },
-  });
-
-  // 模拟刷新：本地 runningAiStage 与级联范围都丢了，只剩服务端回报的这一份。
-  assert.equal(ui.run("runningAiStage"), null);
-  ui.run(`
-    renderAiStatus({
-      kind: "ai",
-      running: true,
-      runId: "run-cascade-restored",
-      stageMode: "stage1",
-      stageCascade: { toStylist: true, toArbiter: false },
-      results: [],
-    });
-  `);
-
-  assert.equal(ui.run("runningAiStage"), "stage1");
-  const restored = ui.run("currentStageCascade");
-  assert.equal(restored.toStylist, true);
-  assert.equal(restored.toArbiter, false);
-  assert.equal(ui.element("stage2Start").disabled, true, "恢复级联态后阶段二开始按钮必须禁用");
-  assert.equal(ui.element("stage3Stop").disabled, false, "级联态下任意停止按钮都可用（停的是整条流水线）");
 });
 
 test("多阶段审核轨迹：右侧卡片仅保留评审意见与分析，不重复渲染改案文本", () => {
@@ -1208,107 +1048,6 @@ test("多阶段审核轨迹：右侧卡片仅保留评审意见与分析，不�
   assert.doesNotMatch(summaryHtml, /class="stage-proposal-mini/);
   assert.doesNotMatch(summaryHtml, /初审改案:/);
   assert.doesNotMatch(summaryHtml, /复审改案:/);
-});
-
-test("阶段等待与接力：阶段一运行中点击阶段二进入「等待阶段一」，阶段一完成后自动接力", async () => {
-  const ui = createWorkbench(storageFixture({}), {
-    apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-relay", results: [] } },
-    },
-    statusQueue: [
-      { ok: true, ai: { running: true, runId: "run-relay", results: [] } },
-      { ok: true, ai: { running: true, runId: "run-relay", results: [] } },
-      { ok: true, ai: { running: true, runId: "run-relay", results: [] } },
-      { ok: true, ai: { running: true, runId: "run-relay", results: [] } },
-    ],
-  });
-
-  // 配置阶段二预设
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]');
-
-  // 1. 启动阶段一
-  await ui.element("stage1Start").dispatch("click");
-  assert.equal(ui.run("runningAiStage"), "stage1");
-  assert.equal(ui.element("stage1Start").disabled, true);
-
-  // 2. 当前尚无任何修改建议行，点击阶段二「开始」
-  await ui.element("stage2Start").dispatch("click");
-  // 阶段二应进入等待状态，而不是直接报错
-  assert.equal(ui.run("stage2WaitingForStage1"), true, "阶段二进入等待阶段一状态");
-  assert.equal(ui.element("stage2StatusPill").textContent, "等待阶段一");
-  assert.equal(ui.element("stage2StatusPill").dataset.state, "queued");
-  assert.equal(ui.element("stage2Start").disabled, true);
-  assert.equal(ui.element("stage2Stop").disabled, false, "等待中阶段的停止按钮应激活可供取消");
-  assert.match(toastMessages(ui).join("|"), /等待阶段一产出建议/);
-
-  // 3. 测试点击阶段二「停止」取消排队
-  await ui.element("stage2Stop").dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), false, "点击停止取消阶段二排队等待");
-  assert.match(toastMessages(ui).join("|"), /已取消阶段二文学复审的排队等待/);
-  // 阶段一仍在运行中
-  assert.equal(ui.run("currentAiRunning"), true);
-
-  // 4. 再次点击阶段二「开始」重新排队
-  await ui.element("stage2Start").dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), true);
-
-  // 5. 模拟阶段一产出修改建议行并完成
-  ui.run(`
-    notes["1"] = {
-      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：建议修改\\n初审改案：新方案",
-      manualDone: false,
-      done: false,
-      aiDone: true,
-    };
-    renderAiStatus({
-      kind: "ai",
-      running: false,
-      finishedAt: new Date().toISOString(),
-      runId: "run-relay",
-      results: [],
-    });
-  `);
-
-  // 阶段一完成后，阶段二应自动解除等待，并准备接力调用
-  assert.equal(ui.run("stage2WaitingForStage1"), false);
-  assert.match(toastMessages(ui).join("|"), /自动接力启动阶段二/);
-});
-
-test("阶段等待与接力：已有建议行时在阶段一运行中点击阶段二依然安全排队，不发起并发启动请求", async () => {
-  const ui = createWorkbench(storageFixture({}), {
-    apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
-    },
-    statusQueue: [
-      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
-      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
-      { ok: true, ai: { running: true, runId: "run-relay-2", results: [] } },
-    ],
-  });
-
-  // 1. 启动阶段一
-  await ui.element("stage1Start").dispatch("click");
-  assert.equal(ui.run("runningAiStage"), "stage1");
-  const postsBefore = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
-  assert.equal(postsBefore, 1);
-
-  // 2. 模拟阶段一在运行过程中产出了初审建议行，并配置了阶段二预设
-  ui.run(`
-    stagePresetSelections.stage2 = ["preset-s2"];
-    notes["1"] = {
-      note: "[AI校对]\\n是否需要修改：是\\nGatekeeper初审：建议修改\\n初审改案：新方案",
-      manualDone: false,
-      done: false,
-      aiDone: true,
-    };
-  `);
-
-  // 3. 虽然 notes 中已有初审建议行，但阶段一仍在运行中，点击阶段二应排队而不是发起并发 start 请求
-  await ui.element("stage2Start").dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), true, "必须安全进入排队状态");
-  const postsAfter = ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length;
-  assert.equal(postsAfter, 1, "绝不发起并发 start 请求");
-  assert.match(toastMessages(ui).join("|"), /已有初审建议，等待阶段一全部完成/);
 });
 
 test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确隐藏并清空内容，CSS包含[hidden]保护", () => {
@@ -1748,86 +1487,6 @@ test("差异辅助：diffSummary 严格限制片段数量并对大范围差异�
   const heavyDiff = diffSummary(heavyFrom, heavyTo, labels);
   assert.match(heavyDiff, /差异较大（行文与句式各有特色）：仅供理解参考，严禁把参考列的风格差异当成错误/);
   assert.equal(heavyDiff.includes("- "), false, "大范围差异时收敛，不输出杂乱碎词列表");
-});
-
-test("多阶段控制：阶段一执行时阶段二与阶段三开始按钮状态完全解耦，不被强制绑定禁用", async () => {
-  const runningAiPayload = {
-    running: true,
-    runId: "run-staged-decouple",
-    stagePipelines: {
-      stage1: { inFlight: 10, pending: 25 },
-      stage2: { inFlight: 0, pending: 0 },
-      stage3: { inFlight: 0, pending: 0 },
-    },
-    results: [],
-  };
-  const ui = createWorkbench(storageFixture({}), {
-    apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: runningAiPayload },
-      "/api/ai-proofread/stop": { ok: true, ai: { running: false, stopRequested: true, runId: "run-staged-decouple", results: [] } },
-    },
-    statusQueue: [
-      { ok: true, ai: runningAiPayload },
-      { ok: true, ai: runningAiPayload },
-      { ok: true, ai: runningAiPayload },
-      { ok: true, ai: runningAiPayload },
-      { ok: true, ai: runningAiPayload },
-    ],
-  });
-
-  const s1Start = ui.element("stage1Start");
-  const s1Stop = ui.element("stage1Stop");
-  const s2Start = ui.element("stage2Start");
-  const s2Stop = ui.element("stage2Stop");
-  const s3Start = ui.element("stage3Start");
-  const s3Stop = ui.element("stage3Stop");
-
-  // 1. 启动阶段一
-  await s1Start.dispatch("click");
-  assert.equal(s1Start.disabled, true, "阶段一自身运行中，开始按钮禁用");
-  assert.equal(s1Stop.disabled, false, "阶段一自身运行中，停止按钮激活");
-
-  // 核心断言：阶段二与阶段三在阶段一执行期间绝不被强制绑定禁用
-  assert.equal(s2Start.disabled, false, "阶段二处于待命，开始按钮必须可点击");
-  assert.equal(s2Stop.disabled, true, "阶段二未在运行，停止按钮必须禁用");
-  assert.equal(s3Start.disabled, false, "阶段三处于待命，开始按钮必须可点击");
-  assert.equal(s3Stop.disabled, true, "阶段三未在运行，停止按钮必须禁用");
-
-  // 2. 模拟从后台接收带 stagePipelines 的状态更新（例如 S1 处理中，S2 空闲，S3 空闲）
-  ui.run(`
-    renderAiStatus({
-      kind: "ai",
-      running: true,
-      runId: "run-staged-decouple",
-      stagePipelines: {
-        stage1: { inFlight: 10, pending: 25 },
-        stage2: { inFlight: 0, pending: 0 },
-        stage3: { inFlight: 0, pending: 0 },
-      },
-    });
-  `);
-
-  assert.equal(s1Start.disabled, true, "流水线指示阶段一处理中，开始按钮禁用");
-  assert.equal(s1Stop.disabled, false, "阶段一停止按钮激活");
-  assert.equal(s2Start.disabled, false, "状态更新后阶段二开始按钮依然保持可用");
-  assert.equal(s2Stop.disabled, true, "阶段二停止按钮依然保持禁用");
-  assert.equal(s3Start.disabled, false, "阶段三开始按钮依然保持可用");
-  assert.equal(s3Stop.disabled, true, "阶段三停止按钮依然保持禁用");
-
-  // 3. 配置阶段二预设，点击阶段二「开始」进行安全排队
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]');
-  await s2Start.dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), true, "阶段二进入排队状态");
-  assert.equal(s2Start.disabled, true, "排队中的阶段二开始按钮被禁用");
-  assert.equal(s2Stop.disabled, false, "排队中的阶段二停止按钮激活，用于随时取消排队");
-  assert.equal(s3Start.disabled, false, "阶段三依然不受干扰，保持可点击");
-
-  // 4. 点击阶段二「停止」取消排队
-  await s2Stop.dispatch("click");
-  assert.equal(ui.run("stage2WaitingForStage1"), false, "已成功取消排队");
-  assert.equal(s2Start.disabled, false, "取消排队后阶段二开始按钮恢复可用");
-  assert.equal(s2Stop.disabled, true, "取消排队后阶段二停止按钮恢复禁用");
-  assert.equal(s1Stop.disabled, false, "阶段一仍然在运行，未被误停止");
 });
 
 test("待判行各阶段审查记录完整保留且卡片默认直接展开", async () => {

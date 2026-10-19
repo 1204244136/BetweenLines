@@ -57,7 +57,7 @@ test("从初审继续剩下的：失败、终止及空备注行在单阶段和�
       ]));
       ui.run('stagePresetSelections.stage2 = ["retry-stylist"]');
     }
-    await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');
+    await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(cascade ? "all" : "stage1")} })`);
     const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
     assert.ok(post);
     assert.equal(Boolean(post.body.stylistConfig), cascade);
@@ -174,9 +174,9 @@ test("清空复审或仲裁重跑时移除本轮异常，保留上游、历史�
   }
 });
 
-test("从阶段一或二级联续跑：复审已调整但仲裁失败的行不能被判为整行完成", async () => {
+test("仲裁失败续跑：单阶段只判断自身完成，一键开始仍须补仲裁待办", async () => {
   const failure = dispute + "\nArbiter仲裁调用异常：请求超时";
-  for (const stage of ["stage1", "stage2"]) {
+  for (const stage of ["stage1", "stage2", "all"]) {
     const ui = fixture({ 1: { note: failure }, 2: { note: arbitrated }, 3: { note: failure, manualDone: true } });
     ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
       { id: "stylist", name: "复审", protocol: "compatible", baseUrl: "http://localhost:1234/v1", model: "stylist" },
@@ -186,7 +186,7 @@ test("从阶段一或二级联续跑：复审已调整但仲裁失败的行不�
     await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
     const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
     assert.ok(post.body.arbiterConfig);
-    assert.deepEqual(post.body.completedIndexes.sort(), [2, 3]);
+    assert.deepEqual(post.body.completedIndexes.sort(), stage === "all" ? [2, 3] : [1, 2, 3]);
     assert.equal(post.body.rowNotes[1], failure);
   }
 });
