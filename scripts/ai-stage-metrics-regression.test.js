@@ -77,6 +77,33 @@ test("仲裁行：分歧、仲裁、结合方案各计一次，待仲裁为零",
   assert.equal(metrics.stage3Pending, 0);
 });
 
+test("复审采纳但无改案的待终审结果计入仲裁待办，初审待终审不算已复审", () => {
+  for (const stage of ["gatekeeper", "stylist"]) {
+    const result = {
+      index: 1,
+      status: "suggestion",
+      done: false,
+      note: "[AI校对]\n是否需要修改：待终审\nGatekeeper初审：指代不明，无法确认"
+        + (stage === "stylist" ? "\nStylist复审[采纳]：认可初审判断，尚无可用改案" : ""),
+      critique: { attitude: "accept" },
+      stageResult: { stage, needsEdit: false, needsContext: true, decision: "unclear", revisedText: "" },
+    };
+    const metrics = createStageMetrics();
+    const delta = computeResultMetricsDelta(result);
+    applyMetricsDelta(metrics, delta, 1);
+    const reviewed = Number(stage === "stylist");
+    assert.equal(metrics.stage2Reviewed, reviewed);
+    assert.equal(metrics.stage2Diverged, reviewed);
+    assert.equal(metrics.stage3Pending, reviewed);
+    assert.equal(metrics.stage3Arbitrated, 0);
+    assert.equal(metrics.finalPendingArbiter, 1);
+    assert.equal(metrics.finalNeedsCheck, 0);
+    assert.equal(metrics.finalNeedsEdit, 0);
+    applyMetricsDelta(metrics, delta, -1);
+    assert.deepEqual(metrics, createStageMetrics());
+  }
+});
+
 test("前端：合并服务端异常数不污染本地指标缓存", () => {
   const key = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({

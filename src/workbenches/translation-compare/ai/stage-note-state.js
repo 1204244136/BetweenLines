@@ -118,6 +118,7 @@ function createStageNoteTools() {
     ));
     const arbitrated = automated && !failed && !errors.stage2 && !errors.stage3 && Boolean(stage3);
     const diverged = reviewed && Boolean(
+      modify === "待终审" ||
       /调整|驳回|仲裁|^(modify|reject|escalate)$/.test(stage2[1] || "") ||
       /提交仲裁|分歧|escalate/.test(decisionText) ||
       (stage1Revision && stage2Revision && stage1Revision !== stage2Revision)

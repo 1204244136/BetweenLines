@@ -107,6 +107,11 @@
 - **当前实现**：`renderStageMetricsDashboard` 始终使用当前工作台全行范围表示初审覆盖。聚合兼容输入以已完成加队列、异常两者最大值作下界；停止时同时显示未审与异常。复审和仲裁的实际候选范围仍可随上游产出增长，不锁定历史最高百分比。
 - **回归**：`node --test scripts/ai-progress-resume.test.js scripts/ai-stage-metrics-regression.test.js scripts/ai-stage-metrics.test.js`，覆盖真实点击续跑、队列含异常、停止、刷新、成功增量、空文本行与已有备注和签名保留。
 
+### 阶段三正在仲裁，阶段二仍显示同一行待复审或异常
+- **根因**：复审成功只更新实时计数并移交仲裁，新行备注等仲裁收尾才发布；页面仍按旧失败备注统计待复审与异常。同一运行重试还曾只清理异常明细，遗漏服务端累计的下游异常数。
+- **当前实现**：复审交接时发布「已复审、待终审」中间结果，立即替换旧失败备注；仲裁成功或失败通过同一修订游标覆盖，处理数量只在整行收尾时累计。重试同步撤销旧下游异常数，仲裁中的行只留在仲裁待办；显式待终审的复审记录可直接恢复仲裁。
+- **回归**：`node --test scripts/ai-stage-controls.test.js scripts/stage-note-state.test.js scripts/ai-stage-metrics-regression.test.js`，覆盖真实请求交接、成功/失败仲裁、同一运行重试、页面异常归属与复审采纳但无改案的待终审恢复。
+
 ---
 
 ## 写回异常

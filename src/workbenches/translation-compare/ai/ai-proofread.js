@@ -189,7 +189,12 @@ function recordStageError(stage, rowIndex, error, forcedKind = "") {
 
 function clearStageError(stage, rowIndex) {
   const bucket = status.stageErrors?.[stage];
-  if (bucket) delete bucket[String(rowIndex)];
+  if (!bucket || !Object.prototype.hasOwnProperty.call(bucket, String(rowIndex))) return;
+  delete bucket[String(rowIndex)];
+  // 下游异常由调度直接计数；初审异常则由行结果的指标贡献替换，不能在此重复扣除。
+  if (stage === "stage2" || stage === "stage3") {
+    status.stageMetrics[stage + "Errors"] = Math.max(0, status.stageMetrics[stage + "Errors"] - 1);
+  }
 }
 
 function withStageFailureNote(result, stage, error, { stopped = false, refusal = false } = {}) {
@@ -888,7 +893,7 @@ function adoptPersistedResults(projectKey, rowsSignature) {
   return true;
 }
 
-function addResult(result, { prefilterKind = "" } = {}) {
+function addResult(result, { prefilterKind = "", intermediate = false } = {}) {
   // Every result, including deterministic prefilter rows and transport errors,
   // exposes the same stage contract for consumers that do not understand the
   // legacy note/status fields yet.
@@ -901,6 +906,14 @@ function addResult(result, { prefilterKind = "" } = {}) {
   const previousDelta = resultMetricDeltas.get(result.index);
   if (previousDelta) applyMetricsDelta(status.stageMetrics, previousDelta, -1);
   const storedResult = proofreadResults.record(normalizedResult);
+
+  // 所有阶段指标由同一个纯函数得出，添加与撤销共用，不再各写一套判据。
+  const delta = computeResultMetricsDelta(storedResult, { prefilterKind });
+  resultMetricDeltas.set(result.index, delta);
+  applyMetricsDelta(status.stageMetrics, delta, 1);
+  // 交接结果及时更新备注与阶段指标，整行收尾后才累计处理数量。
+  if (intermediate) return;
+
   status.processed += 1;
   if (result.done) status.handled += 1;
   if (prefilterKind) {
@@ -915,11 +928,6 @@ function addResult(result, { prefilterKind = "" } = {}) {
   }
   if (result.status === "suggestion") status.suggested += 1;
   if (result.status === "error") status.errors += 1;
-
-  // 所有阶段指标由同一个纯函数得出，添加与撤销共用，不再各写一套判据。
-  const delta = computeResultMetricsDelta(storedResult, { prefilterKind });
-  resultMetricDeltas.set(result.index, delta);
-  applyMetricsDelta(status.stageMetrics, delta, 1);
 }
 
 async function startPrefilter(input) {
@@ -1806,8 +1814,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           // 与初审对称：成功也必须进熔断窗口，否则窗口里只剩失败样本，错误率会虚高到 100%。
           feedback("stage2", request, "success");
         }
-        // 复审一完成就计入实时计数，不等仲裁结束：触发仲裁的行要等 Stage 3 跑完才 finalize，
-        // stageMetrics 到那一刻才 +1，阶段二卡片会长时间停在很小的数字上，看起来像「阶段二没干活」。
+        // 复审一完成就计入实时计数，不等仲裁结束。
         const stylistReview = s2.decision?.stylistReview;
         if (stylistReview) {
           stage2ReviewedLive += 1;
@@ -1817,6 +1824,12 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           }
         }
         if (s2.arbCheck?.triggered && links.stage3 && !isStageStopped("stage3")) {
+          // 先发布已复审、待终审的备注，及时解除旧复审异常；仲裁仍使用原始阶段输入。
+          // 中间方案不经过成品门禁，也不作为最终修改结果交付或累计处理数量。
+          const pendingResult = decisionToResult(s2.row, {
+            ...s2.decision, stage: "stylist", needsContext: true, better: "unclear",
+          }, s2.targetLabel, s2.counterpartLabel, s2.targetKey, config.proofreadMode);
+          addResult(pendingResult, { intermediate: true });
           // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
           dispatchers.stage3.enqueue(s2);
           syncStagePipelineQueues();

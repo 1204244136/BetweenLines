@@ -12,6 +12,8 @@ const { clearProofreadCache, clientStatus, startProofread, stopProofread } = req
 const { createProjectContext } = require("./project-context");
 const { createProjectStaging, projectArtifacts, publishProject } = require("./project-store");
 const { handleAiRoutes } = require("../src/runtime/routes/ai");
+const { stageNoteState } = require("../src/workbenches/translation-compare/ai/stage-note-state");
+const { createWorkbench, storageFixture } = require("./workbench-fixture");
 
 const initial = "[AI校对]\n语义是否相同：不同\n是否需要修改：是\nGatekeeper初审：修改措辞\n初审改案：初审改案。\n修改结果：初审改案。";
 const reviewed = initial + "\nStylist复审[调整]：两份方案存在分歧\n复审改案：复审改案。\n修改结果：复审改案。";
@@ -48,6 +50,16 @@ async function fixture(t, count = 4) {
   }
   publishProject(staging.dir, { dataDir });
   const calls = [];
+  const callWaiters = [];
+  const consumedCalls = new Set();
+  const nextCall = (stage) => {
+    const call = calls.find((item) => item.stage === stage && !consumedCalls.has(item));
+    if (call) {
+      consumedCalls.add(call);
+      return Promise.resolve(call);
+    }
+    return new Promise((resolve) => callWaiters.push({ stage, resolve }));
+  };
   const model = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
@@ -55,6 +67,11 @@ async function fixture(t, count = 4) {
       const call = { stage: req.url.split("/")[1], body: JSON.parse(body), res, closed: false };
       calls.push(call);
       res.on("close", () => { call.closed = true; });
+      const waiterIndex = callWaiters.findIndex((waiter) => waiter.stage === call.stage);
+      if (waiterIndex >= 0) {
+        consumedCalls.add(call);
+        callWaiters.splice(waiterIndex, 1)[0].resolve(call);
+      }
     });
   });
   const api = http.createServer((req, res) => {
@@ -97,7 +114,84 @@ async function fixture(t, count = 4) {
     call.res.writeHead(200, { "content-type": "application/json" });
     call.res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
   }
-  return { config, calls, post, respond };
+  return { config, calls, post, respond, nextCall, project, rows };
+}
+
+for (const outcome of ["success", "failure"]) {
+  test(`复审重试转仲裁：立即交付已复审备注，仲裁 ${outcome} 只结算一次`, { timeout: 10000 }, async (t) => {
+    const { config, calls, post, respond, nextCall, project, rows } = await fixture(t, 1);
+    const failure = initial + "\nStylist复审调用异常：请求超时";
+    const key = project.notesStorage.key;
+    const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: failure, aiDone: true } }) }), {
+      rows, projectKey: project.projectKey, rowsSignature: project.rowsSignature, currentKey: key,
+    });
+    assert.equal(ui.element("metricStage2Pending").textContent, 1);
+    assert.equal(ui.element("metricStage2Errors").textContent, 1);
+
+    const started = await post("start", { ...config, stage: "all", continueOnly: true, rowNotes: { 1: failure } });
+    assert.equal(started.status, 202);
+    const reviewCall = await nextCall("stage2");
+    respond(reviewCall);
+    // 请求到达本地模型就是确定性的交接 gate；仲裁响应由测试显式释放。
+    const arbitrationCall = await nextCall("stage3");
+    const live = clientStatus({ runId: started.ai.runId, afterRevision: started.ai.resultRevision });
+    assert.equal(live.results.length, 1, "复审完成不能等仲裁结束才发布最新行备注");
+    assert.equal(live.stageMetrics.stage2Reviewed, 1);
+    assert.equal(live.stagePipelines.stage3.inFlight, 1);
+    const intermediate = live.results[0];
+    const state = stageNoteState(intermediate.note);
+    assert.equal(state.reviewed, true);
+    assert.equal(state.errors.stage2, undefined);
+    assert.equal(state.pendingArbitration, true);
+    assert.equal(intermediate.done, false);
+    assert.match(intermediate.note, /是否需要修改：待终审/);
+    assert.doesNotMatch(intermediate.note, /^修改结果：/m, "仲裁完成前不发布可写回的最终修改结果");
+    for (const field of ["processed", "handled", "modelProcessed", "modelHandled", "suggested", "errors"]) {
+      assert.equal(live[field], 0, `${field} 不应把中间交接当作最终行结果计数`);
+    }
+
+    ui.run(`renderAiStatus(${JSON.stringify(live)})`);
+    const afterDelivery = clientStatus({ runId: live.runId, afterRevision: live.resultRevision });
+    ui.run(`renderAiStatus(${JSON.stringify(afterDelivery)})`);
+    assert.equal(ui.element("metricStage2Pending").textContent, 0);
+    assert.equal(ui.element("metricStage2Errors").textContent, 0);
+    assert.equal(ui.element("metricStage3Pending").textContent, 1);
+    assert.equal(ui.element("stage3StatusPill").textContent, "处理中");
+    assert.equal(ui.run('parseAutomatedNote(notes[1].note).revision'), "");
+    assert.equal(ui.run('notes[1].revisionText'), "");
+    assert.equal(ui.run('revisionTextFor(notes[1])'), "", "待终审的过程稿不能自动成为可写回的成品修改结果");
+
+    if (outcome === "failure") {
+      arbitrationCall.res.writeHead(401, { "content-type": "application/json" });
+      arbitrationCall.res.end(JSON.stringify({ error: { message: "invalid api key" } }));
+    } else {
+      respond(arbitrationCall);
+    }
+    await until(() => !clientStatus().running);
+    const settled = clientStatus({ runId: live.runId, afterRevision: live.resultRevision });
+    assert.equal(settled.results.length, 1, "最终结果沿同一游标覆盖中间行备注");
+    assert.ok(settled.resultRevision > live.resultRevision);
+    assert.equal(settled.processed, 1);
+    assert.equal(settled.modelProcessed, 1);
+    assert.equal(settled.handled, 0);
+    assert.equal(settled.modelHandled, 0);
+    assert.equal(settled.suggested, 1);
+    assert.equal(settled.errors, 0);
+    const finalState = stageNoteState(settled.results[0].note);
+    assert.equal(finalState.reviewed, true);
+    assert.equal(finalState.errors.stage2, undefined);
+    assert.equal(Boolean(finalState.errors.stage3), outcome === "failure");
+    assert.equal(finalState.arbitrated, outcome === "success");
+    assert.equal(settled.stageMetrics.stage2Reviewed, 1);
+    assert.equal(settled.stageMetrics.stage3Arbitrated, outcome === "success" ? 1 : 0);
+    assert.equal(settled.stageMetrics.stage3Errors, outcome === "failure" ? 1 : 0);
+    ui.run(`renderAiStatus(${JSON.stringify(settled)})`);
+    ui.run(`renderAiStatus(${JSON.stringify(clientStatus({ runId: live.runId, afterRevision: settled.resultRevision }))})`);
+    assert.equal(ui.element("metricStage2Pending").textContent, 0);
+    assert.equal(ui.element("metricStage2Errors").textContent, 0);
+    assert.equal(ui.element("metricStage3Errors").textContent, outcome === "failure" ? 1 : 0);
+    assert.deepEqual(calls.map((call) => call.stage), ["stage2", "stage3"]);
+  });
 }
 
 test("真实路由：三个独立阶段可同时运行，定向停止真正中止自身请求并保留其他阶段", async (t) => {
@@ -194,6 +288,7 @@ test("同一任务内重启已停复审只恢复自身，保留独立仲裁及�
   await until(() => calls[1].closed && !clientStatus().stageControls.stage2.running);
   const stopped = clientStatus().results.find((result) => result.index === 1);
   assert.ok(stopped);
+  assert.equal(clientStatus().stageMetrics.stage2Errors, 1);
   const next = await post("start", {
     ...reviewInput, continueOnly: true, rowNotes: { 1: stopped.note },
     stylistConfig: { ...config.stylistConfig, model: "new-stylist-model" },
@@ -208,6 +303,7 @@ test("同一任务内重启已停复审只恢复自身，保留独立仲裁及�
   await until(() => !clientStatus().stageControls.stage2.running);
   assert.equal(clientStatus().stageControls.stage3.running, true);
   assert.deepEqual(clientStatus().stageErrors.stage2, {}, "成功重跑清除旧的阶段异常");
+  assert.equal(clientStatus().stageMetrics.stage2Errors, 0, "同一任务复审重试成功也清除旧的异常计数");
   respond(arbiter);
   await until(() => !clientStatus().running);
   assert.deepEqual(calls.map((call) => call.stage), ["stage3", "stage2", "stage2"]);

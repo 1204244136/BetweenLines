@@ -8,6 +8,7 @@ const unclear = "[AI校对]\n是否需要修改：待人工确认\nGatekeeper初
 const reviewed = initial + "\nStylist复审[采纳]：同意\n复审改案：本轮初审方案";
 const dispute = initial + "\nStylist复审[调整]：语序调整\n复审改案：本轮复审方案";
 const arbitrated = dispute + "\nArbiter仲裁[复审方案]：采纳复审\n仲裁改案：本轮复审方案";
+const acceptedPendingArbitration = "[AI校对]\n是否需要修改：待终审\nGatekeeper初审：指代不明，无法确认\nStylist复审[采纳]：认可初审判断，尚无可用改案";
 
 test("最新审核轮次：旧复审、旧仲裁和人工前后缀不污染本轮，兼容 CRLF", () => {
   for (const lineEnding of ["\n", "\r\n"]) {
@@ -152,6 +153,31 @@ test("下游失败保留上游结论与待办，异常只属于最新轮次和�
   }
   assert.deepEqual(stageNoteState("人工备注\n调用失败：超时").errors, {});
   assert.deepEqual(stageNoteState(initial + "\n分析：原译出现『调用失败』一词").errors, {});
+});
+
+test("复审采纳但无可用改案：明确待终审仍属于仲裁待办", () => {
+  for (const lineEnding of ["\n", "\r\n"]) {
+    const state = stageNoteState(acceptedPendingArbitration.replace(/\n/g, lineEnding));
+    assert.equal(state.reviewed, true);
+    assert.equal(state.diverged, true);
+    assert.equal(state.pendingArbitration, true);
+    assert.equal(state.pendingReview, false);
+    assert.equal(state.arbitrated, false);
+    assert.deepEqual(state.errors, {});
+  }
+});
+
+test("从备注恢复采纳但待终审的行：仲裁计数与筛选保留未人工确认的待办", async () => {
+  const ui = fixture({
+    1: { note: acceptedPendingArbitration },
+    2: { note: acceptedPendingArbitration, manualDone: true },
+  });
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage3Pending"), 1);
+  assert.equal(Number(ui.element("metricStage3Pending").textContent), 1);
+  assert.equal(Number(ui.element("metricStage2Pending").textContent), 0);
+  await ui.element("stage3PendingItem").dispatch("click");
+  assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1]);
+  assert.equal(ui.run('notes["1"].note'), acceptedPendingArbitration);
 });
 
 test("清空复审或仲裁重跑时移除本轮异常，保留上游、历史与人工确认行", () => {

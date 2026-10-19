@@ -994,7 +994,7 @@
         .filter((line) => !isNoteProseLine(line))
         .join("\n")
         .replace(/\s+$/, "");
-      // 存量备注迁移：终审结论是「不需要修改」的行不该带着自动推导出来的修改结果。
+      // 存量备注迁移：无需修改或仍待终审的行不该带着自动推导出来的修改结果。
       // 早期版本会把初审/复审的过程稿当成默认修改结果存下来，人工点「批量写回」就会把
       // 已经否掉的方案写进源文件（真实事件：某卷 14 行写回了终审明确「维持原译」的改案）。
       // 只清「正好等于某个阶段改案」的那种自动推导值：用户显式切过版本、或自己写过别的
@@ -1003,7 +1003,7 @@
         .map((text) => String(text || "").trim())
         .filter(Boolean);
       if (!value?.revisionStageActive && item.revisionText
-        && String(parsedNote?.modify || "").trim() === "否"
+        && ["否", "待终审"].includes(String(parsedNote?.modify || "").trim())
         && stageProposals.includes(item.revisionText)) {
         item.revisionText = "";
       }
@@ -1107,8 +1107,9 @@
       // 终审结论是「不需要修改」的行没有默认修改结果：初审/复审改案只是过程稿，被判
       // 「维持原译」之后再当成待写回的成品，就会把已经否掉的方案写进源文件
       //（真实事件：某卷 14 行写回了被仲裁驳回的初审/复审改案）。用户显式切换过版本走上面第 1 条。
-      const unchangedVerdict = String(noteData?.modify || "").trim() === "否";
-      if (noteData && !unchangedVerdict && (noteData.stage2 || noteData.stage3)) {
+      // 待终审的过程稿也不能自动当作最终修改结果。
+      const hasNoDefaultRevision = ["否", "待终审"].includes(String(noteData?.modify || "").trim());
+      if (noteData && !hasNoDefaultRevision && (noteData.stage2 || noteData.stage3)) {
         if (noteData.stage3) {
           const s3 = noteData.stage3Revision || noteData.revision || noteData.stage2Revision || noteData.stage1Revision;
           if (s3 && !isPartialProposal(s3, targetText, item.note)) return s3;
@@ -2444,9 +2445,9 @@
 
       // 默认版本显示逻辑：最后阶段的版本优先（仲裁 ＞ 复审 ＞ 初审）。
       // 安全红线：局部提议（isPartialProposal）绝不能直接作为全量成品文本覆盖 data.revision！
-      // 「不需要修改」是终审的结论：这一行没有成品改案，过程稿不得被抬成默认修改结果。
-      const verdictUnchanged = String(data.modify || "").trim() === "否";
-      if (verdictUnchanged) {
+      // 无需修改或仍待终审的行都没有默认成品改案，过程稿不能自动成为修改结果。
+      const hasNoDefaultRevision = ["否", "待终审"].includes(String(data.modify || "").trim());
+      if (hasNoDefaultRevision) {
         data.revision = "";
       } else if (data.stage3 && (data.stage3Revision || data.revision)) {
         if (data.stage3Revision && !isPartialProposal(data.stage3Revision, targetText, note)) {

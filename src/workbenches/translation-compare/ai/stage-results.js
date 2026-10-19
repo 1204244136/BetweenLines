@@ -229,9 +229,9 @@ function computeResultMetricsDelta(result = {}, { prefilterKind = "" } = {}) {
     } else if (result.status === "suggestion" && result.stageResult?.stage === "stylist") {
       add("stage2Reviewed");
     }
-    // 复审分歧：复审态度为调整/驳回/升级，或该行已被仲裁（仲裁过的行必然是分歧行）。
+    // 复审分歧：调整/驳回/升级、已复审待终审，或已经取得仲裁结论。
     // 一行最多贡献 1，且不再依赖非加性的 max 兜底，撤销时才能精确还原。
-    const diverged = (hasStage2Review && (attitude === "modify" || attitude === "reject" || attitude === "escalate"))
+    const diverged = (hasStage2Review && (attitude === "modify" || attitude === "reject" || attitude === "escalate" || isPendingArbiterResult(result)))
       || arbitrated;
     if (diverged) add("stage2Diverged");
 
