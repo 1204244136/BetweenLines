@@ -129,6 +129,16 @@
 
 ---
 
+## 修改结果的阶段版本
+
+- 版本栏渲染与 `applyStageRevision` 共用同一版本状态，分别判断显示、禁用及可切换文本。待执行判据复用 `stageNoteState` 的最新轮次 `pendingReview` / `pendingArbitration`，人工已确认行不生成待执行占位；阶段启用读取 `committedStagePresetIds`，与已添加预设配置一致。未启用且没有对应审核记录的下游版本隐藏，启用且本行待审的版本显示并禁用；已有真实改案不随停用隐藏。已审核但缺少完整改案时禁用并说明原因，不将其标为尚未执行。
+- 只有对应阶段实际产生的完整改案才能切换；通用 `revision` 兜底不得冒充尚未执行的复审或终审，局部提议保留禁用状态。没有默认成品时允许保留版本栏，但不得因此自动填入可写回文本；默认成品与人工选择边界见 [AI 契约](ai-proofread-contract.md#默认修改结果只认末阶段真正采纳的改案)。
+- 阶段配置变化仅同步可见行的版本栏，不重建整页编辑器，不覆盖编辑内容或改动备注。
+
+验证：`node --test scripts/stage-revision-buttons.test.js scripts/stage-review-reports.test.js`。
+
+---
+
 ## AI 模型预设管理（`ai-presets.js`）
 
 - 存储键：`translation-compare-ai-presets-v2`。

@@ -1648,7 +1648,7 @@
       white-space: nowrap;
       flex-shrink: 0;
     }
-    .stage-pill-btn:hover {
+    .stage-pill-btn:hover:not(:disabled) {
       border-color: var(--focus);
       color: var(--text);
     }

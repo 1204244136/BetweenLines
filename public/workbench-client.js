@@ -1312,6 +1312,7 @@
         pill3.dataset.state = hasStage3 ? "idle" : "disabled";
         pill3.textContent = hasStage3 ? "待命" : "未启用";
       }
+      refreshRevisionStagePills();
     }
 
     function applyPreset(preset) {
@@ -2567,6 +2568,63 @@
       pipelineOpenOverrides.set(String(id), Boolean(open));
     }
 
+    // 版本切换与执行待办是两种状态：只有真实阶段稿能切换，待执行阶段只占位。
+    // 渲染与点击共用此处，禁止拿通用「修改结果」冒充尚未执行的下游方案。
+    function revisionStageChoices(item, note, targetText = "") {
+      if (!note) return [];
+      const state = stageNoteState(item?.note || "");
+      const pendingReview = !item?.manualDone && state.pendingReview;
+      const pendingArbitration = !item?.manualDone && state.pendingArbitration;
+      const choices = [
+        { stage: "1", label: "初审", cls: "is-gk", name: "阶段一事实初审", present: Boolean(note.stage1 || note.stage1Revision || (!note.stage2 && !note.stage3 && note.revision)),
+          text: note.stage1Revision || (!note.stage2 && !note.stage3 ? note.revision : ""), pending: false },
+        { stage: "2", label: "复审", cls: "is-stylist", name: "阶段二文学复审", present: Boolean(note.stage2),
+          text: state.reviewed ? note.stage2Revision : "", pending: pendingReview && committedStagePresetIds("stage2").length > 0 },
+        { stage: "3", label: "终审", cls: "is-arbiter", name: "阶段三终审仲裁", present: Boolean(note.stage3),
+          text: state.arbitrated ? note.stage3Revision : "", pending: pendingArbitration && committedStagePresetIds("stage3").length > 0 },
+      ];
+      if (!choices.some((choice) => choice.text || choice.pending)) return [];
+      return choices.filter((choice) => choice.present || choice.pending).map((choice) => {
+        const text = String(choice.text || "").trim();
+        const partial = isPartialProposal(text, targetText, item?.note || "", { isInitialProposal: choice.stage === "1" });
+        const disabled = !text || partial;
+        const title = choice.pending ? choice.name + "尚未完成，暂无可切换版本"
+          : partial ? choice.name + "仅提供局部修正，请在差异辅助中查看"
+          : !text ? choice.name + "未提供可用的完整修改文本"
+          : "切换为" + choice.name + "文本";
+        return { ...choice, text, disabled, title };
+      });
+    }
+
+    function renderRevisionStagePills(item, id, note, targetText, revisionText) {
+      const choices = revisionStageChoices(item, note, targetText);
+      if (!choices.length) return "";
+      const matching = choices.filter((choice) => !choice.disabled && choice.text === String(revisionText || "").trim());
+      const active = matching.find((choice) => choice.stage === String(item?.revisionStageActive)) || matching.at(-1);
+      return '<div class="revision-stage-pills" data-row-id="' + escapeHtml(id || "") + '" title="在不同阶段的修改版本间快速切换">' +
+        '<span class="stage-pills-label">版本:</span>' + choices.map((choice) =>
+          '<button type="button" class="stage-pill-btn ' + choice.cls + (active === choice ? ' is-active' : '') + '" data-apply-stage="' + choice.stage + '" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(choice.title) + '"' +
+          (choice.disabled ? ' disabled="" aria-disabled="true"' : '') + '>' + choice.label + '</button>'
+        ).join("") + '</div>';
+    }
+
+    // 增删适用预设只更新版本栏，不重建编辑器、审核轨迹或整张表格。
+    const revisionStagePillsCache = new WeakMap();
+    function refreshRevisionStagePills() {
+      for (const [id, row] of renderedRowsById) {
+        const item = notes[id];
+        const sourceRow = rowsById.get(id);
+        const targetText = String(sourceRow?.[revisionTargetFor(item)] || sourceRow?.cn || "");
+        const note = parseAutomatedNote(item?.note || "", targetText);
+        const slot = row.querySelector("[data-revision-stage-slot]");
+        if (slot) {
+          const html = renderRevisionStagePills(item, id, note, targetText, revisionTextFor(item, sourceRow));
+          if ((revisionStagePillsCache.get(slot) ?? slot.innerHTML) !== html) slot.innerHTML = html;
+          revisionStagePillsCache.set(slot, html);
+        }
+      }
+    }
+
     function renderNoteSummary(item, id) {
       const noteText = item?.note || "";
       const row = typeof rowsById !== "undefined" && rowsById ? rowsById.get(String(id || "")) : null;
@@ -2647,48 +2705,8 @@
         ? '<div class="note-detail note-reason"><div class="note-detail-head"><span class="note-summary-key">分析</span></div><div class="note-summary-value">' + escapeHtml(displayAnalysis) + '</div></div>'
         : "";
 
-      let stagePillsHtml = "";
-      const hasMultipleStages = Boolean(
-        note.stage2 || note.stage3 ||
-        (note.stage1Revision && (note.stage2Revision || note.revision))
-      );
-      if (hasMultipleStages) {
-        const currentRev = String(revisionText || "").trim();
-        const s1Rev = String(note.stage1Revision || "").trim();
-        const s2Rev = String(note.stage2Revision || (!note.stage3 ? note.revision : "") || "").trim();
-        const s3Rev = String(note.stage3Revision || (note.stage3 ? note.revision : "") || "").trim();
-
-        const s1IsPartial = isPartialProposal(s1Rev, rowTargetText, noteText);
-        const s2IsPartial = isPartialProposal(s2Rev, rowTargetText, noteText);
-        const s3IsPartial = isPartialProposal(s3Rev, rowTargetText, noteText);
-
-        const s1Title = s1IsPartial ? "阶段一事实初审提议（局部修正）" : "切换为阶段一事实初审文本";
-        const s2Title = s2IsPartial ? "阶段二文学复审提议（局部修正）" : "切换为阶段二文学复审文本";
-        const s3Title = s3IsPartial ? "阶段三终审仲裁提议（局部修正）" : "切换为阶段三终审仲裁文本";
-
-        // 默认显示最后的合法全量版本：仲裁 ＞ 复审 ＞ 初审
-        let activeStage = note.stage3 ? "3" : (note.stage2 ? "2" : "1");
-        if (item?.revisionStageActive) {
-          activeStage = String(item.revisionStageActive);
-        } else if (note.stage3 && s3Rev && currentRev === s3Rev) {
-          activeStage = "3";
-        } else if (note.stage2 && s2Rev && currentRev === s2Rev) {
-          activeStage = "2";
-        } else if (s1Rev && currentRev === s1Rev) {
-          activeStage = "1";
-        }
-
-        const isS1Active = activeStage === "1";
-        const isS2Active = activeStage === "2";
-        const isS3Active = activeStage === "3";
-
-        stagePillsHtml = '<div class="revision-stage-pills" data-row-id="' + escapeHtml(id || "") + '" title="在不同阶段的修改版本间快速切换">' +
-          '<span class="stage-pills-label">版本:</span>' +
-          '<button type="button" class="stage-pill-btn is-gk ' + (isS1Active ? 'is-active' : '') + '" data-apply-stage="1" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s1Title) + '">初审</button>' +
-          '<button type="button" class="stage-pill-btn is-stylist ' + (isS2Active ? 'is-active' : '') + '" data-apply-stage="2" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s2Title) + '">复审</button>' +
-          (note.stage3 ? '<button type="button" class="stage-pill-btn is-arbiter ' + (isS3Active ? 'is-active' : '') + '" data-apply-stage="3" data-row-id="' + escapeHtml(id || "") + '" title="' + escapeHtml(s3Title) + '">仲裁</button>' : '') +
-        '</div>';
-      }
+      const stagePillsHtml = '<div data-revision-stage-slot="' + escapeHtml(id || "") + '">' +
+        renderRevisionStagePills(item, id, note, rowTargetText, revisionText) + '</div>';
 
       const cleanTargetLabel = String(revisionLabel || "").replace(/[（(][^）)]*[）)]/g, "").trim() || String(revisionLabel || "").trim();
       const shortTargetLabel = cleanTargetLabel.length > 6 ? cleanTargetLabel.slice(0, 5) + "…" : cleanTargetLabel;
@@ -2711,7 +2729,7 @@
             stagePillsHtml +
             '<textarea class="revision-editor" data-revision="' + escapeHtml(id || "") + '" aria-label="第 ' + escapeHtml(id || "") + ' 行 AI 修改结果">' + escapeHtml(revisionText) + '</textarea>' +
           '</div>'
-        : "";
+        : stagePillsHtml;
       
       let ratingBadges = "";
       if (note.score !== null && note.score !== undefined) {
@@ -3390,6 +3408,7 @@
       if (applyStageBtn) {
         event.preventDefault();
         event.stopPropagation();
+        if (applyStageBtn.disabled) return;
         const rowId = applyStageBtn.dataset.rowId;
         const stage = applyStageBtn.dataset.applyStage;
         applyStageRevision(rowId, stage);
@@ -3807,33 +3826,14 @@
       const noteData = parseAutomatedNote(notes[rowId].note, rowTargetText);
       if (!noteData) return;
 
-      let targetText = "";
-      let stageName = "";
-      if (String(stage) === "1") {
-        targetText = noteData.stage1Revision || "";
-        stageName = "阶段一初审方案";
-      } else if (String(stage) === "2") {
-        targetText = noteData.stage2Revision || noteData.revision || "";
-        stageName = "阶段二复审方案";
-      } else if (String(stage) === "3") {
-        targetText = noteData.stage3Revision || noteData.revision || "";
-        stageName = "阶段三仲裁方案";
-      }
-
-      if (!targetText) {
-        const fallbackMsg = noteData.stage1
-          ? ("第 " + rowId + " 行初审要点：" + noteData.stage1.slice(0, 80) + "…")
-          : "该阶段未提供独立修改文本";
-        showToast(fallbackMsg, { tone: "watch", durationMs: 7000 });
+      const choice = revisionStageChoices(current, noteData, rowTargetText).find((item) => item.stage === String(stage));
+      if (!choice) return;
+      if (choice.disabled) {
+        showToast(choice.title, { tone: "watch", durationMs: 7000 });
         return;
       }
-
-      // 核心安全防线：若该阶段提供的内容是局部修正提议（非整段改案），
-      // 绝不能直接作为整行 revisionText 覆盖输入框（否则会导致整段正文被砍掉）！
-      if (isPartialProposal(targetText, rowTargetText, current.note)) {
-        showToast("第 " + rowId + " 行" + stageName + "为局部修正提议「" + targetText + "」（非整段改案），已在下方演进对比中展示；请在输入框中针对对应语句进行修改，避免覆盖整行。", { tone: "watch", durationMs: 8000 });
-        return;
-      }
+      const targetText = choice.text;
+      const stageName = choice.name + "方案";
 
       current.revisionText = targetText;
       current.revisionStageActive = String(stage);
@@ -3843,7 +3843,17 @@
 
       const rowElem = renderedRow(rowId);
       if (rowElem) {
-        const editor = rowElem.querySelector('.revision-editor[data-revision="' + CSS.escape(rowId) + '"]');
+        let editor = rowElem.querySelector('.revision-editor[data-revision="' + CSS.escape(rowId) + '"]');
+        // 待终审时只有版本栏，没有默认成品；显式选取已有过程稿后才创建编辑器与写回入口。
+        if (!editor) {
+          const summary = rowElem.querySelector(".note-summary");
+          if (summary) {
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = renderNoteSummary(current, rowId);
+            summary.replaceWith(wrapper.firstElementChild);
+            editor = rowElem.querySelector('.revision-editor[data-revision="' + CSS.escape(rowId) + '"]');
+          }
+        }
         if (editor) {
           editor.value = targetText;
           invalidateRevisionEditorHeight(editor);
@@ -3856,6 +3866,8 @@
         for (const pill of pills) {
           pill.classList.toggle("is-active", pill.dataset.applyStage === String(stage));
         }
+        const diffSlot = rowElem.querySelector('[data-diff-slot]');
+        if (diffSlot && row) diffSlot.innerHTML = renderDiffBlock(row, current);
       }
 
       showToast("已切换为" + stageName, { tone: "success" });
