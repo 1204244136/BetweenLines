@@ -1744,7 +1744,7 @@
     .empty-state.visible {
       display: block;
     }
-    /* 紧凑看板：头部一行、指标并排、异常待办与短进度共用一行。 */
+    /* 固定轨道看板：按卡片宽度切换行数，启停与待办显隐不改变高度。 */
     .ai-stage-dashboard .ai-stage-dashboard-title-group {
       min-width: 0;
       flex-shrink: 1;
@@ -1752,20 +1752,24 @@
       gap: 6px;
     }
     .ai-stage-dashboard .ai-stage-cards {
-      align-items: start;
+      align-items: stretch;
+    }
+    .ai-stage-dashboard .ai-stage-card {
+      container: ai-stage / inline-size;
     }
     .ai-stage-card .ai-stage-card-head {
-      flex-direction: row;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: 22px 22px;
       align-items: center;
-      gap: 4px 8px;
+      gap: 4px;
     }
     .ai-stage-card .ai-stage-card-title-row {
       justify-content: flex-start;
       gap: 4px;
     }
     .ai-stage-card .ai-stage-card-ctrls {
-      flex: 1 1 260px;
+      min-width: 0;
       justify-content: flex-end;
       gap: 4px;
     }
@@ -1774,6 +1778,8 @@
       min-width: 70px;
     }
     .ai-stage-card .ai-stage-card-body {
+      display: grid;
+      grid-template-rows: auto 46px;
       cursor: default;
       transition: none;
       flex: 0 0 auto;
@@ -1781,19 +1787,31 @@
       padding: 1px 0;
     }
     .ai-stage-card .ai-stage-card-main {
-      flex-direction: row;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-rows: 22px 18px 18px;
       align-items: baseline;
-      flex-wrap: wrap;
-      gap: 3px 12px;
+      gap: 3px 8px;
+      min-width: 0;
+    }
+    .ai-stage-card .ai-stage-card-value {
+      grid-area: 1 / 1;
+      justify-self: start;
     }
     .ai-stage-card .ai-stage-card-sub {
+      grid-area: 2 / 1 / auto / -1;
+      flex-wrap: nowrap;
       gap: 3px 8px;
     }
-    .ai-stage-efficiency {
+    .ai-stage-efficiency,
+    .ai-stage-routing {
+      grid-area: 3 / 1 / auto / -1;
       display: inline-flex;
       align-items: baseline;
-      flex-wrap: wrap;
       gap: 3px 6px;
+    }
+    .ai-stage-card .ai-stage-sub-item {
+      white-space: nowrap;
     }
     .ai-stage-efficiency-rate,
     .ai-stage-runtime-info,
@@ -1803,20 +1821,77 @@
       font-variant-numeric: tabular-nums;
     }
     .ai-stage-runtime {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-rows: 18px 4px 18px;
       gap: 3px;
       margin-top: 0;
+      min-width: 0;
     }
     .ai-stage-runtime-summary {
+      grid-area: 1 / 2;
+      justify-self: end;
       display: flex;
       align-items: baseline;
-      flex-wrap: wrap;
       gap: 3px 8px;
     }
+    .ai-stage-runtime-line {
+      grid-row: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .ai-stage-runtime-info {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .ai-stage-progress-text {
+      flex: 0 0 auto;
       margin-left: auto;
       white-space: nowrap;
+    }
+    .ai-stage-runtime .ai-stage-card-progress {
+      grid-row: 2;
+    }
+    .ai-stage-runtime .ai-stage-active-info {
+      grid-row: 3;
+      height: 18px;
+    }
+    @container ai-stage (min-width: 480px) {
+      .ai-stage-card .ai-stage-card-main {
+        grid-template-columns: max-content minmax(0, 1fr) auto;
+        grid-template-rows: 22px 18px;
+      }
+      .ai-stage-efficiency,
+      .ai-stage-routing {
+        grid-area: 1 / 2;
+      }
+      .ai-stage-runtime-summary {
+        grid-area: 1 / 3;
+      }
+    }
+    @container ai-stage (min-width: 800px) {
+      .ai-stage-card .ai-stage-card-head {
+        grid-template-columns: max-content minmax(0, 1fr);
+        grid-template-rows: 22px;
+        column-gap: 8px;
+      }
+      .ai-stage-card .ai-stage-card-main {
+        grid-template-columns: max-content max-content minmax(0, 1fr) auto;
+        grid-template-rows: 22px;
+      }
+      .ai-stage-card .ai-stage-card-sub {
+        grid-area: 1 / 2;
+      }
+      .ai-stage-efficiency,
+      .ai-stage-routing {
+        grid-area: 1 / 3;
+      }
+      .ai-stage-runtime-summary {
+        grid-area: 1 / 4;
+      }
     }
     .ai-stage-card .ai-stage-card-value strong {
       color: var(--ai-text);

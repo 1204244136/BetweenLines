@@ -90,18 +90,51 @@ test("初审直通占比：归属通过行子集，空分母不显示百分比�
   assert.doesNotMatch(ui.element("aiStageFastPassRate").title, /228|442|100%/);
 });
 
-test("阶段卡片分组：待办与异常只出现在底部运行区，结果分布保持独立", () => {
+test("阶段卡片分组：待办与异常紧随指标，运行文字与进度共行且保留独立轨道", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
   const markup = ui.html.split("<script>")[0];
   for (let stage = 1; stage <= 3; stage++) {
     const start = markup.indexOf('id="stage' + stage + 'Card"');
     const end = stage < 3 ? markup.indexOf('id="stage' + (stage + 1) + 'Card"', start) : markup.indexOf('id="aiLog"', start);
     const card = markup.slice(start, end);
+    const mainPosition = card.indexOf('class="ai-stage-card-main"');
+    const summaryPosition = card.indexOf('class="ai-stage-runtime-summary"');
     const runtimePosition = card.indexOf('class="ai-stage-runtime"');
-    assert.ok(runtimePosition > card.indexOf('class="ai-stage-card-sub"'));
-    assert.ok(card.indexOf('id="stage' + stage + 'ErrorItem"') > runtimePosition);
-    if (stage > 1) assert.ok(card.indexOf('id="stage' + stage + 'PendingItem"') > runtimePosition);
+    assert.ok(mainPosition < card.indexOf('class="ai-stage-card-sub"'));
+    assert.ok(summaryPosition > card.indexOf('class="ai-stage-card-sub"'));
+    assert.ok(summaryPosition < runtimePosition, "待办与异常不再单独占运行区的一行");
+    const summary = card.slice(summaryPosition, runtimePosition);
+    assert.match(summary, new RegExp('id="stage' + stage + 'ErrorItem"'));
+    if (stage > 1) assert.match(summary, new RegExp('id="stage' + stage + 'PendingItem"'));
+    assert.match(card, new RegExp('class="ai-stage-runtime-line"[^>]*>\\s*<div id="stage' + stage + 'RuntimeInfo"[^>]*>\\s*</div>\\s*<div id="stage' + stage + 'ProgressText"'));
+    const runtime = card.slice(runtimePosition);
+    assert.ok(runtime.indexOf('id="stage' + stage + 'ProgressWrap"') > runtime.indexOf('id="stage' + stage + 'ProgressText"'));
+    assert.ok(runtime.indexOf('id="stage' + stage + 'ActiveInfo"') > runtime.indexOf('id="stage' + stage + 'ProgressWrap"'));
   }
+});
+
+test("待仲裁入口：只渲染一次，移到指标行后仍按当前轮次筛选待办", async () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  const markup = ui.html.split("<script>")[0];
+  assert.equal([...markup.matchAll(/id="stage3PendingItem"/g)].length, 1);
+  assert.equal([...markup.matchAll(/id="metricStage3Pending"/g)].length, 1);
+  assert.equal([...markup.matchAll(/待仲裁:\s*<span/g)].length, 1);
+  const dispute = "[AI校对]\n语义是否相同：相同\n是否需要修改：待终审\nGatekeeper初审：建议修改\n初审改案：初审案\nStylist复审[调整]：存在分歧\n复审改案：复审案";
+  const arbitrated = dispute.replace("是否需要修改：待终审", "是否需要修改：是") + "\nArbiter仲裁[初审方案]：采纳初审\n仲裁改案：初审案\n修改结果：初审案";
+  ui.run(`Object.assign(notes, ${JSON.stringify({
+    1: { note: dispute },
+    2: { note: arbitrated },
+    3: { note: dispute, manualDone: true },
+  })}); markNotesDirtyForMetrics(); updateStageMetricsDashboard();`);
+  const pending = ui.element("stage3PendingItem");
+  assert.equal(pending.hidden, false);
+  assert.equal(Number(ui.element("metricStage3Pending").textContent), 1);
+  await pending.dispatch("click");
+  assert.deepEqual([...ui.run("filteredRows.map(row => row.index)")], [1]);
+  assert.equal(pending.getAttribute("aria-pressed"), "true");
+  await pending.dispatch("click");
+  assert.deepEqual([...ui.run("filteredRows.map(row => row.index)")], [1, 2, 3]);
+  assert.equal(pending.getAttribute("aria-pressed"), "false");
 });
 
 test("运行信息：无活跃行号也显示队列与容量，停止后清理运行数字", () => {
@@ -170,6 +203,47 @@ test("可见阶段进度：初审覆盖全页，下游当前候选增加时更�
   assert.equal(ui.element("stage2ProgressText").textContent, "");
   assert.equal(ui.element("stage2ProgressText").title, "");
   assert.equal(progress.getAttribute("aria-valuenow"), null);
+});
+
+test("运行停止与进度重置：三阶段清理动态内容，保留已有审核进度直至重置", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run(`
+    stagePresetSelections.stage2 = ["preset-s2"];
+    stagePresetSelections.stage3 = ["preset-s3"];
+    renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 1, stage3Arbitrated: 1 }, {
+      stage1: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] },
+      stage2: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] },
+      stage3: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] }
+    }, true);
+  `);
+  for (const stage of [1, 2, 3]) {
+    assert.equal(ui.element("stage" + stage + "RuntimeInfo").hidden, false);
+    assert.equal(ui.element("stage" + stage + "ActiveInfo").hidden, false);
+    assert.equal(ui.element("stage" + stage + "ProgressWrap").hidden, false);
+  }
+  ui.run("renderStageMetricsDashboard({ stage1Passed: 3, stage2Reviewed: 1, stage3Arbitrated: 1 });");
+  for (const stage of [1, 2, 3]) {
+    const runtime = ui.element("stage" + stage + "RuntimeInfo");
+    const active = ui.element("stage" + stage + "ActiveInfo");
+    assert.equal(runtime.hidden, true);
+    assert.equal(runtime.textContent, "");
+    assert.equal(runtime.title || "", "");
+    assert.equal(active.hidden, true);
+    assert.equal(ui.element("stage" + stage + "ActiveRowsText").textContent, "");
+    assert.equal(ui.element("stage" + stage + "ProgressWrap").hidden, false);
+    assert.match(ui.element("stage" + stage + "ProgressText").textContent, /100%$/);
+  }
+  ui.run("resetStageProgressBars();");
+  for (const stage of [1, 2, 3]) {
+    const progress = ui.element("stage" + stage + "ProgressWrap");
+    const text = ui.element("stage" + stage + "ProgressText");
+    assert.equal(progress.hidden, true);
+    assert.equal(ui.element("stage" + stage + "Progress").style.width, "0%");
+    for (const attribute of ["title", "aria-valuenow", "aria-valuemax", "aria-valuetext"]) assert.equal(progress.getAttribute(attribute), null);
+    assert.equal(text.hidden, true);
+    assert.equal(text.textContent, "");
+    assert.equal(text.title, "");
+  }
 });
 
 test("阶段预设标签：每个预设位置显示自己的并发与排队信息", () => {
