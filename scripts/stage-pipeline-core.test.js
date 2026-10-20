@@ -361,6 +361,36 @@ test("仲裁决议应用：applyArbitrationDecision 支持结合修改方案并�
   assert.equal(applied.revisedText, "仲裁结合两者的全新定案文本");
 });
 
+test("终审只输出改或不改：旧式存疑、空改案与原文相同改案保守保留原译", () => {
+  for (const input of [
+    { arbitration: { winner: "unclear", finalDecision: "unclear", reason: "证据不足" }, adjudicatedRevisedText: "未经采纳的改稿" },
+    { arbitration: { winner: "stylist", finalDecision: "replace" } },
+    { arbitration: { winner: "stylist", finalDecision: "replace" }, adjudicatedRevisedText: " 原译。 " },
+    { arbitration: { winner: "original", finalDecision: "keep" }, adjudicatedRevisedText: "未经采纳的改稿" },
+  ]) {
+    const applied = applyArbitrationDecision({ ...input, targetText: "原译。" });
+    assert.equal(applied.finalDecision, "keep");
+    assert.equal(applied.arbitration.finalDecision, "keep");
+    assert.equal(applied.winner, "original");
+    assert.equal(applied.needsEdit, false);
+    assert.equal(applied.isUnclear, false);
+    assert.equal(applied.revisedText, "");
+  }
+});
+
+test("终审响应损坏或结论不合法必须报错，不能伪装为不改", () => {
+  for (const raw of ["这不是 JSON", "{}", "[]", '{"winner":"stylist",', '{"winner":"stylist","finalDecision":"maybe"}']) {
+    assert.throws(() => parseArbiterResponse(raw), /终审/);
+  }
+});
+
+test("终审提示词只要求 keep/replace，证据不足保留原译", () => {
+  const prompt = buildPersonaSystemPrompt("arbiter");
+  assert.match(prompt, /证据不足.*保留原译/);
+  assert.doesNotMatch(prompt, /finalDecision=unclear|转人工/);
+  assert.match(prompt, /finalDecision \('keep'\|'replace'\)/);
+});
+
 test("仲裁备注格式化：formatArbitrationNoteLines 生成结构化分析轨迹", () => {
   const lines = formatArbitrationNoteLines({
     gatekeeperDecision: { summary: "发现漏译形容词" },

@@ -195,8 +195,8 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "2. 术语裁决权威：遵守项目译名对照表与专有名词规范，不得回退已纠正的术语；结合方案也必须保留标准译名。",
       "3. 裁决机制：某方案完整正确时选 gatekeeper 或 stylist；原译准确恰当、无需修改时选 original。",
       "   【核心结合方案】双方各有可取之处时，主动融合初审纠错与复审表达，winner=synthesis，并在 revisedText 给出完整结合文本；两案均有严重缺陷且确需修改时，可选 neither 给出独立修复方案。",
-      "4. 充分权衡上下文与证据后定案；依据仍不足、难以定论时才用 finalDecision=unclear 转人工，不能用存疑逃避裁决。",
-      "5. 仅输出合法 JSON：winner ('gatekeeper'|'stylist'|'synthesis'|'original'|'neither'), reason, finalDecision ('keep'|'replace'|'unclear'), riskFlags, revisedText。replace 必须给出完整修改文本。",
+      "4. 充分权衡上下文与证据后必须定案为修改或不修改；证据不足以支持修改时保守保留原译，winner=original、finalDecision=keep，并说明依据。不得输出存疑或待人工检查的结论。",
+      "5. 仅输出合法 JSON：winner ('gatekeeper'|'stylist'|'synthesis'|'original'|'neither'), reason, finalDecision ('keep'|'replace'), riskFlags, revisedText。replace 必须给出完整修改文本；keep 的 revisedText 为空。",
       termSection ? `\n${termSection}` : "",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
@@ -328,14 +328,14 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
       rationale: stylistCritique.rationale || stylistCritique.summary || "",
       revisedText: stylistCritique.revisedText || "",
     },
-    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。只有经终审权衡后仍证据严重不足、无法做出确定结论的极少数顽固疑难，方可将 finalDecision 设为 unclear 转人工确认。",
+    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。最终结论只能是修改（finalDecision=replace）或不修改（finalDecision=keep）；证据不足以支持修改时保留原译，并在 reason 中说明，不得留下存疑或待人工检查。",
   };
 
   return [
     { role: "system", content: baseSystem },
     {
       role: "user",
-      content: `请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | synthesis | original | neither",\n  "reason": "仲裁裁决理由（若采用结合方案，请说明分别吸取了初审与复审的哪些长处）",\n  "finalDecision": "replace | keep | unclear",\n  "riskFlags": [],\n  "revisedText": "最终定案文本（若采用结合方案或修改方案，给出完整成品文本；若维持原译可为空）"\n}`,
+      content: `请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | synthesis | original | neither",\n  "reason": "仲裁裁决理由（若采用结合方案，请说明分别吸取了初审与复审的哪些长处）",\n  "finalDecision": "replace | keep",\n  "riskFlags": [],\n  "revisedText": "最终定案文本（若采用结合方案或修改方案，给出完整成品文本；若维持原译可为空）"\n}`,
     },
   ];
 }
@@ -412,12 +412,20 @@ function normalizeArbiterWinner(rawWinner, fallbackDecision) {
  */
 function parseArbiterResponse(content) {
   const text = String(content || "").trim();
-  const jsonText = text.startsWith("{") ? text : (text.match(/\{[\s\S]*\}/) || ["{}"])[0];
-  let parsed = {};
+  const jsonText = text.startsWith("{") ? text : (text.match(/\{[\s\S]*\}/) || [""])[0];
+  let parsed;
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    parsed = {};
+    throw new Error("终审响应不是合法 JSON。");
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object"
+      || !(parsed.winner || parsed.finalDecision || parsed.decision)) {
+    throw new Error("终审响应缺少裁决字段。");
+  }
+  const finalDecision = parsed.finalDecision || parsed.decision;
+  if (finalDecision && !["keep", "replace", "unclear"].includes(finalDecision)) {
+    throw new Error("终审返回了不合法的最终结论。");
   }
 
   const rawWinner = parsed.winner || (parsed.decision === "keep" ? "original" : "stylist");

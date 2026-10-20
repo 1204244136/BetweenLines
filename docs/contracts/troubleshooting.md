@@ -176,14 +176,14 @@
 - **现象**：页面上「修改结果」文本框变成两行、写回后成品段落被拆开。
 - **排查**：
   - 这是成品格式门禁（`ai/format-guard.js`）拦截的形状。历史故障中，旧对齐快照把多段原文与单段目标文本放在一行，页面把换行渲染成空格后不易察觉；模型据此误判「译文把原文换行丢了」并往 `revisedText` 插入 `\n`，写回按 `\n{2,}` 切分时随之错段。当前构建必须遵守单原文段落不变量；先核对该行是否来自旧快照，再查门禁输出。
-  - 门禁会并回模型插入的换行/空行/`<br>` 并在备注分析栏写一行「格式自动规范化：…」，段结构与 noteref 标记对不上的行直接作废转终审；只有终审仍存疑才标记待人工确认，详见 [AI 契约](ai-proofread-contract.md#待人工确认只能由终审分发)。
+  - 门禁会并回模型插入的换行/空行/`<br>` 并在备注分析栏写一行「格式自动规范化：…」，段结构与 noteref 标记对不上的修订直接作废；终审前转终审，终审改案仍不合格时保留原译并记录原因，详见 [AI 契约](ai-proofread-contract.md#终审二元定案)。
   - 若仍能写回出换行：确认常驻 AI 实现已更新，再检查这一层是否被 `formatGuard:false` / `TRANSCOMPARATOR_FORMAT=0` 误关闭。
 
 ### 2. 修订结果里的标点被改坏
 - **现象**：英文句子被全角化、`3.5`/`e.g.`/URL 里的点被换成 `。`。
 - **排查**：
   - 检查 `ai/punctuation.js` 的语境判据：半角→全角只在标点两侧出现中日文时生效；全角→半角要求正向 ASCII 证据（两侧都是字母/数字，或一侧是、另一侧是行边界且整段无汉字/假名），纯标点行与中文句子不会被误还原；紧贴 ASCII 字母/数字的点有豁免；内联标记整段先摘后还原。
-  - 修改结果仍出现 `“…”` 时看 `status.punctQuoteVoids` 与备注；无法配对或英文语境弯引号作废转终审，具体语境与规范化规则见 [AI 契约](ai-proofread-contract.md#2-输出侧标点规范化aipunctuationjsnormalizedecisionpunctuation)。
+  - 修改结果仍出现 `“…”` 时看 `status.punctQuoteVoids` 与备注；无法配对或英文语境弯引号作废该修订，终审前转终审，终审后保留原译，具体语境与规范化规则见 [AI 契约](ai-proofread-contract.md#2-输出侧标点规范化aipunctuationjsnormalizedecisionpunctuation)。
   - 若某一行的标点确实不该动，确认是否被标签外语境带偏，或通过 `punctNormalize:false` / `TRANSCOMPARATOR_PUNCT=0` 临时关闭。
 
 ### 3. 修订结果里唐突出现日文

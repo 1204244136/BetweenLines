@@ -138,7 +138,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
           <div class="stat"><strong>${stats.total}</strong>总行</div>
           <div class="stat"><strong id="doneCount">0</strong>人工确认</div>
           <div class="stat"><strong id="aiDoneCount">0</strong>自动结果</div>
-          <div class="stat" id="modifyRateStat" title="最终建议修改的行 ÷ 已有自动结论的行；尚无自动结论时显示 —"><strong id="modifyRate">—</strong>修改率</div>
+          <div class="stat" id="modifyRateStat" title="最终建议修改的行 ÷ 已有自动结果的行；尚无自动结果时显示 —"><strong id="modifyRate">—</strong>修改率</div>
         </div>
       </div>
     </header>
@@ -291,8 +291,8 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
                 <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
                 <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
-                <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="需要人工确认的存疑行数" role="button" tabindex="0" hidden>待人工确认: <strong id="metricFinalNeedsCheck">0</strong></span>
-                <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="流水线尚未走到终审仲裁的存疑行数——「待人工确认」只能由终审分发，这些行还等着终审定案（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
+                <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="兼容旧版存疑结果与预筛冲突；这些记录尚未定案，可进入 AI 流程继续审核（点击筛选未定案记录）" role="button" tabindex="0" hidden>未定案记录: <strong id="metricFinalNeedsCheck">0</strong></span>
+                <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="尚未完成终审仲裁的存疑行数，等待终审判断修改或不改（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
               </div>
               <div class="ai-stage-dashboard-actions" role="group" aria-label="全部审核阶段操作">
                 <button id="aiStartAll" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动全部已启用阶段，逐行衔接初审、复审与仲裁">一键开始</button>

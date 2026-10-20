@@ -2641,8 +2641,7 @@
       const hasStageTraces = Boolean(note.stage1 || note.stage2 || note.stage3);
       if (hasStageTraces) {
         const isNeedsCheck = note.modify === "待人工确认" || note.modify === "人工确认";
-        // 「待终审」是还没走到终审的存疑行：同样需要展开审阅，但不能显示成「终审定案为待人工确认」——
-        // 终审是唯一能分发「待人工确认」的阶段。
+        // 兼容旧版存疑结论；当前终审成功后只会判断修改或不改。
         const isPendingArbiter = note.modify === "待终审";
         const isUnresolved = isNeedsCheck || isPendingArbiter;
         const s2Attitude = note.stage2?.attitude || (isUnresolved && !note.stage2 ? "待定" : "复审");
@@ -2655,7 +2654,7 @@
         const rawWinner = note.stage3?.winner || (isUnresolved && note.stage3 ? "存疑待定" : "仲裁");
         const s3Winner = formatWinnerLabel(rawWinner);
 
-        // 核心体验契约：待判行是需要人工定夺的焦点，各阶段审查记录默认直接展开呈现！
+        // 未定案记录默认展开各阶段审查记录，便于继续审核。
         // 去重契约：阶段卡片只承载「审查意见」，各阶段改案全文只在左侧差异辅助（修改结果对比 +
         // 分步演进明细）与「修改结果」区呈现一次；卡片里再打印一遍是纯粹的重复噪音。
         // 用户手动开合过这一行就以他的选择为准，否则沿用"待判行默认展开"。
@@ -2672,7 +2671,7 @@
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-arbiter">仲裁·' + escapeHtml(s3Winner) + '</span>';
         }
         if (isNeedsCheck) {
-          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-final-check" title="经审查仍难以断定，终审定案为待人工确认">待人工确认</span>';
+          stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-final-check" title="旧版存疑结果尚未定案，可重新运行审核，终审将判断修改或不改">未定案记录</span>';
         } else if (isPendingArbiter && note.stage2) {
           // 没走复审的行上面已经标了「待复审」——它还没到终审那一步，不必再叠一个「待终审」。
           stepsHtml += '<span class="pipeline-arrow">➔</span><span class="pipeline-step is-pending-step" title="流水线还没走到终审仲裁，这一行等着终审定案；当前未启用终审仲裁，或它没被送进终审">待终审</span>';
@@ -2748,7 +2747,7 @@
       return '<div class="note-summary">' +
         pipelineHtml +
         '<div class="note-summary-line"><span class="note-summary-key">语义</span><span class="note-summary-value">' + escapeHtml(note.semantic || "待人工判定") + '</span></div>' +
-        '<div class="note-summary-line"><span class="note-summary-key">修改</span><span class="note-summary-value">' + escapeHtml(note.modify || "待人工判定") + '</span></div>' +
+        '<div class="note-summary-line"><span class="note-summary-key">修改</span><span class="note-summary-value">' + escapeHtml(["待人工确认", "人工确认"].includes(note.modify) ? "未定案记录" : (note.modify || "待判定")) + '</span></div>' +
         ratingLine +
         analysis +
         revision +
@@ -3197,8 +3196,7 @@
       return "unclear";
     }
 
-    // 「待终审」与「待人工确认」在「自动分析结果」里都算未定案（都进「待判」），
-    // 但顶部徽章的筛选必须分开：前者还没等到终审，后者才是终审分发的判决。
+    // 待终审与兼容的未定案记录都进「待判」，顶部徽章仍各自筛选。
     function isPendingArbiterRow(row) {
       const note = parseAutomatedNote(notes[String(row.index)]?.note || "");
       return note?.modify === "待终审";
@@ -3497,7 +3495,7 @@
     const summaryFilterItems = [
         { id: "aiStageSummaryNeedsEdit", filter: "needsEdit", name: "最终建议修改" },
         { id: "aiStageSummaryUnchanged", filter: "unchanged", name: "无需修改" },
-        { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "待人工确认" },
+        { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "未定案记录" },
         { id: "aiStageSummaryPendingArbiter", filter: "pendingArbiter", name: "待终审" },
         { id: "stage1PassedItem", filter: "stage1Passed", name: "初审通过", nativeButton: true },
         { id: "stage1NeedsEditItem", filter: "stage1NeedsEdit", name: "初审提改", nativeButton: true },
@@ -4316,10 +4314,10 @@
     }
 
     /**
-     * 右上角「修改率」：最终建议修改的行 ÷ 已有自动结论的行。
+     * 右上角「修改率」：最终建议修改的行 ÷ 已有自动结果的行。
      * 分子分母直接复用阶段指标的最终结论口径（finalNeedsEdit / finalUnchanged /
      * finalNeedsCheck / finalPendingArbiter），不另写一套备注分类规则。
-     * 还没有任何自动结论时显示「—」：0 行结论不等于 0% 修改率。
+     * 还没有任何自动结果时显示「—」：0 行结果不等于 0% 修改率。
      */
     function updateModifyRateStat(metrics = {}) {
       if (!modifyRate) return;
@@ -4330,14 +4328,17 @@
       const audited = needsEdit + unchanged + needsCheck + pendingArbiter;
       if (!audited) {
         modifyRate.textContent = "—";
-        if (modifyRateStat) modifyRateStat.title = "尚无自动校对结论：修改率 = 最终建议修改的行 ÷ 已有自动结论的行。";
+        if (modifyRateStat) modifyRateStat.title = "尚无自动校对结果：修改率 = 最终建议修改的行 ÷ 已有自动结果的行。";
         return;
       }
       const rounded = Math.round((needsEdit / audited) * 1000) / 10;
       modifyRate.textContent = (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)) + "%";
       if (modifyRateStat) {
-        modifyRateStat.title = "最终建议修改 " + needsEdit + " 行 / 已有自动结论 " + audited + " 行"
-          + "（无需修改 " + unchanged + "、待人工确认 " + needsCheck + "、待终审 " + pendingArbiter + "；调用失败的行不计入分母）。";
+        const results = ["无需修改 " + unchanged];
+        if (needsCheck) results.push("未定案记录 " + needsCheck);
+        if (pendingArbiter) results.push("待终审 " + pendingArbiter);
+        modifyRateStat.title = "最终建议修改 " + needsEdit + " 行 / 已有自动结果 " + audited + " 行"
+          + "（" + results.join("、") + "；调用失败的行不计入分母）。";
       }
     }
 
@@ -4390,7 +4391,7 @@
       if (elFinalNeedsCheck) elFinalNeedsCheck.textContent = finalNeedsCheck;
       const badgeNeedsCheck = document.getElementById("aiStageSummaryNeedsCheck");
       if (badgeNeedsCheck) badgeNeedsCheck.hidden = finalNeedsCheck === 0;
-      // 「待终审」单独一个徽章：这些行还没等到终审仲裁，既不该混进「待人工确认」，也不能就这么消失。
+      // 运行中尚未完成终审的行单独展示，不混入兼容的未定案记录。
       const elFinalPendingArbiter = document.getElementById("metricFinalPendingArbiter");
       if (elFinalPendingArbiter) elFinalPendingArbiter.textContent = finalPendingArbiter;
       const badgePendingArbiter = document.getElementById("aiStageSummaryPendingArbiter");
@@ -4698,7 +4699,7 @@
         } else if (parsed.modify === "否") {
           finalUnchanged += 1;
         } else if (parsed.modify === "待终审") {
-          // 「待人工确认」只能由终审分发：还没走到终审的存疑行单独计，不混进待确认指标。
+          // 尚未完成终审的行单独计；旧版存疑与预筛冲突保留在兼容指标中。
           finalPendingArbiter += 1;
         } else {
           finalNeedsCheck += 1;
@@ -4904,7 +4905,7 @@
       const stageMetricsSummary = [
         ["finalNeedsEdit", "最终建议修改"],
         ["finalUnchanged", "无需修改"],
-        ["finalNeedsCheck", "待人工确认"],
+        ["finalNeedsCheck", "未定案记录"],
         ["finalPendingArbiter", "待终审"],
         ["stage1Passed", "初审通过"],
         ["stage1NeedsEdit", "初审提改"],
@@ -4920,7 +4921,8 @@
         ["fastPassHits", "快速直通"],
         ["lowScoreHits", "低分归因"],
         ["webLookupHits", "线上查证"],
-      ].map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
+      ].filter(([key]) => key !== "finalNeedsCheck" || Number(stageMetrics[key]) > 0)
+        .map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
 
       stageMetricsSummaryCache = stageMetricsSummary;
       if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;

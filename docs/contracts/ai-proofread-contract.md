@@ -6,7 +6,7 @@
 
 - `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；共享 AI 传输、连接配置、任务队列与基础 JSON 提示契约已位于 `src/ai/`。目录所有权与跨工作台依赖见 [module-boundaries.md](module-boundaries.md)，共享层不得引入领域 rows、notes 或任务运行状态。
 - 共享 LLM 传输层只能请求 `http:`/`https:`，不得接受带用户名/密码的 URL，必须拒绝云元数据、link-local、多播和未指定地址，并禁止自动跟随重定向；本机 Ollama 的回环地址仍属于允许范围。HTTP 200 后读取响应体若发生 `terminated`、`socket hang up`、`UND_ERR_SOCKET` 等流中断，只在传输层对完整请求做最多两次短退避重试；HTTP 错误、超时、JSON 格式错误和调用方取消不得走这条重试。重试成功的断流不进入阶段错误、熔断或并发下调；重试耗尽才交给既有网络异常与并发调度口径。
-- 模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。
+- 初审模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。终审在两种模式下都只允许 `finalDecision=keep|replace`，兼容旧模型的存疑输出按下文「终审二元定案」收敛。
 
 ---
 
@@ -57,13 +57,13 @@
   → 低分归因与修复（极低分行按相邻行解释原因再修）
   → 线上查证（按站点顺序 + 自行检索）
   → 输出侧确定性工序（成品格式门禁 → 标点规范化 → 语言护栏）
-  → 阶段结论分发（尚未终审的存疑行待终审；终审仍存疑才待人工）。
+  → 阶段结论分发（尚未终审的存疑行待终审；终审成功后只定案为改或不改）。
 - **两者的对应关系**：
   - 对照表对应第 ④ 层的术语段；
   - 模型基础轮与上下文轮对应第 ①②③⑤ 层加相邻行；
   - 极低分复核对应第 ④ 层的低分归因段；
   - 线上查证对应第 ④ 层的线上查证段；
-  - 输出侧三步（成品格式门禁、标点规范化、语言护栏）都是结论产出**之后**的确定性工序、不读提示词，不对应任何一层；终局为待人工时不注入任何新层。
+  - 输出侧三步（成品格式门禁、标点规范化、语言护栏）都是结论产出**之后**的确定性工序、不读提示词，不对应任何一层；终审改案被作废时保留原译并记明原因，不注入任何新层。
 - 新增任何一层/一段时，更新本文及代码顶部摘要；`AGENTS.md` 只维护契约入口，用户可观察行为改变时才更新 README 的功能说明，避免复制一套分层细则。
 
 ### 分层纪律与前缀表
@@ -127,9 +127,9 @@
 - 一行就是一个成品段落，段数由目标列当前行给定（按 `\n{2,}` 切出的片段）。
 - **三档处置**：
   1. 能确定性还原就修：并回模型插入的换行/空行/`<br>`、去掉首尾空白；目标列单段时段落分隔一并并回（中日文之间不加分隔符、两侧 ASCII 补空格）。
-  2. 结构性事实对不上就作废转终审：目标列 ≥2 段而段数不一致，或 noteref 标记增减，作废 `revisedText`、置 `needsContext=true`，原因并入 `summary`；最终状态按「待人工确认只能由终审分发」一节决定。
+  2. 结构性事实对不上就作废修订：目标列 ≥2 段而段数不一致，或 noteref 标记增减，作废 `revisedText`、置 `needsContext=true`，原因并入 `summary`；尚未终审时转终审，终审后按「终审二元定案」一节保守定案为不改。
   3. 防呆：`summary`/`suggestion` 里的换行折叠成空格，防止破坏按行解析层。
-- **三条纪律**：只动结构与内联标记不动文字；修不了就转终审不猜；改动必须留痕（备注分析栏写「格式自动规范化：…」）。
+- **三条纪律**：只动结构与内联标记不动文字；修不了的上游改案转终审，终审改案不合格则保留原译；改动必须留痕（备注分析栏写「格式自动规范化：…」）。
 - 计数走 `status.formatFixes`/`formatLineBreaks`/`formatParagraphs`/`formatNoteFields`/`formatVoids`，开关为 `formatGuard:false` / `TRANSCOMPARATOR_FORMAT=0`。
 
 ### 2. 输出侧标点规范化（`ai/punctuation.js`，`normalizeDecisionPunctuation`）
@@ -137,7 +137,7 @@
 - **宽度与体例**：
   - 中文语境（标点最近的左右非空白字符里有中日文）的半角标点转全角（`，。？！；：（）`，省略号统一成 `……`）。
   - **英文句子保持半角**：反向还原要求**正向 ASCII 证据**（标点紧邻的左右字符都是字母/数字，或一侧是、另一侧是行边界且整段无汉字/假名）。纯标点行或拟声行不会被误判为英文。
-  - 中文语境可配对双引号转直角引号：`“…”` 与 `"…"` → `「…」`；无法配对或英文语境弯引号作废整条修订转终审（`status.punctQuoteVoids`）。
+  - 中文语境可配对双引号转直角引号：`“…”` 与 `"…"` → `「…」`；无法配对或英文语境弯引号作废整条修订（`status.punctQuoteVoids`），终审前转终审，终审后保留原译。
   - 紧贴 ASCII 字母/数字的点豁免（`3.5`、`e.g.`、`S1_01`）。
   - 内联标记（`<ruby>`/`<rt>`/`<a epub:type="noteref">`）先摘后还原。
 - **成对标记内侧句末点号还原**（`restoreTerminalPunctuation`）：
@@ -147,7 +147,7 @@
 
 ### 3. 输出侧语言护栏（`ai/ai-proofread.js`，`guardTargetScript`）
 
-- 目标列当前行**本来不含假名**而 `revisedText` 含假名时，作废修订结果、置 `needsContext=true`、备注写明原因；最终状态按终审是否已执行分流。
+- 目标列当前行**本来不含假名**而 `revisedText` 含假名时，作废修订结果、置 `needsContext=true`、备注写明原因；尚未终审时转终审，终审后保守定案为不改。
 - 拦截诱因：原文有注音而目标列没有时模型照抄读音，或上下文轮把相邻行原文当成可复制文本。
 - 计数走 `status.scriptLeaks`。
 
@@ -246,19 +246,23 @@
 
 一键流水线的阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 且复审仍启用时，通过 `dispatchers.stage2.enqueue` 把完整 `s1` 交给复审；`executeStage2` 判定 `arbCheck.triggered` 且仲裁仍启用时，通过 `dispatchers.stage3.enqueue` 交给仲裁。定向停止某阶段后不再向它派发或追加候选，其它已运行阶段继续处理自己的队列。各阶段内部的预设集合、请求归属、并发/退避与熔断由 `ai/stage-dispatch.js` 持有；每个预设是一条独立通道，阶段配额是各通道之和，`cleanConfig` 保留 `presetPool`/`stylistPresets`/`arbiterPresets` 的连接参数与 `presetId`/`name`。热更新、新旧同 ID 请求隔离及整体终止汇总见下文「阶段派发状态与请求归属」；`dispatch()` 仍按 **stage3 → stage2 → stage1** 顺序派发。
 
-### 「待人工确认」只能由终审分发
+### 终审二元定案
 
-`decisionToResult` 里 `needsContext || better === "unclear"` 的出口**区分两种结论**，判据是这一行有没有走到终审（`decision.arbitration` 存在，或 `decision.stage === "arbiter"`）：
+三个阶段成功处理完的行，最终只能是 `是否需要修改：是` 或 `是否需要修改：否`，不得生成「待人工确认 / 待人工检查」终局：
 
-- **走过终审** → `是否需要修改：待人工确认`。终审是唯一有资格把一行判给人工的阶段。
-- **没走到终审** → `是否需要修改：待终审`。它既不是终局结论，也不该冒充终审的判决。前端把它单独计成 `finalPendingArbiter`（徽章「待终审」），**不混进** `finalNeedsCheck`（徽章「待确认」）；行内审核轨迹显示「待终审」，不再说「终审定案为待人工确认」。服务端同一口径见 `ai/stage-results.js` 的 `isPendingArbiterResult` / `computeResultMetricsDelta`。
+- **终审提示词**：双语、三语统一只允许 `finalDecision=keep|replace`。证据不足以支持修改时返回 `keep`，不能把判断转交人工。
+- **终审成功返回**：只有确定采纳且有可用完整改案时才能定案为改。证据不足、旧模型仍返回 `unclear`，或没有可用完整改案时，一律保守保留原译，清除最终存疑状态与默认修改结果，并在分析栏保留原因；初审和复审过程稿仍可查看。
+- **终审成品门禁**：终审改案被格式、标点或语言护栏作废后，同样定案为不改并保留作废原因，不得重新落入待人工或待终审。
+- **成品门禁新增的仲裁候选**：一键流水线已启用仲裁时，复审原本无分歧、但成品门禁作废改案后产生的待终审也须追加到仲裁队列，不能因早先未触发分歧而漏审。单独阶段仍只处理自身，不因此级联启动仲裁。
+- **尚未完成终审**：存疑行继续为 `是否需要修改：待终审`，统计为 `finalPendingArbiter`，不是终局结论。真正的终审调用异常继续保留异常与仲裁待办，不能伪装成成功的 `keep`。
+- **未定案记录兼容**：不改写旧存疑备注，`finalNeedsCheck` 继续兼容旧版 AI 存疑与预筛结构冲突；界面仅在有数据时显示「未定案记录」。旧终审存疑须重新运行终审，才能得到新的二元结论；预筛结构冲突继续按预筛规则进入审核，不自动改成待终审。人工确认、人工编辑与显式选中的阶段版本均按既有契约保留。
 
-配套两条纪律，缺一条这个口径就会被绕过：
+配套两条纪律：
 
-1. **复审「采纳」必须定案**：`runStage2Stylist` 在 `attitude === "accept" && decision.stage1RevisedText` 时要把 `better` 一并改成定案值（双语 `neither`、三语 `counterpart`）。初审判「存疑」时 `better` 是 `unclear`（`normalizeDecision` 对「结论说不用改、分析里却说要改」的保守归类），只清 `needsContext` 会让这个残留值把已经定案的行写成「待人工确认」——而它根本没走到终审。
-2. **存疑未解除必须升级终审**：`shouldTriggerArbitration` 的第 5 条判据是「初审存疑（`needsContext` / `better === "unclear"`）且复审没能解除它」。复审「采纳初审改案 / 给出自己的改案 / 驳回」都算解除；只表态采纳、手里却没有任何可用改案的行不算——那种行既没有定案依据，也不该由复审直接甩给人工。
+1. **复审「采纳」必须定案**：`runStage2Stylist` 在 `attitude === "accept" && decision.stage1RevisedText` 时要把 `better` 一并改成定案值（双语 `neither`、三语 `counterpart`），同时解除 `needsContext`，不得让初审残留的 `unclear` 把完整改案重新判为待终审。
+2. **存疑未解除必须升级终审**：`shouldTriggerArbitration` 的第 5 条判据是「初审存疑（`needsContext` / `better === "unclear"`）且复审没能解除它」。复审「采纳初审改案 / 给出自己的改案 / 驳回」都算解除；只表态采纳、却没有可用改案的行仍须交终审。
 
-**措辞纪律**：程序写进备注分析栏的兜底文案（格式门禁作废、语言护栏作废、标点作废、模型拒答、低分归因与线上查证兜底）一律说「转终审确认」「已作废，等待终审裁决」「已自动跳过并标记待终审」，不再说「转人工确认」——后者只属于终审自己的 unclear 判决（`ai/arbiter.js` 里终审判定 unclear 的说明文案，以及终审提示词里 `finalDecision=unclear` 的定义）。
+**措辞纪律**：终审前的格式、语言、标点作废及低分归因、线上查证兜底写「转终审确认」「已作废，等待终审裁决」。终审成功后证据不足或改案作废写明「保留原译」及原因；真实调用异常仍写调用异常，不得写「转人工确认」或成功定案。
 
 ### 独立阶段二/三的队列来源
 

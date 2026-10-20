@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { makeHtml } = require("./build-compare");
-const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
+const { createWorkbench, createClientFixture, storageFixture, toastMessages } = require("./workbench-fixture");
 const { createStageMetrics, createStagePipelines } = require("../src/workbenches/translation-compare/ai/stage-results");
 
 test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
@@ -44,6 +44,10 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="metricStage3Arbitrated"/);
   assert.doesNotMatch(html, /id="metricStage3Settled"/, "不重复显示与已仲裁同步累计的定案数字");
   const dashboardMarkup = html.slice(html.indexOf('<div id="aiStageDashboard"'), html.indexOf('<div class="ai-log', html.indexOf('<div id="aiStageDashboard"')));
+  const dashboardHeaderMarkup = dashboardMarkup.slice(0, dashboardMarkup.indexOf('<div class="ai-stage-cards">'));
+  assert.match(dashboardHeaderMarkup, /id="aiStageSummaryNeedsCheck"[^>]*hidden>未定案记录:/, "兼容旧结果的入口默认隐藏，不预留人工检查类别");
+  assert.match(dashboardHeaderMarkup, /兼容旧版存疑结果与预筛冲突/);
+  assert.doesNotMatch(dashboardHeaderMarkup, /待人工确认|待人工检查/);
   assert.doesNotMatch(dashboardMarkup, /class="ai-stage-flow-arrow"/, "阶段结果分类不用箭头暗示先后关系");
   for (const [item, metric, label] of [["stage1TotalItem", "metricStage1Total", "已初审"], ["stage2ReviewedItem", "metricStage2Reviewed", "已复审"], ["stage3ArbitratedItem", "metricStage3Arbitrated", "已仲裁"]]) {
     assert.match(html, new RegExp('id="' + item + '"[^>]*class="ai-stage-card-value ai-stage-metric"[^>]*>\\s*<strong id="' + metric + '">0</strong><span class="ai-stage-unit">' + label));
@@ -1359,7 +1363,7 @@ test("顶部审核结论指标筛选：点击建议修改/无需修改筛选对�
   assert.equal(ui.run("filteredRows.length"), 4);
 });
 
-test("「待终审」独立成账：没走到终审的存疑行不混进「待人工确认」", async () => {
+test("「待终审」独立成账：没完成终审的行不混进兼容的未定案记录", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -1369,7 +1373,7 @@ test("「待终审」独立成账：没走到终审的存疑行不混进「待�
         aiDone: false,
       },
       2: {
-        // 走到终审、终审仍定不了 → 才是「待人工确认」。
+        // 旧版允许终审转人工，恢复后保留原始记录，展示为未定案记录。
         note: "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\nGatekeeper初审：存疑待定\nStylist复审[提交仲裁]：依据不足\nArbiter仲裁[存疑待定]：终审也无法定案\n分析：终审定案为待人工确认。",
         aiDone: false,
       },
@@ -1384,7 +1388,7 @@ test("「待终审」独立成账：没走到终审的存疑行不混进「待�
   });
 
   assert.equal(ui.element("metricFinalPendingArbiter").textContent, 1, "行1没走到终审，计入待终审");
-  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "只有终审定案的行2算待人工确认");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "旧版存疑行2继续保留为未定案记录");
   assert.equal(ui.element("aiStageSummaryPendingArbiter").hidden, false, "待终审徽章在有行时展示");
 
   // 轨迹：行1显示「待终审」，不能再声称「终审定案为待人工确认」。
@@ -1392,7 +1396,9 @@ test("「待终审」独立成账：没走到终审的存疑行不混进「待�
   assert.match(html1, /待终审/);
   assert.doesNotMatch(html1, /待人工确认/);
   const html2 = ui.run('renderNoteSummary(notes["2"], "2")');
-  assert.match(html2, /待人工确认/);
+  assert.match(html2, /is-final-check"[^>]*>未定案记录<\/span>/);
+  assert.doesNotMatch(html2, /终审定案为待人工确认">/);
+  assert.match(html2, /<span class="note-summary-key">修改<\/span><span class="note-summary-value">未定案记录<\/span>/);
   assert.doesNotMatch(html2, /待终审/);
 
   // 两个徽章各筛各的，不互相吞并。
@@ -1406,6 +1412,72 @@ test("「待终审」独立成账：没走到终审的存疑行不混进「待�
   assert.equal(ui.run("activeSummaryFilter"), "needsCheck");
   assert.equal(ui.run("filteredRows.length"), 1);
   assert.equal(ui.run("filteredRows[0].index"), 2);
+});
+
+for (const comparisonMode of ["bilingual", "trilingual"]) {
+  test(`${comparisonMode}：三阶段成功完成后只展示修改或不改，不预留未定案类别`, () => {
+    const currentKey = "translation-compare-notes-v7:project:rows";
+    const rows = [1, 2].map((index) => ({
+      index, jp: "JP" + index, cn: "CN" + index,
+      ...(comparisonMode === "trilingual" ? { tw: "TW" + index } : {}),
+      relation: "1:1", score: 0.9, signature: "sig-" + index,
+    }));
+    const html = makeHtml(rows, {
+      comparisonMode,
+      files: { jp: "A.txt", cn: "B.txt", ...(comparisonMode === "trilingual" ? { tw: "C.txt" } : {}) },
+      labels: { jp: "原文", cn: "译文", ...(comparisonMode === "trilingual" ? { tw: "对照文本" } : {}) },
+    }, { projectKey: "project", rowsSignature: "rows", notesStorage: { key: currentKey } });
+    const ui = createClientFixture(html, storageFixture({
+      [currentKey]: JSON.stringify({
+        1: {
+          note: "[AI校对]\n语义是否相同：不同\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：完整修改\nStylist复审[调整]：采用更明确的表达\n复审改案：完整修改\nArbiter仲裁[结合方案]：采用完整修改\n仲裁改案：完整修改\n修改结果：完整修改",
+          aiDone: true,
+        },
+        2: {
+          note: "[AI校对]\n语义是否相同：相同\n是否需要修改：否\nGatekeeper初审：存疑待定\nStylist复审[提交仲裁]：需要最终判断\nArbiter仲裁[维持原译]：证据不足以证明需要修改，保留原译\n分析：维持原译。",
+          aiDone: true,
+        },
+      }),
+    }));
+
+    assert.equal(ui.run("pageMeta.comparisonMode"), comparisonMode);
+    assert.equal(ui.element("metricFinalNeedsEdit").textContent, 1);
+    assert.equal(ui.element("metricFinalUnchanged").textContent, 1);
+    assert.equal(ui.element("metricStage3Arbitrated").textContent, 2);
+    assert.equal(ui.element("aiStageSummaryNeedsCheck").hidden, true);
+    assert.equal(ui.element("aiStageSummaryPendingArbiter").hidden, true);
+    assert.doesNotMatch(ui.run("stageMetricsSummaryCache"), /未定案记录|待人工确认/);
+    assert.doesNotMatch(ui.element("modifyRateStat").title, /未定案记录|待人工确认|待终审/);
+    assert.equal(ui.element("modifyRate").textContent, "50%");
+    assert.equal(ui.element("doneCount").textContent, "0", "自动定案与人工确认仍各自独立");
+    for (const index of [1, 2]) {
+      assert.doesNotMatch(ui.run(`renderNoteSummary(notes["${index}"], "${index}")`), /is-final-check|待人工确认|未定案记录/);
+    }
+  });
+}
+
+test("未定案记录兼容旧版存疑与新预筛冲突，不改写记录也不分配人工终局", async () => {
+  const currentKey = "translation-compare-notes-v7:project:rows";
+  const legacyNote = "[AI校对]\n语义是否相同：相同\n是否需要修改：待人工确认\nGatekeeper初审：存疑\nStylist复审[提交仲裁]：依据不足\nArbiter仲裁[存疑待定]：旧版未定案";
+  const conflictNote = "[规则预筛]\n语义是否相同：不同\n是否需要修改：待人工确认\n分析：结构化内容冲突，继续 AI 审核。";
+  const ui = createWorkbench(storageFixture({
+    [currentKey]: JSON.stringify({
+      1: { note: legacyNote, aiDone: false },
+      2: { note: conflictNote, aiDone: false },
+    }),
+  }), {
+    rows: [1, 2].map((index) => ({ index, jp: "JP" + index, cn: "CN" + index, relation: "1:1", score: 0.9, signature: "sig-" + index })),
+  });
+
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 2);
+  assert.equal(ui.element("aiStageSummaryNeedsCheck").hidden, false);
+  assert.equal(ui.element("metricFinalPendingArbiter").textContent, 0, "预筛冲突不冒充已进入终审");
+  assert.equal(ui.run('notes["1"].note'), legacyNote);
+  assert.equal(ui.run('notes["2"].note'), conflictNote);
+  assert.match(ui.run('renderNoteSummary(notes["2"], "2")'), /<span class="note-summary-key">修改<\/span><span class="note-summary-value">未定案记录<\/span>/);
+  await ui.element("aiStageSummaryNeedsCheck").dispatch("click");
+  assert.deepEqual(Array.from(ui.run("filteredRows.map((row) => row.index)")), [1, 2]);
+  assert.match(toastMessages(ui).at(-1), /未定案记录/);
 });
 
 test("三语语境校对：认知审核阶段指标严格闭环且初审存疑行顺利流入复审排队", async () => {
@@ -1443,7 +1515,7 @@ test("三语语境校对：认知审核阶段指标严格闭环且初审存疑�
   // 1. 全局最终审核结论指标：严格闭环
   assert.equal(ui.element("metricFinalNeedsEdit").textContent, 2, "行3与行4最终需修改");
   assert.equal(ui.element("metricFinalUnchanged").textContent, 1, "行1无需修改");
-  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "行2存疑待人工确认");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "行2是旧版未定案记录");
 
   // 2. 阶段一初审指标：存疑独立统计，总检严格闭环
   assert.equal(ui.element("metricStage1Passed").textContent, 1, "行1初审直接通过");
@@ -1470,16 +1542,16 @@ test("三语语境校对：认知审核阶段指标严格闭环且初审存疑�
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1, "行4仲裁");
   assert.equal(ui.element("metricArbSynthesis").textContent, 1, "行4结合方案");
 
-  // 5. 待人工确认指标徽标在有存疑行时可见，并支持点击筛选
+  // 5. 旧版未定案记录在非零时可见，并支持点击筛选
   const checkBadge = ui.element("aiStageSummaryNeedsCheck");
-  assert.equal(checkBadge.hidden, false, "存在待确认行时待确认徽标必须展示");
+  assert.equal(checkBadge.hidden, false, "存在旧版未定案记录时保留可见入口");
   await checkBadge.dispatch("click");
   assert.equal(ui.run("activeSummaryFilter"), "needsCheck");
-  assert.equal(ui.run("filteredRows.length"), 1, "准确筛选出 1 行待人工确认");
+  assert.equal(ui.run("filteredRows.length"), 1, "准确筛选出 1 行未定案记录");
   assert.equal(ui.run("filteredRows[0].index"), 2);
 });
 
-test("三语语境校对：初审存疑经由复审与终审仲裁后，若终审难以定夺才落定为终审待判", async () => {
+test("旧版终审存疑恢复：保留阶段经历与未定案记录，不冒充当前终审结论", async () => {
   const currentKey = "translation-compare-notes-v7:project:rows";
   const storage = storageFixture({
     [currentKey]: JSON.stringify({
@@ -1502,7 +1574,7 @@ test("三语语境校对：初审存疑经由复审与终审仲裁后，若终�
   assert.equal(ui.element("metricCritiqueEscalate").textContent, 1, "复审升级仲裁");
   assert.equal(ui.element("metricStage2Pending").textContent, 0, "复审排队已清零");
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1, "终审已仲裁");
-  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "终审难以定夺，最终沉淀为待人工确认");
+  assert.equal(ui.element("metricFinalNeedsCheck").textContent, 1, "旧版终审存疑继续保留为未定案记录");
 });
 
 test("三语语境校对：Stylist 与 Arbiter 正确接收非原文目标列与带隔离防线的对照列语境", () => {

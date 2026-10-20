@@ -1823,20 +1823,28 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             stage2AttitudesLive[liveAttitude] += 1;
           }
         }
-        if (s2.arbCheck?.triggered && links.stage3 && !isStageStopped("stage3")) {
+        // 无分歧的复审改案也可能被成品门禁作废；完整流水线必须继续交给终审。
+        // 已有分歧的过程稿仍不运行成品门禁，保留原始仲裁输入。
+        const finalDecision = s2.arbCheck?.triggered ? null : guardFinalDecision(s2, config);
+        const needsArbiter = s2.arbCheck?.triggered || (finalDecision && shouldRetryWithContext(finalDecision));
+        if (needsArbiter && links.stage3 && !isStageStopped("stage3")) {
+          const arbitrationInput = finalDecision ? {
+            ...s2, decision: finalDecision,
+            arbCheck: { triggered: true, reason: "复审改案未通过成品门禁，交由终审裁决。" },
+          } : s2;
           // 先发布已复审、待终审的备注，及时解除旧复审异常；仲裁仍使用原始阶段输入。
           // 中间方案不经过成品门禁，也不作为最终修改结果交付或累计处理数量。
           const pendingResult = decisionToResult(s2.row, {
-            ...s2.decision, stage: "stylist", needsContext: true, better: "unclear",
+            ...arbitrationInput.decision, stage: "stylist", needsContext: true, better: "unclear",
           }, s2.targetLabel, s2.counterpartLabel, s2.targetKey, config.proofreadMode);
           addResult(pendingResult, { intermediate: true });
           // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
-          dispatchers.stage3.enqueue(s2);
+          dispatchers.stage3.enqueue(arbitrationInput);
           syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
           // 没有下游仲裁，或未产生分歧：采纳复审结论，直接完成
-          const result = finalizeRowResult(s2, config);
+          const result = finalizeRowResult(s2, config, finalDecision || undefined);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2.row.index);
         }
@@ -2438,7 +2446,7 @@ async function runStage2Stylist(stage1Result, config, labels, extraAllRows = nul
       } else if (stylistReview.critique.attitude === "accept" && decision.stage1RevisedText) {
         // 复审明确认可初审改案 = 定案。这里必须把 better 一并改成定案值：初审判「存疑」时
         // （模型结论自相矛盾，normalizeDecision 保守归类为 unclear）只清 needsContext 会留下
-        // better=unclear，decisionToResult 会把它写成「终审定案为待人工确认」——而这一行根本没走到终审。
+        // better=unclear，让完整改案重新落入待终审。
         decision.needsEdit = true;
         decision.needsContext = false;
         decision.better = config.proofreadMode === "bilingual" ? "neither" : "counterpart";
@@ -2516,25 +2524,13 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
 
     decision.arbitration = applied.arbitration;
     decision.arbitrationModelId = aConf.model;
-    if (applied.revisedText) {
-      decision.revisedText = applied.revisedText;
-      decision.stage3RevisedText = applied.revisedText;
-    }
+    decision.revisedText = applied.revisedText;
+    decision.stage3RevisedText = applied.revisedText;
     decision.needsEdit = applied.needsEdit;
-    if (applied.isUnclear) {
-      decision.better = "unclear";
-      decision.needsContext = true;
-    } else {
-      decision.needsContext = false;
-      if (applied.finalDecision === "keep") {
-        decision.needsEdit = false;
-        decision.revisedText = "";
-        decision.better = config.proofreadMode === "bilingual" ? "keep" : "target";
-      } else if (applied.finalDecision === "replace") {
-        decision.needsEdit = true;
-        decision.better = config.proofreadMode === "bilingual" ? "neither" : "counterpart";
-      }
-    }
+    decision.needsContext = false;
+    decision.better = applied.needsEdit
+      ? (config.proofreadMode === "bilingual" ? "neither" : "counterpart")
+      : (config.proofreadMode === "bilingual" ? "keep" : "target");
     decision.stage = "arbiter";
     pushLog(`第 ${row.index} 行：Arbiter 仲裁定案（胜出者: ${applied.winner}，最终结论: ${applied.finalDecision}）。`);
   } catch (arbiterErr) {
@@ -2550,8 +2546,8 @@ async function runStage3Arbiter(stage2Result, config, labels, extraAllRows = nul
   };
 }
 
-function finalizeRowResult(stageResult, config) {
-  const { row, targetKey, counterpartKey, targetLabel, counterpartLabel, targetText, lowScore } = stageResult;
+function guardFinalDecision(stageResult, config) {
+  const { row, targetText } = stageResult;
   let decision = stageResult.decision;
 
   // 成品格式门禁（确定性工序，输出侧的第一关）
@@ -2562,8 +2558,13 @@ function finalizeRowResult(stageResult, config) {
   const guarded = guardTargetScript(decision, targetText);
   if (guarded !== decision) {
     status.scriptLeaks += 1;
-    pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废，等待终审裁决。`);
+    pushLog(`第 ${row.index} 行：修改结果混入原文（日文）文字，已作废，${decision.stage === "arbiter" ? "保留原译，不修改" : "等待终审裁决"}。`);
   }
+  return guarded;
+}
+
+function finalizeRowResult(stageResult, config, guarded = guardFinalDecision(stageResult, config)) {
+  const { row, targetKey, targetLabel, counterpartLabel, lowScore } = stageResult;
   const result = decisionToResult(row, guarded, targetLabel, counterpartLabel, targetKey, config.proofreadMode);
   result.stageSignals = {
     lowScore: Boolean(lowScore?.active),
@@ -3168,7 +3169,8 @@ function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
   const width = normalizeTargetPunctuation(decision.revisedText);
   if (width.unresolvedQuotes) {
     status.punctQuoteVoids += 1;
-    pushLog(`第 ${row.index} 行：修改结果含无法确定性配对的弯引号，已作废，等待终审裁决。`);
+    const disposition = decision.stage === "arbiter" ? "保留原译，不修改" : "等待终审裁决";
+    pushLog(`第 ${row.index} 行：修改结果含无法确定性配对的弯引号，已作废，${disposition}。`);
     return {
       ...decision,
       revisedText: "",
@@ -3180,7 +3182,7 @@ function normalizeDecisionPunctuation(decision, row, config, targetText = "") {
       severity: "none",
       summary: [
         String(decision.summary || "").trim(),
-        "模型给出的修改结果含无法确定性转换为「」的弯引号（可能未配对或处在英文语境），已作废，等待终审裁决——成品引号必须使用「」/『』。",
+        `模型给出的修改结果含无法确定性转换为「」的弯引号（可能未配对或处在英文语境），已作废，${disposition}——成品引号必须使用「」/『』。`,
       ].filter(Boolean).join(" "),
     };
   }
@@ -3233,7 +3235,9 @@ function applyFormatGuard(decision, row, config, targetText) {
   const next = { ...decision, summary: result.summary, suggestion: result.suggestion };
   if (result.voided) {
     status.formatVoids += 1;
-    pushLog(`第 ${row.index} 行：${result.detail}`);
+    const detail = decision.stage === "arbiter"
+      ? result.detail.replace("等待终审裁决", "保留原译，不修改") : result.detail;
+    pushLog(`第 ${row.index} 行：${detail}`);
     return {
       ...next,
       revisedText: "",
@@ -3244,7 +3248,7 @@ function applyFormatGuard(decision, row, config, targetText) {
       needsContext: true,
       better: "unclear",
       severity: "none",
-      summary: [String(next.summary || "").trim(), result.detail].filter(Boolean).join(" "),
+      summary: [String(next.summary || "").trim(), detail].filter(Boolean).join(" "),
     };
   }
   if (!result.changed) return next;
@@ -3257,7 +3261,7 @@ function applyFormatGuard(decision, row, config, targetText) {
 }
 
 /**
- * 目标列语言护栏：修订结果里混进原文（日文）文字时一律作废并转人工。
+ * 目标列语言护栏：混入原文（日文）文字时作废；终审前继续审核，终审后保留原译。
  *
  * 为什么需要：提示词只能“要求”模型，做不到“保证”。模型有两种情况下会写出带原文文字的修订结果——
  * ① 原文有注音标记（<ruby>鍋掴<rt>なべつか</rt></ruby>）而目标列没有，它判定“译文漏了注音”，
@@ -3291,7 +3295,7 @@ function guardTargetScript(decision, targetText) {
     scriptLeak: true,
     summary: [
       String(decision.summary || "").trim(),
-      "模型给出的修改结果混入了原文（日文）文字，已作废，等待终审裁决——成品不得写入原文文字。",
+      `模型给出的修改结果混入了原文（日文）文字，已作废，${decision.stage === "arbiter" ? "保留原译，不修改" : "等待终审裁决"}——成品不得写入原文文字。`,
     ].filter(Boolean).join(" "),
   };
 }
@@ -3878,6 +3882,23 @@ function summaryIntent(summary) {
 
 function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKey = "", proofreadMode = "") {
   const bilingual = proofreadMode === "bilingual";
+  // 真正取得终审结论后只允许改或不改。成品门禁再次作废改案时，保守保留原译；
+  // 失败回退仍是上游阶段，不进入此分支，也不能伪装为终审完成。
+  if (decision.stage === "arbiter" && decision.arbitration) {
+    const applied = applyArbitrationDecision({
+      arbitration: {
+        ...decision.arbitration,
+        ...((decision.needsContext || decision.better === "unclear") ? { finalDecision: "unclear" } : {}),
+      },
+      adjudicatedRevisedText: decision.needsEdit ? decision.revisedText : "",
+      targetText: textForKey(row, targetKey || "cn"),
+    });
+    decision = {
+      ...decision, arbitration: applied.arbitration, needsEdit: applied.needsEdit, needsContext: false,
+      revisedText: applied.revisedText, stage3RevisedText: applied.revisedText,
+      better: applied.needsEdit ? (bilingual ? "neither" : "counterpart") : (bilingual ? "keep" : "target"),
+    };
+  }
   // 双语没有“另一份译文”可比较：counterpart 一律按“仍需修改”处理。
   const better = bilingual && decision.better === "counterpart" ? "neither" : decision.better;
   const hasStageTraces = Boolean(
@@ -3900,10 +3921,9 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
 
   const effectiveStage = decision.stage || (decision.arbitration ? "arbiter" : (decision.stylistReview ? "stylist" : "gatekeeper"));
   const effectiveModelId = (effectiveStage === "arbiter" ? decision.arbitrationModelId : (effectiveStage === "stylist" ? decision.stylistModelId : status.model)) || status.model;
-  // 「待人工确认」是终审的判决：只有真正走到终审的行才配这个结论。没经过终审的存疑行标成
-  // 「待终审」——它还等着终审仲裁定案（当前没配终审，或者这条流水线没把它送进终审）。
-  const arbitratedRow = Boolean(decision.arbitration) || effectiveStage === "arbiter";
-  const unclearLabel = arbitratedRow ? "待人工确认" : "待终审";
+  const fastPass = effectiveStage === "gatekeeper" && !decision.stylistReview && !decision.arbitration
+    && isFastPassDecision(decision);
+  const unclearLabel = "待终审";
 
   if (decision.needsContext || better === "unclear") {
     return {
@@ -3947,7 +3967,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
       // 语义不同却无需修改，表示 B 作为译文是成立的（keep），不是“比谁更好”。
       status: decision.semanticSame ? "same" : (bilingual ? "target-ok" : "target-better"),
       done: true,
-      fastPass: isFastPassDecision(decision),
+      fastPass,
       critique: decision.stylistReview?.critique || null,
       arbitration: decision.arbitration || null,
       stageResult: normalizeReviewStageResult({
@@ -3966,7 +3986,7 @@ function decisionToResult(row, decision, targetLabel, counterpartLabel, targetKe
         `语义是否相同：${decision.semanticSame ? "相同" : "不同"}`,
         "是否需要修改：否",
         // 快速直通必须落进备注：前端按备注复算指标，不写就只能把「未进复审的放行行」全当直通，直通率恒为 100%。
-        isFastPassDecision(decision) ? "快速直通：是" : "",
+        fastPass ? "快速直通：是" : "",
         speakerLine(decision),
         ...multiStageLines,
         ...analysisLines(decision),

@@ -30,7 +30,7 @@ async function until(predicate, message = "等待阶段状态") {
   assert.ok(predicate(), message);
 }
 
-async function fixture(t, count = 4) {
+async function fixture(t, count = 4, options = {}) {
   clearProofreadCache();
   const selection = {
     comparisonMode: "bilingual", inputMode: "txt",
@@ -39,7 +39,7 @@ async function fixture(t, count = 4) {
   };
   const rows = Array.from({ length: count }, (_, offset) => ({
     index: offset + 1, jp: `日本語の原文には異なる意味がある ${offset + 1}。`,
-    cn: `需要模型判断的译文段落 ${offset + 1}。`, score: 0.2,
+    cn: options.targetText ?? `需要模型判断的译文段落 ${offset + 1}。`, score: 0.2,
   }));
   const project = createProjectContext(selection, rows);
   const staging = createProjectStaging(selection, { dataDir });
@@ -112,9 +112,124 @@ async function fixture(t, count = 4) {
         ? { critique: { attitude: "escalate", rationale: "提交仲裁" }, revisedText: "复审改案。", summary: "复审分歧" }
         : { semanticSame: false, needsEdit: true, decision: "replace", revisedText: "初审改案。", summary: "修改措辞", score: 80 });
     call.res.writeHead(200, { "content-type": "application/json" });
-    call.res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }));
+    call.res.end(JSON.stringify({ choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) } }] }));
   }
   return { config, calls, post, respond, nextCall, project, rows };
+}
+
+async function runFinalDecisionPipeline(t, options = {}) {
+  const scenario = await fixture(t, 1, options);
+  const { config, calls, post, respond, nextCall } = scenario;
+  const started = await post("start", { ...config, stage: "all", formatGuard: true, punctNormalize: true });
+  assert.equal(started.status, 202);
+  respond(await nextCall("stage1"), options.gatekeeper);
+  await until(() => calls.some((call) => call.stage === "stage2") || !clientStatus().running);
+  const reviewCall = calls.find((call) => call.stage === "stage2");
+  assert.ok(reviewCall, "存疑或提改行必须进入复审");
+  respond(reviewCall, options.stylist);
+  await until(() => calls.some((call) => call.stage === "stage3") || !clientStatus().running);
+  const arbitrationCall = calls.find((call) => call.stage === "stage3");
+  assert.ok(arbitrationCall, `复审存疑或成品门禁作废后必须移交终审：${clientStatus().logs.join(" | ")}`);
+  respond(arbitrationCall, options.arbiter);
+  await until(() => !clientStatus().running);
+  return { ...scenario, finished: clientStatus() };
+}
+
+function assertFinalUnchanged(scenario) {
+  const { finished, project, rows } = scenario;
+  assert.deepEqual(scenario.calls.map((call) => call.stage), ["stage1", "stage2", "stage3"]);
+  assert.equal(finished.results.length, 1);
+  const result = finished.results[0];
+  assert.equal(result.done, true);
+  assert.match(result.note, /是否需要修改：否/);
+  assert.doesNotMatch(result.note, /是否需要修改：(?:待人工确认|待终审)/);
+  assert.doesNotMatch(result.note, /^修改结果：/m, "保守不改不能附默认成品修改结果");
+  assert.equal(result.stageResult.needsContext, false);
+  assert.equal(result.stageResult.needsEdit, false);
+  assert.equal(result.stageResult.revisedText, "");
+  assert.equal(result.fastPass, false, "终审保守不改属于仲裁完成，不是初审快速直通");
+  assert.equal(result.arbitration.finalDecision, "keep");
+  assert.equal(stageNoteState(result.note).arbitrated, true);
+  assert.equal(finished.stageMetrics.stage3Settled, 1);
+  assert.equal(finished.stageMetrics.finalUnchanged, 1);
+  assert.equal(finished.stageMetrics.finalNeedsEdit, 0);
+  assert.equal(finished.stageMetrics.finalNeedsCheck, 0);
+  assert.equal(finished.stageMetrics.finalPendingArbiter, 0);
+  assert.equal(finished.stageMetrics.stage3Errors, 0);
+  assert.equal(finished.stageMetrics.fastPassHits, 0);
+  const key = project.notesStorage.key;
+  const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: result.note, aiDone: true } }) }), {
+    rows, projectKey: project.projectKey, rowsSignature: project.rowsSignature, currentKey: key,
+  });
+  assert.equal(ui.run("parseAutomatedNote(notes[1].note).revision"), "");
+  assert.equal(ui.run("revisionTextFor(notes[1])"), "", "阶段过程稿不得成为保守不改行的默认写回内容");
+}
+
+for (const initialDecision of ["unclear", "replace"]) {
+  test(`终审二元定案：初审 ${initialDecision} 经复审升级，终审证据不足保守不改`, async (t) => {
+    const scenario = await runFinalDecisionPipeline(t, {
+      gatekeeper: {
+        semanticSame: false, needsEdit: initialDecision === "replace", needsContext: initialDecision === "unclear",
+        decision: initialDecision, revisedText: initialDecision === "replace" ? "初审改案。" : "",
+        summary: initialDecision === "replace" ? "存在明确漏译" : "指代依据不足，无法确定", score: 80,
+      },
+      arbiter: { winner: "unclear", finalDecision: "unclear", reason: "上下文证据不足，不能证明原译有错", revisedText: "不应采用的未定稿。" },
+    });
+    assertFinalUnchanged(scenario);
+    assert.match(scenario.finished.results[0].note, /证据不足/);
+  });
+}
+
+const invalidFinalRevisions = [
+  { label: "日文假名泄漏", targetText: "当前译文。", revisedText: "修订译文あ。", reason: /混入了原文（日文）文字/ },
+  { label: "译注标记丢失", targetText: '当前译文<a epub:type="noteref" href="#note1"><sup>㊟</sup></a>。', revisedText: "修订译文。", reason: /noteref 注释标记/ },
+  { label: "多段结构变化", targetText: "当前第一段。\n\n当前第二段。", revisedText: "合并后的修订译文。", reason: /段落结构与目标列不一致/ },
+  { label: "未配对弯引号", targetText: "当前译文。", revisedText: "“无法配对的修订译文。", reason: /弯引号/ },
+];
+
+for (const invalid of invalidFinalRevisions) {
+  test(`终审二元定案：${invalid.label}作废后保守不改`, async (t) => {
+    const scenario = await runFinalDecisionPipeline(t, {
+      targetText: invalid.targetText,
+      arbiter: { winner: "stylist", finalDecision: "replace", reason: "采纳修改方案", revisedText: invalid.revisedText },
+    });
+    assertFinalUnchanged(scenario);
+    assert.match(scenario.finished.results[0].note, invalid.reason, "门禁作废原因必须保留在分析轨迹");
+    assert.doesNotMatch(scenario.finished.results[0].note, /等待终审裁决/, "终审门禁作废后不能仍提示等待终审");
+  });
+}
+
+for (const invalid of invalidFinalRevisions.slice(0, 2)) {
+  test(`全流水线：复审采纳后${invalid.label}才触发门禁，自动追加终审`, async (t) => {
+    const scenario = await runFinalDecisionPipeline(t, {
+      targetText: invalid.targetText,
+      gatekeeper: { semanticSame: false, needsEdit: true, decision: "replace", revisedText: invalid.revisedText, summary: "存在明确漏译", score: 80 },
+      stylist: { critique: { attitude: "accept", rationale: "认可初审修订" }, revisedText: invalid.revisedText, summary: "采纳初审改案" },
+      arbiter: { winner: "original", finalDecision: "keep", reason: "修订方案不可安全采用，保留原译", revisedText: "" },
+    });
+    assertFinalUnchanged(scenario);
+  });
+}
+
+for (const invalid of [
+  { label: "坏 JSON", content: "{broken-json" },
+  { label: "未知 finalDecision", content: { winner: "stylist", finalDecision: "defer", reason: "无效决议", revisedText: "不能采用的改案。" } },
+]) {
+  test(`终审二元定案：${invalid.label}保留仲裁异常及待办`, async (t) => {
+    const scenario = await runFinalDecisionPipeline(t, { arbiter: invalid.content });
+    const { finished } = scenario;
+    assert.equal(finished.results.length, 1);
+    const result = finished.results[0];
+    const state = stageNoteState(result.note);
+    assert.equal(Boolean(state.errors.stage3), true);
+    assert.equal(state.arbitrated, false, "解析失败不能冒充终审完成");
+    assert.equal(state.pendingArbitration, true, "失败行必须保留在终审待办");
+    assert.equal(finished.stageMetrics.stage3Errors, 1);
+    assert.equal(finished.stageMetrics.stage3Arbitrated, 0);
+    assert.equal(finished.stageMetrics.stage3Settled, 0);
+    assert.equal(finished.stageMetrics.finalUnchanged, 0);
+    assert.match(result.note, /Arbiter仲裁调用异常/);
+  });
 }
 
 for (const outcome of ["success", "failure"]) {

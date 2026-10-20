@@ -1928,7 +1928,7 @@ test("异常明细不跨任务残留：上一次运行的失败行，在新任�
         return;
       }
       const content = isArbiter
-        ? { verdict: "keep_stylist", revisedText: "仲裁定案", summary: "仲裁通过" }
+        ? { winner: "stylist", finalDecision: "replace", revisedText: "仲裁定案", reason: "仲裁通过" }
         : isStylist
           ? { critique: { attitude: "escalate", rationale: "请终审裁决" }, revisedText: "复审改案", summary: "提交仲裁" }
           : { semanticSame: true, needsEdit: true, decision: "replace", revisedText: "初审改案", summary: "初审建议修改", score: 80 };
@@ -1962,6 +1962,7 @@ test("异常明细不跨任务残留：上一次运行的失败行，在新任�
     const second = await runToEnd(baseUrl);
     assert.equal(second.running, false);
     assert.equal(second.stageMetrics.stage3Errors, 0, "第二次运行仲裁全部成功");
+    assert.equal(second.stageMetrics.stage3Arbitrated, totalRows, "有效的终审响应必须全部取得结论");
     assert.deepEqual(second.stageErrors.stage3, {}, "上一次运行的失败明细不能残留到新任务里");
   } finally {
     await new Promise((resolve) => server.close(resolve));

@@ -90,8 +90,7 @@ function shouldTriggerArbitration({
 
   // 5. 初审存疑、复审又没能解除它 → 必须升级终审。
   // 复审「采纳初审改案 / 给出自己的改案 / 驳回」都算解除存疑；只表态采纳、手里却没有任何
-  // 可用改案的行不算解除——那种行既没有定案依据，也不该由复审直接甩给人工：
-  // 「待人工确认」是终审的判决，得先让终审看过这一行。
+  // 可用改案的行不算解除——那种行还没有定案依据，得先让终审看过这一行。
   const isGkUnclear = Boolean(
     gatekeeperDecision.needsContext === true ||
     gatekeeperDecision.better === "unclear" ||
@@ -171,14 +170,15 @@ function applyArbitrationDecision({
   adjudicatedRevisedText = "",
 }) {
   const normArb = normalizeArbitrationResult(arbitration);
-  const winner = normArb.winner;
+  let winner = normArb.winner;
   const isOriginal = winner === "original" || winner === "target";
   const isSynthesis = winner === "synthesis" || winner === "combined" || winner === "compromise" || winner === "结合方案" || winner === "综合方案";
-  const isUnclear = normArb.finalDecision === "unclear" || winner === "unclear";
-  const finalDecision = isUnclear ? "unclear" : (normArb.finalDecision || (isOriginal ? "keep" : "replace"));
+  const wasUnclear = normArb.finalDecision === "unclear" || winner === "unclear";
+  let finalDecision = wasUnclear ? "keep" : (normArb.finalDecision || (isOriginal ? "keep" : "replace"));
+  if (!["keep", "replace"].includes(finalDecision)) throw new Error("终审返回了不合法的最终结论。");
 
   let finalRevisedText = adjudicatedRevisedText;
-  if (!finalRevisedText && !isUnclear) {
+  if (!finalRevisedText && finalDecision === "replace") {
     if (winner === "stylist") {
       finalRevisedText = stylistReview.revisedText || gatekeeperDecision.revisedText || "";
     } else if (winner === "gatekeeper") {
@@ -193,14 +193,28 @@ function applyArbitrationDecision({
     }
   }
 
-  const needsEdit = finalDecision === "replace" && Boolean(finalRevisedText);
+  finalRevisedText = String(finalRevisedText || "").trim();
+  const noUsableRevision = finalDecision === "replace" && (!finalRevisedText || finalRevisedText === String(targetText).trim());
+  if (wasUnclear || isOriginal || finalDecision === "keep" || noUsableRevision) {
+    finalDecision = "keep";
+    if (wasUnclear || isOriginal || noUsableRevision) winner = "original";
+    finalRevisedText = "";
+    if (wasUnclear || noUsableRevision) {
+      normArb.reason = [normArb.reason, wasUnclear
+        ? "终审证据不足，保守保留原译，不修改。"
+        : "终审未提供可用且不同于原译的完整改案，保留原译，不修改。"].filter(Boolean).join(" ");
+    }
+  }
+  normArb.finalDecision = finalDecision;
+  normArb.winner = winner;
+  const needsEdit = finalDecision === "replace";
 
   return {
     arbitration: normArb,
     finalDecision,
     winner,
     needsEdit,
-    isUnclear,
+    isUnclear: false,
     revisedText: finalRevisedText,
   };
 }
@@ -273,7 +287,7 @@ function formatArbitrationNoteLines({
     };
     const winLabel = winnerMap[arbitration.winner] || (arbitration.finalDecision === "unclear" ? "存疑待定" : (arbitration.winner || "裁决"));
     const defaultArbReason = arbitration.finalDecision === "unclear"
-      ? "终审法官全面权衡初审与复审意见，依据依然不足或存在深层分歧，建议转人工确认。"
+      ? "旧版终审存疑记录，可重新运行终审取得修改或不修改的结论。"
       : "终审裁决定案。";
     lines.push(`Arbiter仲裁[${winLabel}]：${arbitration.reason || defaultArbReason}`);
     const s3Text = String(arbitration.revisedText || gatekeeperDecision.stage3RevisedText || "").trim();
