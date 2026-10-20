@@ -340,14 +340,12 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <button id="stage1FastPassItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审通过行中的快速直通子集，包含预筛放行与模型高置信通过">直通: <span id="metricFastPassHits">0</span></button>
                       <span id="aiStageFastPassRate" class="ai-stage-efficiency-rate" title="快速直通数 ÷ 初审通过数">通过中: —</span>
                     </div>
-                    <div class="ai-stage-runtime-summary">
-                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage1ErrorItem" type="button" aria-pressed="false" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></button>
-                    </div>
                   </div>
 
                   <div class="ai-stage-runtime" aria-label="阶段1运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage1RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div id="stage1RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div class="ai-stage-runtime-summary">
+                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage1ErrorItem" type="button" aria-pressed="false" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></button>
                       <div id="stage1ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage1ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage1Progress"></span></div>
@@ -394,15 +392,13 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <button class="ai-stage-sub-item ai-stage-metric" id="stage2EscalateItem" type="button" aria-pressed="false" title="复审显式请求升级仲裁">升级仲裁: <span id="metricCritiqueEscalate">0</span></button>
                     </div>
                     <div class="ai-stage-routing"><button id="stage2DivergedItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="已产生初审与复审分歧的行数（含已仲裁行）">分歧: <span id="metricStage2Diverged">0</span></button></div>
-                    <div class="ai-stage-runtime-summary">
-                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage2PendingItem" type="button" aria-pressed="false" title="最新一轮初审提改或存疑、尚未完成复审且未人工确认的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage2ErrorItem" type="button" aria-pressed="false" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></button>
-                    </div>
                   </div>
 
                   <div class="ai-stage-runtime" aria-label="阶段2运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage2RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div id="stage2RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div class="ai-stage-runtime-summary">
+                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage2PendingItem" type="button" aria-pressed="false" title="最新一轮初审提改或存疑、尚未完成复审且未人工确认的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage2ErrorItem" type="button" aria-pressed="false" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></button>
                       <div id="stage2ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage2ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage2Progress"></span></div>
@@ -448,14 +444,12 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <button id="stage3SynthesisItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁综合双方优点给出结合方案">综合: <span id="metricArbSynthesis">0</span></button>
                       <button id="stage3OriginalItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁判定双方方案均不妥，维持原译">原译: <span id="metricArbOriginal">0</span></button>
                     </div>
+                  </div>
+                  <div class="ai-stage-runtime" aria-label="阶段3运行与待办">
+                    <div id="stage3RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
                     <div class="ai-stage-runtime-summary">
                       <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage3PendingItem" type="button" aria-pressed="false" title="复审已产生分歧但尚未执行终审仲裁的行数（点击可筛选）" hidden>待仲裁: <span id="metricStage3Pending">0</span></button>
                       <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage3ErrorItem" type="button" aria-pressed="false" title="阶段三仲裁异常行数">异常: <span id="metricStage3Errors">0</span></button>
-                    </div>
-                  </div>
-                  <div class="ai-stage-runtime" aria-label="阶段3运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage3RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
                       <div id="stage3ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage3ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage3Progress"></span></div>

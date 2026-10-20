@@ -107,9 +107,9 @@
 
 ## 浮动提示（Toast）与进度承载分工
 
-- **阶段看板位置职责**：顶部只汇总当前审核结论；卡片主指标统一为取得结论的行数（初审 `stage1Total`、复审 `stage2Reviewed`、仲裁 `stage3Arbitrated`），分类不使用流程箭头，重复累计的 `stage3Settled` 不再单独展示。结果分布、初审直通方式与复审分歧保留独立语义分组；`.ai-stage-runtime-summary` 位于主指标行最右侧，只保留一份可筛选的待办与非零异常。底部 `.ai-stage-runtime-line` 共用一行显示运行信息与进度范围，进度条和当前行号各占固定轨道；零异常隐藏，失败再次出现时恢复入口。直通占比为 `fastPassHits / stage1Passed`，空分母显示 `—`，不改变既有行分类、存储或统计字段。待仲裁包含本轮未定案且未人工确认的行（含在飞），不能等同于本次待派发队列。
+- **阶段看板位置职责**：顶部只汇总当前审核结论；卡片主指标统一为取得结论的行数（初审 `stage1Total`、复审 `stage2Reviewed`、仲裁 `stage3Arbitrated`），分类不使用流程箭头，重复累计的 `stage3Settled` 不再单独展示。结果分布、初审直通方式与复审分歧保留独立语义分组，在主指标行并排；标题、配置与操作同排，窄空间自然换行。底部 `.ai-stage-runtime` 的待办、非零异常与短进度共用一行；零异常隐藏，失败再次出现时恢复入口。直通占比为 `fastPassHits / stage1Passed`，空分母显示 `—`，不改变既有行分类、存储或统计字段。
 - **可见进度范围**：`stageNProgressText` 与条形进度共用 `renderStageProgress` 的完成数、总数和百分比；可见文字只显示全页/当前候选及百分比，完整分子、分母保留在悬停与 ARIA 说明中。进度容器提供 `progressbar` 角色、明确的阶段范围与数值说明。未启用、空范围和重置同时隐藏文字/条形并清理文字提示与动态 ARIA 值，禁止保留上一轮百分比或单独计算显示分母。
-- **紧凑布局占位**：预设选择与适用预设两个可见下拉使用相同的零基准弹性份额，按钮保留固有宽度。按卡片容器宽度统一选择固定的标题、指标和运行轨道行数，同宽卡片等高；状态文字、待办/异常及运行明细显隐不得改变卡片高度或进度条纵坐标。隐藏内容仍清空文字、提示与动态 ARIA，不用旧数据占位。运行详情以该阶段在飞/待派发为准，只有动态配额不算正在运行；初审尚未完成的行仍单独显示未审提示。
+- **紧凑布局占位**：预设选择与适用预设两个可见下拉使用相同的零基准弹性份额，按钮保留固有宽度。阶段卡片按内容高度顶对齐，正文不伸展、运行区不自动贴底；不能为其它阶段的活跃行保留空行。运行详情以该阶段在飞/待派发为准，只有动态配额不算正在运行；初审尚未完成的行仍单独显示未审提示。
 
 - **阶段指标筛选**：每项阶段数字使用独立的原生 `button`，选中状态同步到 `is-active` 与 `aria-pressed`；原生 Enter/Space 激活只走一次 `click`，不得额外绑定等价键盘事件。卡片正文不再拥有阶段总筛选、按钮角色或 Tab 停靠点。指标与顶部结论摘要共用一个可切换/取消的筛选状态，「清筛选」清除全部指标选中态。`computeStageMetricsFromNotes` 在原统计遍历中记录 `metricRowIds`，非待办指标直接读取该缓存，禁止另写备注分类规则；待复审/待仲裁继续使用共享当前轮次判据。分歧统计保留全部已仲裁记录，人工确认只移除尚待仲裁的待办。回归：`node --test scripts/stage-review-reports.test.js scripts/ai-stage-metrics.test.js scripts/build-compare.test.js`。
 - **顶部统计栏的「修改率」**：分子分母直接复用 `computeStageMetricsFromNotes` 的最终结论指标（`finalNeedsEdit` ÷ `finalNeedsEdit + finalUnchanged + finalNeedsCheck + finalPendingArbiter`），由 `renderStageMetricsDashboard` 统一刷新，禁止另写一套备注分类规则；调用失败的行不进分母，没有任何自动结论时显示 `—`，不显示 `0%`。回归：`node --test scripts/modify-rate.test.js`。
