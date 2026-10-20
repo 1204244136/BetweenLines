@@ -141,7 +141,7 @@ test("清除行失败保留墓碑；指定确认只解除对应行，成功请�
   assert.equal(consume(session, status([result(1), result(2)], { resultRevision: 4 })).applied, 2);
 });
 
-test("受控轮询：在途互斥、每批游标参数与 16ms 追赶均由接收会话持有", async () => {
+test("受控轮询：请求互斥、每批游标参数与 16ms 追赶均由接收会话持有", async () => {
   const timers = fakeTimers();
   const requests = [];
   const batches = [];
@@ -165,7 +165,7 @@ test("受控轮询：在途互斥、每批游标参数与 16ms 追赶均由接�
   profile = "profile-b";
   assert.equal(timers.fire(), 16);
   await session.refresh();
-  assert.equal(requests.length, 2, "timer 发出的追赶请求也受同一在途锁保护");
+  assert.equal(requests.length, 2, "定时器发出的追赶请求也受同一请求互斥锁保护");
   assert.equal(requests[1].params.runId, "run-a");
   assert.equal(requests[1].params.afterRevision, "1");
   assert.equal(requests[1].params.profileId, "profile-b");
@@ -176,7 +176,7 @@ test("受控轮询：在途互斥、每批游标参数与 16ms 追赶均由接�
   assert.equal(timers.pending.size, 0);
 });
 
-test("reset 保留在途请求及追赶：旧 running 回包仍可接收，运行墓碑继续拦静止包", async () => {
+test("reset 保留尚未完成的请求及追赶：旧 running 响应仍可接收，已清除运行仍拦截停止状态的响应", async () => {
   const timers = fakeTimers();
   const requests = [];
   const batches = [];

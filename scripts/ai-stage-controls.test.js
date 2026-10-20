@@ -348,7 +348,7 @@ test("真实路由：三个独立阶段可同时运行，定向停止真正中�
   assert.match(live.results.find((result) => result.index === 3).note, /仲裁定案。/);
 });
 
-test("真实路由：行冲突与重复启动返回 409，一键停止等待在飞请求收尾后允许干净重启", async (t) => {
+test("真实路由：行冲突与重复启动返回 409，一键停止等待正在处理的请求结束后允许干净重启", async (t) => {
   const { config, calls, post, respond } = await fixture(t, 2);
   await post("start", { ...config, stage: "stage1" });
   await until(() => calls.length === 1);

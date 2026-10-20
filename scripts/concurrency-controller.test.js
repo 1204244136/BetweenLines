@@ -14,17 +14,17 @@ const {
 const { resolveConcurrencyCap } = require("../src/workbenches/translation-compare/ai/concurrency-limits");
 const { createStageBreaker } = require("../src/workbenches/translation-compare/ai/circuit-breaker");
 
-// 让上探不受「最短间隔」限制：这里测的是策略本身，间隔单独有一条用例。
+// 让上调不受「最短间隔」限制：这里测的是策略本身，间隔单独有一条用例。
 const policy = { ...CONCURRENCY_POLICY, minStepIntervalMs: 0 };
 
 function controller(cap) {
   return createStageController({ stageKey: "stage1", label: "初审", config: { concurrency: cap }, now: () => 0 });
 }
 
-// 单调递增的测试时钟：下调会把 lastAdjustmentAt 记成「当时」，喂成功用的时钟不能倒流回更早的时刻。
+// 单调递增的测试时钟：下调会将 lastAdjustmentAt 更新为当时的时间，模拟成功应答时不能使用更早的时刻。
 let clock = 100_000;
 
-// 喂 n 次成功，返回途中发生的每一次上探。
+// 模拟 n 次成功应答，返回期间发生的每一次上调。
 function feed(ctrl, n, extra = {}) {
   const steps = [];
   for (let i = 0; i < n; i += 1) {
@@ -47,7 +47,7 @@ test("起步并发：min(上限, 3)；默认上限 3 就是固定 3，与旧行�
   assert.deepEqual({ cur: wide.currentConcurrency, max: wide.maxConcurrency, initial: wide.initialConcurrency }, { cur: 3, max: 20, initial: 3 });
 });
 
-test("上限是唯一输入：只保底 1，20/99/256 都原样保留（没有 32 硬顶）", () => {
+test("上限是唯一输入：最小值为 1，20/99/256 都原样保留（不设 32 的固定最大值）", () => {
   assert.equal(controller(20).maxConcurrency, 20);
   assert.equal(controller(99).maxConcurrency, 99);
   assert.equal(controller(256).maxConcurrency, 256);
@@ -79,7 +79,7 @@ test("慢启动：一整轮请求全部正常就翻倍，上限 32 时 3→6→1
     "24>32:slow-start",
   ]);
   assert.equal(ctrl.currentConcurrency, 32);
-  // 到顶后不再上探。
+  // 达到上限后不再上调。
   assert.equal(feed(ctrl, 50).length, 0);
 });
 
@@ -91,12 +91,12 @@ test("慢启动不到一整轮不翻倍：成功数少于当前并发时保持�
   assert.equal(ctrl.currentConcurrency, 6);
 });
 
-test("限流下调：并发 >3 时 ×0.7，否则 -1；并把慢启动阈值压到新水位", () => {
+test("限流下调：并发 >3 时 ×0.7，否则 -1；慢启动阈值降至调整后的并发数", () => {
   const ctrl = controller(32);
-  feed(ctrl, 200); // 爬到 32
+  feed(ctrl, 200); // 增加至 32
   const step = stepDownOnLimit(ctrl, { now: clock, policy });
   assert.deepEqual(step, { from: 32, to: 22 });
-  assert.equal(ctrl.slowStartThreshold, 22, "阈值压到出事后的水位，之后不再翻倍冒进");
+  assert.equal(ctrl.slowStartThreshold, 22, "阈值降至调整后的并发数，达到该值后不再翻倍增加");
   assert.equal(ctrl.knownLimit, 32);
 
   const low = controller(3);
@@ -119,11 +119,11 @@ test("限流下调去抖：同一次拥塞事件里同时返回的一批 429 只
   assert.equal(stepDownOnLimit(ctrl, { now: t0 + 1_600, startedAt: t0 + 1_550, policy }), null);
 });
 
-test("下调之后：先慢启动爬回阈值，再加法上探；越过出事水位需要更长的稳定期", () => {
+test("下调之后：先慢启动增加至阈值，再按加法上调；达到受限并发数需要更长的稳定期", () => {
   const ctrl = controller(32);
   feed(ctrl, 200); // 32
   stepDownOnLimit(ctrl, { now: clock, policy }); // 22，阈值 22，knownLimit 32
-  ctrl.currentConcurrency = 10; // 假设继续被压到 10（阈值随之收紧到 10 以下的场景在下一条测）
+  ctrl.currentConcurrency = 10; // 假设继续降至 10（阈值随之降至 10 以下的场景在下一条测）
   ctrl.slowStartThreshold = 22;
   ctrl.consecutiveSuccesses = 0;
 
@@ -133,21 +133,21 @@ test("下调之后：先慢启动爬回阈值，再加法上探；越过出事�
   // 20 < 22：继续慢启动，但翻倍会超阈值，只到 22。
   const toThreshold = feed(ctrl, 20);
   assert.deepEqual(toThreshold.map((s) => `${s.from}>${s.to}:${s.mode}`), ["20>22:slow-start"]);
-  // 到达阈值后加法上探：22→23…每 5 次 +1，直到贴近出事水位 32。
+  // 到达阈值后按加法上调：22→23…每 5 次 +1，直到接近受限并发数 32。
   const additive = feed(ctrl, 5);
   assert.deepEqual(additive.map((s) => `${s.from}>${s.to}:${s.mode}`), ["22>23:additive"]);
   ctrl.currentConcurrency = 30;
   ctrl.consecutiveSuccesses = 0;
   ctrl.knownLimit = 32;
-  // 30→31 离出事水位还有余量：5 次即可；31→32 会踏入出事水位：要求 15 次。
+  // 30→31 尚未达到受限并发数：5 次即可；31→32 将达到该值：要求 15 次。
   assert.equal(feed(ctrl, 5).length, 1);
   assert.equal(ctrl.currentConcurrency, 31);
-  assert.equal(feed(ctrl, 14).length, 0, "踏入出事水位前必须更谨慎：14 次不够");
+  assert.equal(feed(ctrl, 14).length, 0, "恢复至受限并发数需要更多成功应答：14 次不够");
   assert.equal(feed(ctrl, 1).length, 1);
   assert.equal(ctrl.currentConcurrency, 32);
 });
 
-test("上探最短间隔：两次调整之间不足 3 秒不上探，成功数照常累计", () => {
+test("上调最短间隔：两次调整之间不足 3 秒不上调，成功数照常累计", () => {
   const ctrl = controller(16);
   ctrl.lastAdjustmentAt = 10_000;
   const early = [];
@@ -169,7 +169,7 @@ test("过载型失败温和 -1，同样受去抖与「同一次事件」约束",
   assert.equal(stepDownOnOverload(low, { now: clock, policy }), null, "已是 1 不能再降");
 });
 
-test("与熔断联动：断路器打开，并发塌到 1，慢启动阈值设为冷却前并发的一半（至少 2）", () => {
+test("与熔断联动：断路器打开，并发降至 1，慢启动阈值设为冷却前并发的一半（至少 2）", () => {
   const ctrl = controller(32);
   feed(ctrl, 200); // 32
   const collapsed = collapseForBreaker(ctrl, { now: clock, policy });
@@ -177,7 +177,7 @@ test("与熔断联动：断路器打开，并发塌到 1，慢启动阈值设为
   assert.equal(ctrl.currentConcurrency, 1);
   assert.equal(ctrl.slowStartThreshold, 16);
 
-  // 恢复后从 1 慢启动：1→2→4→8→16，然后才是加法上探；不会一步跳回 32。
+  // 恢复后从 1 慢启动：1→2→4→8→16，然后才按加法上调；不会直接恢复至 32。
   const steps = feed(ctrl, 1 + 2 + 4 + 8 + 5);
   assert.deepEqual(steps.map((s) => `${s.from}>${s.to}:${s.mode}`), [
     "1>2:slow-start",
@@ -188,10 +188,10 @@ test("与熔断联动：断路器打开，并发塌到 1，慢启动阈值设为
   ]);
 });
 
-test("与熔断联动：连续限流已把并发压到 1 后断路器才打开，阈值仍取出事水位的一半", () => {
+test("与熔断联动：连续限流已把并发降至 1 后断路器才打开，阈值仍取受限并发数的一半", () => {
   const ctrl = controller(32);
   feed(ctrl, 200); // 32
-  // 连续几行 429 把并发一路压到 1（每次下调都记下出事水位）。
+  // 连续几行 429 把并发逐步降至 1（每次下调都记录调整前的并发数）。
   let t = clock;
   let guard = 0;
   while (ctrl.currentConcurrency > 1) {
@@ -200,11 +200,11 @@ test("与熔断联动：连续限流已把并发压到 1 后断路器才打开�
     assert.ok(++guard < 20, "下调必须收敛到 1");
   }
   assert.equal(ctrl.currentConcurrency, 1);
-  assert.ok(ctrl.knownLimit >= 2, "出事水位被记住了");
+  assert.ok(ctrl.knownLimit >= 2, "保留此前记录的受限并发数");
   const expected = Math.min(ctrl.slowStartThreshold, Math.max(2, Math.floor(ctrl.knownLimit / 2)));
   const collapsed = collapseForBreaker(ctrl, { now: t + 1_000, policy });
   assert.equal(collapsed.from, 1);
-  assert.ok(collapsed.threshold >= 2, "不能因为当前并发已是 1，就把阈值算到保底值以下");
+  assert.ok(collapsed.threshold >= 2, "不能因为当前并发已是 1，就把阈值设为最小值以下");
   assert.equal(collapsed.threshold, expected);
 });
 
@@ -217,13 +217,13 @@ test("与熔断联动：探测再次失败换下一档冷却时，阈值只收�
   const again = collapseForBreaker(ctrl, { now: clock + 5_000, policy });
   assert.deepEqual(again, { from: 1, to: 1, threshold: 16 });
 
-  // 上限很小时阈值保底 2，否则恢复后永远只有 1。
+  // 上限很小时阈值至少为 2，否则恢复后并发始终为 1。
   const tiny = controller(3);
   const c = collapseForBreaker(tiny, { now: clock, policy });
   assert.deepEqual(c, { from: 3, to: 1, threshold: 2 });
 });
 
-test("与熔断联动：失败窗口逼近熔断线（pressure ≥ 0.5）时暂停上探，回落后立即恢复", () => {
+test("与熔断联动：失败窗口逼近熔断阈值（pressure ≥ 0.5）时暂停上调，回落后立即恢复", () => {
   const breaker = createStageBreaker();
   const ctrl = controller(16);
 
@@ -231,7 +231,7 @@ test("与熔断联动：失败窗口逼近熔断线（pressure ≥ 0.5）时暂�
   for (let i = 0; i < 3; i += 1) breaker.recordSuccess();
   for (let i = 0; i < 2; i += 1) breaker.recordFailure();
   assert.ok(breaker.pressure >= CONCURRENCY_POLICY.pauseRampPressure);
-  assert.equal(feed(ctrl, 30, { pressure: breaker.pressure }).length, 0, "压力大时无论成功多少次都不上探");
+  assert.equal(feed(ctrl, 30, { pressure: breaker.pressure }).length, 0, "pressure 达到暂停阈值时，无论成功多少次都不上调");
   assert.equal(ctrl.rampPaused, true);
   assert.equal(ctrl.currentConcurrency, 3);
 
@@ -243,7 +243,7 @@ test("与熔断联动：失败窗口逼近熔断线（pressure ≥ 0.5）时暂�
   assert.equal(ctrl.rampPaused, false);
 });
 
-test("断路器 pressure：样本不足 5 个时恒为 0，偶发一次失败不会卡住上探", () => {
+test("断路器 pressure：样本不足 5 个时恒为 0，偶发一次失败不会阻止上调", () => {
   const breaker = createStageBreaker();
   breaker.recordFailure();
   assert.equal(breaker.pressure, 0);

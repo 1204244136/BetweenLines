@@ -126,13 +126,13 @@ function createStageDispatch({
     const wasPaused = channel.rampPaused;
     const step = stepUpOnSuccess(channel, { now: now(), pressure: generation.breaker.pressure, policy });
     if (channel.rampPaused !== wasPaused) events.push({ type: "log", message: channel.rampPaused
-      ? `[并发调度] ${tag(channel)}失败率已逼近熔断线，暂停上探，并发维持 ${channel.currentConcurrency}。`
-      : `[并发调度] ${tag(channel)}失败率回落，恢复上探。` });
+      ? `[并发调度] ${tag(channel)}失败率已逼近熔断线，暂停上调，并发维持 ${channel.currentConcurrency}。`
+      : `[并发调度] ${tag(channel)}失败率回落，恢复上调。` });
     if (!step) return;
     events.push({ type: "concurrency", direction: "up" });
     events.push({ type: "log", message: step.mode === "slow-start"
       ? `[并发调度] ${tag(channel)}一整轮请求全部正常，并发从 ${step.from} 翻倍至 ${step.to}（上限 ${channel.maxConcurrency}）。`
-      : `[并发调度] ${tag(channel)}连续 ${step.successes} 次请求正常，并发从 ${step.from} 上探至 ${step.to}（上限 ${channel.maxConcurrency}）。` });
+      : `[并发调度] ${tag(channel)}连续 ${step.successes} 次请求正常，并发从 ${step.from} 上调至 ${step.to}（上限 ${channel.maxConcurrency}）。` });
   }
 
   function noteFailure(generation, request, error, events, stopped) {
@@ -187,7 +187,7 @@ function createStageDispatch({
       events.push({ type: "log", message: verdict.cycle === 1
         ? `[熔断] ${breakerLabel(generation)}：连续多行限流重试用尽，暂停派发 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却），冷却后单发探测；已完成的行不受影响。`
         : `[熔断] ${breakerLabel(generation)}：探测仍被限流，继续冷却 ${formatDuration(verdict.cooldownMs)}（${attempt}冷却）。` });
-      if (verdict.cycle === 1) events.push({ type: "log", message: `[并发调度] ${breakerLabel(generation)}：熔断冷却，并发降到 ${to}（冷却前 ${from}）；恢复后从 ${to} 起步慢启动，先爬到 ${Math.max(0, Number(channel.slowStartThreshold) || 0)}，再逐步上探（上限 ${channel.maxConcurrency}）。` });
+      if (verdict.cycle === 1) events.push({ type: "log", message: `[并发调度] ${breakerLabel(generation)}：熔断冷却，并发降到 ${to}（冷却前 ${from}）；恢复后从 ${to} 起步慢启动，先增加至 ${Math.max(0, Number(channel.slowStartThreshold) || 0)}，再逐步上调（上限 ${channel.maxConcurrency}）。` });
     }
     return true;
   }

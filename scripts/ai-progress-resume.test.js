@@ -105,7 +105,7 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
   assertUnreviewedAndFailed(reloaded);
 });
 
-test("初审失败重试：在飞仍未完成，取得可用结论才增加全页进度", async () => {
+test("初审失败重试：请求处理中不计为完成，取得可用结论才增加全页进度", async () => {
   const ui = fixture();
   await ui.settle();
   await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');

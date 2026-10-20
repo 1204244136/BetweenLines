@@ -961,7 +961,7 @@ async function startPrefilter(input) {
       continue;
     }
     if (resolvedByTermTable.has(Number(row.index))) continue;
-    // 术语冲突行不吃预筛：这类行必须由模型给出术语判断（术语判断是模型分析里的一环）。
+    // 术语冲突行不通过预筛：这类行必须由模型给出术语判断（术语判断是模型分析里的一环）。
     if (isTermConflictRow(config, row.index)) {
       pending += 1;
       continue;
@@ -985,7 +985,7 @@ async function startPrefilter(input) {
   }
 
   status.queued = pending;
-  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行；术语冲突 ${status.termConflicts} 行按口径留给 AI 判断（不吃预筛），剩余 ${pending} 行需要 AI 校对。`);
+  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行；术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${pending} 行需要 AI 校对。`);
   finish();
   return clientStatus({ includeResults: false });
 }
@@ -1160,7 +1160,7 @@ async function startProofread(input) {
 
   if (joining) status.queued += queue.length + resumedStage2Count + resumedStage3Count;
   else status.queued = queue.length + resumedStage2Count + resumedStage3Count;
-  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不吃预筛、留给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2Count ? `；另有 ${resumedStage2Count} 行续跑复审` : ""}${resumedStage3Count ? `；另有 ${resumedStage3Count} 行续跑仲裁` : ""}。`);
+  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2Count ? `；另有 ${resumedStage2Count} 行续跑复审` : ""}${resumedStage3Count ? `；另有 ${resumedStage3Count} 行续跑仲裁` : ""}。`);
   pushLog(describeConcurrencyPolicy(config.concurrency));
   pushLog(describePolicy());
   return launchQueue();
@@ -1295,7 +1295,7 @@ function stopProofread(payload = {}) {
   return clientStatus({ includeResults: false });
 }
 
-// 运行中改预设集合：删掉的预设，它的待审行立刻改派给其余预设；新加的预设立刻抢活。
+// 运行中改预设集合：删掉的预设，它的待审行立刻改派给其余预设；新加的预设立即参与处理。
 // 任务没在跑时抛 NOT_RUNNING——那种情况下改动会在下次启动时随请求体一起生效。
 function updateStagePresets(payload = {}) {
   // 只对正在跑的 AI 校对任务开放：预筛走的是另一条队列，没有阶段预设池可改。
@@ -1509,8 +1509,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     currentQueueWakeup?.();
     const label = STAGE_OUTCOME_LABELS[stageKey] || stageKey;
     if (added.length) pushLog(`[预设池] ${label}：运行中加入 ${added.length} 个预设，立刻参与派发。`);
-    if (removed.length) pushLog(`[预设池] ${label}：运行中移除 ${removed.length} 个预设，其待审行已改派给其余预设；在飞的请求跑完即止。`);
-    if (fallback) pushLog(`[预设池] ${label}：预设已全部移除，回落到阶段配置继续跑完剩余行。`);
+    if (removed.length) pushLog(`[预设池] ${label}：运行中移除 ${removed.length} 个预设，其待审行已改派给其余预设；正在处理的请求不受影响，结果照常写回。`);
+    if (fallback) pushLog(`[预设池] ${label}：预设已全部移除，使用阶段配置继续处理剩余行。`);
     return result;
   }
   activePresetPoolUpdater = applyPresetPoolUpdate;
@@ -2000,7 +2000,7 @@ function finish() {
     if (!status.punctFixes && !status.punctQuoteVoids && !status.punctRestored && status.punctEnabled === false) {
       pushLog("标点规范化：已关闭。");
     }
-    pushLog(`并发调度统计：起步并发 ${status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，峰值并发 ${status.peakConcurrency || status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，并发下调 ${status.concurrencyDowns || 0} 次，并发上探 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
+    pushLog(`并发调度统计：起步并发 ${status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，峰值并发 ${status.peakConcurrency || status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，并发下调 ${status.concurrencyDowns || 0} 次，并发上调 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
   }
   if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");

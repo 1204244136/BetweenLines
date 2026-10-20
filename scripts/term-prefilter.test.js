@@ -65,7 +65,7 @@ function publishRows(label, rows, extra = {}) {
 test("对照表只跳过整行都是术语的行，其余命中行注入术语后照常调用模型", async () => {
   clearProofreadCache();
   const rows = [
-    // 无注音条目命中强证据差异（译文用的是“其他译法”）——术语冲突行不吃预筛，
+    // 无注音条目命中强证据差异（译文用的是“其他译法”）——术语冲突行不通过预筛，
     // 必须照样调用模型（术语判断是模型分析的一环），所以这里刻意给了很高的相似度分。
     { index: 1, jp: "召喚陣を取り外す。", cn: "取下魔法阵。", tw: "", twCn: "", score: 0.99 },
     { index: 2, jp: "東雲太郎は言った。", cn: "東雲太郎说道。", tw: "", twCn: "", score: 0 },
@@ -126,7 +126,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     const finished = clientStatus();
     const byIndex = new Map(finished.results.map((result) => [result.index, result]));
 
-    // 第 1 行：术语冲突 → 不由对照表出结论，注入冲突线索后交给模型（相似度分再高也不吃预筛）。
+    // 第 1 行：术语冲突 → 不由对照表出结论，注入冲突线索后交给模型（相似度分再高也不通过预筛）。
     assert.match(byIndex.get(1).note, /^\[AI校对\]/, "术语冲突行必须经过模型，不写面向人工的对照表结论");
     // 第 2 行：术语一致，但句中还有别的内容 → 不写对照表备注，注入术语后由模型给结论。
     assert.match(byIndex.get(2).note, /^\[AI校对\]/);
@@ -170,7 +170,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 4 条术语：命中 4 行（整行只有术语、跳过模型 1，术语冲突 1，存疑交模型判断 1），另有 3 行的术语作为提示词注入后照常交给模型/);
     assert.match(finished.logs.join("\n"), /1 条候选因中日两侧没有同时注音，降级为只作一致性证据/);
     assert.match(finished.logs.join("\n"), /1 条候选因没有同时注音、且译文未出现该译名而未参与判定/, "第 6 行的候选要如实报数");
-    assert.match(finished.logs.join("\n"), /术语冲突 1 行不吃预筛、留给 AI 判断/);
+    assert.match(finished.logs.join("\n"), /术语冲突 1 行不通过预筛，交给 AI 判断/);
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

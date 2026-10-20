@@ -160,7 +160,7 @@ test("一键开始：只配仲裁也保留独立仲裁配置，不要求配置�
   assertButtons(ui, ["stage1", "stage3"]);
 });
 
-test("刷新恢复：stageControls 让零排队、零在飞的活动阶段仍可停止", async () => {
+test("刷新恢复：stageControls 让没有排队和处理中请求的活动阶段仍可停止", async () => {
   const { ui } = stageControlWorkbench({ active: ["stage1", "stage3"] });
   await ui.settle();
   assertButtons(ui, ["stage1", "stage3"]);
@@ -227,7 +227,7 @@ test("迟到的停止前状态不能恢复已停阶段，结果游标留待新�
   ui.run("let raceResultWrites = 0; const originalRaceWriteNote = writeNote; writeNote = (...args) => { raceResultWrites += 1; return originalRaceWriteNote(...args); };");
   const beforeStop = state();
   await ui.refresh();
-  assert.equal(pollCount, 2, "旧轮询仍在途");
+  assert.equal(pollCount, 2, "旧轮询尚未完成");
   await ui.element("stage1Stop").dispatch("click");
   await ui.settle();
   assertButtons(ui, []);
@@ -243,7 +243,7 @@ test("迟到的停止前状态不能恢复已停阶段，结果游标留待新�
   freshPollTimer.cleared = true;
   await freshPollTimer.callback();
   await ui.settle();
-  assert.ok(pollCount >= 3, "失效的在途轮询之后自动补发新轮询");
+  assert.ok(pollCount >= 3, "尚未完成的旧轮询失效后自动补发新轮询");
   assert.equal(ui.run('latestAiNotePart(notes["1"].note)'), initial, "被丢弃回包的结果仍由新轮询完整重取");
   assert.equal(ui.run("raceResultWrites"), 1);
   assert.equal(ui.run("aiResultReception.snapshot().resultRevision"), 1);
@@ -252,7 +252,7 @@ test("迟到的停止前状态不能恢复已停阶段，结果游标留待新�
 });
 
 for (const active of [[], ["stage1"]]) {
-  test(`启动请求在途时禁用一键停止${active.length ? "，即使另一阶段已经运行" : ""}，避免新阶段越过总停`, async () => {
+  test(`启动请求尚未完成时禁用一键停止${active.length ? "，即使另一阶段已经运行" : ""}，避免新阶段未被停止`, async () => {
     const startReply = deferred();
     let responsePayload;
     const { ui } = stageControlWorkbench({
@@ -267,7 +267,7 @@ for (const active of [[], ["stage1"]]) {
     assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/start").length, 1);
     assert.equal(ui.element("aiStopAll").disabled, true, "已有阶段运行也应等待另一个 start 请求落定");
     await ui.element("aiStopAll").dispatch("click");
-    assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/stop").length, 0, "handler 同样拒绝在途启动期间的总停");
+    assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/stop").length, 0, "处理函数同样拒绝启动请求尚未完成时执行一键停止");
     startReply.resolve(responsePayload);
     await pendingStart;
     await ui.settle();
@@ -275,7 +275,7 @@ for (const active of [[], ["stage1"]]) {
   });
 }
 
-test("一键停止请求在途时禁用全部开始入口，不能加入新的阶段", async () => {
+test("一键停止请求尚未完成时禁用全部开始入口，不能加入新的阶段", async () => {
   const stopReply = deferred();
   let responsePayload;
   const { ui } = stageControlWorkbench({

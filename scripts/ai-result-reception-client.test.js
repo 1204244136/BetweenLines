@@ -41,7 +41,7 @@ function controlledClient(storage = storageFixture(), options = {}) {
 
 const paramsFor = (request) => new URL(request.url, "http://localhost").searchParams;
 
-test("生成页面：在途轮询互斥，分页追赶携带已应用游标并读取当前档案", async () => {
+test("生成页面：轮询请求互斥，分页追赶携带已应用游标并读取当前档案", async () => {
   const client = controlledClient();
   const { ui, requests } = client;
   await ui.refresh();

@@ -153,7 +153,7 @@
         .filter((item) => item.model);
     }
 
-    // 触顶 = 这条通道已经顶到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上探）。
+    // 触顶 = 这条通道已经达到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上调）。
     // 口径由服务端 presetPipelines[].topped 给出；旧服务端没有这个字段时按同一口径本地折算。
     function stagePresetTopped(row) {
       if (!row.runtime) return false;
@@ -284,7 +284,7 @@
       void syncRunningStagePresets(stage);
     }
 
-    // 运行中增删预设要立刻生效：删掉的预设，它的待审行马上改派给其余预设；新加的预设马上抢活。
+    // 运行中增删预设要立刻生效：删掉的预设，它的待审行马上改派给其余预设；新加的预设立即参与处理。
     // 任务没在跑时什么都不做——那种改动本来就会随下次启动的请求体生效。
     async function syncRunningStagePresets(stage) {
       if (!currentAiRunning) return;
@@ -300,13 +300,13 @@
         const added = Array.isArray(data.added) ? data.added.length : 0;
         const removed = Array.isArray(data.removed) ? data.removed.length : 0;
         if (data.rejected) {
-          showToast(`${stageLabel}没有可用的兜底模型配置，这次改动没有生效；请至少保留一个预设。`, { tone: "watch", durationMs: 10000 });
+          showToast(`${stageLabel}没有可用的阶段模型配置，这次改动没有生效；请至少保留一个预设。`, { tone: "watch", durationMs: 10000 });
           return;
         }
         const parts = [];
         if (added) parts.push(`新增 ${added} 个预设，已立刻参与派发`);
         if (removed) parts.push(`移除 ${removed} 个预设，待审行已改派给其余预设`);
-        if (data.fallback) parts.push("预设已全部移除，本阶段回落到阶段配置继续跑完剩余行");
+        if (data.fallback) parts.push("预设已全部移除，本阶段使用阶段配置继续处理剩余行");
         if (parts.length) {
           showToast(`${stageLabel}预设已即时生效：${parts.join("；")}。`, { tone: "success", durationMs: 7000 });
         }
@@ -4237,8 +4237,8 @@
       }
     }
 
-    // 阶段运行区分别标出实际在飞、队列、动态配额和配置上限。
-    // 触顶仍以服务端通道反馈为准；旧服务端按实际在飞与配置上限折算。
+    // 阶段运行区分别标出正在处理的行数、队列、动态配额和配置上限。
+    // 触顶仍以服务端通道反馈为准；旧服务端按正在处理的请求数与配置上限折算。
     function stageConcurrencyText(pipeline, activeInfoEl = null) {
       const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
       const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
@@ -4251,7 +4251,7 @@
         return "";
       }
       // 触顶口径来自服务端的 presetCount/toppedCount；旧服务端没有这两个字段时，
-      // 退回「实际在飞 ≥ 并发上限」——多预设下它天然等价于全部通道都顶到各自上限。
+      // 按「正在处理的请求数 ≥ 并发上限」判断；多预设下等价于全部通道都已达到各自上限。
       const presetCount = Math.max(0, Number(pipeline?.presetCount) || 0);
       const toppedCount = Math.max(0, Number(pipeline?.toppedCount) || 0);
       const allTopped = presetCount > 0 ? toppedCount >= presetCount : (cap > 0 && inFlight >= cap);
@@ -4259,10 +4259,10 @@
       if (activeInfoEl) {
         const toppedDetail = presetCount > 1
           ? `已触顶 ${toppedCount}/${presetCount} 个预设${allTopped ? "（全部触顶）" : ""}。`
-          : (allTopped ? "实际在飞已达预设并发上限（触顶）。" : "");
-        activeInfoEl.title = "实际在飞 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
+          : (allTopped ? "正在处理的请求数已达预设并发上限（触顶）。" : "");
+        activeInfoEl.title = "正在处理 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
           + "；队列待派发 " + pending + " 行。" + toppedDetail
-          + "允许并发由自适应调度上探得出，队列不足时实际在飞会小于它。";
+          + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。";
       }
       return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText;
     }

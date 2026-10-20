@@ -76,7 +76,7 @@ test("同 id 重加：旧成功只归还旧通道，新通道配额与完成统�
   assert.equal(state.inFlight, 2);
   assert.equal(state.presets[0].inFlight, 2);
   assert.equal(state.presets[0].completed, 0);
-  assert.equal(state.presets[0].quota, 3, "旧通道上探不提升新通道配额");
+  assert.equal(state.presets[0].quota, 3, "旧通道上调不提升新通道配额");
   assert.equal(state.presets[0].breakerState, "closed");
   dispatcher.release(fresh[0].request);
   dispatcher.release(fresh[1].request);
@@ -132,7 +132,7 @@ test("同 id 重加：旧 429 回队，但不继承旧退避；新派发获得�
   assert.equal(clock.pendingCount, 0, "退休请求不创建唤醒新通道的定时器");
 });
 
-test("移除仍在飞的通道后，阶段等待旧请求；finally 清掉其唤醒定时器", (t) => {
+test("移除仍有请求正在处理的通道后，阶段等待旧请求；finally 清掉其唤醒定时器", (t) => {
   const { dispatcher, clock, wakes } = fixture(t);
   dispatcher.enqueue({ index: 1 });
   const old = dispatcher.take();

@@ -168,7 +168,7 @@ test("紧凑看板：零异常不占位，失败与待办出现后保留筛选�
   assert.doesNotMatch(ui.html.split("<script>")[0], /class="ai-stage-group-label"|class="ai-stage-summary-label"/);
 });
 
-test("单阶段运行：空闲阶段只保留配额时不显示运行行，排队与在飞仍显示", () => {
+test("单阶段运行：空闲阶段只保留配额时不显示运行行，有排队或正在处理的行时仍显示", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
   ui.run(`currentStageCascade.toArbiter = true;
     renderStageMetricsDashboard({ stage1Passed: 3, stage2Reviewed: 2, stage3Arbitrated: 1 }, {
@@ -437,12 +437,12 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   assert.equal(pill3.dataset.state, "disabled");
   assert.equal(pill3.textContent, "未启用");
 
-  // Check active rows text：并发后缀默认只给「实际在飞 / 预设上限」。分子是实际在飞，
-  // 分母是面板上的并发上限；控制器上探出来的许可值不进行内（它不会因为队列空了而回落，
+  // 检查运行行文字：并发后缀默认只给「正在处理的行数 / 预设上限」。分子是正在处理的行数，
+  // 分母是面板上的并发上限；控制器上调后的许可值不计入分子（它不会因为队列空了而回落，
   // 拿它当分子就会出现「1 处理中 · 并发 32/32」这种看着自相矛盾的画面），只在悬停里说明。
-  // 这里正是「队列不足、实际在飞小于许可值」的场景：2/32 而不是 2/4。
+  // 这里正是「队列不足、正在处理的行数小于许可值」的场景：2/32 而不是 2/4。
   assert.match(ui.element("stage1ProgressWrap").title, /\n当前行：70, 71$/);
-  assert.match(ui.element("stage1RuntimeInfo").title, /实际在飞 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
+  assert.match(ui.element("stage1RuntimeInfo").title, /正在处理 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
   assert.match(ui.element("stage2ProgressWrap").title, /\n当前行：68$/);
 
   // 跑完后的流水线汇总同样不在状态行重复：阶段卡片上已经有同一组数字。
@@ -472,7 +472,7 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
       results: [],
     });
   `);
-  // 跑完后阶段卡片自己收口：进度条按各阶段最终总量走满，状态行依旧不被写入。
+  // 完成后阶段卡片更新为最终状态：进度条按各阶段最终总量走满，状态行依旧不被写入。
   assert.equal(ui.element("aiStatus").textContent, "", "固定状态行在任何状态下都不再被写入");
   assert.equal(ui.element("stage1ProgressWrap").title, "阶段一 事实初审进度：已完成 68 / 共 68 行（100%）");
   assert.equal(ui.element("stage2ProgressWrap").title, "阶段二 文学复审进度：已完成 17 / 共 17 行（100%）");

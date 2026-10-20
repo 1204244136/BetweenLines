@@ -69,7 +69,7 @@ test("预设池：注入并发通道后，配额取各通道当前并发，阶�
   // 通道是活对象（含定时器与 Map），绝不能跟着状态接口序列化出去。
   assert.deepEqual(Object.keys(pool.snapshot()[0]).includes("channel"), false);
 
-  // 派发按通道各自的余量走：p1 只允许 2 个在飞，p2 允许 5 个，加起来就是阶段可派发量。
+  // 派发按通道各自的余量走：p1 最多同时处理 2 个请求，p2 最多同时处理 5 个，加起来就是阶段可派发量。
   channels.get("p2").currentConcurrency = 5;
   assert.equal(pool.totalQuota(), 7);
   pool.setPending({ p1: 10, p2: 10 });
@@ -81,8 +81,8 @@ test("预设池：注入并发通道后，配额取各通道当前并发，阶�
     pool.begin(item.presetId, i + 1);
   }
   const counts = dispatched.reduce((acc, id) => ({ ...acc, [id]: (acc[id] || 0) + 1 }), {});
-  assert.equal(counts.p1, 2, "p1 的通道只允许 2 个在飞");
-  assert.equal(counts.p2, 5, "p2 的通道允许 5 个在飞");
+  assert.equal(counts.p1, 2, "p1 的通道最多同时处理 2 个请求");
+  assert.equal(counts.p2, 5, "p2 的通道最多同时处理 5 个请求");
   assert.equal(dispatched.length, 7, "同时派出的总量等于各通道余量之和");
 
   // 挂了通道的预设，配额升降由通道（concurrency-controller）负责，池内不再自算一套 ±1。

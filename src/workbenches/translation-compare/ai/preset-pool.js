@@ -30,13 +30,13 @@ const FALLBACK_START_QUOTA = 3;
 //
 // options.createChannel(preset, index, total) 注入一条独立通道（通常是 concurrency-controller
 // 的 createStageController）。挂了通道的预设，配额就是通道当前允许并发：每个预设各按各的
-// 上限慢启动/上探/下调，阶段总并发是各通道之和。只用一个阶段控制器时，多预设会被
-// 「第一个预设（或主配置）的上限」卡住——界面选了 3 个预设、每个 3 并发，实际只有 3 个请求在飞。
+// 上限慢启动/上调/下调，阶段总并发是各通道之和。只用一个阶段控制器时，多预设会被
+// 「第一个预设（或主配置）的上限」限制——界面选了 3 个预设、每个 3 并发，实际却只有 3 个请求同时处理。
 function createPresetPool(value, fallback = null, options = {}) {
   const createChannel = typeof options.createChannel === "function" ? options.createChannel : null;
   const state = new Map();
   // 预设池可以在运行中被改动（运行中增删预设）：version 每次变化 +1，调用方据此决定
-  // 要不要整队重新分配绑定——新预设要立刻抢活，被删预设的待派发行要立刻让给其余预设。
+  // 要不要整队重新分配绑定——新预设要立即参与处理，被删预设的待派发行要立刻分配给其余预设。
   let version = 0;
 
   const items = () => [...state.values()];
@@ -92,8 +92,8 @@ function createPresetPool(value, fallback = null, options = {}) {
     return item;
   }
 
-  // 移除预设：已经在飞的那几行不打断（请求已经发出去，结果照常写回），
-  // 但池里不再保留这条通道，它也就再也拿不到新活。
+  // 移除预设：正在处理的行不打断（请求已经发出，结果照常写回），
+  // 但池里不再保留这条通道，也不再向它分配新请求。
   function removePreset(presetId) {
     if (!state.delete(String(presetId))) return false;
     version += 1;
@@ -156,7 +156,7 @@ function createPresetPool(value, fallback = null, options = {}) {
       item.failures += ok ? 0 : 1;
       item.latencyMs += Math.max(0, Number(latencyMs) || 0);
       item.activeRows = item.activeRows.filter((index) => index !== rowIndex);
-      // 挂了通道的预设，配额升降由通道按 concurrency-controller 的慢启动/上探/下调策略决定；
+      // 已绑定通道的预设，配额升降由通道按 concurrency-controller 的慢启动/上调/下调策略决定；
       // 这里再算一套 ±1 会和通道打架，把「预设配了 32 却长期停在 3」那种退化重新带回来。
       if (item.channel) return;
       const total = item.successes + item.failures;
@@ -177,7 +177,7 @@ function createPresetPool(value, fallback = null, options = {}) {
         successes: item.successes,
         failures: item.failures,
         // 触顶 = 这条通道已经顶到它自己配置的并发上限。它与「配额用满」（inFlight >= quota）
-        // 不是一回事：配额还会继续上探，只有到配置上限才真的加不动了。口径在这里定一次，
+        // 不是一回事：配额还会继续上调，只有达到配置上限才不再增加。口径在这里定一次，
         // 页面只做计数与展示，不再自己重算一遍。
         topped: isTopped(item),
         activeRows: [...item.activeRows],
@@ -196,7 +196,7 @@ function createPresetPool(value, fallback = null, options = {}) {
 // 追加新项，不能只在初始化时轮转，否则后续进入的行会再次全部落到第一个预设。
 //
 // options.reassign=true 时忽略已有绑定、整队重算：预设集合刚被改动过（运行中增删预设），
-// 新预设要立刻分到活，被删预设的待派发行也要立刻让给其余预设。
+// 新预设要立即分配到待处理行，被删预设的待派发行也要立刻分配给其余预设。
 function assignPendingPresetIds(pool, items = [], options = {}) {
   const reassign = options.reassign === true;
   const allPresets = pool?.presets || [];

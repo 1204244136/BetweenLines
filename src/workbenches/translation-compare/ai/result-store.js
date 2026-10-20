@@ -15,7 +15,7 @@ function aiResultsDir(dataDir) {
   return path.join(storageLayout(dataDir).runtimeDir, "ai-results");
 }
 
-// 项目键与行集签名都是短哈希，但仍然按文件名安全字符收口，避免路径穿越。
+// 项目键与行集签名都是短哈希，但仍然只允许文件名安全字符，避免路径穿越。
 function safeSegment(value) {
   return String(value || "").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
 }

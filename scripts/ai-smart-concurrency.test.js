@@ -137,11 +137,11 @@ test("并发上限：预设只保存一个并发上限，旧预设的智能并�
   assert.equal("concurrencyMax" in legacySmart, false);
   // 旧预设：关闭智能并发时 concurrencyMax 从不生效，上限就是 concurrency。
   assert.equal(tools.sanitizePreset({ name: "固定", smartConcurrency: false, concurrency: 5, concurrencyMax: 15 }).concurrency, 5);
-  // 折算后同样不设硬顶。
+  // 折算后同样不设固定最大值。
   assert.equal(tools.sanitizePreset({ name: "超界", smartConcurrency: true, concurrency: 4, concurrencyMax: 99 }).concurrency, 99);
 });
 
-test("并发上限：预设与服务端一致取消硬顶，20/33/99 都原样保留", () => {
+test("并发上限：预设与服务端一致取消固定最大值，20/33/99 都原样保留", () => {
   const tools = createPresetTools();
 
   // 用户这次的实际现象：预设里选 20，旧实现因 20 > 12 直接回落成 3。
@@ -171,7 +171,7 @@ test("并发上限：预设与服务端一致取消硬顶，20/33/99 都原样�
   assert.equal("concurrencyMax" in subConf, false);
   assert.equal(cleanSubStageConfig({ model: "gpt-4o", concurrency: 33 }).concurrency, 33);
 
-  // 生成页面不再给控件写 max：没有硬顶，旧口径的 max 属性反而会拦住数字箭头。
+  // 生成页面不再给控件写 max：不设固定最大值，旧口径的 max 属性反而会拦住数字箭头。
   const html = makeHtml(
     [{ index: 1, jp: "原文一", cn: "译文一", relation: "1:1", score: 0.9, signature: "sig-1" }],
     { comparisonMode: "bilingual", files: { jp: "A.txt", cn: "B.txt" }, labels: { jp: "原文", cn: "译文" } },
@@ -234,7 +234,7 @@ test("并发上限界面：页面只有一个「并发上限」输入，没有�
   assert.equal("concurrencyMax" in saved, false);
 });
 
-test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到上限", async () => {
+test("并发调度：并发上限 4 时以 3 起步，请求稳定后上调到上限", async () => {
   clearProofreadCache();
   const { project } = setupMockProject(30, "probe");
 
@@ -253,7 +253,7 @@ test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到�
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 
-  // 缩短「两次上探之间的最短间隔」以便快速上探；不是运行时开关。
+  // 缩短「两次上调之间的最短间隔」以便快速上调；不是运行时开关。
   const prevInterval = process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
   process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL = "10";
 
@@ -264,7 +264,7 @@ test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到�
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      concurrency: 4, // 并发上限 4：起步 3，一整轮请求正常后上探到 4
+      concurrency: 4, // 并发上限 4：起步 3，一整轮请求正常后上调到 4
       projectKey: project.projectKey,
       rowsSignature: project.rowsSignature,
     });
@@ -279,10 +279,10 @@ test("并发调度：并发上限 4 时以 3 起步，请求稳定后上探到�
     assert.equal(finished.errors, 0);
     assert.equal(finished.concurrency, 3, "起步并发 = min(上限, 3)");
     assert.equal(finished.concurrencyMax, 4, "状态里回报的是并发上限");
-    assert.equal(finished.peakConcurrency, 4, "稳定后应上探到上限");
+    assert.equal(finished.peakConcurrency, 4, "稳定后应上调到上限");
     assert.ok(finished.concurrencyUps >= 1);
-    assert.ok(maxConcurrentSeen <= 4, `任何时刻都不得超过并发上限，实际同时在途 ${maxConcurrentSeen}`);
-    assert.ok(finished.logs.some((log) => log.includes("[并发调度]") && log.includes("从 3")), "上探必须留下日志");
+    assert.ok(maxConcurrentSeen <= 4, `任何时刻都不得超过并发上限，实际同时处理 ${maxConcurrentSeen} 个请求`);
+    assert.ok(finished.logs.some((log) => log.includes("[并发调度]") && log.includes("从 3")), "上调必须留下日志");
     assert.equal("smartConcurrency" in finished, false, "状态接口不再回报智能并发开关");
   } finally {
     if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
@@ -422,7 +422,7 @@ test("并发上限很小（等于起步并发）时遭遇 429 同样退避重试
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       model: "test-model",
       proofreadMode: "bilingual",
-      // 关键：并发上限 2 < 起步值 3，调度器没有上探空间。频控退避与重试不该依赖能不能上探——
+      // 关键：并发上限 2 < 起步值 3，调度器没有上调空间。频控退避与重试不该依赖能不能上调——
       // 否则这类用户遇到 429 会被当成普通失败，一次不重试地刷到队列尽头。
       concurrency: 2,
       projectKey: project.projectKey,
@@ -1302,8 +1302,8 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   const progressTitle2 = ui.element("stage2ProgressWrap").title;
   const progressTitle3 = ui.element("stage3ProgressWrap").title;
 
-  // 并发后缀默认只给「实际在飞 / 预设上限」：这里三段的队列都够，实际在飞正好等于许可值。
-  // 「队列不足、实际在飞小于许可值」的场景由 ai-stage-metrics.test.js 覆盖。
+  // 并发后缀默认只给「正在处理的行数 / 预设上限」：这里三段的队列都够，正在处理的行数正好等于许可值。
+  // 「队列不足、正在处理的行数小于许可值」的场景由 ai-stage-metrics.test.js 覆盖。
   assert.match(progressTitle1, /\n当前行：1, 2, 3$/);
   assert.match(ui.element("stage1RuntimeInfo").textContent, /运行 3 行.*当前配额 3.*配置上限 10/);
 
@@ -1313,7 +1313,7 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   assert.match(progressTitle3, /\n当前行：8, 9$/);
   assert.match(ui.element("stage3RuntimeInfo").textContent, /运行 2 行.*当前配额 2.*配置上限 3/);
 
-  // 只有实际在飞真的顶到预设上限时才额外标「触顶」：许可值触顶、实际在飞没跟上（队列不足）
+  // 只有正在处理的行数达到预设上限时才额外标「触顶」：许可值触顶、正在处理的行数未达到上限（队列不足）
   // 不算触顶，否则又会出现「1 处理中 · 并发 32/32 · 触顶」这种自相矛盾的画面。
   ui.run(`
     renderAiStatus({
@@ -1335,7 +1335,7 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
     });
   `);
   assert.match(ui.element("stage1RuntimeInfo").textContent, /运行 10 行.*配置上限 10 · 触顶/);
-  assert.match(ui.element("stage1RuntimeInfo").title, /实际在飞已达预设并发上限（触顶）/);
+  assert.match(ui.element("stage1RuntimeInfo").title, /正在处理的请求数已达预设并发上限（触顶）/);
 });
 
 function passingBody() {
@@ -1485,7 +1485,7 @@ test("限流熔断：冷却结束后只放行一个探测请求，探测通过�
   const { project } = setupMockProject(totalRows, "halfopen");
   const okRequests = [];
   // 首档冷却按 0.001 缩放。服务端轮询日志，看到断路器真正打开后再计时，
-  // 冷却期内一律 429（含迟到的在途请求），冷却结束后放行并稍作延迟，
+  // 冷却期内一律 429（含尚未完成的请求），冷却结束后放行并稍作延迟，
   // 让「探测尚未返回时是否又冲出别的请求」可被观察到。
   const cooldownMs = firstCooldownMs(0.001);
   let openedAt = 0;
@@ -2015,7 +2015,7 @@ test("异常明细：用户停止任务时，被打断的行归为「任务已�
   }
 });
 
-test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后从低位重新爬升，不一步跳回冷却前水位", async () => {
+test("并发调度与熔断联动：断路器打开时并发降至 1，恢复后逐步增加，不立即恢复冷却前的并发数", async () => {
   clearProofreadCache();
   const totalRows = 40;
   const { project } = setupMockProject(totalRows, "breakerlink");
@@ -2024,7 +2024,7 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
   let requestCount = 0;
   let openedAt = 0;
   // 首档冷却按 0.001 缩放。看到断路器真正打开后再计时：冷却期内一律 429，
-  // 冷却结束后放行。放行后记录每个请求发出时刻的在途数，用来检验恢复期的并发爬升曲线。
+  // 冷却结束后放行。放行后记录每个请求发出时刻尚未完成的请求数，用来检验恢复期的并发增长曲线。
   const cooldownMs = firstCooldownMs(0.001);
   const watcher = setInterval(() => {
     if (!openedAt && clientStatus({ includeResults: false }).logs.some((log) => log.includes("暂停派发"))) {
@@ -2078,17 +2078,17 @@ test("并发调度与熔断联动：断路器打开时并发塌到 1，恢复后
     assert.equal(finished.stopRequested, false, "探测成功后应恢复并跑完，不该被终止");
     const logs = finished.logs.join("\n");
     assert.match(logs, /\[熔断\] 初审：连续多行限流重试用尽，暂停派发/);
-    assert.match(logs, /\[并发调度\] 初审：熔断冷却，并发降到 1（冷却前 \d+）；恢复后从 1 起步慢启动，先爬到 \d+/, "断路器打开必须把并发塌到 1 并留下日志");
-    // 慢启动阈值应取出事水位的一半（>= 2），而不是拿已被压到 1 的当前并发去算。
-    const threshold = Number(logs.match(/先爬到 (\d+)/)[1]);
+    assert.match(logs, /\[并发调度\] 初审：熔断冷却，并发降到 1（冷却前 \d+）；恢复后从 1 起步慢启动，先增加至 \d+/, "断路器打开必须把并发降至 1 并留下日志");
+    // 慢启动阈值应取限流前并发数的一半（>= 2），而不是拿已被压到 1 的当前并发去算。
+    const threshold = Number(logs.match(/先增加至 (\d+)/)[1]);
     assert.ok(threshold >= 2 && threshold <= 16, `慢启动阈值应在 2~16 之间，实际 ${threshold}`);
     assert.match(logs, /并发从 1 翻倍至 2/, "恢复后应走慢启动（一整轮正常即翻倍），而不是 15 次才 +1");
     assert.match(logs, /限流冷却解除/);
     // 恢复后的第一批请求不得一拥而上：半开探测只放行 1 个，探测通过后也是从低位慢启动，
-    // 而不是一步回到 3 或更高（旧行为：直接回到冷却前的水位）。
+    // 而不是一步回到 3 或更高（旧行为：直接回到冷却前的并发数）。
     assert.ok(inFlightAtSend.length >= 2, "冷却解除后应继续处理剩余行");
     assert.equal(inFlightAtSend[0], 1, "半开探测只放行一个请求");
-    assert.ok(inFlightAtSend.slice(0, 2).every((n) => n <= 2), `恢复初期并发必须处于低位，实际前两个请求发出时在途数 ${inFlightAtSend.slice(0, 2)}`);
+    assert.ok(inFlightAtSend.slice(0, 2).every((n) => n <= 2), `恢复初期必须保持较低并发，实际前两个请求发出时尚未完成的请求数 ${inFlightAtSend.slice(0, 2)}`);
   } finally {
     clearInterval(watcher);
     if (prevInterval === undefined) delete process.env.TRANSCOMPARATOR_CONCURRENCY_STEP_INTERVAL;
@@ -2155,7 +2155,7 @@ test("多预设并发：各预设按自己的并发上限运行，互不越界�
     assert.equal(finished.errors, 0);
     assert.equal(finished.concurrency, 8, "起步并发 = 各预设 min(上限, 3) 之和：3 + 2 + 3");
     assert.equal(finished.concurrencyMax, 8, "并发上限 = 各预设自己的上限之和");
-    assert.equal(maxTotal, 8, `同时在途应达到各预设上限之和，实际 ${maxTotal}`);
+    assert.equal(maxTotal, 8, `同时处理的请求数应达到各预设上限之和，实际 ${maxTotal}`);
     // 上限 2 的那个预设不得被别的预设的余量带过界；上限 3 的两个也不得越界。
     assert.ok((peakByPath.get("p1") || 0) <= 3, `p1 上限 3，实际峰值 ${peakByPath.get("p1")}`);
     assert.ok((peakByPath.get("p2") || 0) <= 2, `p2 上限 2，实际峰值 ${peakByPath.get("p2")}`);
@@ -2226,7 +2226,7 @@ test("多预设并发：阶段一选中的每个预设各开自己的并发，�
     assert.equal(finished.concurrency, 9, "起步并发 = 三个预设各自起步并发之和");
     assert.equal(finished.concurrencyMax, 9, "并发上限 = 三个预设各自上限之和");
     assert.equal(finished.peakConcurrency, 9);
-    assert.equal(maxConcurrentSeen, 9, `三个预设必须各开各的并发，实际同时在途 ${maxConcurrentSeen}`);
+    assert.equal(maxConcurrentSeen, 9, `三个预设必须各自独立并发处理，实际同时处理 ${maxConcurrentSeen} 个请求`);
 
     const pipelines = finished.presetPipelines.stage1;
     assert.equal(pipelines.length, 3, "三个预设都要出现在运行状态里");
@@ -2362,7 +2362,7 @@ test("阶段熔断汇总：只有阶段内所有预设熔断后才终止整体�
   }
 });
 
-test("多预设热更新：运行中加入的预设立刻抢活，移除的预设待审行立刻改派且不卡死", async () => {
+test("多预设热更新：运行中加入的预设立即参与处理，移除的预设待审行立即改派且任务不停滞", async () => {
   clearProofreadCache();
   const totalRows = 24;
   const { project } = setupMockProject(totalRows, "poolhot");
@@ -2504,7 +2504,7 @@ test("多预设热更新：运行中把预设删空会回落到主配置，剩�
     assert.equal(finished.running, false);
     assert.equal(finished.errors, 0);
     assert.equal(finished.results.length, totalRows, "回落后剩余行仍要跑完");
-    assert.match(finished.logs.join("\n"), /\[预设池\] 初审：预设已全部移除，回落到阶段配置继续跑完剩余行/);
+    assert.match(finished.logs.join("\n"), /\[预设池\] 初审：预设已全部移除，使用阶段配置继续处理剩余行/);
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
@@ -2556,7 +2556,7 @@ for (const oldOutcome of ["success", "failure", "rate-limit"]) {
       });
       await waitForDispatch(() => held.has("old-model"), "旧请求应已发出");
       updateStagePresets({ stage: "stage1", presets: [makePreset("temporary", "temporary-model")] });
-      await waitForDispatch(() => held.has("temporary-model"), "移除旧预设后临时通道接活");
+      await waitForDispatch(() => held.has("temporary-model"), "移除旧预设后临时通道开始处理待审行");
       updateStagePresets({ stage: "stage1", presets: [makePreset("same", "new-model")] });
       await waitForDispatch(() => held.has("new-model"), "同 id 的新通道应已发出请求");
       assert.equal(clientStatus().stagePipelines.stage1.inFlight, 3, "阶段计数包含两条已移除通道");
@@ -2565,7 +2565,7 @@ for (const oldOutcome of ["success", "failure", "rate-limit"]) {
         ? clientStatus().concurrencyLimits === 1 : clientStatus().latestResultRevision > 0, "旧请求应已返回反馈");
       const state = clientStatus();
       assert.equal(state.stagePipelines.stage1.inFlight, 2, "旧请求归还后只剩临时通道和新通道的真实请求");
-      assert.equal(state.running, true, "仍有真实在飞请求时任务不能完成");
+      assert.equal(state.running, true, "仍有请求正在处理时任务不能完成");
       const current = state.presetPipelines.stage1.find((item) => item.presetId === "same");
       assert.equal(current.inFlight, 1);
       assert.equal(current.completed, 0);

@@ -132,7 +132,7 @@ function createAiResultReception({
       received.clear();
       runId = "";
       revision = 0;
-      // 保留运行/行拦截、在途请求和追赶 timer，与原页面清缓存一致。
+      // 保留运行/行拦截、尚未完成的请求和追赶 timer，与原页面清缓存一致。
     },
     discardCurrentRun() {
       if (runId) clearedRuns.add(runId);
