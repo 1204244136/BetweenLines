@@ -1780,7 +1780,7 @@
     .ai-stage-card .ai-stage-card-body {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: auto 46px;
+      grid-template-rows: auto 25px;
       justify-content: stretch;
       min-width: 0;
       cursor: default;
@@ -1825,7 +1825,7 @@
     }
     .ai-stage-runtime {
       display: grid;
-      grid-template-rows: 18px 4px 18px;
+      grid-template-rows: 18px 4px;
       gap: 3px;
       margin-top: 0;
       min-width: 0;
@@ -1857,10 +1857,6 @@
     }
     .ai-stage-runtime .ai-stage-card-progress {
       grid-row: 2;
-    }
-    .ai-stage-runtime .ai-stage-active-info {
-      grid-row: 3;
-      height: 18px;
     }
     @container ai-stage (min-width: 480px) {
       .ai-stage-card .ai-stage-card-main {

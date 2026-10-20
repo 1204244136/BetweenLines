@@ -72,7 +72,7 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="stage1StatusPill"/);
   assert.match(html, /id="stage2StatusPill"/);
   assert.match(html, /id="stage3StatusPill"/);
-  assert.match(html, /id="stage1ActiveInfo"/);
+  assert.doesNotMatch(html, /id="stage[123](?:ActiveInfo|ActiveRowsText)"/);
   assert.doesNotMatch(html, /aiPresetRuntimePanel/, "不再在阶段卡片外渲染重复的全局预设运行模块");
   assert.match(html, /id="stage1PresetTags"/);
 });
@@ -90,7 +90,7 @@ test("初审直通占比：归属通过行子集，空分母不显示百分比�
   assert.doesNotMatch(ui.element("aiStageFastPassRate").title, /228|442|100%/);
 });
 
-test("阶段卡片分组：待办与异常紧随指标，运行文字与进度共行且保留独立轨道", () => {
+test("阶段卡片分组：待办与异常紧随指标，进度条位于运行区底部且无当前行明细条", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
   const markup = ui.html.split("<script>")[0];
   for (let stage = 1; stage <= 3; stage++) {
@@ -109,7 +109,8 @@ test("阶段卡片分组：待办与异常紧随指标，运行文字与进度�
     assert.match(card, new RegExp('class="ai-stage-runtime-line"[^>]*>\\s*<div id="stage' + stage + 'RuntimeInfo"[^>]*>\\s*</div>\\s*<div id="stage' + stage + 'ProgressText"'));
     const runtime = card.slice(runtimePosition);
     assert.ok(runtime.indexOf('id="stage' + stage + 'ProgressWrap"') > runtime.indexOf('id="stage' + stage + 'ProgressText"'));
-    assert.ok(runtime.indexOf('id="stage' + stage + 'ActiveInfo"') > runtime.indexOf('id="stage' + stage + 'ProgressWrap"'));
+    assert.doesNotMatch(runtime, /id="stage[123](?:ActiveInfo|ActiveRowsText)"/);
+    assert.match(runtime, new RegExp('id="stage' + stage + 'ProgressWrap"[^>]*><span id="stage' + stage + 'Progress"></span></div>\\s*</div>\\s*</div>\\s*</div>'));
   }
 });
 
@@ -143,7 +144,7 @@ test("运行信息：无活跃行号也显示队列与容量，停止后清理�
   assert.equal(ui.element("stage1StatusPill").textContent, "排队中");
   assert.equal(ui.element("stage1RuntimeInfo").hidden, false);
   assert.equal(ui.element("stage1RuntimeInfo").textContent, "运行 0 行 · 排队 12 行 · 当前配额 10 · 配置上限 48");
-  assert.equal(ui.element("stage1ActiveInfo").hidden, true);
+  assert.doesNotMatch(ui.element("stage1ProgressWrap").title, /当前行/);
   ui.run("renderStageMetricsDashboard({});");
   assert.equal(ui.element("stage1RuntimeInfo").hidden, true);
   assert.equal(ui.element("stage1RuntimeInfo").textContent, "");
@@ -174,14 +175,16 @@ test("单阶段运行：空闲阶段只保留配额时不显示运行行，排�
   for (const stage of [1, 2]) {
     assert.equal(ui.element("stage" + stage + "RuntimeInfo").hidden, true);
     assert.equal(ui.element("stage" + stage + "RuntimeInfo").textContent, "");
-    assert.equal(ui.element("stage" + stage + "ActiveInfo").hidden, true);
+    assert.doesNotMatch(ui.element("stage" + stage + "ProgressWrap").title, /当前行/);
   }
   assert.equal(ui.element("stage3RuntimeInfo").hidden, false);
-  assert.equal(ui.element("stage3ActiveInfo").hidden, false);
+  assert.match(ui.element("stage3ProgressWrap").title, /\n当前行：3$/);
   ui.run("renderStageMetricsDashboard({ stage1Passed: 3 }, { stage2: { inFlight: 0, pending: 2, concurrency: 6, concurrencyMax: 52, activeRows: [] } }, true);");
   assert.equal(ui.element("stage2RuntimeInfo").hidden, false);
   assert.match(ui.element("stage2RuntimeInfo").textContent, /排队 2 行/);
   assert.equal(ui.element("stage3RuntimeInfo").hidden, true);
+  assert.equal(ui.element("stage3ProgressWrap").getAttribute("title"), null);
+  assert.equal(ui.element("stage3ProgressWrap").getAttribute("aria-valuetext"), null);
 });
 
 test("可见阶段进度：初审覆盖全页，下游当前候选增加时更新分母与无障碍值", () => {
@@ -207,32 +210,41 @@ test("可见阶段进度：初审覆盖全页，下游当前候选增加时更�
 
 test("运行停止与进度重置：三阶段清理动态内容，保留已有审核进度直至重置", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
+  const activeRows = { 1: [2, 4, 6, 8], 2: [12, 14, 16, 18], 3: [22, 24, 26, 28] };
+  const pipelines = Object.fromEntries(Object.entries(activeRows).map(([stage, rows]) => [
+    "stage" + stage, { inFlight: 4, pending: 1, concurrency: 4, concurrencyMax: 8, activeRows: rows },
+  ]));
   ui.run(`
     stagePresetSelections.stage2 = ["preset-s2"];
     stagePresetSelections.stage3 = ["preset-s3"];
-    renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 1, stage3Arbitrated: 1 }, {
-      stage1: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] },
-      stage2: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] },
-      stage3: { inFlight: 1, pending: 1, concurrency: 2, concurrencyMax: 4, activeRows: [2] }
-    }, true);
+    renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 1, stage3Arbitrated: 1 }, ${JSON.stringify(pipelines)}, true);
   `);
   for (const stage of [1, 2, 3]) {
+    const progress = ui.element("stage" + stage + "ProgressWrap");
+    const rowInfo = "当前行：" + activeRows[stage].join(", ");
     assert.equal(ui.element("stage" + stage + "RuntimeInfo").hidden, false);
-    assert.equal(ui.element("stage" + stage + "ActiveInfo").hidden, false);
-    assert.equal(ui.element("stage" + stage + "ProgressWrap").hidden, false);
+    assert.equal(progress.hidden, false);
+    assert.equal(progress.title.split("\n")[1], rowInfo, "完整保留超过三行的当前行号");
+    assert.equal(progress.getAttribute("aria-valuetext").split("\n")[1], rowInfo);
+    for (const otherStage of [1, 2, 3].filter((other) => other !== stage)) {
+      assert.equal(progress.title.includes("当前行：" + activeRows[otherStage].join(", ")), false, "阶段提示不能串用其它阶段行号");
+    }
   }
-  ui.run("renderStageMetricsDashboard({ stage1Passed: 3, stage2Reviewed: 1, stage3Arbitrated: 1 });");
+  // 服务停止响应即便还保留上一轮 activeRows，也不能继续显示实时行号。
+  const stoppedPipelines = Object.fromEntries(Object.entries(pipelines).map(([stage, pipeline]) => [stage, { ...pipeline, inFlight: 0, pending: 0 }]));
+  ui.run(`renderStageMetricsDashboard({ stage1Passed: 3, stage2Reviewed: 1, stage3Arbitrated: 1 }, ${JSON.stringify(stoppedPipelines)}, false);`);
   for (const stage of [1, 2, 3]) {
     const runtime = ui.element("stage" + stage + "RuntimeInfo");
-    const active = ui.element("stage" + stage + "ActiveInfo");
+    const progress = ui.element("stage" + stage + "ProgressWrap");
     assert.equal(runtime.hidden, true);
     assert.equal(runtime.textContent, "");
     assert.equal(runtime.title || "", "");
-    assert.equal(active.hidden, true);
-    assert.equal(ui.element("stage" + stage + "ActiveRowsText").textContent, "");
-    assert.equal(ui.element("stage" + stage + "ProgressWrap").hidden, false);
+    assert.equal(progress.hidden, false);
     assert.match(ui.element("stage" + stage + "ProgressText").textContent, /100%$/);
+    assert.doesNotMatch(progress.title, /当前行/);
+    assert.doesNotMatch(progress.getAttribute("aria-valuetext"), /当前行/);
   }
+  ui.run(`renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 1, stage3Arbitrated: 1 }, ${JSON.stringify(pipelines)}, true);`);
   ui.run("resetStageProgressBars();");
   for (const stage of [1, 2, 3]) {
     const progress = ui.element("stage" + stage + "ProgressWrap");
@@ -396,14 +408,14 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   assert.equal(ui.element("stage1ProgressWrap").hidden, false, "阶段一进度条可见");
   assert.equal(
     ui.element("stage1ProgressWrap").title,
-    "阶段一 事实初审进度：已完成 51 / 共 203 行（25%）",
+    "阶段一 事实初审进度：已完成 51 / 共 203 行（25%）\n当前行：70, 71",
     "阶段一进度 = 已完成 51 /（已完成 51 + 队列 150待审 + 2处理中）"
   );
   assert.equal(ui.element("stage1Progress").style.width, "25%");
   assert.equal(ui.element("stage2ProgressWrap").hidden, false, "阶段二进度条可见");
   assert.equal(
     ui.element("stage2ProgressWrap").title,
-    "阶段二 文学复审进度：已完成 17 / 共 20 行（85%）",
+    "阶段二 文学复审进度：已完成 17 / 共 20 行（85%）\n当前行：68",
     "阶段二进度 = 已复审 17 /（已完成 17 + 队列 2排队 + 1处理中）"
   );
   assert.equal(ui.element("stage3ProgressWrap").hidden, true, "阶段三未启用时不显示进度条");
@@ -425,11 +437,9 @@ test("客户端状态渲染：renderAiStatus 展示多阶段流水线状态与�
   // 分母是面板上的并发上限；控制器上探出来的许可值不进行内（它不会因为队列空了而回落，
   // 拿它当分子就会出现「1 处理中 · 并发 32/32」这种看着自相矛盾的画面），只在悬停里说明。
   // 这里正是「队列不足、实际在飞小于许可值」的场景：2/32 而不是 2/4。
-  const active1Text = ui.element("stage1ActiveRowsText");
-  assert.equal(active1Text.textContent, "70, 71");
+  assert.match(ui.element("stage1ProgressWrap").title, /\n当前行：70, 71$/);
   assert.match(ui.element("stage1RuntimeInfo").title, /实际在飞 2 行；当前允许并发 4，并发上限 32；队列待派发 150 行/);
-  const active2Text = ui.element("stage2ActiveRowsText");
-  assert.equal(active2Text.textContent, "68");
+  assert.match(ui.element("stage2ProgressWrap").title, /\n当前行：68$/);
 
   // 跑完后的流水线汇总同样不在状态行重复：阶段卡片上已经有同一组数字。
   // 放在阶段徽标断言之后，避免这一轮渲染把运行态徽标覆盖成 done。
@@ -1124,18 +1134,13 @@ test("多阶段审核轨迹：右侧卡片仅保留评审意见与分析，不�
   assert.doesNotMatch(summaryHtml, /复审改案:/);
 });
 
-test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确隐藏并清空内容，CSS包含[hidden]保护", () => {
-  const css = fs.readFileSync(path.resolve(__dirname, "../public/ai-panel.css"), "utf8");
-  assert.match(css, /\.ai-stage-active-info\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/, "ai-panel.css 必须包含 .ai-stage-active-info[hidden] 隐藏规则");
-
+test("当前行悬停提示：空行、隐藏进度和完成时清理旧行号", () => {
   const baseCss = fs.readFileSync(path.resolve(__dirname, "../public/workbench-style.css"), "utf8");
   assert.match(baseCss, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/, "workbench-style.css 必须包含全局 [hidden] 隐藏规则");
 
   const ui = createWorkbench(storageFixture({}));
-  const active1 = ui.element("stage1ActiveInfo");
-  const activeText1 = ui.element("stage1ActiveRowsText");
-  assert.equal(active1.hidden, true);
-  assert.equal(activeText1.textContent, "");
+  const progress = ui.element("stage1ProgressWrap");
+  assert.doesNotMatch(progress.title || "", /当前行/);
 
   // 模拟运行中有活跃行
   ui.run(`
@@ -1143,8 +1148,18 @@ test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确�
       stage1: { inFlight: 1, pending: 0, activeRows: [5, 6] }
     }, true);
   `);
-  assert.equal(active1.hidden, false);
-  assert.equal(activeText1.textContent, "5, 6");
+  assert.match(progress.title, /\n当前行：5, 6$/);
+  assert.match(progress.getAttribute("aria-valuetext"), /\n当前行：5, 6$/);
+
+  ui.run('renderStageProgress("1", 1, 3, { activeRows: [] });');
+  assert.doesNotMatch(progress.title, /当前行/);
+  assert.doesNotMatch(progress.getAttribute("aria-valuetext"), /当前行/);
+  ui.run('renderStageProgress("1", 1, 3, { activeRows: [5, 6] });');
+  ui.run('renderStageProgress("1", 1, 3, { enabled: false, activeRows: [5, 6] });');
+  assert.equal(progress.hidden, true);
+  assert.equal(progress.getAttribute("title"), null);
+  assert.equal(progress.getAttribute("aria-valuetext"), null);
+  ui.run('renderStageProgress("1", 1, 3, { activeRows: [5, 6] });');
 
   // 模拟运行结束
   ui.run(`
@@ -1152,8 +1167,9 @@ test("样式与DOM：活跃行处理中提示在空闲与完成时必须正确�
       stage1: { inFlight: 0, pending: 0, activeRows: [] }
     }, false);
   `);
-  assert.equal(active1.hidden, true);
-  assert.equal(activeText1.textContent, "", "隐藏时清空活跃行文本");
+  assert.equal(progress.hidden, true);
+  assert.equal(progress.getAttribute("title"), null);
+  assert.equal(progress.getAttribute("aria-valuetext"), null);
 });
 
 test("样式：阶段卡片的预设下拉按内容取宽，不再被固定上限截断", () => {

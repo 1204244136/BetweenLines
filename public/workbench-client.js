@@ -4269,7 +4269,7 @@
       return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText;
     }
 
-    function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0 } = {}) {
+    function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0, activeRows = [] } = {}) {
       const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
       const bar = document.getElementById("stage" + stageKey + "Progress");
       const text = document.getElementById("stage" + stageKey + "ProgressText");
@@ -4293,6 +4293,7 @@
       const action = { "1": "已初审", "2": "已复审", "3": "已仲裁" }[stageKey];
       const scope = String(stageKey) === "1" ? "全部" : "当前候选";
       const description = action + " " + safeDone + " / " + scope + " " + safeTotal + " 行 · " + percent + "%";
+      const activeRowsText = Array.isArray(activeRows) && activeRows.length ? "\n当前行：" + activeRows.join(", ") : "";
       if (text) {
         text.hidden = false;
         text.textContent = (scope === "全部" ? "全页" : "当前候选") + " " + percent + "%";
@@ -4303,9 +4304,9 @@
       wrap.setAttribute("aria-valuemin", "0");
       wrap.setAttribute("aria-valuemax", String(safeTotal));
       wrap.setAttribute("aria-valuenow", String(safeDone));
-      wrap.setAttribute("aria-valuetext", description);
+      wrap.setAttribute("aria-valuetext", description + activeRowsText);
       wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
-        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "");
+        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "") + activeRowsText;
     }
 
     function resetStageProgressBars() {
@@ -4501,8 +4502,6 @@
 
       // Stage 1
       const pill1 = document.getElementById("stage1StatusPill");
-      const active1 = document.getElementById("stage1ActiveInfo");
-      const activeText1 = document.getElementById("stage1ActiveRowsText");
       if (pill1) {
         pill1.title = "";
         if (latestStageControls?.stage1?.stopRequested) {
@@ -4535,22 +4534,9 @@
           pill1.textContent = s1Total > 0 ? "已完成" : "待命";
         }
       }
-      if (active1 && activeText1) {
-        if (aiRunning && p1.activeRows && p1.activeRows.length > 0) {
-          active1.hidden = false;
-          activeText1.textContent = p1.activeRows.slice(0, 3).join(", ") + (p1.activeRows.length > 3 ? "..." : "");
-        } else {
-          active1.hidden = true;
-          activeText1.textContent = "";
-          active1.removeAttribute("title");
-        }
-      }
-
       // Stage 2
       const s2Enabled = Boolean(committedStagePresetIds("stage2").length || s2Reviewed > 0 || s2Errors > 0 || activeStages.stage2 || p2.inFlight > 0 || p2.pending > 0);
       const pill2 = document.getElementById("stage2StatusPill");
-      const active2 = document.getElementById("stage2ActiveInfo");
-      const activeText2 = document.getElementById("stage2ActiveRowsText");
       if (pill2) {
         pill2.title = "";
         if (!s2Enabled) {
@@ -4579,22 +4565,9 @@
           pill2.textContent = s2Reviewed > 0 ? (activeStages.stage2 ? "当前候选已完成" : "已完成") : (activeStages.stage2 ? "等待候选" : "待命");
         }
       }
-      if (active2 && activeText2) {
-        if (aiRunning && p2.activeRows && p2.activeRows.length > 0) {
-          active2.hidden = false;
-          activeText2.textContent = p2.activeRows.slice(0, 3).join(", ") + (p2.activeRows.length > 3 ? "..." : "");
-        } else {
-          active2.hidden = true;
-          activeText2.textContent = "";
-          active2.removeAttribute("title");
-        }
-      }
-
       // Stage 3
       const s3Enabled = Boolean(committedStagePresetIds("stage3").length || s3Arbitrated > 0 || s3Errors > 0 || activeStages.stage3 || p3.inFlight > 0 || p3.pending > 0);
       const pill3 = document.getElementById("stage3StatusPill");
-      const active3 = document.getElementById("stage3ActiveInfo");
-      const activeText3 = document.getElementById("stage3ActiveRowsText");
       if (pill3) {
         pill3.title = "";
         if (!s3Enabled) {
@@ -4623,17 +4596,6 @@
           pill3.textContent = s3Arbitrated > 0 ? (activeStages.stage3 ? "当前候选已完成" : "已完成") : (activeStages.stage3 ? "等待候选" : "待命");
         }
       }
-      if (active3 && activeText3) {
-        if (aiRunning && p3.activeRows && p3.activeRows.length > 0) {
-          active3.hidden = false;
-          activeText3.textContent = p3.activeRows.slice(0, 3).join(", ") + (p3.activeRows.length > 3 ? "..." : "");
-        } else {
-          active3.hidden = true;
-          activeText3.textContent = "";
-          active3.removeAttribute("title");
-        }
-      }
-
       // 运行数字统一归卡片底部，队列没有活跃行时也如实展示。
       for (const [number, pipeline] of [[1, p1], [2, p2], [3, p3]]) {
         const info = document.getElementById("stage" + number + "RuntimeInfo");
@@ -4651,18 +4613,21 @@
         enabled: aiRunning || s1Total > 0 || s1Errors > 0,
         label: "阶段一 事实初审",
         errors: s1Errors,
+        activeRows: aiRunning ? p1.activeRows : [],
       });
       const s2Queue = Math.max(0, Number(p2.pending) || 0) + Math.max(0, Number(p2.inFlight) || 0);
       renderStageProgress("2", s2Reviewed, s2Reviewed + Math.max(s2Pending, s2Queue, s2Errors), {
         enabled: s2Enabled,
         label: "阶段二 文学复审",
         errors: s2Errors,
+        activeRows: aiRunning ? p2.activeRows : [],
       });
       const s3Queue = Math.max(0, Number(p3.pending) || 0) + Math.max(0, Number(p3.inFlight) || 0);
       renderStageProgress("3", s3Arbitrated, s3Arbitrated + Math.max(s3Pending, s3Queue, s3Errors), {
         enabled: s3Enabled,
         label: "阶段三 终审仲裁",
         errors: s3Errors,
+        activeRows: aiRunning ? p3.activeRows : [],
       });
     }
 

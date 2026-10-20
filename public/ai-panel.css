@@ -738,8 +738,7 @@ details[open] > summary .details-toggle::before {
 /* 每张阶段卡片底部一条进度条：进度 = 该阶段已完成 / 本轮该阶段总量。
    原来右上角那条全局进度条反映的是「模型实际调用数 / 总调用数」，按阶段推进的流水线
    在它上面看不出是哪个阶段卡住了，所以改成每阶段一条。
-   它紧跟在指标行下方、位于「处理中: …」明细行之前：那张明细行只在运行中出现，
-   放在进度条之前会把这一张卡片的进度条顶下去，三张卡片就不在同一水平线了。 */
+   它位于卡片运行区的最后一条固定轨道；当前行号随进度悬停显示，不再单独占行。 */
 .ai-stage-card-progress {
   height: 4px;
   border-radius: 999px;
@@ -859,38 +858,6 @@ details[open] > summary .details-toggle::before {
 @keyframes ai-stage-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.65; }
-}
-
-.ai-stage-active-info {
-  font-size: 10px;
-  line-height: 1.3;
-  color: var(--ai-focus);
-  background: color-mix(in srgb, var(--ai-focus) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ai-focus) 18%, transparent);
-  border-radius: var(--ai-radius-badge, 4px);
-  padding: 1px 6px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-sizing: border-box;
-}
-
-.ai-stage-active-info[hidden] {
-  display: none !important;
-}
-
-.ai-stage-active-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ai-focus);
-  box-shadow: 0 0 4px var(--ai-focus);
-  animation: ai-stage-pulse 1.4s infinite ease-in-out;
-  flex-shrink: 0;
 }
 
 .ai-stage-card-ctrls {

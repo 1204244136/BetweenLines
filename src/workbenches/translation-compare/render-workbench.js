@@ -351,7 +351,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <div id="stage1ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage1ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage1Progress"></span></div>
-                    <div id="stage1ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>当前行: <span id="stage1ActiveRowsText"></span></div>
                   </div>
                 </div>
               </div>
@@ -406,7 +405,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <div id="stage2ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage2ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage2Progress"></span></div>
-                    <div id="stage2ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>当前行: <span id="stage2ActiveRowsText"></span></div>
                   </div>
                 </div>
               </div>
@@ -459,7 +457,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                       <div id="stage3ProgressText" class="ai-stage-progress-text" hidden></div>
                     </div>
                     <div id="stage3ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage3Progress"></span></div>
-                    <div id="stage3ActiveInfo" class="ai-stage-active-info" hidden><span class="ai-stage-active-dot" aria-hidden="true"></span>当前行: <span id="stage3ActiveRowsText"></span></div>
                   </div>
                 </div>
               </div>

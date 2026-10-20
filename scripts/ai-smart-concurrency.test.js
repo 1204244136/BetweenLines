@@ -1298,19 +1298,19 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
     });
   `);
 
-  const activeText1 = ui.element("stage1ActiveRowsText").textContent;
-  const activeText2 = ui.element("stage2ActiveRowsText").textContent;
-  const activeText3 = ui.element("stage3ActiveRowsText").textContent;
+  const progressTitle1 = ui.element("stage1ProgressWrap").title;
+  const progressTitle2 = ui.element("stage2ProgressWrap").title;
+  const progressTitle3 = ui.element("stage3ProgressWrap").title;
 
   // 并发后缀默认只给「实际在飞 / 预设上限」：这里三段的队列都够，实际在飞正好等于许可值。
   // 「队列不足、实际在飞小于许可值」的场景由 ai-stage-metrics.test.js 覆盖。
-  assert.match(activeText1, /1, 2, 3/);
+  assert.match(progressTitle1, /\n当前行：1, 2, 3$/);
   assert.match(ui.element("stage1RuntimeInfo").textContent, /运行 3 行.*当前配额 3.*配置上限 10/);
 
-  assert.match(activeText2, /4, 5, 6\.\.\./);
+  assert.match(progressTitle2, /\n当前行：4, 5, 6, 7$/);
   assert.match(ui.element("stage2RuntimeInfo").textContent, /运行 4 行.*当前配额 4.*配置上限 8/);
 
-  assert.match(activeText3, /8, 9/);
+  assert.match(progressTitle3, /\n当前行：8, 9$/);
   assert.match(ui.element("stage3RuntimeInfo").textContent, /运行 2 行.*当前配额 2.*配置上限 3/);
 
   // 只有实际在飞真的顶到预设上限时才额外标「触顶」：许可值触顶、实际在飞没跟上（队列不足）
