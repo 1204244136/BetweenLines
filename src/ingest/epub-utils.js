@@ -242,6 +242,16 @@ function meaningfulBlocks(text) {
     .filter((block) => Array.from(block).length >= 2);
 }
 
+function isStandaloneReadingGuide(info) {
+  const blocks = info.text.split(/\n\s*\n+/).map((block) => block.trim()).filter(Boolean);
+  if (info.hasBodyLabel || blocks.length !== 1) return false;
+  const block = blocks[0];
+  // 明确面向读者的独立说明；不凭卷号、页序或正文长度猜测起点。
+  return /^※\s*本書/.test(block)
+    && /(?:読み始めて|お読み)(?:くださ|いただ)/.test(block)
+    && /お楽しみいただけます[。．]?$/.test(block);
+}
+
 function firstMeaningfulBlock(text) {
   return meaningfulBlocks(text)[0] || "";
 }
@@ -494,6 +504,12 @@ async function readEpubSpineDocumentsFromArchive(zip, options = {}) {
       ...analyzeSpineDocument(rawHtml, text, labels),
       isNonBodyDocument: isNonBodyDocument(item.path, labels),
     });
+  }
+  // 只在明确正文锚点之前排除独立阅读提示；正文内相同文本与无锚点输入保持原样。
+  const firstBodyIndex = spineInfos.findIndex((info) => info.hasBodyLabel
+    || (!info.isNonBodyDocument && !info.isHardEndBoundary && /\uE200H[1-6]:/.test(info.text)));
+  for (let index = 0; index < firstBodyIndex; index += 1) {
+    if (isStandaloneReadingGuide(spineInfos[index])) spineInfos[index].isNonBodyDocument = true;
   }
   const bodyIndexes = selectBodySpineIndexes(spineInfos);
   return spineInfos.map((info, spineIndex) => ({

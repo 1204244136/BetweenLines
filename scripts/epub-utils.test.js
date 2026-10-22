@@ -193,6 +193,65 @@ for (const [converter, read, available] of [
 ]) {
   for (const hasNav of [false, true]) {
     for (const unpacked of [false, true]) {
+      test(`${converter} 排除无语义文件名的独立阅读提示，保留短引子与正文（导航 ${hasNav}，解压 ${unpacked}）`, { skip: !available && "Pandoc unavailable" }, async () => {
+        const guidance = '<p>※本書は前巻の続編です。前巻を<ruby>傍<rt>かたわ</rt></ruby>らに置いて読み始めてくださいますと、より深くお楽しみいただけます。</p>';
+        const fixture = await bodyBoundaryEpub(hasNav, unpacked, {
+          names: ["part-a.xhtml", "part-b.xhtml", "part-c.xhtml"],
+          labels: [null, null, "序章"],
+          documents: [guidance, '<p>ようこそ、</p><p>扉の向こうには街が広がっていた。彼は足を止めて、見慣れない景色を眺めた。</p>', '<h1>序章</h1><p>※本書を手にした彼は、まだ物語を知らなかった。</p>'],
+        });
+        const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+        process.env.TRANSCOMPARATOR_DATA_DIR = path.join(fixture.dir, "runtime-data");
+        try {
+          const before = inputBytes(fixture.file);
+          const text = await read(fixture.file);
+          assert.doesNotMatch(text, /前巻|読み始めて|お楽しみいただけます/);
+          assert.deepEqual(splitParagraphs(sliceMainDocument(text, "jp"), "jp").map((p) => p.text), [
+            "ようこそ、", "扉の向こうには街が広がっていた。彼は足を止めて、見慣れない景色を眺めた。", "※本書を手にした彼は、まだ物語を知らなかった。",
+          ]);
+          const spine = await readEpubSpineDocuments(fixture.file);
+          assert.equal(spine[0].isNonBodyDocument, true);
+          assert.equal(spine[0].bodySelected, false);
+          assert.deepEqual(inputBytes(fixture.file), before);
+        } finally {
+          if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
+          else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+          fs.rmSync(fixture.dir, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+  for (const [name, document, label, before = "", chapter = '<h1>序章</h1>'] of [
+    ["与正文混排的提示", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p><p>扉の向こうには街が広がっていた。彼は足を止めて、見慣れない景色を眺めた。</p>', null],
+    ["与单字正文混排的提示", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p><p>一</p>', null],
+    ["与正文同段的提示", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。彼は本を閉じた。</p>', null],
+    ["有正文导航标签的页面", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p>', "引子"],
+    ["有正文标题的页面", '<h1>引子</h1><p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p>', null],
+    ["叙述中引用阅读提示", '<p>「※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。」</p>', null],
+    ["正文开始后的阅读提示", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p>', null, '<h1>序章</h1><p>ここから物語が始まる。</p>'],
+    ["没有明确正文边界的阅读提示", '<p>※本書は前巻の続編です。読み始めてくださいますと、お楽しみいただけます。</p>', null, "", ""],
+  ]) {
+    test(`${converter} 不整页排除${name}`, { skip: !available && "Pandoc unavailable" }, async () => {
+      const documents = [...(before ? [before] : []), document, chapter + '<p>物語は続いていた。</p>'];
+      const fixture = await bodyBoundaryEpub(true, false, {
+        names: documents.map((item, index) => `part-${index}.xhtml`),
+        labels: [...(before ? ["序章"] : []), label, chapter ? "序章" : null],
+        documents,
+      });
+      const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+      process.env.TRANSCOMPARATOR_DATA_DIR = path.join(fixture.dir, "runtime-data");
+      try {
+        assert.match(await read(fixture.file), /読み始めてくださいますと/);
+        assert.equal((await readEpubSpineDocuments(fixture.file))[before ? 1 : 0].isNonBodyDocument, false);
+      } finally {
+        if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
+        else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+        fs.rmSync(fixture.dir, { recursive: true, force: true });
+      }
+    });
+  }
+  for (const hasNav of [false, true]) {
+    for (const unpacked of [false, true]) {
       test(`${converter} 按${hasNav ? "导航标签" : "文件语义"}排除${unpacked ? "解压" : "打包"} EPUB 非正文页且保留短开篇`, { skip: !available && "Pandoc unavailable" }, async () => {
         const fixture = await bodyBoundaryEpub(hasNav, unpacked);
         const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
