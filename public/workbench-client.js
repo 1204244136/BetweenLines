@@ -679,6 +679,7 @@
       stage3Stop: document.getElementById("stage3Stop"),
       clearCache: document.getElementById("clearAiLog"),
       panelState: document.getElementById("aiPanelState"),
+      cacheHitRate: document.getElementById("aiCacheHitRate"),
       prompt: document.getElementById("aiPrompt"),
       promptReset: document.getElementById("aiPromptReset"),
     };
@@ -1730,6 +1731,7 @@
     let notifiedFinishedRunId = "";
 
     function clearLocalAiCache() {
+      renderAiCacheMetrics();
       aiResultReception.resetReception();
       aiActiveIds.clear();
       activeRowId = "";
@@ -1738,6 +1740,7 @@
     }
 
     function renderClearedAiStatus(message = "已清除 AI 运行记录；备注与人工确认已保留。") {
+      renderAiCacheMetrics();
       aiIds.start.disabled = false;
       aiIds.stop.disabled = true;
       prefilterIds.start.disabled = false;
@@ -4931,6 +4934,31 @@
       return stageMetrics;
     }
 
+    function renderAiCacheMetrics(metrics = {}) {
+      const badge = aiIds.cacheHitRate;
+      if (!badge) return;
+      const count = (key) => {
+        const value = Number(metrics?.[key]);
+        return Number.isFinite(value) ? Math.max(0, value) : 0;
+      };
+      const calls = count("modelCalls");
+      const reported = count("cacheReportedCalls");
+      const input = count("cacheReportedPromptTokens");
+      const cached = Math.min(input, count("cachedPromptTokens"));
+      const partial = calls > reported;
+      const rate = reported > 0 && input > 0 ? (cached / input * 100).toFixed(1) + "%" : "—";
+      badge.textContent = "缓存命中: " + rate + (reported > 0 && partial ? "（部分）" : "");
+      badge.title = reported > 0
+        ? [
+          "本轮缓存命中率 = 缓存读取 token ÷ 已报告缓存用量的输入 token。",
+          "缓存读取 " + cached.toLocaleString("zh-CN") + " / " + input.toLocaleString("zh-CN") + " token；未命中 " + count("cacheMissPromptTokens").toLocaleString("zh-CN") + " token。",
+          ...(count("cacheWritePromptTokens") > 0 ? ["缓存写入 " + count("cacheWritePromptTokens").toLocaleString("zh-CN") + " token（包含在未命中输入中）。"] : []),
+          "已报告缓存用量 " + reported + " / " + calls + " 次调用" + (partial ? "；未报告的调用不参与命中率计算。" : "。"),
+        ].join("\n")
+        : (calls > 0 ? "接口未返回缓存用量，无法计算命中率；未报告不等于未命中。" : "本轮模型输入的缓存命中占比；尚无接口返回的缓存用量。");
+      badge.setAttribute("aria-label", badge.textContent + "。" + badge.title);
+    }
+
     function renderAiStatus(ai) {
       if (!ai) return;
       currentAiRunning = Boolean(ai.running);
@@ -4963,6 +4991,7 @@
         renderClearedAiStatus();
         return;
       }
+      renderAiCacheMetrics(sameAiScope ? ai.metrics : null);
       if (ai.running) {
         aiCacheCleared = false;
       }

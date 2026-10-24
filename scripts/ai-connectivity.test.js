@@ -77,6 +77,11 @@ test("testModelConnectivity: 针对 OpenAI 兼容协议正常响应返回连通�
       promptTokens: 8,
       completionTokens: 3,
       totalTokens: 11,
+      cachedPromptTokens: 0,
+      cacheMissPromptTokens: 0,
+      cacheWritePromptTokens: 0,
+      cacheReportedPromptTokens: 0,
+      cacheReportedCalls: 0,
     });
     assert.match(result.message, /模型连通成功/);
 
@@ -128,6 +133,11 @@ test("testModelConnectivity: 针对 Claude 原生 Messages 协议返回连通成
       promptTokens: 6,
       completionTokens: 5,
       totalTokens: 11,
+      cachedPromptTokens: 0,
+      cacheMissPromptTokens: 0,
+      cacheWritePromptTokens: 0,
+      cacheReportedPromptTokens: 0,
+      cacheReportedCalls: 0,
     });
     assert.equal(receivedHeaders["x-api-key"], "sk-ant-test-key");
     assert.equal(receivedHeaders["anthropic-version"], "2023-06-01");

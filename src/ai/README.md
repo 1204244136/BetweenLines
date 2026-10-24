@@ -6,6 +6,7 @@
 |---|---|
 | `connection-config.js` | 统一规范化接口协议与供应商身份 |
 | `llm-client.js` | 共享请求、响应解析、出站地址校验、等待预算与取消 |
+| `token-usage.js` | 归一化接口 token 用量与缓存读取、写入、未报告状态，不持有任务统计 |
 | `task-queue.js` | 有界任务派发、取消及进度回调 |
 | `prompt-contract.js` | 不带领域字段的 Prompt 组装与 JSON 输出约束 |
 

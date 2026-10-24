@@ -1,4 +1,5 @@
 const { normalizeConnectionConfig } = require("./connection-config");
+const { normalizeTokenUsage } = require("./token-usage");
 /**
  * 共享底层 LLM 客户端与传输层 (src/ai/llm-client.js)
  *
@@ -615,11 +616,7 @@ async function testModelConnectivity(config = {}, options = {}) {
 
       const latencyMs = Date.now() - startTime;
       const replyPreview = extractClaudeText(data).trim();
-      const usage = {
-        promptTokens: Number(data.usage?.input_tokens) || 0,
-        completionTokens: Number(data.usage?.output_tokens) || 0,
-        totalTokens: (Number(data.usage?.input_tokens) || 0) + (Number(data.usage?.output_tokens) || 0),
-      };
+      const usage = normalizeTokenUsage(data.usage, "claude");
 
       return {
         ok: true,
@@ -676,11 +673,7 @@ async function testModelConnectivity(config = {}, options = {}) {
 
     const latencyMs = Date.now() - startTime;
     const replyPreview = String(data.choices?.[0]?.message?.content || "").trim();
-    const usage = {
-      promptTokens: Number(data.usage?.prompt_tokens) || 0,
-      completionTokens: Number(data.usage?.completion_tokens) || 0,
-      totalTokens: Number(data.usage?.total_tokens) || 0,
-    };
+    const usage = normalizeTokenUsage(data.usage);
 
     return {
       ok: true,

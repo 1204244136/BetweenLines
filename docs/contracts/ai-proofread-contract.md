@@ -27,6 +27,15 @@
 
 验证：`node --test scripts/ai-connectivity.test.js scripts/ai-model-timeout.test.js scripts/ai-error-kinds.test.js scripts/ai-smart-concurrency.test.js`。
 
+## Token 用量与缓存命中统计
+
+- `src/ai/token-usage.js` 是接口用量归一化的纯能力入口；翻译请求与共享连通性探测复用它，不在客户端解析供应商字段。OpenAI-compatible 读取 `prompt_tokens_details.cached_tokens`（兼容 `input_tokens_details.cached_tokens`），DeepSeek 读取 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`，Claude 读取 `cache_read_input_tokens` / `cache_creation_input_tokens`。
+- Claude 的 `input_tokens` 不含缓存读取和写入，归一化的 `promptTokens` 必须将三者相加；缓存写入是未命中输入的子集，不得再次加入输入总量。缓存命中仅描述输入处理，不推算费用或输出节省。
+- 翻译任务的 `metrics` 按本轮响应累计 `cachedPromptTokens`、`cacheMissPromptTokens`、`cacheWritePromptTokens`、`cacheReportedPromptTokens` 与 `cacheReportedCalls`。后两项分别是明确报告缓存用量的输入 token 分母与调用数；未报告不可当作零命中，也不可用其输入量稀释已知命中率。有效零命中仍属于已报告。
+- 页面只在项目与行集一致时显示本轮缓存统计；命中率为 `cachedPromptTokens / cacheReportedPromptTokens`，没有有效分母显示「—」，部分调用报告时标「部分」。悬停与 ARIA 给出统计明细；切轮、清除及外项目响应不得保留旧比率。本轮汇总属于运行状态，不写入长期备注或旧结果快照。
+
+验证：`node --test scripts/ai-token-usage.test.js scripts/ai-cache-metrics-client.test.js scripts/ai-model-timeout.test.js scripts/ai-connectivity.test.js`，共享传输或客户端变更另运行 `npm test`。
+
 ## 模型能力与思考档位
 
 - `ai/model-capabilities.js` 是两端能力识别的唯一实现；`browserModelCapabilitiesSource()` 将清单与纯解析函数、显式依赖注入翻译比较和说话人工作台，不带网络调用或服务端缓存。`workbench-shared.js` 不得另写一套模型正则。

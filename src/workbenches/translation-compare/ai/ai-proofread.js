@@ -57,6 +57,7 @@ const {
   testModelConnectivity,
 } = require("../../../ai/llm-client");
 const { firstString, parseBoolean } = require("../../../ai/prompt-contract");
+const { normalizeTokenUsage } = require("../../../ai/token-usage");
 const toTw = OpenCC.Converter({ from: "cn", to: "tw" });
 const { loadGlossary, glossaryPrompt } = require("./glossary");
 const {
@@ -221,6 +222,22 @@ function stageErrorKindsSnapshot() {
   return snapshot;
 }
 
+function createModelCallMetrics() {
+  return {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+    cacheMissPromptTokens: 0,
+    cacheWritePromptTokens: 0,
+    cacheReportedPromptTokens: 0,
+    cacheReportedCalls: 0,
+    totalLatencyMs: 0,
+    modelCalls: 0,
+    averageLatencyMs: 0,
+  };
+}
+
 const status = {
   running: false,
   kind: "proofread",
@@ -300,14 +317,7 @@ const status = {
   stageErrors: createStageErrors(),
   stagePipelines: createStagePipelines(),
   presetPipelines: { stage1: [], stage2: [], stage3: [] },
-  metrics: {
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    totalLatencyMs: 0,
-    modelCalls: 0,
-    averageLatencyMs: 0,
-  },
+  metrics: createModelCallMetrics(),
   logs: [],
 };
 
@@ -324,6 +334,10 @@ function recordModelCallMetrics(latencyMs, usage = {}) {
   status.metrics.promptTokens += promptTokens;
   status.metrics.completionTokens += completionTokens;
   status.metrics.totalTokens += totalTokens;
+  // 未报告缓存用量的调用不进入命中率分母；0 命中与未知必须可区分。
+  for (const key of ["cachedPromptTokens", "cacheMissPromptTokens", "cacheWritePromptTokens", "cacheReportedPromptTokens", "cacheReportedCalls"]) {
+    status.metrics[key] += usage[key] || 0;
+  }
   if (status.metrics.modelCalls > 0) {
     status.metrics.averageLatencyMs = Math.round(status.metrics.totalLatencyMs / status.metrics.modelCalls);
   }
@@ -775,14 +789,7 @@ function resetStatus(config, rowsLength, { reusePrevious = false } = {}) {
   status.stageControls = createStageControls();
   status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
   status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
-  status.metrics = {
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    totalLatencyMs: 0,
-    modelCalls: 0,
-    averageLatencyMs: 0,
-  };
+  status.metrics = createModelCallMetrics();
   status.logs = [];
   resultMetricDeltas = new Map();
   controllers = new Set();
@@ -874,6 +881,7 @@ function resetIdleTaskStatus() {
   status.stageMetrics = createStageMetrics();
   status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
+  status.metrics = createModelCallMetrics();
   status.logs = [];
   resultMetricDeltas = new Map();
   controllers = new Set();
@@ -3667,11 +3675,7 @@ async function callOpenAiCompatible(messages, config) {
     body: JSON.stringify(body),
   }, { timeoutMs: MODEL_RESPONSE_TIMEOUT_MS });
   const latencyMs = Date.now() - startTime;
-  const usage = {
-    promptTokens: Number(data.usage?.prompt_tokens) || 0,
-    completionTokens: Number(data.usage?.completion_tokens) || 0,
-    totalTokens: Number(data.usage?.total_tokens) || 0,
-  };
+  const usage = normalizeTokenUsage(data.usage);
   recordModelCallMetrics(latencyMs, usage);
   const firstChoice = data.choices?.[0];
   if (firstChoice?.message?.refusal) {
@@ -3695,11 +3699,7 @@ async function callClaude(messages, config) {
     body: JSON.stringify(buildClaudeMessageBody(messages, config)),
   }, { timeoutMs: MODEL_RESPONSE_TIMEOUT_MS });
   const latencyMs = Date.now() - startTime;
-  const usage = {
-    promptTokens: Number(data.usage?.input_tokens) || 0,
-    completionTokens: Number(data.usage?.output_tokens) || 0,
-    totalTokens: (Number(data.usage?.input_tokens) || 0) + (Number(data.usage?.output_tokens) || 0),
-  };
+  const usage = normalizeTokenUsage(data.usage, "claude");
   recordModelCallMetrics(latencyMs, usage);
   if (data.stop_reason === "refusal") {
     const error = new Error("The model declined to answer (Claude refusal).");

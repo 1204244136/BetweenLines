@@ -289,6 +289,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div class="ai-stage-dashboard-header">
               <div class="ai-stage-dashboard-title-group">
                 <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
+                <span id="aiCacheHitRate" class="ai-stage-badge" title="本轮模型输入的缓存命中占比；尚无接口返回的缓存用量。" aria-label="本轮缓存命中率：尚无数据">缓存命中: —</span>
                 <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
                 <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
                 <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="兼容旧版存疑结果与预筛冲突；这些记录尚未定案，可进入 AI 流程继续审核（点击筛选未定案记录）" role="button" tabindex="0" hidden>未定案记录: <strong id="metricFinalNeedsCheck">0</strong></span>
