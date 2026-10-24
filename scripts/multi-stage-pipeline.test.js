@@ -18,6 +18,12 @@ const {
   parseArbiterResponse,
 } = require("../src/workbenches/translation-compare/ai/persona-runtime");
 
+function extractPersonaUserPayload(content) {
+  const heading = content.search(/请(?:审阅|裁决)第 \d+ 行/);
+  const start = content.indexOf("：\n", heading) + 2;
+  return JSON.parse(content.slice(start));
+}
+
 const {
   shouldTriggerArbitration,
   applyArbitrationDecision,
@@ -372,11 +378,7 @@ test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规
   assert.ok(stylistSystem.includes("术语表（全卷）"));
   assert.ok(stylistSystem.includes("注意人物语气与对话节奏"));
 
-  const extractUserPayload = (content) => {
-    const start = content.indexOf("{");
-    const end = content.indexOf("\n\n请按如下");
-    return JSON.parse(content.slice(start, end >= 0 ? end : undefined));
-  };
+  const extractUserPayload = extractPersonaUserPayload;
 
   const stylistUserJson = extractUserPayload(stylistMessages[1].content);
   assert.ok(stylistUserJson.terms, "Stylist user payload 必须包含 terms 字段");
@@ -416,9 +418,7 @@ test("多阶段流水线：无术语命中行优雅降级，不引入多余 term
   const arbiterMessages = buildArbiterMessages(row, gatekeeperDecision, stylistReview, {
     targetLabel: "当前译文",
   });
-  const start = arbiterMessages[1].content.indexOf("{");
-  const end = arbiterMessages[1].content.indexOf("\n\n请按如下");
-  const arbiterUserJson = JSON.parse(arbiterMessages[1].content.slice(start, end));
+  const arbiterUserJson = extractPersonaUserPayload(arbiterMessages[1].content);
   assert.equal(arbiterUserJson.terms, undefined, "无术语命中行不注入 terms 字段");
   assert.equal(arbiterUserJson.glossary, undefined);
 });
@@ -504,9 +504,7 @@ test("多阶段流水线：上下文由短变长（Stylist 前后各 1 行，Arb
     context: mockContext,
   });
 
-  const start = arbiterMessages[1].content.indexOf("{");
-  const end = arbiterMessages[1].content.indexOf("\n\n请按如下");
-  const payload = JSON.parse(arbiterMessages[1].content.slice(start, end));
+  const payload = extractPersonaUserPayload(arbiterMessages[1].content);
 
   assert.ok(payload.context, "Arbiter payload 必须接收 context 语境");
   assert.equal(payload.context.before.length, 2, "Arbiter 拥有更长的前置语境（2行）");

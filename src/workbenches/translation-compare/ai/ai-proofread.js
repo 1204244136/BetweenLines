@@ -56,7 +56,7 @@ const {
   normalizeNonGptTemperature,
   testModelConnectivity,
 } = require("../../../ai/llm-client");
-const { firstString, parseBoolean } = require("../../../ai/prompt-contract");
+const { firstString, parseBoolean, createSystemMessage } = require("../../../ai/prompt-contract");
 const { normalizeTokenUsage } = require("../../../ai/token-usage");
 const toTw = OpenCC.Converter({ from: "cn", to: "tw" });
 const { loadGlossary, glossaryPrompt } = require("./glossary");
@@ -64,7 +64,7 @@ const {
   DEFAULT_PROFILE_ID,
   listProfiles,
   proofreadPromptFor,
-  buildProofreadSystemPrompt,
+  buildProofreadSystemPromptParts,
   profileEntities,
   profileLineStats,
   resolveProfile,
@@ -3487,6 +3487,10 @@ function buildMessages(payload, config = {}) {
     task: `${bilingualMode ? "双语版本校对" : "三语语境校对"}；校对目标列：${payload.targetLabel}`,
     comparisonMode: proofreadMode,
     profile: { id: contract.profileId, name: contract.profileName },
+    outputSchema: contract.outputSchema,
+    modePolicy: bilingualMode
+      ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
+      : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
     // 说话习惯层：完整规则与说话人判断口径都在系统提示词的【说话习惯】【说话人判断】段落里，
     // 这里只给出本行/本卷的范围与候选事实（谁、什么类型、期望写法、能否用于判断流失），
     // 不再复述规则句子。detectable=false 的候选只作说话人线索：理由有三种（未登记写法 /
@@ -3573,9 +3577,6 @@ function buildMessages(payload, config = {}) {
         verb: payload.speechMerge.verb,
       },
     } : {}),
-    modePolicy: bilingualMode
-      ? "A 是原文与准入边界，用于确认语义、遗漏、误译和增译；只能修改 B。"
-      : "A 是原文与准入边界；B、C 同级，只修改所选目标列。",
     contextPolicy: [
       payload.contextMode === "auto"
         ? "已补相邻上下文，请据此给出最终判断。"
@@ -3597,7 +3598,6 @@ function buildMessages(payload, config = {}) {
     ].filter(Boolean).join(" "),
     // contextBudget（轮数/行数/字符上限）与 contextExpansion 是程序内部参数，模型无法也无需据此判断，
     // 提示词已要求不得猜测上下文范围，因此不再随请求下发。
-    outputSchema: contract.outputSchema,
     row: {
       index: payload.row.index,
       source: payload.row.jp || "",
@@ -3633,29 +3633,30 @@ function buildMessages(payload, config = {}) {
   // 这里记一次「章级块 vs 本行块」的对比供审计（`TRANSCOMPARATOR_FULL_PROMPT=1` 时两者相同，数字自然显示为“没有省”）。
   const habitBlock = [payload.speechHabit?.block || "", payload.speechHabit?.speakerCheck?.block || ""].filter(Boolean).join("\n");
   recordSpeechHabitTrim(payload.speechHabit?.chapterBlock || payload.speechHabit?.block || "", habitBlock);
+  const systemPrompt = buildProofreadSystemPromptParts({
+    mode: proofreadMode,
+    profileId,
+    customSystem: config.systemPrompt,
+    glossary,
+    speechHabitBlock: habitBlock,
+    termBlock: payload.termGuidance?.block || "",
+    // 低分归因段：只在因极低分转入复核的那些轮次注入（段内自带归因口径与“保持原文行序”的修法）。
+    lowScoreBlock: payload.lowScore
+      ? lowScoreBlock({
+        targetLabel: payload.targetLabel,
+        sourceLabel: bilingualMode ? payload.counterpartLabel : "原文 A",
+        rows: payload.lowScore.rows,
+      })
+      : "",
+    webLookupBlock: webLookupBlock(payload.webLookup || {}),
+    rowFeatures,
+    rowEntities,
+    sourceText: rowSource,
+    targetText: rowTarget,
+    fullPrompt,
+  });
   return [
-    { role: "system", content: buildProofreadSystemPrompt({
-      mode: proofreadMode,
-      profileId,
-      customSystem: config.systemPrompt,
-      glossary,
-      speechHabitBlock: habitBlock,
-      termBlock: payload.termGuidance?.block || "",
-      // 低分归因段：只在因极低分转入复核的那些轮次注入（段内自带归因口径与“保持原文行序”的修法）。
-      lowScoreBlock: payload.lowScore
-        ? lowScoreBlock({
-          targetLabel: payload.targetLabel,
-          sourceLabel: bilingualMode ? payload.counterpartLabel : "原文 A",
-          rows: payload.lowScore.rows,
-        })
-        : "",
-      webLookupBlock: webLookupBlock(payload.webLookup || {}),
-      rowFeatures,
-      rowEntities,
-      sourceText: rowSource,
-      targetText: rowTarget,
-      fullPrompt,
-    }) },
+    createSystemMessage(systemPrompt.system, systemPrompt.cacheablePrefix.length),
     { role: "user", content: JSON.stringify(user, null, 2) },
   ];
 }

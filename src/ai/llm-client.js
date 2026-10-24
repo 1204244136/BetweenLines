@@ -1,5 +1,6 @@
 const { normalizeConnectionConfig } = require("./connection-config");
 const { normalizeTokenUsage } = require("./token-usage");
+const { CACHEABLE_PREFIX_LENGTH } = require("./prompt-contract");
 /**
  * 共享底层 LLM 客户端与传输层 (src/ai/llm-client.js)
  *
@@ -173,14 +174,34 @@ function buildChatCompletionBody(messages, config = {}, modelMeta = null, option
   return body;
 }
 
+function buildClaudeSystem(messages) {
+  const systemMessages = messages.filter((message) => message.role === "system" && String(message.content || ""));
+  const blocks = [];
+  let breakpoints = 0;
+  let stablePrefixOpen = true;
+  for (const [index, message] of systemMessages.entries()) {
+    const content = String(message.content || "");
+    const separator = index > 0 ? "\n\n" : "";
+    const boundary = message[CACHEABLE_PREFIX_LENGTH];
+    const declaredStable = Number.isInteger(boundary) && boundary > 0 && boundary <= content.length;
+    if (stablePrefixOpen && declaredStable && breakpoints < 4) {
+      blocks.push({ type: "text", text: separator + content.slice(0, boundary), cache_control: { type: "ephemeral" } });
+      if (boundary < content.length) blocks.push({ type: "text", text: content.slice(boundary) });
+      breakpoints += 1;
+    } else {
+      blocks.push({ type: "text", text: separator + content });
+    }
+    // Claude 断点覆盖此前全部内容；遇到动态或未声明的文本后不能再标后续断点。
+    stablePrefixOpen = stablePrefixOpen && declaredStable && boundary === content.length;
+  }
+  // 未声明稳定前缀的旧调用保留字符串请求格式；不替调用方猜缓存边界。
+  return breakpoints > 0 ? blocks : blocks.map((block) => block.text).join("");
+}
+
 function buildClaudeMessageBody(messages, config = {}, modelMeta = null) {
   const caps = modelMeta || detectModelCapabilities(config.model, config.provider, null,
     config.modelMeta?.id === config.model ? config.modelMeta : null);
-  const system = messages
-    .filter((message) => message.role === "system")
-    .map((message) => String(message.content || ""))
-    .filter(Boolean)
-    .join("\n\n");
+  const system = buildClaudeSystem(messages);
   const effort = caps.reasoning ? normalizeModelReasoningEffort(config.reasoningEffort, config.model, caps) : "";
   const isThinkingEnabled = caps.reasoning && effort && effort !== "off" && effort !== "none";
   const budgetTokens = isThinkingEnabled ? (CLAUDE_THINKING_BUDGETS[effort] || 4096) : 0;

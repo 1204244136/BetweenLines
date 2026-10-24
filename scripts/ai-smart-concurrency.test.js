@@ -37,6 +37,12 @@ const { createPresetTools } = require("../src/workbenches/translation-compare/ai
 const { makeHtml } = require("./build-compare");
 const { createWorkbench } = require("./workbench-fixture");
 
+function personaUserPayload(userText) {
+  const heading = userText.search(/请(?:审阅|裁决)第 \d+ 行/);
+  assert.ok(heading >= 0, "下游请求必须包含当前行提示");
+  return JSON.parse(userText.slice(userText.indexOf("：\n", heading) + 2));
+}
+
 test.after(() => {
   if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
   else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
@@ -1639,8 +1645,7 @@ test("多段备注重建：清空内存后从复审与仲裁起点保留完整�
     req.on("end", () => {
       const payload = JSON.parse(body);
       const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
-      const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
-      requests.push({ path: req.url, payload: req.url.startsWith("/gatekeeper/") ? null : JSON.parse(payloadText) });
+      requests.push({ path: req.url, payload: req.url.startsWith("/gatekeeper/") ? null : personaUserPayload(userText) });
       const content = req.url.startsWith("/arbiter/")
         ? { winner: "stylist", finalDecision: "replace", revisedText: stylistRevision, reason: "复审方案完整保留段落。" }
         : req.url.startsWith("/stylist/")
@@ -1768,8 +1773,7 @@ for (const stage of ["stage2", "stage3"]) {
         assert.ok(requests.at(-1).userText.includes(`"revisedText": "${previousRevision}"`), "上次异常不能混进重建的改案");
         if (stage === "stage3") {
           const userText = requests.at(-1).userText;
-          const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
-          const arbiterPayload = JSON.parse(payloadText);
+          const arbiterPayload = personaUserPayload(userText);
           assert.equal(arbiterPayload.stylistReview.revisedText, stylistRevision, "摘要内存缺少复审详情时必须从备注补回，不能拿空复审送仲裁");
           assert.equal(arbiterPayload.stylistReview.rationale, "复审完成");
           assert.ok(retried.results[0].note.includes(`复审改案：${stylistRevision}`), "仲裁成功后仍完整保留复审轨迹");
@@ -1852,8 +1856,7 @@ test("复审失败续跑：没有初审改案或关键词的待终审备注仍�
     req.on("end", () => {
       const payload = JSON.parse(body);
       const userText = String(payload.messages.find((message) => message.role === "user")?.content || "");
-      const payloadText = userText.slice(userText.indexOf("{"), userText.indexOf("\n\n请按如下 JSON 结构回复："));
-      gatekeeperReviews.push(JSON.parse(payloadText).gatekeeperReview);
+      gatekeeperReviews.push(personaUserPayload(userText).gatekeeperReview);
       if (!healthy) {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "stylist down" } }));

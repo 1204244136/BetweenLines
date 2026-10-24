@@ -1604,7 +1604,7 @@ test("三语语境校对：Stylist 与 Arbiter 正确接收非原文目标列与
     basePrompt: "通用提示词",
   });
 
-  const stylistUserJson = JSON.parse(stylistMessages[1].content.split("\n\n")[0].replace(/^请审阅第 \d+ 行的翻译与初审方案：\n/, ""));
+  const stylistUserJson = JSON.parse(stylistMessages[1].content.slice(stylistMessages[1].content.indexOf("：\n", stylistMessages[1].content.indexOf("请审阅第")) + 2));
   assert.equal(stylistUserJson.sourceText, row.jp);
   assert.equal(stylistUserJson.targetText, row.tw, "目标文本必须是台版，绝不能取错为简中");
   assert.ok(stylistUserJson.referenceText, "必须提供对照列参考文本");
@@ -1626,7 +1626,7 @@ test("三语语境校对：Stylist 与 Arbiter 正确接收非原文目标列与
     basePrompt: "通用提示词",
   });
 
-  const arbiterUserJson = JSON.parse(arbiterMessages[1].content.split("\n\n")[0].replace(/^请裁决第 \d+ 行的分歧：\n/, ""));
+  const arbiterUserJson = JSON.parse(arbiterMessages[1].content.slice(arbiterMessages[1].content.indexOf("：\n", arbiterMessages[1].content.indexOf("请裁决第")) + 2));
   assert.equal(arbiterUserJson.targetText, row.tw, "Arbiter 目标文本必须是台版");
   assert.ok(arbiterUserJson.referenceText, "Arbiter 必须收到对照列参考文本");
   assert.equal(arbiterUserJson.referenceText.text, row.cn);

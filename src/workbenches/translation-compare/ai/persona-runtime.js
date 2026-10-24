@@ -12,6 +12,7 @@
 
 const { detectModelCapabilities, normalizeModelReasoningEffort } = require("./model-capabilities");
 const { normalizeCritiqueResult, normalizeArbitrationResult } = require("./stage-results");
+const { createSystemMessage } = require("../../../ai/prompt-contract");
 
 const PERSONAS = Object.freeze(["gatekeeper", "stylist", "arbiter"]);
 
@@ -114,7 +115,7 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
     // 4. 针对 Arbiter 的极致精简（最短提示词）：
     // Arbiter 专注于裁判原则与成品硬红线，跳过通用初审工作流程描述（如【通用校对规则】大段流程）
     if (persona === "arbiter") {
-      if (/【通用校对规则】/.test(line)) {
+      if (/【通用校对规则】|【通用按行补充规则】/.test(line)) {
         skippingGeneralRulesForArbiter = true;
         continue;
       }
@@ -145,32 +146,33 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
 /**
  * Build the system prompt tailored specifically for the given persona.
  */
-function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
+function personaPromptParts(lines, termBlock) {
+  const cacheablePrefix = lines.filter(Boolean).join("\n");
+  return { cacheablePrefix, system: [cacheablePrefix, termBlock ? `\n${termBlock}` : ""].filter(Boolean).join("\n") };
+}
+
+function buildPersonaSystemPromptParts(persona, basePrompt = "", options = {}) {
   const def = PERSONA_DEFINITIONS[persona] || PERSONA_DEFINITIONS.gatekeeper;
   const customRules = options.customRules ? `\n【附加特定规则】\n${options.customRules}` : "";
   const specializedBase = extractSpecializedRules(basePrompt, persona);
   const termBlock = options.termBlock || options.termGuidance?.block || "";
   const glossary = options.glossary || "";
-  const termSection = [
-    termBlock ? `\n${termBlock}` : "",
-    glossary ? `\n${glossary}` : "",
-  ].filter(Boolean).join("\n");
 
   if (persona === "gatekeeper") {
-    return [
+    return personaPromptParts([
       `【当前身份与任务契约：${def.name}】`,
       "你是一名冷峻严苛的翻译事实质检员（Gatekeeper）。你的职责是严格审查译文是否存在事实性硬伤。",
       "1. 核心审查范围：错译、漏译、无依据加译、数字单位错误、否定翻转、主客体颠倒、专有名词与人名错乱。",
       "2. 绝对纪律：宁可不改，绝不擅自为了修辞美感而重写译文；若译文语义准确且无硬伤，必须判定无需修改（needsEdit=false）。",
       "3. 保持客观中立，指出硬伤时给出确凿证据。",
-      termSection ? `\n${termSection}` : "",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
-    ].filter(Boolean).join("\n");
+      glossary ? `\n${glossary}` : "",
+    ], termBlock);
   }
 
   if (persona === "stylist") {
-    return [
+    return personaPromptParts([
       `【当前身份与任务契约：${def.name}】`,
       "你是一名资深的文学责编与风格审阅专家（Stylist）。你的职责是审视中文译本的自然度与文学表现力，并对事实初审员（Gatekeeper）的修改提案与存疑分析进行同行评审（Peer Critique）。",
       "1. 核心审查范围：中文表达是否通顺生动、是否残留生硬的日文翻译腔（如滥用被动态、的字过多、语序僵硬）、标点节奏、角色口吻契合度。",
@@ -181,14 +183,14 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "   - escalate: 双方存在深层歧义，或初审存疑且复审依据依然严重不足，需提交终审仲裁。",
       "3. 术语与规范红线：在文学润色与消除翻译腔的同时，必须严格遵守译名对照表（若提供）与专有名词规范，不得为了追求修辞或句式流畅而擅自变更标准译名；若 Gatekeeper 已纠正术语，复审方案不得改回错误译名。",
       "4. 必须输出合法 JSON，包含 critique 结构：attitude, rationale, acceptedChanges, rejectedChanges，以及 revisedText（修改结果）。",
-      termSection ? `\n${termSection}` : "",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
-    ].filter(Boolean).join("\n");
+      glossary ? `\n${glossary}` : "",
+    ], termBlock);
   }
 
   if (persona === "arbiter") {
-    return [
+    return personaPromptParts([
       `【当前身份与任务契约：${def.name}】`,
       "你是终审法官（Chief Arbiter），处理初审与复审的分歧、高风险语句或存疑未决行。",
       "1. 忠实度第一：依据原文和上下文裁决，驳回扭曲原意的修辞；原则上不重新翻译。",
@@ -197,20 +199,24 @@ function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
       "   【核心结合方案】双方各有可取之处时，主动融合初审纠错与复审表达，winner=synthesis，并在 revisedText 给出完整结合文本；两案均有严重缺陷且确需修改时，可选 neither 给出独立修复方案。",
       "4. 充分权衡上下文与证据后必须定案为修改或不修改；证据不足以支持修改时保守保留原译，winner=original、finalDecision=keep，并说明依据。不得输出存疑或待人工检查的结论。",
       "5. 仅输出合法 JSON：winner ('gatekeeper'|'stylist'|'synthesis'|'original'|'neither'), reason, finalDecision ('keep'|'replace'), riskFlags, revisedText。replace 必须给出完整修改文本；keep 的 revisedText 为空。",
-      termSection ? `\n${termSection}` : "",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
-    ].filter(Boolean).join("\n");
+      glossary ? `\n${glossary}` : "",
+    ], termBlock);
   }
 
-  return basePrompt;
+  return { system: basePrompt, cacheablePrefix: basePrompt };
+}
+
+function buildPersonaSystemPrompt(persona, basePrompt = "", options = {}) {
+  return buildPersonaSystemPromptParts(persona, basePrompt, options).system;
 }
 
 /**
  * Build messages for Stylist review.
  */
 function buildStylistMessages(row, gatekeeperDecision, options = {}) {
-  const baseSystem = buildPersonaSystemPrompt("stylist", options.basePrompt || "", options);
+  const baseSystem = buildPersonaSystemPromptParts("stylist", options.basePrompt || "", options);
   const targetLabel = options.targetLabel || "当前译文";
   const sourceText = options.sourceText || row.source || row.jp || "";
   const targetText = options.targetText || row.target || (options.targetKey && row[options.targetKey]) || row.cn || "";
@@ -220,6 +226,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
   const context = options.context || null;
 
   const userPayload = {
+    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若初审为存疑待定行，请依据上下文与文学表现力判定原译是否妥当或给出润色修改案；若复审仍存疑无法定断，请设为 escalate 提交终审仲裁。若提供了译名对照表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
     index: row.index,
     sourceText,
     targetText,
@@ -260,14 +267,13 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
       revisedText: gatekeeperDecision.revisedText || "",
       score: gatekeeperDecision.score,
     },
-    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若初审为存疑待定行，请依据上下文与文学表现力判定原译是否妥当或给出润色修改案；若复审仍存疑无法定断，请设为 escalate 提交终审仲裁。若提供了译名对照表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
   };
 
   return [
-    { role: "system", content: baseSystem },
+    createSystemMessage(baseSystem.system, baseSystem.cacheablePrefix.length),
     {
       role: "user",
-      content: `请审阅第 ${row.index} 行的翻译与初审方案：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "critique": {\n    "attitude": "accept | modify | reject | escalate",\n    "rationale": "评阅分析",\n    "acceptedChanges": ["采纳点"],\n    "rejectedChanges": ["驳回点"]\n  },\n  "revisedText": "最终润色文本（若无需修改或完全维持原译则为空）",\n  "summary": "简短综合意见"\n}`,
+      content: `请按如下 JSON 结构回复：\n{\n  "critique": {\n    "attitude": "accept | modify | reject | escalate",\n    "rationale": "评阅分析",\n    "acceptedChanges": ["采纳点"],\n    "rejectedChanges": ["驳回点"]\n  },\n  "revisedText": "最终润色文本（若无需修改或完全维持原译则为空）",\n  "summary": "简短综合意见"\n}\n\n请审阅第 ${row.index} 行的翻译与初审方案：\n${JSON.stringify(userPayload, null, 2)}`,
     },
   ];
 }
@@ -276,7 +282,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
  * Build messages for Arbiter final decision.
  */
 function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options = {}) {
-  const baseSystem = buildPersonaSystemPrompt("arbiter", options.basePrompt || "", options);
+  const baseSystem = buildPersonaSystemPromptParts("arbiter", options.basePrompt || "", options);
   const targetLabel = options.targetLabel || "当前译文";
   const sourceText = options.sourceText || row.source || row.jp || "";
   const targetText = options.targetText || row.target || (options.targetKey && row[options.targetKey]) || row.cn || "";
@@ -286,6 +292,7 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
   const context = options.context || null;
 
   const userPayload = {
+    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。最终结论只能是修改（finalDecision=replace）或不修改（finalDecision=keep）；证据不足以支持修改时保留原译，并在 reason 中说明，不得留下存疑或待人工检查。",
     index: row.index,
     sourceText,
     targetText,
@@ -328,14 +335,13 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
       rationale: stylistCritique.rationale || stylistCritique.summary || "",
       revisedText: stylistCritique.revisedText || "",
     },
-    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。最终结论只能是修改（finalDecision=replace）或不修改（finalDecision=keep）；证据不足以支持修改时保留原译，并在 reason 中说明，不得留下存疑或待人工检查。",
   };
 
   return [
-    { role: "system", content: baseSystem },
+    createSystemMessage(baseSystem.system, baseSystem.cacheablePrefix.length),
     {
       role: "user",
-      content: `请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}\n\n请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | synthesis | original | neither",\n  "reason": "仲裁裁决理由（若采用结合方案，请说明分别吸取了初审与复审的哪些长处）",\n  "finalDecision": "replace | keep",\n  "riskFlags": [],\n  "revisedText": "最终定案文本（若采用结合方案或修改方案，给出完整成品文本；若维持原译可为空）"\n}`,
+      content: `请按如下 JSON 结构回复：\n{\n  "winner": "gatekeeper | stylist | synthesis | original | neither",\n  "reason": "仲裁裁决理由（若采用结合方案，请说明分别吸取了初审与复审的哪些长处）",\n  "finalDecision": "replace | keep",\n  "riskFlags": [],\n  "revisedText": "最终定案文本（若采用结合方案或修改方案，给出完整成品文本；若维持原译可为空）"\n}\n\n请裁决第 ${row.index} 行的分歧：\n${JSON.stringify(userPayload, null, 2)}`,
     },
   ];
 }

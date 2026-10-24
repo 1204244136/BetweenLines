@@ -167,7 +167,7 @@ test("按行裁剪：只在当前行命中特征时才注入对应的特化规�
   ]) {
     assert.equal(trimmed.includes(marker), true, `常驻条目被误裁：${marker}`);
   }
-  // 通用侧、模式层、固定尾巴永远全量。
+  // 通用侧、模式层、固定输出约束永远全量。
   for (const marker of ["【通用校对规则】", "当前是双语校对", "硬性格式约束", "只返回一个 JSON 对象"]) {
     assert.equal(trimmed.includes(marker), true, `不可裁剪的层丢了内容：${marker}`);
   }
@@ -394,7 +394,7 @@ test("输出语言约束与标记范围：修订结果不得写入原文文字�
   const full = proofreadPromptFor("bilingual", "novel").system;
   const trimmed = buildProofreadSystemPrompt({ mode: "bilingual", profileId: "novel", rowFeatures: plain });
   for (const text of [full, trimmed]) {
-    // 通用侧与固定尾巴永远全量：裁剪之后这两条也必须在，否则模型只在“恰好命中 ruby”的行才受约束。
+    // 通用侧与固定输出约束永远全量：裁剪之后这两条也必须在，否则模型只在“恰好命中 ruby”的行才受约束。
     assert.equal(text.includes("revisedText 只能是目标列语言的文字"), true);
     assert.equal(text.includes("不得照抄原文读音"), true);
     assert.equal(text.includes("只保留目标列自身已有的内联标记"), true);
@@ -638,9 +638,10 @@ test("真实行样本保持压缩后的请求预算", () => {
   // 三.1 收窄后的拉丁保留范围（灵装与种族名一律汉译）、一.7 的 ひゃっほー／ぶーぶー 分流则落在已有
   // 按行条目里（只增本行长度）。最坏行实测 system 4712、单行请求 4712+858=5570，两个基线同步上调。
   // 新增上游语义分轨、专词裁定与码位边界后，真实最坏行 system 5457，总长 6315。
-  assert.ok(messages[0].content.length <= 5457, `system 前缀仍过长：${messages[0].content.length}`);
+  // 缓存分区增加两个段首及分区标题共 36 字符，规则正文与裁剪集合保持不变。
+  assert.ok(messages[0].content.length <= 5493, `system 前缀仍过长：${messages[0].content.length}`);
   assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
-  assert.ok(messages[0].content.length + messages[1].content.length <= 6315, "单行请求总长度超过预算");
+  assert.ok(messages[0].content.length + messages[1].content.length <= 6351, "单行请求总长度超过预算");
 });
 
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {
@@ -664,10 +665,10 @@ test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线�
   for (const needle of markers) {
     assert.equal(counts(system, needle), 1, `动态段只能出现一次：${needle}`);
   }
-  const order = [...markers, "只返回一个 JSON 对象"]
+  const order = ["只返回一个 JSON 对象", ...markers]
     .map((needle) => system.indexOf(needle));
-  assert.equal(order.every((index) => index >= 0), true, "动态段与固定尾巴都应在最终提示词里");
-  assert.deepEqual([...order].sort((a, b) => a - b), order, "顺序必须是 术语 → 说话习惯 → 低分归因 → 线上查证 → JSON 约定");
+  assert.equal(order.every((index) => index >= 0), true, "动态段与固定输出约束都应在最终提示词里");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "顺序必须是 JSON 约定 → 术语 → 说话习惯 → 低分归因 → 线上查证");
 
   // 自定义提示词里残留的旧动态段要被剥掉（用户可能直接沿用上一次的整段文本）。
   // 注意动态段的边界是“到下一个【或硬性约束为止”，所以用户追加的规则要写在段**之前**才不会被吞掉

@@ -119,7 +119,7 @@ const genericHeader = "【通用校对规则】";
 /**
  * 提示词分层（本文件是**唯一权威定义**，其它模块只消费不重定义）。
  *
- * 一次请求的 system 提示词由五层按固定顺序拼成，每层的职责与注入时机都不同：
+ * system 的内容按五层归属维护；实际排列将常驻规则集中为稳定前缀，条件规则与动态资料后置：
  *
  * | 层 | 内容 | 来源 | 注入时机 |
  * |----|------|------|----------|
@@ -127,7 +127,7 @@ const genericHeader = "【通用校对规则】";
  * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
  * | 3 特化档案 | 作品/阶段规范，分三种条目：**常驻条目**（关系、作品专有、证据边界）、**按行条目**（排版层、文本层规范，声明 `features`）与**实体条目**（只对某个角色/专有词成立的规范，声明 `characters`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`）、实体条目只在该行真的出现那个名字时（`name-entities.js`） |
  * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、低分归因段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`low-score.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
- * | 5 固定尾巴 | noteref 硬性约束、术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行（刻意保守：宁可重复也不丢） |
+ * | 5 固定输出约束 | noteref 硬性约束、全局术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行，位于稳定前缀内且各只出现一次 |
  *
  * **分层（请求里注入了什么）与判定链（结论怎么一步步来的）是两个视角，别混为一谈**：
  *
@@ -135,7 +135,8 @@ const genericHeader = "【通用校对规则】";
  * 对应层：第 4 层的术语段 ──── 第 1/2/3/5 层（+ 相邻行）── 第 4 层的低分归因段 ──── 第 4 层的线上查证段 ──── 无（输出侧的每一步都是结论产出**之后**的确定性工序，不读提示词，见 `format-guard.js`/`punctuation.js`/`ai-proofread.js` 的 `guardTargetScript`，三步顺序写在 `applyFormatGuard` → `normalizeDecisionPunctuation` → `guardTargetScript` 的调用处）──── 无（终局）
  *
  * 约束：
- * - **顺序不得调整**，测试按分区顺序断言（通用侧 → 模式 → 特化侧 → 动态段 → 约束 → 输出约定）。
+ * - 排列固定为：通用常驻 → 模式 → 档案常驻 → 固定输出约束 → 档案命中条目 → 通用命中条目 → 动态资料。
+ *   按行裁剪与规则正文保持不变；缓存边界只覆盖前四段，不能延伸到当前行或按行资料。
  * - 判据**只写一层**：字段默认值、档位定义、needsContext 口径在通用侧写一次；`modeSchemas`
  *   只负责“键名 + 取值”；特化档案只写工作阶段规范，不复述任务契约。
  * - 第 4 层的动态段一律经 `dynamicBlockPrefixes` 剥离后再注入：自定义提示词里残留的旧段会先被剥掉，
@@ -205,32 +206,59 @@ function lineIncluded(line, scope = null) {
 
 // 特化侧正文：只由 profiles/ 里的可替换档案生成，通用侧不认识它的内容。
 // scope = null 时输出全量（页面/审计）；给了特征/实体集合时按行裁剪，整节被裁空则连标题一起省掉。
-function profileSystemFor(profile, scope = null) {
+function lineInSegment(line, emptyScope, segment) {
+  if (segment === "all") return true;
+  // 复用同一门禁判断“空命中时是否仍常驻”，未知特征/实体因此仍按保守口径保留。
+  const always = lineIncluded(line, emptyScope);
+  return segment === "static" ? always : !always;
+}
+
+function profileSystemFor(profile, scope = null, segment = "all") {
   if (!profile) return "";
   const bound = bindScope(scope, profile);
+  const emptyScope = bindScope({ features: new Set(), entities: new Set() }, profile);
   const sections = profile.sections
     .map((section) => {
       const lines = (section.lines || [])
+        .filter((line) => lineInSegment(line, emptyScope, segment))
         .filter((line) => lineIncluded(line, bound))
         .map(lineText)
         .filter(Boolean);
       return lines.length ? promptSections(`— ${section.title}`, lines) : "";
     })
     .filter(Boolean);
+  if (segment === "conditional" && !sections.length) return "";
   return promptSections(
-    `${profile.marker}${profile.summary ? ` ${profile.summary}` : ""}`,
+    segment === "conditional"
+      ? `${conditionalProfileBlockPrefix}${profile.id}】`
+      : `${profile.marker}${profile.summary ? ` ${profile.summary}` : ""}`,
     sections,
   );
 }
 
 // 通用侧同样支持按行条目：语义判断和输出契约留常驻，只有可观察现象触发的规则才按当前行注入。
-function genericSystemFor(scope = null) {
+function genericSystemFor(scope = null, segment = "all") {
   const bound = bindScope(scope, null);
+  const emptyScope = bindScope({ features: new Set(), entities: new Set() }, null);
   const lines = sharedInstructions
+    .filter((line) => lineInSegment(line, emptyScope, segment))
     .filter((line) => lineIncluded(line, bound))
     .map(lineText)
     .filter(Boolean);
+  if (segment === "conditional") return lines.length ? promptSections("【通用按行补充规则】", lines) : "";
   return promptSections(genericHeader, lines);
+}
+
+function defaultPromptParts(contract, profile, scope = null, glossary = "") {
+  const cacheablePrefix = withJsonOnly(promptSections(
+    genericSystemFor(scope, "static"), contract.instructions,
+    profileSystemFor(profile, scope, "static"), noterefConstraint, glossary,
+  ), contract.outputSchema, { includeKeys: false });
+  // 档案补充后接独立的通用段，也为完整默认提示词中的档案清理提供确定边界。
+  const conditional = promptSections(
+    profileSystemFor(profile, scope, "conditional"), genericSystemFor(scope, "conditional"),
+  );
+  return { cacheablePrefix, conditional, system: promptSections(cacheablePrefix, conditional) };
 }
 
 /**
@@ -309,7 +337,7 @@ function proofreadPromptFor(mode = "bilingual", profileId = DEFAULT_PROFILE_ID) 
     modeSystem: promptSections(contract.instructions),
     profileSystem,
     // 默认提示词与真正发出的提示词保持一致：也带上 noteref 硬性约束（组装时会先去重再补一次）。
-    system: withJsonOnly(promptSections(body, noterefConstraint), outputSchema, { includeKeys: false }),
+    system: defaultPromptParts({ ...contract, outputSchema }, profile).system,
   };
 }
 
@@ -327,6 +355,7 @@ function stripJsonContract(text) {
 }
 
 const profileBlockPrefix = "【成品校对规范：";
+const conditionalProfileBlockPrefix = "【成品校对按行补充：";
 const speechHabitPrefix = "【说话习惯（";
 const jsonKeyHintPrefix = "必须使用以下英文键名";
 
@@ -342,13 +371,17 @@ function stripNoterefConstraint(text) {
 // 自定义提示词里可能还留着上一次选中的特化档案（例如页面预填的是默认档案，用户又换了下拉）。
 // 档案块到下一个顶层小节（【…）或硬性约束为止；剥离后由本次选中的档案统一注入，避免两套规范并存。
 function stripProfileBlock(text) {
-  const value = String(text || "");
-  const start = value.indexOf(profileBlockPrefix);
-  if (start < 0) return value.trim();
-  const rest = value.slice(start + profileBlockPrefix.length);
-  const boundary = rest.search(/\n(?=【|硬性格式约束：)/);
-  const end = boundary < 0 ? value.length : start + profileBlockPrefix.length + boundary + 1;
-  return `${value.slice(0, start)}${value.slice(end)}`.trim();
+  let value = String(text || "");
+  for (let pass = 0; pass < 10; pass += 1) {
+    const prefix = [profileBlockPrefix, conditionalProfileBlockPrefix].find((item) => value.includes(item));
+    if (!prefix) break;
+    const start = value.indexOf(prefix);
+    const rest = value.slice(start + prefix.length);
+    const boundary = rest.search(/\n(?=【|硬性格式约束：)/);
+    const end = boundary < 0 ? value.length : start + prefix.length + boundary + 1;
+    value = `${value.slice(0, start)}${value.slice(end)}`;
+  }
+  return value.trim();
 }
 
 // 说话习惯段与说话人判断段都是动态生成的（按章、按行）：自定义提示词里可能留着上一次的，
@@ -377,7 +410,7 @@ function stripSpeechHabitBlock(text) {
   return value.trim();
 }
 
-function buildProofreadSystemPrompt({
+function buildProofreadSystemPromptParts({
   mode = "bilingual",
   profileId = DEFAULT_PROFILE_ID,
   customSystem = "",
@@ -401,9 +434,8 @@ function buildProofreadSystemPrompt({
   const entities = fullPrompt
     ? null
     : (rowEntities || detectRowEntities({ source: sourceText, target: targetText, entities: profileEntities(profile) }));
-  const genericSystem = genericSystemFor({ features, sourceText, targetText });
-  const profileSystem = profileSystemFor(profile, { features, entities, sourceText, targetText });
-  const trimmedBody = promptSections(genericSystem, contract.instructions, profileSystem);
+  const scope = { features, entities, sourceText, targetText };
+  const parts = defaultPromptParts(contract, profile, scope, glossary);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
   // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段、上一行的术语段与
   // 低分归因段，再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层、对照表命中段与
@@ -420,16 +452,22 @@ function buildProofreadSystemPrompt({
   // 直接与带档案块的 contract.body 比较永远不相等（custom 的档案块已被剥掉），默认提示词会误走
   // 自定义分支，通用侧的条件规则（片段/noteref/原文外内容）也就不再按行裁剪。
   const defaultCustom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(contract.system))));
-  const isDefaultPrompt = !custom || custom === contract.body || custom === defaultCustom;
-  const body = isDefaultPrompt
-    ? promptSections(trimmedBody, ...dynamicBlocks)
-    : promptSections(
+  // 已发布页面可能仍带旧顺序的完整默认提示词；它也必须进入按行裁剪分支。
+  const legacyDefault = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(
+    withJsonOnly(promptSections(contract.body, noterefConstraint), contract.outputSchema, { includeKeys: false }),
+  ))));
+  const isDefaultPrompt = !custom || custom === contract.body || custom === defaultCustom || custom === legacyDefault;
+  const cacheablePrefix = isDefaultPrompt ? parts.cacheablePrefix : withJsonOnly(promptSections(
       custom,
       custom.includes(modeMarkers[contract.mode]) ? "" : contract.modeSystem,
-      profileSystem,
-      ...dynamicBlocks,
-    );
-  return withJsonOnly(promptSections(body, noterefConstraint, glossary), contract.outputSchema, { includeKeys: false });
+      profileSystemFor(profile, scope, "static"), noterefConstraint, glossary,
+    ), contract.outputSchema, { includeKeys: false });
+  const conditional = isDefaultPrompt ? parts.conditional : profileSystemFor(profile, scope, "conditional");
+  return { cacheablePrefix, system: promptSections(cacheablePrefix, conditional, ...dynamicBlocks) };
+}
+
+function buildProofreadSystemPrompt(options = {}) {
+  return buildProofreadSystemPromptParts(options).system;
 }
 
 /**
@@ -476,6 +514,7 @@ module.exports = {
   profileSystemFor,
   proofreadPromptFor,
   buildProofreadSystemPrompt,
+  buildProofreadSystemPromptParts,
   modeContracts,
   resolveProfile,
   detectRowEntities,

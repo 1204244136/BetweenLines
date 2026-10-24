@@ -225,6 +225,7 @@
     const user = JSON.stringify({
       task: "speaker-attribution",
       attentionVersion: attention.version || pageMeta.attentionVersion || "",
+      outputSchema: pageMeta.prompt?.outputSchema || {},
       target: {
         index: row.index,
         sourceText: row.sourceText || "",
@@ -243,7 +244,6 @@
         score: row.alignment?.score ?? null,
         comparison: row.comparison || null,
       },
-      outputSchema: pageMeta.prompt?.outputSchema || {},
     }, null, 2);
     return [system, user].filter(Boolean).join("\n\n");
   }

@@ -6,6 +6,7 @@ const {
   buildSpeakerSystemPrompt,
 } = require("./ai/speaker-contract");
 const { stripInvisible, unique } = require("../../core/text-helpers");
+const { createSystemMessage } = require("../../ai/prompt-contract");
 
 // 说话归属动词。最长/最具特异性的表层形式排在前面，以便
 // 择一匹配能够优先锚定它们（例如「と言った」先于「言った」，「叫び返した」
@@ -297,6 +298,7 @@ function buildSpeakerPrompt(row = {}, options = {}) {
     task: "speaker-attribution",
     mode,
     attentionVersion: attention.version,
+    outputSchema: contract.outputSchema,
     target: {
       index: row.index,
       sourceText: normalize(row.sourceText || ""),
@@ -321,7 +323,6 @@ function buildSpeakerPrompt(row = {}, options = {}) {
           },
         }
       : {}),
-    outputSchema: contract.outputSchema,
   };
   const user = JSON.stringify(payload, null, 2);
   return {
@@ -330,7 +331,7 @@ function buildSpeakerPrompt(row = {}, options = {}) {
     system,
     user,
     messages: [
-      { role: "system", content: system },
+      createSystemMessage(system, system.length),
       { role: "user", content: user },
     ],
     text: `${system}\n\n${user}`,

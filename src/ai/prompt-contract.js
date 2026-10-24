@@ -7,6 +7,17 @@
 const JSON_ONLY_INSTRUCTION =
   "只返回一个 JSON 对象，不要返回 Markdown、代码块、分析过程或额外解释。";
 
+// 缓存边界是进程内的传输提示，不属于消息正文或兼容接口的 JSON 字段。
+const CACHEABLE_PREFIX_LENGTH = Symbol.for("betweenlines.ai.cacheablePrefixLength");
+
+function createSystemMessage(content, cachePrefixLength = 0) {
+  const message = { role: "system", content: String(content || "") };
+  if (Number.isInteger(cachePrefixLength) && cachePrefixLength > 0 && cachePrefixLength <= message.content.length) {
+    Object.defineProperty(message, CACHEABLE_PREFIX_LENGTH, { value: cachePrefixLength });
+  }
+  return message;
+}
+
 function promptSections(...sections) {
   return sections
     .flat(Infinity)
@@ -48,6 +59,8 @@ function parseBoolean(value, fallback = false) {
 }
 
 module.exports = {
+  CACHEABLE_PREFIX_LENGTH,
+  createSystemMessage,
   JSON_ONLY_INSTRUCTION,
   promptSections,
   withJsonOnly,
