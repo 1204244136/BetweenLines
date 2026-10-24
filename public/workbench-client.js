@@ -61,6 +61,39 @@
     let notesMetricsVersion = 0;
     let lastComputedMetricsVersion = -1;
 
+    // 原生 title 在悬停期间被改写会反复消失、重现。当前停留只读移入时的快照，
+    // 页面数字与 ARIA 继续更新；移开（或焦点离开）后再应用最新说明。
+    const liveHoverTitles = new WeakMap();
+    let liveHoverTitleScope = 0;
+    function setLiveHoverTitle(element, value, { reset = false } = {}) {
+      if (!element) return;
+      let state = liveHoverTitles.get(element);
+      if (!state) {
+        state = { hovered: false, focused: false, latest: "", scope: liveHoverTitleScope };
+        liveHoverTitles.set(element, state);
+        const flush = () => {
+          if (!state.hovered && !state.focused && element.title !== state.latest) element.title = state.latest;
+        };
+        element.addEventListener("mouseenter", () => {
+          // 元素隐藏时浏览器可能没有派发离开事件，重新进入仍应取得最新快照。
+          if (!state.focused && element.title !== state.latest) element.title = state.latest;
+          state.hovered = true;
+        });
+        element.addEventListener("mouseleave", () => { state.hovered = false; flush(); });
+        element.addEventListener("focusin", () => { state.focused = true; });
+        element.addEventListener("focusout", (event) => {
+          if (element.contains(event.relatedTarget)) return;
+          state.focused = false;
+          flush();
+        });
+      }
+      const scopeChanged = state.scope !== liveHoverTitleScope;
+      state.scope = liveHoverTitleScope;
+      state.latest = String(value || "");
+      if ((reset || scopeChanged || element.hidden || !state.latest || (!state.hovered && !state.focused))
+        && element.title !== state.latest) element.title = state.latest;
+    }
+
     function markNotesDirtyForMetrics() {
       notesMetricsVersion += 1;
     }
@@ -173,7 +206,13 @@
       // 预设标签、下拉栏文本与悬停提示共用这一份运行数据，避免三处各算各的。
       const rows = ids.map((id) => {
         const preset = presetTools.getPreset(localStorage, id);
-        const runtime = stagePipelines.find((item) => String(item.presetId) === String(id));
+        const candidateRuntime = stagePipelines.find((item) => String(item.presetId) === String(id));
+        const candidateActiveRows = Array.isArray(candidateRuntime?.activeRows) ? candidateRuntime.activeRows : [];
+        const runtime = candidateRuntime && (currentAiRunning
+          || Number(candidateRuntime.inFlight) > 0
+          || Number(candidateRuntime.pending) > 0
+          || candidateActiveRows.length > 0)
+          ? candidateRuntime : null;
         const row = {
           id,
           preset,
@@ -191,56 +230,66 @@
 
       const stageToppedCount = rows.filter((row) => row.topped).length;
 
-      tags.replaceChildren(...rows.map((row) => {
-        const tag = document.createElement("div");
-        tag.className = "ai-stage-preset-tag";
-        const label = document.createElement("span");
-        label.className = "ai-stage-preset-tag-label";
-        label.textContent = row.label;
-        label.title = row.label;
-
-        const runtimeLabel = document.createElement("span");
-        runtimeLabel.className = "ai-stage-preset-runtime";
+      const existing = new Map(Array.from(tags.children)
+        .filter((tag) => tag.dataset.presetId).map((tag) => [tag.dataset.presetId, tag]));
+      const nextTags = rows.map((row) => {
+        let tag = existing.get(String(row.id));
+        if (!tag) {
+          tag = document.createElement("div");
+          tag.className = "ai-stage-preset-tag";
+          tag.dataset.presetId = String(row.id);
+          const label = document.createElement("span");
+          label.className = "ai-stage-preset-tag-label";
+          const runtimeLabel = document.createElement("span");
+          runtimeLabel.className = "ai-stage-preset-runtime";
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "ai-stage-preset-tag-remove";
+          remove.textContent = "×";
+          remove.title = "移除该预设";
+          remove.addEventListener("click", (event) => {
+            event?.stopPropagation?.();
+            stagePresetSelections[stage] = stagePresetSelections[stage].filter((item) => item !== row.id);
+            renderStagePresetSelection(stage);
+            updateStagePresetDependencies();
+            saveAiConfig();
+            void syncRunningStagePresets(stage);
+          });
+          tag.append(label, runtimeLabel, remove);
+        }
+        const [label, runtimeLabel] = tag.children;
+        if (label.textContent !== row.label) label.textContent = row.label;
+        setLiveHoverTitle(label, row.label);
+        let runtimeText = "";
         if (row.runtime) {
-          runtimeLabel.textContent = `运行 ${row.inFlight} · 当前配额 ${row.quota} · 配置上限 ${row.configuredConcurrency}`
+          runtimeText = `运行 ${row.inFlight} · 当前配额 ${row.quota} · 配置上限 ${row.configuredConcurrency}`
             + (row.topped ? " · 触顶" : "")
             + (row.breakerTripped ? " · 熔断" : "")
             + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
           const activeRows = Array.isArray(row.runtime.activeRows) ? row.runtime.activeRows : [];
-          runtimeLabel.title = `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
+          setLiveHoverTitle(runtimeLabel, `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
             + (row.topped ? "（已触顶）" : "")
             + (row.breakerTripped ? "（该预设已熔断，后续行改派给其它预设）" : "")
-            + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : "");
+            + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : ""),
+          { reset: !currentAiRunning || Boolean(latestStageControls?.[stage]?.stopRequested && !row.inFlight) });
         } else {
           // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
-          runtimeLabel.textContent = "";
-          runtimeLabel.title = `额定并发上限 ${row.configuredConcurrency}`;
+          setLiveHoverTitle(runtimeLabel, `额定并发上限 ${row.configuredConcurrency}`, { reset: true });
         }
-
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "ai-stage-preset-tag-remove";
-        remove.textContent = "×";
-        remove.title = "移除该预设";
-        remove.addEventListener("click", (event) => {
-          event?.stopPropagation?.();
-          stagePresetSelections[stage] = ids.filter((item) => item !== row.id);
-          renderStagePresetSelection(stage);
-          updateStagePresetDependencies();
-          saveAiConfig();
-          void syncRunningStagePresets(stage);
-        });
-        tag.append(label);
-        tag.append(runtimeLabel);
-        tag.append(remove);
+        if (runtimeLabel.textContent !== runtimeText) runtimeLabel.textContent = runtimeText;
         return tag;
-      }));
+      });
 
       if (ids.length === 0) {
-        const emptyItem = document.createElement("div");
+        const emptyItem = tags.children[0]?.className === "ai-stage-applied-empty"
+          ? tags.children[0] : document.createElement("div");
         emptyItem.className = "ai-stage-applied-empty";
         emptyItem.textContent = stage === "stage1" ? "当前使用主配置，未添加独立预设" : "当前未启用预设";
-        tags.replaceChildren(emptyItem);
+        nextTags.push(emptyItem);
+      }
+      // 状态轮询不替换悬停或聚焦的锚点；只有适用列表真正变化时才更新结构。
+      if (tags.children.length !== nextTags.length || nextTags.some((tag, index) => tags.children[index] !== tag)) {
+        tags.replaceChildren(...nextTags);
       }
       tags.hidden = false;
 
@@ -251,10 +300,10 @@
         if (ids.length === 0) {
           if (stage === "stage1") {
             valueEl.textContent = "适用：主配置";
-            trigger.title = "阶段一当前未添加独立预设，默认使用主配置";
+            setLiveHoverTitle(trigger, "阶段一当前未添加独立预设，默认使用主配置", { reset: true });
           } else {
             valueEl.textContent = "未启用";
-            trigger.title = stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设";
+            setLiveHoverTitle(trigger, stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设", { reset: true });
           }
         } else {
           valueEl.textContent = ids.length === 1 ? "适用：" + rows[0].label : "适用 (" + rows.length + ")";
@@ -264,8 +313,9 @@
               : "（配置上限 " + row.configuredConcurrency + "）";
             return (index + 1) + ". " + row.label + stateText;
           }).join("\n");
-          trigger.title = "当前阶段适用预设：\n" + presetList
-            + (stageToppedCount > 0 ? "\n已触顶 " + stageToppedCount + "/" + rows.length + " 个预设" + (stageToppedCount >= rows.length ? "（全部触顶）" : "") + "。" : "");
+          setLiveHoverTitle(trigger, "当前阶段适用预设：\n" + presetList
+            + (stageToppedCount > 0 ? "\n已触顶 " + stageToppedCount + "/" + rows.length + " 个预设" + (stageToppedCount >= rows.length ? "（全部触顶）" : "") + "。" : ""),
+          { reset: !currentAiRunning || stagePipelines.length === 0 });
         }
       }
     }
@@ -4138,7 +4188,7 @@
     function setProtocolHint(defaults) {
       if (!defaults) return;
       aiIds.apiKey.placeholder = defaults.apiKeyPlaceholder || "";
-      aiIds.protocol.title = defaults.note || "";
+      setLiveHoverTitle(aiIds.protocol, defaults.note || "");
     }
 
     function applyProtocolDefaults(defaults, { force = false } = {}) {
@@ -4160,7 +4210,7 @@
       if (!status) {
         hint.dataset.state = builtSummary ? "ok" : "pending";
         hint.textContent = builtSummary ? "说话习惯：构建期 " + builtSummary : "说话习惯：检测中…";
-        hint.title = "控制台生成前选择的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。";
+        setLiveHoverTitle(hint, "控制台生成前选择的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。");
         return;
       }
       const files = status.files || [];
@@ -4170,19 +4220,19 @@
       if (!files.length) {
         hint.dataset.state = "off";
         hint.textContent = "说话习惯：未挂载";
-        hint.title = "本项目没有挂载说话习惯表。可在控制台选择辅助表格后重新生成。";
+        setLiveHoverTitle(hint, "本项目没有挂载说话习惯表。可在控制台选择辅助表格后重新生成。", { reset: true });
         return;
       }
       if (!status.entries) {
         hint.dataset.state = "warning";
         hint.textContent = "说话习惯：加载失败";
-        hint.title = errors.length ? errors.join("\n") : files.join("\n");
+        setLiveHoverTitle(hint, errors.length ? errors.join("\n") : files.join("\n"));
         return;
       }
       const ok = errors.length === 0;
       hint.dataset.state = ok ? "ok" : "warning";
       hint.textContent = "说话习惯：" + names + "（" + status.entries + " 条，" + scopeLabel + "命中人名" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (builtSummary ? "；构建期：" + builtSummary : "");
-      hint.title = [files.join("\n"), ...errors].join("\n");
+      setLiveHoverTitle(hint, [files.join("\n"), ...errors].join("\n"));
     }
     function setTermTableHint(status) {
       const hint = aiIds.termTableHint;
@@ -4192,7 +4242,7 @@
         // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
         hint.dataset.state = built ? "ok" : "pending";
         hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
-        hint.title = "控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。";
+        setLiveHoverTitle(hint, "控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。");
         return;
       }
       const files = status.files || [];
@@ -4201,19 +4251,19 @@
       if (!files.length) {
         hint.dataset.state = "off";
         hint.textContent = "对照表：未挂载";
-        hint.title = "本项目没有挂载对照表。可在控制台选择辅助表格后重新生成。";
+        setLiveHoverTitle(hint, "本项目没有挂载对照表。可在控制台选择辅助表格后重新生成。", { reset: true });
         return;
       }
       if (!status.entries) {
         hint.dataset.state = "warning";
         hint.textContent = "对照表：加载失败";
-        hint.title = errors.length ? errors.join("\n") : files.join("\n");
+        setLiveHoverTitle(hint, errors.length ? errors.join("\n") : files.join("\n"));
         return;
       }
       const ok = errors.length === 0;
       hint.dataset.state = ok ? "ok" : "warning";
       hint.textContent = "对照表：" + names + "（" + status.entries + " 条术语" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (built ? "；" + built : "");
-      hint.title = [files.join("\n"), ...errors].join("\n");
+      setLiveHoverTitle(hint, [files.join("\n"), ...errors].join("\n"));
     }
 
     /**
@@ -4234,9 +4284,9 @@
       const kindsTotal = entries.reduce((sum, entry) => sum + entry.count, 0);
       item.hidden = count <= 0 && kindsTotal <= 0;
       if (count > 0 || kindsTotal > 0) {
-        item.title = formatAiErrorHoverTitle(stageLabel, Math.max(count, kindsTotal), kinds);
+        setLiveHoverTitle(item, formatAiErrorHoverTitle(stageLabel, Math.max(count, kindsTotal), kinds));
       } else {
-        item.title = item.dataset.defaultTitle;
+        setLiveHoverTitle(item, item.dataset.defaultTitle);
       }
     }
 
@@ -4250,7 +4300,7 @@
       // 分母就是预设上限；旧服务端只回报许可值时退回用它，此时没有预设边界可比，不判触顶。
       const ceiling = cap || allowed;
       if (!ceiling) {
-        if (activeInfoEl) { activeInfoEl.title = ""; activeInfoEl.removeAttribute("title"); }
+        if (activeInfoEl) { setLiveHoverTitle(activeInfoEl, ""); activeInfoEl.removeAttribute("title"); }
         return "";
       }
       // 触顶口径来自服务端的 presetCount/toppedCount；旧服务端没有这两个字段时，
@@ -4263,14 +4313,14 @@
         const toppedDetail = presetCount > 1
           ? `已触顶 ${toppedCount}/${presetCount} 个预设${allTopped ? "（全部触顶）" : ""}。`
           : (allTopped ? "正在处理的请求数已达预设并发上限（触顶）。" : "");
-        activeInfoEl.title = "正在处理 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
+        setLiveHoverTitle(activeInfoEl, "正在处理 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
           + "；队列待派发 " + pending + " 行。" + toppedDetail
-          + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。";
+          + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。");
       }
       return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText;
     }
 
-    function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0, activeRows = [] } = {}) {
+    function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0, activeRows = [], resetHover = false } = {}) {
       const wrap = document.getElementById("stage" + stageKey + "ProgressWrap");
       const bar = document.getElementById("stage" + stageKey + "Progress");
       const text = document.getElementById("stage" + stageKey + "ProgressText");
@@ -4280,11 +4330,12 @@
       if (!enabled || safeTotal <= 0) {
         wrap.hidden = true;
         bar.style.width = "0%";
+        setLiveHoverTitle(wrap, "");
         wrap.removeAttribute("title");
         wrap.removeAttribute("aria-valuenow");
         wrap.removeAttribute("aria-valuemax");
         wrap.removeAttribute("aria-valuetext");
-        if (text) { text.hidden = true; text.textContent = ""; text.title = ""; }
+        if (text) { text.hidden = true; text.textContent = ""; setLiveHoverTitle(text, ""); }
         return;
       }
       // 仍有未完成行时，四舍五入也不能把进度画成 100%。
@@ -4297,8 +4348,9 @@
       const activeRowsText = Array.isArray(activeRows) && activeRows.length ? "\n当前行：" + activeRows.join(", ") : "";
       if (text) {
         text.hidden = false;
-        text.textContent = (scope === "全部" ? "全页" : "当前候选") + " " + percent + "%";
-        text.title = description;
+        const progressText = (scope === "全部" ? "全页" : "当前候选") + " " + percent + "%";
+        if (text.textContent !== progressText) text.textContent = progressText;
+        setLiveHoverTitle(text, description, { reset: resetHover });
       }
       wrap.setAttribute("role", "progressbar");
       wrap.setAttribute("aria-label", label + (scope === "全部" ? "全页覆盖进度" : "当前候选进度"));
@@ -4306,8 +4358,8 @@
       wrap.setAttribute("aria-valuemax", String(safeTotal));
       wrap.setAttribute("aria-valuenow", String(safeDone));
       wrap.setAttribute("aria-valuetext", description + activeRowsText);
-      wrap.title = (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
-        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "") + activeRowsText;
+      setLiveHoverTitle(wrap, (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
+        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "") + activeRowsText, { reset: resetHover });
     }
 
     function resetStageProgressBars() {
@@ -4331,7 +4383,7 @@
       const audited = needsEdit + unchanged + needsCheck + pendingArbiter;
       if (!audited) {
         modifyRate.textContent = "—";
-        if (modifyRateStat) modifyRateStat.title = "尚无自动校对结果：修改率 = 最终建议修改的行 ÷ 已有自动结果的行。";
+        setLiveHoverTitle(modifyRateStat, "尚无自动校对结果：修改率 = 最终建议修改的行 ÷ 已有自动结果的行。", { reset: true });
         return;
       }
       const rounded = Math.round((needsEdit / audited) * 1000) / 10;
@@ -4340,8 +4392,8 @@
         const results = ["无需修改 " + unchanged];
         if (needsCheck) results.push("未定案记录 " + needsCheck);
         if (pendingArbiter) results.push("待终审 " + pendingArbiter);
-        modifyRateStat.title = "最终建议修改 " + needsEdit + " 行 / 已有自动结果 " + audited + " 行"
-          + "（" + results.join("、") + "；调用失败的行不计入分母）。";
+        setLiveHoverTitle(modifyRateStat, "最终建议修改 " + needsEdit + " 行 / 已有自动结果 " + audited + " 行"
+          + "（" + results.join("、") + "；调用失败的行不计入分母）。");
       }
     }
 
@@ -4410,7 +4462,7 @@
       const pillS1Unclear = document.getElementById("stage1UnclearPill");
       if (pillS1Unclear) {
         pillS1Unclear.hidden = false;
-        pillS1Unclear.title = "初审存疑待定 " + s1Unclear + " 行，可交给阶段二文学复审（点击可筛选）";
+        setLiveHoverTitle(pillS1Unclear, "初审存疑待定 " + s1Unclear + " 行，可交给阶段二文学复审（点击可筛选）");
       }
       const elS1Total = document.getElementById("metricStage1Total");
       if (elS1Total) elS1Total.textContent = s1Total;
@@ -4440,7 +4492,7 @@
       if (elS2Pending) elS2Pending.textContent = s2Pending;
       if (itemS2Pending) {
         itemS2Pending.hidden = s2Pending === 0;
-        itemS2Pending.title = "最新一轮初审提改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（点击可筛选）。历史轮次不参与待办判断。";
+        setLiveHoverTitle(itemS2Pending, "最新一轮初审提改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（点击可筛选）。历史轮次不参与待办判断。");
       }
 
       const elCAccept = document.getElementById("metricCritiqueAccept");
@@ -4465,7 +4517,7 @@
       if (elS3Pending) elS3Pending.textContent = s3Pending;
       if (itemS3Pending) {
         itemS3Pending.hidden = s3Pending === 0;
-        itemS3Pending.title = "最新一轮复审产生分歧、尚未仲裁定案且未人工确认：" + s3Pending + " 行（含正在仲裁的行，点击可筛选）。历史轮次不参与待办判断。";
+        setLiveHoverTitle(itemS3Pending, "最新一轮复审产生分歧、尚未仲裁定案且未人工确认：" + s3Pending + " 行（含正在仲裁的行，点击可筛选）。历史轮次不参与待办判断。");
       }
       const elArbGK = document.getElementById("metricArbGatekeeper");
       if (elArbGK) elArbGK.textContent = arbGK;
@@ -4484,12 +4536,13 @@
       if (elRate) {
         const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) + "%" : "—";
         elRate.textContent = "通过中: " + rate;
-        elRate.title = s1Passed > 0
+        let rateTitle = s1Passed > 0
           ? "初审放行 " + s1Passed + " 行中 " + fpHits + " 行快速直通 (" + rate + ")\n快速直通数 ÷ 初审通过数；不是全部审核行的通过率。"
           : "尚无初审通过行，直通占比暂不计算。";
         if (totalAudited > 0) {
-          elRate.title += "\n审核总量 " + totalAudited + " 行（总直通占比 " + Math.round((fpHits / totalAudited) * 100) + "%）";
+          rateTitle += "\n审核总量 " + totalAudited + " 行（总直通占比 " + Math.round((fpHits / totalAudited) * 100) + "%）";
         }
+        setLiveHoverTitle(elRate, rateTitle);
       }
 
       // 实时阶段状态指示（动态胶囊与活跃行提示）
@@ -4507,7 +4560,7 @@
       // Stage 1
       const pill1 = document.getElementById("stage1StatusPill");
       if (pill1) {
-        pill1.title = "";
+        let pillTitle = "";
         if (latestStageControls?.stage1?.stopRequested) {
           pill1.dataset.state = "queued";
           pill1.textContent = activeStages.stage1 ? "停止中" : "已停止";
@@ -4522,14 +4575,14 @@
         } else if (s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0 || aiRunning)) {
           pill1.dataset.state = "queued";
           pill1.textContent = "待处理";
-          pill1.title = "当前工作台还有 " + s1Unreviewed + " 行尚未取得初审结论"
+          pillTitle = "当前工作台还有 " + s1Unreviewed + " 行尚未取得初审结论"
             + (s1Errors > 0 ? "，另有 " + s1Errors + " 行异常待重试" : "")
             + "。点阶段一「开始」→「继续剩下的」处理；已有结论保持不变。";
         } else if (s1Errors > 0) {
           // 队列耗尽只代表本轮尝试结束，调用失败的行没有初审结论，仍需续跑。
           pill1.dataset.state = "queued";
           pill1.textContent = "异常待重试";
-          pill1.title = "初审仍有 " + s1Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段一「开始」→「继续剩下的」重试。";
+          pillTitle = "初审仍有 " + s1Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段一「开始」→「继续剩下的」重试。";
         } else if (activeStages.stage1) {
           pill1.dataset.state = "idle";
           pill1.textContent = "已完成";
@@ -4537,12 +4590,13 @@
           pill1.dataset.state = s1Total > 0 ? "done" : "idle";
           pill1.textContent = s1Total > 0 ? "已完成" : "待命";
         }
+        setLiveHoverTitle(pill1, pillTitle);
       }
       // Stage 2
       const s2Enabled = Boolean(committedStagePresetIds("stage2").length || s2Reviewed > 0 || s2Errors > 0 || activeStages.stage2 || p2.inFlight > 0 || p2.pending > 0);
       const pill2 = document.getElementById("stage2StatusPill");
       if (pill2) {
-        pill2.title = "";
+        let pillTitle = "";
         if (!s2Enabled) {
           pill2.dataset.state = "disabled";
           pill2.textContent = "未启用";
@@ -4560,7 +4614,7 @@
         } else if (s2Errors > 0) {
           pill2.dataset.state = "queued";
           pill2.textContent = "异常待重试";
-          pill2.title = "复审仍有 " + s2Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段二「开始」→「继续剩下的」重试。";
+          pillTitle = "复审仍有 " + s2Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段二「开始」→「继续剩下的」重试。";
         } else if (s2Pending > 0) {
           pill2.dataset.state = "queued";
           pill2.textContent = "待处理";
@@ -4568,12 +4622,13 @@
           pill2.dataset.state = s2Reviewed > 0 ? "done" : "idle";
           pill2.textContent = s2Reviewed > 0 ? (activeStages.stage2 ? "当前候选已完成" : "已完成") : (activeStages.stage2 ? "等待候选" : "待命");
         }
+        setLiveHoverTitle(pill2, pillTitle);
       }
       // Stage 3
       const s3Enabled = Boolean(committedStagePresetIds("stage3").length || s3Arbitrated > 0 || s3Errors > 0 || activeStages.stage3 || p3.inFlight > 0 || p3.pending > 0);
       const pill3 = document.getElementById("stage3StatusPill");
       if (pill3) {
-        pill3.title = "";
+        let pillTitle = "";
         if (!s3Enabled) {
           pill3.dataset.state = "disabled";
           pill3.textContent = "未启用";
@@ -4591,7 +4646,7 @@
         } else if (s3Errors > 0) {
           pill3.dataset.state = "queued";
           pill3.textContent = "异常待重试";
-          pill3.title = "仲裁仍有 " + s3Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段三「开始」→「继续剩下的」重试。";
+          pillTitle = "仲裁仍有 " + s3Errors + " 行未取得结论。悬停「异常」查看原因；任务结束后点阶段三「开始」→「继续剩下的」重试。";
         } else if (s3Pending > 0) {
           pill3.dataset.state = "queued";
           pill3.textContent = "待处理";
@@ -4599,6 +4654,7 @@
           pill3.dataset.state = s3Arbitrated > 0 ? "done" : "idle";
           pill3.textContent = s3Arbitrated > 0 ? (activeStages.stage3 ? "当前候选已完成" : "已完成") : (activeStages.stage3 ? "等待候选" : "待命");
         }
+        setLiveHoverTitle(pill3, pillTitle);
       }
       // 运行数字统一归卡片底部，队列没有活跃行时也如实展示。
       for (const [number, pipeline] of [[1, p1], [2, p2], [3, p3]]) {
@@ -4609,12 +4665,13 @@
         info.textContent = hasRuntime
           ? (stageConcurrencyText(pipeline, info) || "运行 " + (Number(pipeline.inFlight) || 0) + " 行 · 排队 " + (Number(pipeline.pending) || 0) + " 行")
           : (info.hidden ? "" : "未审 " + s1Unreviewed + " 行");
-        if (!hasRuntime) { info.title = ""; info.removeAttribute("title"); }
+        if (!hasRuntime) { setLiveHoverTitle(info, ""); info.removeAttribute("title"); }
       }
 
       // 初审用同一覆盖范围表示累计进度；复审和仲裁只覆盖实际产生的候选行。
       renderStageProgress("1", s1Done, s1ScopeTotal, {
         enabled: aiRunning || s1Total > 0 || s1Errors > 0,
+        resetHover: !aiRunning,
         label: "阶段一 事实初审",
         errors: s1Errors,
         activeRows: aiRunning ? p1.activeRows : [],
@@ -4622,6 +4679,7 @@
       const s2Queue = Math.max(0, Number(p2.pending) || 0) + Math.max(0, Number(p2.inFlight) || 0);
       renderStageProgress("2", s2Reviewed, s2Reviewed + Math.max(s2Pending, s2Queue, s2Errors), {
         enabled: s2Enabled,
+        resetHover: !aiRunning,
         label: "阶段二 文学复审",
         errors: s2Errors,
         activeRows: aiRunning ? p2.activeRows : [],
@@ -4629,6 +4687,7 @@
       const s3Queue = Math.max(0, Number(p3.pending) || 0) + Math.max(0, Number(p3.inFlight) || 0);
       renderStageProgress("3", s3Arbitrated, s3Arbitrated + Math.max(s3Pending, s3Queue, s3Errors), {
         enabled: s3Enabled,
+        resetHover: !aiRunning,
         label: "阶段三 终审仲裁",
         errors: s3Errors,
         activeRows: aiRunning ? p3.activeRows : [],
@@ -4928,13 +4987,13 @@
         .map(([key, label]) => label + " " + Math.max(0, Number(stageMetrics[key]) || 0)).join("，");
 
       stageMetricsSummaryCache = stageMetricsSummary;
-      if (aiIds.panelState) aiIds.panelState.title = stageMetricsSummary;
+      setLiveHoverTitle(aiIds.panelState, stageMetricsSummary);
 
       renderStageMetricsDashboard(stageMetrics, stagePipelines, aiRunning, stageErrorKinds);
       return stageMetrics;
     }
 
-    function renderAiCacheMetrics(metrics = {}) {
+    function renderAiCacheMetrics(metrics = {}, { resetHover = false } = {}) {
       const badge = aiIds.cacheHitRate;
       if (!badge) return;
       const count = (key) => {
@@ -4947,8 +5006,9 @@
       const cached = Math.min(input, count("cachedPromptTokens"));
       const partial = calls > reported;
       const rate = reported > 0 && input > 0 ? (cached / input * 100).toFixed(1) + "%" : "—";
-      badge.textContent = "缓存命中: " + rate + (reported > 0 && partial ? "（部分）" : "");
-      badge.title = reported > 0
+      const text = "缓存命中: " + rate + (reported > 0 && partial ? "（部分）" : "");
+      if (badge.textContent !== text) badge.textContent = text;
+      const title = reported > 0
         ? [
           "本轮缓存命中率 = 缓存读取 token ÷ 已报告缓存用量的输入 token。",
           "缓存读取 " + cached.toLocaleString("zh-CN") + " / " + input.toLocaleString("zh-CN") + " token；未命中 " + count("cacheMissPromptTokens").toLocaleString("zh-CN") + " token。",
@@ -4956,11 +5016,14 @@
           "已报告缓存用量 " + reported + " / " + calls + " 次调用" + (partial ? "；未报告的调用不参与命中率计算。" : "。"),
         ].join("\n")
         : (calls > 0 ? "接口未返回缓存用量，无法计算命中率；未报告不等于未命中。" : "本轮模型输入的缓存命中占比；尚无接口返回的缓存用量。");
-      badge.setAttribute("aria-label", badge.textContent + "。" + badge.title);
+      setLiveHoverTitle(badge, title, { reset: resetHover || calls === 0 });
+      badge.setAttribute("aria-label", badge.textContent + "。" + title);
     }
 
     function renderAiStatus(ai) {
       if (!ai) return;
+      const receipt = aiResultReception.begin(ai);
+      if (receipt.runChanged || !receipt.sameScope) liveHoverTitleScope += 1;
       currentAiRunning = Boolean(ai.running);
       const isRunning = currentAiRunning;
       runningAiStage = isRunning ? (ai.stageMode || runningAiStage) : null;
@@ -4977,7 +5040,6 @@
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
       const stageMetricsSummary = stageMetricsSummaryCache;
       const aiRunId = ai.runId || "";
-      const receipt = aiResultReception.begin(ai);
       if (receipt.runChanged) {
         warnedLegacyService = false;
       }
@@ -4991,7 +5053,7 @@
         renderClearedAiStatus();
         return;
       }
-      renderAiCacheMetrics(sameAiScope ? ai.metrics : null);
+      renderAiCacheMetrics(sameAiScope ? ai.metrics : null, { resetHover: receipt.runChanged || !sameAiScope });
       if (ai.running) {
         aiCacheCleared = false;
       }
@@ -5044,7 +5106,7 @@
           : prefilterText + (isPrefilter ? "，" + pendingText : "，建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)));
 
       if (aiIds.panelState) {
-        aiIds.panelState.title = stageMetricsSummary;
+        setLiveHoverTitle(aiIds.panelState, stageMetricsSummary);
         if (ai.running) {
           aiIds.panelState.textContent = isPrefilter
             ? "预筛选中..."
