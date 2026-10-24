@@ -252,7 +252,6 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--surface-subtle);
-      container-type: inline-size;
     }
     .import-card-head {
       display: flex;
@@ -389,15 +388,19 @@
       outline: none;
     }
     .pick-menu {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
       min-width: 0;
       padding: 6px;
       border: 1px solid var(--line-strong);
       border-radius: 8px;
       background: var(--surface);
       box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
+      container-type: inline-size;
+    }
+    .pick-menu-content {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
     }
     .pick-menu-label {
       padding: 3px 9px 1px;
@@ -448,8 +451,9 @@
       border-radius: 0 0 6px 6px;
       color: var(--muted);
     }
-    @container (min-width: 320px) {
-      .pick-menu {
+    /* 菜单内容宽扣除内边距和边框，对应原卡片 320px 的切换点。 */
+    @container (min-width: 306px) {
+      .pick-menu-content {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -888,6 +892,25 @@
       width: auto;
       min-width: 96px;
     }
+    @media (min-width: 621px) {
+      /* 并排卡片共享行高，标题和文件名换行时仍保持文件区、操作区对齐。 */
+      .import-grid {
+        row-gap: 0;
+      }
+      .import-card {
+        grid-row: span 5;
+        grid-template-rows: subgrid;
+        row-gap: 0;
+      }
+      .import-card > :not(.import-card-head) {
+        margin-top: 8px;
+      }
+      .import-card-head { grid-row: 1; }
+      .import-card > .dropzone { grid-row: 2; }
+      .import-card > .pick-menu { grid-row: 3; }
+      .import-card > .local-path-row { grid-row: 4; }
+      .import-card > .import-actions { grid-row: 5; }
+    }
     @media (max-width: 980px) {
       main {
         grid-template-columns: 1fr;
@@ -985,10 +1008,12 @@
             <div class="import-card-head"><strong id="jpImportTitle">原文</strong><small id="jpImportRequired">必需</small></div>
             <button id="jpDropzone" class="dropzone" type="button" aria-label="导入原文" aria-controls="jpPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="jpPickMenu" class="pick-menu" hidden>
-              <div class="pick-menu-label">选择导入方式</div>
-              <button id="jpNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
-              <button id="jpNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
-              <button id="jpLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              <div class="pick-menu-content">
+                <div class="pick-menu-label">选择导入方式</div>
+                <button id="jpNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+                <button id="jpNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+                <button id="jpLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              </div>
             </div>
             <div id="jpLocalRow" class="local-path-row" hidden>
               <input id="jpLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
@@ -1003,10 +1028,12 @@
             <div class="import-card-head"><strong id="cnImportTitle">主文本（待修改文本）</strong><small id="cnImportRequired">必需</small></div>
             <button id="cnDropzone" class="dropzone" type="button" aria-label="导入主文本（待修改文本）" aria-controls="cnPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="cnPickMenu" class="pick-menu" hidden>
-              <div class="pick-menu-label">选择导入方式</div>
-              <button id="cnNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
-              <button id="cnNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
-              <button id="cnLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              <div class="pick-menu-content">
+                <div class="pick-menu-label">选择导入方式</div>
+                <button id="cnNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+                <button id="cnNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+                <button id="cnLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              </div>
             </div>
             <div id="cnLocalRow" class="local-path-row" hidden>
               <input id="cnLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
@@ -1021,10 +1048,12 @@
             <div class="import-card-head"><strong id="twImportTitle">参考文本</strong><small>必需</small></div>
             <button id="twDropzone" class="dropzone" type="button" aria-label="导入参考文本" aria-controls="twPickMenu" aria-expanded="false"><span>选择文件或 EPUB 文件夹</span></button>
             <div id="twPickMenu" class="pick-menu" hidden>
-              <div class="pick-menu-label">选择导入方式</div>
-              <button id="twNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
-              <button id="twNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
-              <button id="twLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              <div class="pick-menu-content">
+                <div class="pick-menu-label">选择导入方式</div>
+                <button id="twNativeFileButton" class="pick-menu-item" type="button"><strong>单个文件</strong><small>EPUB、TXT、DOCX、HTML 等</small></button>
+                <button id="twNativeFolderButton" class="pick-menu-item" type="button"><strong>EPUB 文件夹</strong><small>已解压且包含 META-INF/container.xml</small></button>
+                <button id="twLocalButton" class="pick-menu-item pick-menu-item--secondary" type="button"><strong>粘贴本机路径</strong><small>选择窗口不可用时手动输入</small></button>
+              </div>
             </div>
             <div id="twLocalRow" class="local-path-row" hidden>
               <input id="twLocalPath" class="local-path-input" type="text" spellcheck="false" placeholder="本机文件或解压 EPUB 目录的完整路径">
