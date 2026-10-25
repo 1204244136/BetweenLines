@@ -48,11 +48,22 @@ function status(running, overrides = {}) {
 
 function fixture({ storage = storageFixture({ [currentKey]: JSON.stringify(initialNotes()) }), pageRows = rows, stage = "stage1" } = {}) {
   const running = status(true, { stageMode: stage });
-  return createWorkbench(storage, {
+  storage.setItem("translation-compare-ai-config-v2", JSON.stringify({ model: "proofread-model" }));
+  if (stage !== "stage1") {
+    storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+      { id: "review", name: "审核", protocol: "compatible", model: "review-model" },
+    ]));
+  }
+  const ui = createWorkbench(storage, {
     rows: pageRows,
     statusQueue: [{ ok: true, ai: status(false) }, { ok: true, ai: running }],
     apiResponses: { "/api/ai-proofread/start": { ok: true, ai: running } },
   });
+  if (stage !== "stage1") {
+    ui.element(`${stage}PresetSelect`).value = "review";
+    ui.element(`${stage}PresetAdd`).click();
+  }
+  return ui;
 }
 
 function assertProgress(ui, done, percent) {

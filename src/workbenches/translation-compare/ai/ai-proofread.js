@@ -546,7 +546,7 @@ function cleanConfig(input = {}) {
   // resolveConcurrencyCap 同时把旧客户端的 smartConcurrency + concurrencyMax 折算成同一个上限。
   const concurrency = resolveConcurrencyCap(input);
   const similarityThreshold = clampNumber(input.similarityThreshold, 0.5, 1, 0.92);
-  const model = String(input.model || defaults.model).trim();
+  const model = String(Object.hasOwn(input, "model") ? (input.model ?? "") : (defaults.model || "")).trim();
   const modelMeta = detectModelCapabilities(model, provider, null,
     input.modelMeta?.id === model ? input.modelMeta : (Array.isArray(input.modelMetadata) ? input.modelMetadata.find((item) => item?.id === model) : null));
   // 特化侧档案：未知 id 一律回落到默认档案，避免旧客户端或手填值把提示词打空。
@@ -645,8 +645,8 @@ function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurren
   if (!input || typeof input !== "object") return null;
   const { protocol, provider } = normalizeConnectionConfig(input);
   const defaults = protocolDefaults[protocol] || fallbackDefaults;
-  const model = String(input.model || defaults.model || "").trim();
-  if (!model) return null;
+  // 子配置必须自带模型；缺失或清空都保留到启动校验，不能丢掉预设或回退到协议默认模型。
+  const model = String(input.model ?? "").trim();
   const modelMeta = detectModelCapabilities(model, provider, null,
     input.modelMeta?.id === model ? input.modelMeta : (Array.isArray(input.modelMetadata) ? input.modelMetadata.find((item) => item?.id === model) : null));
   const baseUrl = String(input.baseUrl || defaults.baseUrl || "").trim().replace(/\/+$/, "");
@@ -683,6 +683,19 @@ function cleanStagePresetPool(value, fallbackConf = null, fallbackDefaults = {},
       return { ...cleaned, presetId: item.presetId, name: item.name };
     })
     .filter(Boolean);
+}
+
+function assertStageConnections(connections, stage) {
+  const label = stage === "stage1" ? "阶段一" : (stage === "stage2" ? "阶段二" : "阶段三");
+  for (const connection of connections) {
+    const model = String(connection.model || "").trim();
+    if (!model || model === "custom") {
+      const error = new Error(`${label}${connection.name ? `预设「${connection.name}」` : ""}尚未配置模型，请先选择或输入模型名称。`);
+      error.code = "MODEL_REQUIRED";
+      throw error;
+    }
+    if (!connection.baseUrl) throw new Error(`${label}请输入接口地址。`);
+  }
 }
 
 function normalizeIndexSet(value) {
@@ -1024,10 +1037,7 @@ async function startProofread(input) {
       error.code = stage === "stage2" ? "STAGE2_CONFIG_MISSING" : "STAGE3_CONFIG_MISSING";
       throw error;
     }
-    for (const connection of connections) {
-      if (!connection.model) throw new Error("请输入模型名称。");
-      if (!connection.baseUrl) throw new Error("请输入接口地址。");
-    }
+    assertStageConnections(connections, stage);
   }
 
   const { project, rows, speechHabits: snapshotSpeechHabits, termPrefilter } = readRows(config);
@@ -1314,6 +1324,7 @@ function updateStagePresets(payload = {}) {
   }
   const stage = payload.stage === "stage2" ? "stage2" : (payload.stage === "stage3" ? "stage3" : "stage1");
   const presets = cleanStagePresetPool(payload.presets, null, {}, AI_CONCURRENCY_LIMITS.defaultConcurrency);
+  assertStageConnections(presets, stage);
   const result = activePresetPoolUpdater(stage, presets);
   return {
     stage,
@@ -1509,6 +1520,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   }
 
   function applyPresetPoolUpdate(stageKey, incomingPresets) {
+    if (!incomingPresets.length) {
+      const fallback = stageDefinitionsFor(stageConfigs[stageKey])[stageKey].fallbackConfig;
+      if (fallback) assertStageConnections([fallback], stageKey);
+    }
     const result = dispatchers[stageKey].updatePresets(incomingPresets);
     const { added, removed, fallback } = result;
     if (!added.length && !removed.length) return result;

@@ -6,6 +6,18 @@ const { makeHtml } = require("./build-compare");
 const { createWorkbench, createClientFixture, storageFixture, toastMessages } = require("./workbench-fixture");
 const { createStageMetrics, createStagePipelines } = require("../src/workbenches/translation-compare/ai/stage-results");
 
+function configureStageModels(ui, stages = []) {
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "preset-s2", name: "复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "review-model" },
+    { id: "preset-s3", name: "仲裁", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "arbiter-model" },
+  ]));
+  ui.run('aiIds.model.value = "initial-model"; saveAiConfig(); restoreAiConfig();');
+  for (const stage of stages) {
+    ui.element(`${stage}PresetSelect`).value = `preset-s${stage.slice(-1)}`;
+    ui.element(`${stage}PresetAdd`).click();
+  }
+}
+
 test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
   const selection = {
@@ -542,11 +554,11 @@ test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不�
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-arb", results: [] } },
     },
   });
+  configureStageModels(ui, ["stage3"]);
 
   // 4 行复审分歧：2 行「调整」+ 1 行「升级仲裁」尚未仲裁，1 行已仲裁定案。
   // 仲裁队列此刻是空的——分歧数只能从备注里读出来，不能靠队列实时计数兜。
   ui.run(`
-    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\n修改结果：复审案1",
       revisionText: "复审案1",
@@ -884,6 +896,7 @@ test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按�
       "/api/ai-proofread/stop": { ok: true, ai: { running: false, stopRequested: true, runId: "run-stage", results: [] } },
     },
   });
+  configureStageModels(ui);
 
   const s1Start = ui.element("stage1Start");
   const s1Stop = ui.element("stage1Stop");
@@ -892,24 +905,24 @@ test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按�
   const s3Start = ui.element("stage3Start");
   const s3Stop = ui.element("stage3Stop");
 
-  // 初始空闲状态：开始可用，停止禁用
+  // 初始空闲状态：有效初审可开始，未配置下游的开始和所有停止均禁用。
   assert.equal(s1Start.disabled, false);
   assert.equal(s1Stop.disabled, true);
-  assert.equal(s2Start.disabled, false);
+  assert.equal(s2Start.disabled, true);
   assert.equal(s2Stop.disabled, true);
-  assert.equal(s3Start.disabled, false);
+  assert.equal(s3Start.disabled, true);
   assert.equal(s3Stop.disabled, true);
 
   // 点击阶段一「开始」
   await s1Start.dispatch("click");
   assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 1);
 
-  // 启动后各阶段状态独立解耦：阶段一运行中（开始禁用，停止可用）；阶段二与阶段三待命中（开始可用，停止禁用）
+  // 启动后阶段一可独立停止；未配置的阶段二、三继续禁用，不能借初审配置启动。
   assert.equal(s1Start.disabled, true, "阶段一运行中开始按钮应禁用");
   assert.equal(s1Stop.disabled, false, "阶段一运行中停止按钮应激活");
-  assert.equal(s2Start.disabled, false, "阶段二未运行未排队，开始按钮应保持可用，不被强制绑定");
+  assert.equal(s2Start.disabled, true, "阶段二未配置模型，开始按钮保持禁用");
   assert.equal(s2Stop.disabled, true, "阶段二未运行未排队，停止按钮应保持禁用");
-  assert.equal(s3Start.disabled, false, "阶段三未运行未排队，开始按钮应保持可用，不被强制绑定");
+  assert.equal(s3Start.disabled, true, "阶段三未配置模型，开始按钮保持禁用");
   assert.equal(s3Stop.disabled, true, "阶段三未运行未排队，停止按钮应保持禁用");
 
   // 点击阶段一「停止」
@@ -923,6 +936,7 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
       "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-staged", results: [] } },
     },
   });
+  configureStageModels(ui);
 
   // 1. 点击阶段一「开始」（此时阶段二尚未配置，没有可级联的下游）
   await ui.element("stage1Start").dispatch("click");
@@ -931,8 +945,9 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
   assert.equal(lastStartPost.body.stage, "stage1", "阶段二未配置时阶段一启动只跑初审，不自动跑阶段二");
 
   // 模拟阶段一产出建议行，且阶段二配置了预设
+  ui.element("stage2PresetSelect").value = "preset-s2";
+  ui.element("stage2PresetAdd").click();
   ui.run(`
-    stagePresetSelections.stage2 = ["preset-s2"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\n修改结果：改案A",
       revisionText: "改案A",
@@ -948,8 +963,9 @@ test("独立三阶段执行：未启用级联时，每个阶段开始按钮传�
   assert.equal(lastStartPost.body.stage, "stage2", "阶段二启动必须指定 stage=stage2，专门复审初审建议行");
 
   // 模拟阶段二产出分歧行，且阶段三配置了预设
+  ui.element("stage3PresetSelect").value = "preset-s3";
+  ui.element("stage3PresetAdd").click();
   ui.run(`
-    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：改案B\\n修改结果：改案A",
       revisionText: "改案A",
@@ -1060,7 +1076,7 @@ test("阶段流水线契约：保留复审实时计数与立场分布，缺省�
 test("旧版常驻服务：没有回报 stageControls 时明确提示重启，未活动阶段保持待命", () => {
   const ui = createWorkbench();
 
-  ui.run('stagePresetSelections.stage2 = ["preset-s2"]; stagePresetSelections.stage3 = ["preset-s3"];');
+  configureStageModels(ui, ["stage2", "stage3"]);
   ui.run(`
     renderAiStatus({
       kind: "ai",

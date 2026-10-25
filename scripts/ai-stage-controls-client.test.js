@@ -20,6 +20,7 @@ function stageControlWorkbench({ active = [], configured = ["stage2", "stage3"],
     total: 3, results: [],
   });
   const ui = createWorkbench(storageFixture({
+    "translation-compare-ai-config-v2": JSON.stringify({ protocol: "compatible", model: "initial-model" }),
     "translation-compare-ai-presets-v2": JSON.stringify([
       { id: "review", name: "复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "review-model" },
       { id: "arbiter", name: "仲裁", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "arbiter-model" },
@@ -58,7 +59,8 @@ function seedNotes(ui, notes) {
 
 function assertButtons(ui, active) {
   for (const stage of stages) {
-    assert.equal(ui.element(`${stage}Start`).disabled, active.includes(stage), `${stage} 开始仅由本阶段活动状态决定`);
+    const configured = stage === "stage1" || ui.run(`committedStagePresetIds("${stage}").length > 0`);
+    assert.equal(ui.element(`${stage}Start`).disabled, active.includes(stage) || !configured, `${stage} 已配置模型且空闲时可以开始`);
     assert.equal(ui.element(`${stage}Stop`).disabled, !active.includes(stage), `${stage} 停止仅作用于本阶段`);
   }
   assert.equal(ui.element("aiStartAll").disabled, active.length > 0, "一键开始仅在所有阶段空闲时可用");

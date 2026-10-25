@@ -225,7 +225,17 @@ for (const [stage, failure, success] of [
 ]) {
   test(`${stage}：刷新及新任务保留异常，成功后清除；下游失败不作废上游方案`, async () => {
     const key = "translation-compare-notes-v7:project:rows";
-    const storage = storageFixture({ [key]: JSON.stringify({ 1: { note: failure } }) });
+    const storage = storageFixture({
+      [key]: JSON.stringify({ 1: { note: failure } }),
+      "translation-compare-ai-config-v2": JSON.stringify({
+        model: "retry-model",
+        stage2PresetIds: stage === "stage2" ? ["retry-preset"] : [],
+        stage3PresetIds: stage === "stage3" ? ["retry-preset"] : [],
+      }),
+      "translation-compare-ai-presets-v2": JSON.stringify([
+        { id: "retry-preset", name: "重试模型", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "retry-model" },
+      ]),
+    });
     const options = { rows: ROWS.slice(0, 1), apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "retry-run",
         stageMode: stage, stageCascade: { toArbiter: stage === "stage3" }, stageMetrics: createStageMetrics(), results: [] } },

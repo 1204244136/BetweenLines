@@ -2,8 +2,14 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { ROWS, storageFixture, createWorkbench, toastMessages } = require("./workbench-fixture");
 
+function createReadyWorkbench(storage, options) {
+  const ui = createWorkbench(storage, options);
+  ui.run('aiIds.model.value = "proofread-model"; saveAiConfig();');
+  return ui;
+}
+
 test("存在未人工确认的 AI 校对信息时，点击开始校对弹出确认弹窗", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
     },
@@ -51,7 +57,7 @@ test("存在未人工确认的 AI 校对信息时，点击开始校对弹出确�
 });
 
 test("弹窗中选择「继续剩下的（未AI校对过的）」，保留原有 AI 记录并跳过已有结果启动校对", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
     },
@@ -81,7 +87,7 @@ test("弹窗中选择「继续剩下的（未AI校对过的）」，保留原有
 });
 
 test("弹窗中选择「从未人工确认处开始」，清空未确认的 AI 记录，保留已确认记录并启动校对", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
     },
@@ -130,7 +136,7 @@ test("弹窗中选择「从未人工确认处开始」，清空未确认的 AI �
 
 // 同一组配置分别从阶段按钮和总按钮启动，确认弹窗必须保留用户选择的运行范围。
 function setupCascadeDialogWorkbench() {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-dialog-cascade", stageMode: "stage1", stageCascade: { toStylist: true, toArbiter: false }, results: [] } },
     },
@@ -185,27 +191,27 @@ test("一键开始：确认弹窗「从未人工确认处开始」保留 all 范
   assert.ok(post.body.stylistConfig);
 });
 
-test("一键开始：阶段二预设取不到时不谎报会走到复审", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+test("一键开始：阶段二适用预设失效时阻止启动并保留已有备注", async () => {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stale-preset", stageMode: "stage1", stageCascade: { toStylist: false, toArbiter: false }, results: [] } },
     },
   });
 
   // 适用列表里留着一个本地已经不存在的预设 id。
-  ui.run('stagePresetSelections.stage2 = ["preset_gone"];');
-  const plan = ui.run("cascadeFromStage('all')");
-  assert.equal(plan.toStylist, false, "取不到预设就等于那一段没启用");
-  assert.equal(plan.toArbiter, false);
+  const note = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：已有改案";
+  ui.run(`stagePresetSelections.stage2 = ["preset_gone"]; notes["1"] = { note: ${JSON.stringify(note)}, aiDone: true }; updateStagePresetDependencies();`);
+  assert.equal(ui.element("aiStartAll").disabled, true, "失效预设必须先修复或移除，不能悄悄忽略");
 
   await ui.element("aiStartAll").dispatch("click");
-  const post = ui.posts.at(-1);
-  assert.equal(post.body.stage, "all");
-  assert.equal(post.body.stylistConfig, null, "取不到预设就不会带上阶段二配置，服务端也就不会级联");
+  assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 0);
+  assert.equal(ui.element("aiConfirmDialog").open, false, "配置无效时不应打开清空重跑弹窗");
+  assert.equal(ui.run('notes["1"].note'), note, "已有 AI 校对记录保持不变");
+  assert.match(toastMessages(ui).join("|"), /阶段二.*预设已失效/);
 });
 
 test("没有未人工确认的 AI 校对信息时，点击开始校对不弹窗直接启动", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
     },
@@ -235,7 +241,7 @@ test("没有未人工确认的 AI 校对信息时，点击开始校对不弹窗�
 });
 
 test("复合备注（手写备注 + AI校对）清空时剥离 AI 部分，保留手写备注", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-new", results: [] } },
     },
@@ -264,15 +270,20 @@ test("复合备注（手写备注 + AI校对）清空时剥离 AI 部分，保�
 });
 
 test("阶段三终审仲裁完全结束后，点击阶段3「开始」弹出确认弹窗，可选择「从未人工确认处开始」重跑仲裁", async () => {
-  const ui = createWorkbench(storageFixture({}), {
+  const ui = createReadyWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stage3-rerun", results: [] } },
     },
   });
 
+  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "preset-s3", name: "终审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "arbiter-model" },
+  ]));
+  ui.run('restoreAiConfig(); aiIds.stage3Preset.value = "preset-s3";');
+  ui.element("stage3PresetAdd").click();
+
   // 配置阶段三预设，并设置两行分歧行：均已完成阶段三仲裁，但未人工确认，且文本中无「提交仲裁/分歧/escalate」字样
   ui.run(`
-    stagePresetSelections.stage3 = ["preset-s3"];
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\nArbiter仲裁[初审方案]：采纳初审方案\\n仲裁改案：初审案1\\n修改结果：初审案1",
       revisionText: "初审案1",

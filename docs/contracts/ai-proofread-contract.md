@@ -260,6 +260,8 @@
 | stage3 | 只跑仲裁 | 启动时已有的复审分歧 |
 | all | 初审及已启用的复审/仲裁 | 已有待办与本次上游逐行产出 |
 
+启动前必须逐一校验本次参与阶段的所有实际连接；空白模型与 `custom` 占位值作为配置错误返回 HTTP 400，不得进入派发队列或改写运行状态、结果及异常计数。只有顶层旧请求省略 `model` 字段时才允许协议默认值，显式空值不得被默认模型掩盖；子配置与池内预设必须自带模型，缺失或空值不得被过滤后回退其它配置。热更新同样先校验完整新集合（包含移除全部预设后的阶段回退配置），失败时保留当前通道与运行状态。独立阶段不校验未参与阶段的模型。回归：`node --test scripts/ai-stage-controls.test.js`。
+
 一键流水线的阶段之间靠内存队列衔接，谁都不等前一阶段整体收尾：`executeStage1` 每完成一行，判定 `isNeedsEdit || isUnclearOrNeedsContext` 且复审仍启用时，通过 `dispatchers.stage2.enqueue` 把完整 `s1` 交给复审；`executeStage2` 判定 `arbCheck.triggered` 且仲裁仍启用时，通过 `dispatchers.stage3.enqueue` 交给仲裁。定向停止某阶段后不再向它派发或追加候选，其它已运行阶段继续处理自己的队列。各阶段内部的预设集合、请求归属、并发/退避与熔断由 `ai/stage-dispatch.js` 持有；每个预设是一条独立通道，阶段配额是各通道之和，`cleanConfig` 保留 `presetPool`/`stylistPresets`/`arbiterPresets` 的连接参数与 `presetId`/`name`。热更新、新旧同 ID 请求隔离及整体终止汇总见下文「阶段派发状态与请求归属」；`dispatch()` 仍按 **stage3 → stage2 → stage1** 顺序派发。
 
 ### 终审二元定案

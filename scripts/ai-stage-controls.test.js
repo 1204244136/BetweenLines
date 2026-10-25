@@ -117,6 +117,135 @@ async function fixture(t, count = 4, options = {}) {
   return { config, calls, post, respond, nextCall, project, rows };
 }
 
+for (const model of ["", "   ", null, undefined, "custom"]) {
+  for (const stage of ["stage1", "stage2", "stage3", "all"]) {
+    test(`启动校验：${stage} 的适用预设模型 ${JSON.stringify(model)} 在入队前拒绝`, async (t) => {
+      const { config, calls, post } = await fixture(t, 1);
+      const targetStage = stage === "all" ? "stage2" : stage;
+      const connection = targetStage === "stage1" ? config
+        : (targetStage === "stage2" ? config.stylistConfig : config.arbiterConfig);
+      const poolKey = targetStage === "stage1" ? "presetPool"
+        : (targetStage === "stage2" ? "stylistPresets" : "arbiterPresets");
+      const before = clientStatus();
+      const result = await post("start", {
+        ...config, stage,
+        [poolKey]: [
+          { ...connection, presetId: "valid" },
+          { ...connection, presetId: "empty-model", model },
+        ],
+        rowNotes: { 1: stage === "stage3" ? reviewed : initial },
+      });
+      assert.equal(result.status, 400);
+      assert.match(result.error, /阶段[一二三].*模型/);
+      const after = clientStatus();
+      assert.equal(after.running, false);
+      assert.equal(after.runId, before.runId);
+      assert.deepEqual(after.results, before.results);
+      assert.deepEqual(after.stageErrors, before.stageErrors);
+      assert.equal(calls.length, 0, "不应把配置错误转成逐行模型请求");
+    });
+  }
+}
+
+for (const protocol of ["local", "claude"]) {
+  test(`启动校验：${protocol} 子预设缺少模型时不能套用协议默认模型`, async (t) => {
+    const { config, calls, post } = await fixture(t, 1);
+    const result = await post("start", {
+      ...config, stage: "all", stylistConfig: { protocol },
+    });
+    assert.equal(result.status, 400);
+    assert.match(result.error, /阶段二.*模型/);
+    assert.equal(clientStatus().running, false);
+    assert.equal(calls.length, 0);
+  });
+}
+
+test("启动校验：显式清空主模型不能被协议默认模型替代", async (t) => {
+  const { config, calls, post } = await fixture(t, 1);
+  for (const protocol of ["local", "claude", "compatible"]) {
+    const before = clientStatus().runId;
+    const result = await post("start", { ...config, stage: "stage1", protocol, model: "" });
+    assert.equal(result.status, 400);
+    assert.match(result.error, /阶段一.*模型/);
+    assert.equal(clientStatus().runId, before);
+    assert.equal(clientStatus().running, false);
+  }
+  assert.equal(calls.length, 0);
+});
+
+for (const stage of ["stage1", "stage2", "stage3"]) {
+  test(`热更新校验：${stage} 空模型预设原子拒绝并保留正在运行的通道`, async (t) => {
+    const { config, post, nextCall } = await fixture(t, 2);
+    assert.equal((await post("start", {
+      ...config, stage, rowNotes: { 1: stage === "stage3" ? reviewed : initial },
+    })).status, 202);
+    await nextCall(stage);
+    const before = clientStatus();
+    for (const preset of [
+      { ...config, presetId: "invalid", model: "" },
+      { protocol: "local", presetId: "missing-model" },
+      { protocol: "claude", presetId: "missing-model" },
+      { presetId: "missing-preset" },
+    ]) {
+      const updated = await post("presets", { stage, presets: [preset] });
+      assert.equal(updated.status, 400);
+      assert.match(updated.error, /阶段[一二三].*模型/);
+    }
+    const after = clientStatus();
+    assert.equal(after.running, true);
+    assert.equal(after.runId, before.runId);
+    assert.deepEqual(after.presetPipelines, before.presetPipelines);
+    assert.deepEqual(after.stageErrors, before.stageErrors);
+  });
+}
+
+test("热更新校验：移除全部适用预设前检查回退的主模型", async (t) => {
+  const { config, post, nextCall } = await fixture(t, 2);
+  assert.equal((await post("start", {
+    ...config, stage: "stage1", model: "",
+    presetPool: [{ ...config, presetId: "valid" }],
+  })).status, 202);
+  await nextCall("stage1");
+  const before = clientStatus();
+  assert.equal((await post("presets", { stage: "stage1", presets: [] })).status, 400);
+  assert.equal(clientStatus().running, true);
+  assert.deepEqual(clientStatus().presetPipelines, before.presetPipelines);
+});
+
+test("启动校验：其它阶段运行时拒绝空模型，不改变已运行阶段", async (t) => {
+  const { config, post, nextCall } = await fixture(t, 2);
+  assert.equal((await post("start", { ...config, stage: "stage1" })).status, 202);
+  await nextCall("stage1");
+  const before = clientStatus();
+  const invalid = await post("start", {
+    ...config, stage: "stage2", stylistConfig: { ...config.stylistConfig, model: "" },
+    forgetResultIndexes: [1], rowNotes: { 1: initial },
+  });
+  assert.equal(invalid.status, 400);
+  const after = clientStatus();
+  assert.equal(after.running, true);
+  assert.equal(after.runId, before.runId);
+  assert.deepEqual(after.stageControls, before.stageControls);
+  assert.deepEqual(after.presetPipelines, before.presetPipelines);
+  assert.deepEqual(after.results, before.results);
+});
+
+for (const stage of ["stage2", "stage3"]) {
+  test(`启动校验：独立 ${stage} 不依赖未参与阶段的模型`, async (t) => {
+    const { config, calls, post, nextCall, respond } = await fixture(t, 1);
+    const inactiveKey = stage === "stage2" ? "arbiterConfig" : "stylistConfig";
+    assert.equal((await post("start", {
+      ...config, stage, model: "",
+      [inactiveKey]: { ...config[inactiveKey], model: "" },
+      rowNotes: { 1: stage === "stage3" ? reviewed : initial },
+    })).status, 202);
+    respond(await nextCall(stage));
+    await until(() => !clientStatus().running);
+    assert.deepEqual(calls.map((call) => call.stage), [stage]);
+    assert.equal(clientStatus().errors, 0);
+  });
+}
+
 async function runFinalDecisionPipeline(t, options = {}) {
   const scenario = await fixture(t, 1, options);
   const { config, calls, post, respond, nextCall } = scenario;

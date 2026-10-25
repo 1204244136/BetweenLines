@@ -179,11 +179,10 @@
     }
 
     // 该阶段当前选中的预设（含完整连接参数与 presetId）：启动时随请求体发送，
-    // 运行中增删预设也用它同步给服务端。缺 model 的条目发过去也会被服务端滤掉，这里先滤一次。
+    // 运行中增删预设也用它同步给服务端。保留无效条目交由校验拒绝，不能悄悄回退到其它配置。
     function stagePresetsFor(stage) {
       return committedStagePresetIds(stage)
-        .map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id }))
-        .filter((item) => item.model);
+        .map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id }));
     }
 
     // 触顶 = 这条通道已经达到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上调）。
@@ -1364,6 +1363,7 @@
         pill3.textContent = hasStage3 ? "待命" : "未启用";
       }
       refreshRevisionStagePills();
+      setAllStageButtonsRunning();
     }
 
     function applyPreset(preset) {
@@ -1474,6 +1474,7 @@
       if (projectAiConfigStorageKey) {
         localStorage.setItem(projectAiConfigStorageKey, JSON.stringify(config));
       }
+      setAllStageButtonsRunning();
     }
 
     function saveAiPrompt() {
@@ -1791,8 +1792,7 @@
 
     function renderClearedAiStatus(message = "已清除 AI 运行记录；备注与人工确认已保留。") {
       renderAiCacheMetrics();
-      aiIds.start.disabled = false;
-      aiIds.stop.disabled = true;
+      setAllStageButtonsRunning(false);
       prefilterIds.start.disabled = false;
       prefilterIds.confirm.disabled = true;
       prefilterIds.stop.disabled = true;
@@ -5862,6 +5862,40 @@
     const pendingStageStarts = new Set();
     const pendingStageStops = new Set();
 
+    function aiStartConfigurationError(stage) {
+      if (stage === "all") {
+        for (const key of ["stage1", "stage2", "stage3"]) {
+          if (key !== "stage1" && !committedStagePresetIds(key).length) continue;
+          const error = aiStartConfigurationError(key);
+          if (error) return error;
+        }
+        return "";
+      }
+      const label = { stage1: "阶段一", stage2: "阶段二", stage3: "阶段三" }[stage];
+      const ids = committedStagePresetIds(stage);
+      if (!ids.length && stage !== "stage1") return `请先为${label}添加适用的模型预设。`;
+      const configs = ids.length
+        ? ids.map((id) => ({ id, preset: presetTools.getPreset(localStorage, id) }))
+        : [{ preset: { model: aiIds.model.value }, main: true }];
+      for (const { id, preset, main } of configs) {
+        if (!preset) return `${label}适用预设已失效，请移除后重新添加（${id}）。`;
+        const model = String(preset.model || "").trim();
+        if (!model || model === "custom") {
+          const source = main ? "主配置" : `适用预设「${presetTools.presetLabel(preset)}」`;
+          return `${label}${source}尚未选择模型，请先补全模型配置。`;
+        }
+      }
+      return "";
+    }
+
+    function validateAiStart(stage) {
+      const error = aiStartConfigurationError(stage);
+      if (!error) return true;
+      setAllStageButtonsRunning();
+      showToast(error, { tone: "watch", durationMs: 8000 });
+      return false;
+    }
+
     function cascadeFromStage(stage) {
       if (stage !== "all") return { toStylist: false, toArbiter: false };
       return {
@@ -5894,13 +5928,21 @@
         const start = document.getElementById(stage + "Start") || (stage === "stage1" ? aiIds.start : null);
         const stop = document.getElementById(stage + "Stop") || (stage === "stage1" ? aiIds.stop : null);
         const stopping = pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested;
-        if (start) start.disabled = active[stage] || pendingStageStops.has(stage) || pendingStopAll || latestAiStopRequested;
+        if (start) {
+          const error = aiStartConfigurationError(stage);
+          start.disabled = Boolean(error) || active[stage] || pendingStageStops.has(stage) || pendingStopAll || latestAiStopRequested;
+          start.title = error;
+        }
         if (stop) stop.disabled = !active[stage] || Boolean(stopping) || pendingStageStarts.has(stage);
       }
       const anyRunning = (running ?? currentAiRunning) || Object.values(active).some(Boolean);
       const startAll = document.getElementById("aiStartAll");
       const stopAll = document.getElementById("aiStopAll");
-      if (startAll) startAll.disabled = Boolean(anyRunning) || pendingStageStops.size > 0 || pendingStopAll;
+      if (startAll) {
+        const error = aiStartConfigurationError("all");
+        startAll.disabled = Boolean(error) || Boolean(anyRunning) || pendingStageStops.size > 0 || pendingStopAll;
+        startAll.title = error;
+      }
       if (stopAll) stopAll.disabled = !anyRunning || pendingStageStarts.size > 0 || pendingStopAll || Object.entries(active).every(([stage, enabled]) =>
         !enabled || pendingStageStarts.has(stage) || pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested);
     }
@@ -5909,6 +5951,7 @@
     let pendingStartStage = "stage1";
 
     function canClearStageForRestart() {
+      if (!validateAiStart(pendingStartStage)) return false;
       if (!currentAiRunning && pendingStageStarts.size === 0) return true;
       showToast("仍有阶段正在运行，请先停止后再清空重跑；也可选择继续剩下的。", { tone: "watch", durationMs: 6000 });
       return false;
@@ -5918,13 +5961,10 @@
       const active = getStageActiveStates(currentAiRunning);
       if (pendingStopAll || latestAiStopRequested || pendingStageStops.has(stage) || active[stage]
         || (stage === "all" && (currentAiRunning || pendingStageStarts.size || pendingStageStops.size))) return;
+      if (!validateAiStart(stage)) return;
       pendingStartStage = stage;
 
       if (stage === "stage2") {
-        if (!committedStagePresetIds("stage2").length) {
-          showToast("请先在阶段二选择模型预设以启用文学复审。", { tone: "watch", durationMs: 6000 });
-          return;
-        }
         const hasStage1Suggestions = Object.values(notes).some((item) => {
           return getStage2RowStatus(item).isRelevant;
         });
@@ -5964,10 +6004,6 @@
         await startAiProofread({ continueOnly: true, stage: "stage2" });
         return;
       } else if (stage === "stage3") {
-        if (!committedStagePresetIds("stage3").length) {
-          showToast("请先在阶段三选择模型预设以启用终审仲裁。", { tone: "watch", durationMs: 6000 });
-          return;
-        }
         let arbitratedCount = 0;
         let pendingArbCount = 0;
         for (const [id, item] of Object.entries(notes)) {
@@ -6022,15 +6058,6 @@
           ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
           : (plan.toArbiter ? "初审；仲裁处理已有分歧" : "");
         const cascadeNote = tailText ? `\n\n本次会一路推进：${tailText}。` : "";
-        // 配了阶段三预设却取不到（预设被删、下拉残留旧 id）时明确说一声：
-        // 否则用户只会看到「配了仲裁却从来不仲裁」，而且阶段三卡片会一直停在很小的定案数上。
-        if (stage === "all" && committedStagePresetIds("stage3").length && !plan.toArbiter) {
-          showToast("阶段三预设已失效（本地找不到该预设），本次不会走到终审仲裁；请重新选择阶段三预设。", { tone: "watch", durationMs: 15000 });
-        }
-        // 阶段二同理：取不到预设便不能接收初审的新候选。
-        if (stage === "all" && committedStagePresetIds("stage2").length && !plan.toStylist) {
-          showToast("阶段二预设已失效（本地找不到该预设），本次不会执行文学复审；请重新选择阶段二预设。", { tone: "watch", durationMs: 15000 });
-        }
         const unconfirmedCount = countUnconfirmedAiProofreadNotes();
         if (unconfirmedCount > 0) {
           if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
@@ -6065,6 +6092,7 @@
     }
 
     async function startAiProofread({ continueOnly = false, stage = "stage1" } = {}) {
+      if (!validateAiStart(stage)) return;
       const plan = cascadeFromStage(stage);
       const startingStages = stage === "all"
         ? ["stage1", ...(plan.toStylist ? ["stage2"] : []), ...(plan.toArbiter ? ["stage3"] : [])]

@@ -95,7 +95,9 @@ for (const running of [false, true]) {
 
 test("生成页面：结果清除失败拦截旧回包，启动只确认当时携带的遗忘行", async () => {
   const startup = deferred();
-  const client = controlledClient(storageFixture(), {
+  const client = controlledClient(storageFixture({
+    "translation-compare-ai-config-v2": JSON.stringify({ model: "proofread-model" }),
+  }), {
     apiResponses: {
       "/api/ai-proofread/results/clear": { ok: false, error: "暂时无法清除" },
       "/api/ai-proofread/start": () => startup.promise,
