@@ -498,15 +498,15 @@ test("原文短式先现在下一行同头重写时，基础轮主动带上下�
 
 test("findInferredSubjectContext 准确识别代词与排除非代词，并按章节边界收窄", () => {
   const rows = [
-    { index: 1, chapter: "第一章", jp: "おじさんはあちこちに視線を投げ、唇を嚙んで、俯いた。", cn: "大叔四处张望，咬着嘴唇，低下了头。" },
-    { index: 2, chapter: "第一章", jp: "それから白井黒子の体をそっと寝かせると、弾かれたように走り出す。", cn: "然后他轻轻放下了白井黑子的身体，像弹簧一样猛地跑了出去。" },
+    { index: 1, chapter: "第一章", jp: "案内人は看板を見上げ、帽子を直して、足を止めた。", cn: "向导抬头看了看招牌，扶正帽子，停住了脚步。" },
+    { index: 2, chapter: "第一章", jp: "それから青い荷物をそっと置くと、駅の窓口へ歩き出す。", cn: "随后他轻轻放下蓝色行李，朝车站的窗口走去。" },
     { index: 3, chapter: "第一章", jp: "彼は走り出した。", cn: "他跑了出去。" }, // 原文已有彼
     { index: 4, chapter: "第一章", jp: "他の人達は皆帰ってしまった。", cn: "其他的人都离开了。" }, // 其他
     { index: 5, chapter: "第一章", jp: "ギターを弾く少年がいる。", cn: "有一个弹吉他的少年。" }, // 吉他
     { index: 6, chapter: "第二章", jp: "彼女の容態を確認する。", cn: "她摇了摇头。" }, // 跨章节
   ];
 
-  // 行 2：中文补他、日文无代词、同章上一行在大叔 → 命中
+  // 行 2：中文补他、日文无代词、同章上一行在向导 → 命中
   const res2 = findInferredSubjectContext(2, rows, "cn");
   assert.ok(res2);
   assert.equal(res2.pronoun, "他");
@@ -534,13 +534,13 @@ test("译文引入原文未直接给出的第三人称代词时，基础轮主�
     rowsFor: (index) => index === 1
       ? {
         chapter: "第一章",
-        jp: "おじさんはあちこちに視線を投げ、唇を嚙んで、俯いた。",
-        cn: "大叔四处张望，咬着嘴唇，低下了头。",
+        jp: "案内人は看板を見上げ、帽子を直して、足を止めた。",
+        cn: "向导抬头看了看招牌，扶正帽子，停住了脚步。",
       }
       : {
         chapter: "第一章",
-        jp: "それから白井黒子の体をそっと寝かせると、弾かれたように走り出す。",
-        cn: "然后他轻轻放下了白井黑子的身体，像弹簧一样猛地跑了出去。",
+        jp: "それから青い荷物をそっと置くと、駅の窓口へ歩き出す。",
+        cn: "随后他轻轻放下蓝色行李，朝车站的窗口走去。",
       },
     respond: (_count, response) => {
       let body = "";
@@ -560,8 +560,8 @@ test("译文引入原文未直接给出的第三人称代词时，基础轮主�
   assert.equal(secondRow.nearbyRows[0].index, 1);
   assert.equal(secondRow.nearbyRows[0].relative, -1);
   assert.equal(secondRow.nearbyRows[0].relation, "prev-row-inferred-subject");
-  assert.match(secondRow.nearbyRows[0].source, /^おじさんは/);
-  assert.match(secondRow.nearbyRows[0].target, /^大叔四处张望/);
+  assert.match(secondRow.nearbyRows[0].source, /^案内人は/);
+  assert.match(secondRow.nearbyRows[0].target, /^向导抬头看了看招牌/);
   assert.match(secondRow.contextPolicy, /目标列使用了原文未直接给出的代词「他」/);
   assert.match(secondRow.contextPolicy, /请结合前文判断代词所指的行为主体是否成立/);
   assert.equal(secondRow.inferredSubject.relation, "prev-row-inferred-subject");
@@ -943,7 +943,7 @@ test("修订结果的弯引号转成直角引号；无法配对的弯引号作�
 });
 
 test("模型删掉成对标记内侧的句末点号时按目标列规范补回，并在备注与统计里留痕", async () => {
-  // 真实回归（第 1087 行）：目标列整行括注，点号落在括号内，模型判「括号内句末添加了多余的句号」
+  // 回归形态：目标列整行括注，点号落在括号内，模型判「括号内句末添加了多余的句号」
   // 并在改写里删掉了它。句末点号的位置是目标列语言的规范问题，原文省略不等于译文该省。
   const decide = (revisedText) => JSON.stringify({
     semanticSame: false,
@@ -961,7 +961,7 @@ test("模型删掉成对标记内侧的句末点号时按目标列规范补回�
     label: "punct-restore",
     rowCount: 2,
     rowsFor: (index) => (index === 1
-      ? { jp: "（……現実にはそうなっていない）", cn: "（……现实中并没有变成那样。）" }
+      ? { jp: "（……駅にはまだ着いていない）", cn: "（……现在还没有到达车站。）" }
       : { jp: "彼は来なかった。", cn: "他没有来。" }),
     respond: (count, response) => {
       let raw = "";
@@ -973,7 +973,7 @@ test("模型删掉成对标记内侧的句末点号时按目标列规范补回�
         const index = Number(user.row.index);
         // 第 1 行：模型既补了遗漏的省略号、又删掉了括号内的句号（要补回那一个点号）；
         // 第 2 行：删的是行尾句号，不在这一层的处理范围（只按位置判断，不做语义判断）。
-        const revised = index === 1 ? "（……现实中并没有变成那样）" : "他没有来";
+        const revised = index === 1 ? "（……现在还没有到达车站）" : "他没有来";
         response.end(JSON.stringify({ choices: [{ message: { content: decide(revised) } }] }));
       });
     },
@@ -988,7 +988,7 @@ test("模型删掉成对标记内侧的句末点号时按目标列规范补回�
   const results = clientStatus().results.filter((item) => item.status !== "error");
   assert.equal(results.length, rows.length);
   const bracket = results.find((item) => item.index === 1);
-  assert.match(bracket.note, /修改结果：（……现实中并没有变成那样。）/);
+  assert.match(bracket.note, /修改结果：（……现在还没有到达车站。）/);
   const fixLine = bracket.note.split("\n").find((line) => line.startsWith("标点自动规范化："));
   assert.equal(fixLine, "标点自动规范化：补回引号/括号内的句末点号 1 处");
   assert.equal(bracket.note.split("\n").indexOf(fixLine) > bracket.note.split("\n").findIndex((line) => line.startsWith("分析：")), true);

@@ -28,7 +28,7 @@ test("说话人推断：validateSpeakerOutput 规范化校验与容错", () => {
     speaker: "艾莉丝",
     status: "confirmed",
     confidence: 0.88,
-    evidence: "说了「当麻」",
+    evidence: "说了「一郎」",
     needsContext: false,
   });
   assert.equal(valid.speaker, "艾莉丝");

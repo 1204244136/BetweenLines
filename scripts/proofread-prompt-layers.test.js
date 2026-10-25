@@ -63,7 +63,7 @@ test.after(() => {
 
 // 每个注册特征的代表性样例行：既验证“特征可达”，也当按行裁剪的夹具。
 const FEATURE_SAMPLES = {
-  ruby: { source: "|食蜂[しょくほう]操祈", target: "<ruby>食蜂<rt>shokuho</rt></ruby>操祈" },
+  ruby: { source: "|甲野[こうの]花子", target: "<ruby>甲野<rt>kono</rt></ruby>花子" },
   emphasis: { source: "彼は﹅怒った﹅。", target: "他<b>生气</b>了。" },
   noteref: { source: "本文。", target: "本文<a epub:type=\"noteref\"><sup>㊟</sup></a>" },
   page: { source: "次のページ。", target: "<p class=\"pb\">换页了。</p>" },
@@ -72,8 +72,8 @@ const FEATURE_SAMPLES = {
   interrobang: { source: "本当に！？", target: "真的？！" },
   quote: { source: "「そうか」と彼は言った。", target: "「是吗」他说。" },
   parenthesis: { source: "（ふうん。……）", target: "（嗯。……）" },
-  middleDot: { source: "ブラッシャ＝Ｐ＝マールハイスク", target: "布拉沙·P.马尔哈伊斯克" },
-  directionalSymbol: { source: "『半蔵∨浜面、聞こえるか？』", target: "「半藏＞滨面，听得到吗？」" },
+  middleDot: { source: "ルノ＝Ｐ＝ハルカ", target: "鲁诺·P.春香" },
+  directionalSymbol: { source: "『甲野∨乙川、準備はいいか？』", target: "「甲野＞乙川，准备好了吗？」" },
   conjunction: { source: "しかし、", target: "然而——" },
   repeat: { source: "あああ、そうか。", target: "啊啊啊，是吗。" },
   speechEffect: { source: "ドキドキした。", target: "心跳不已。" },
@@ -99,9 +99,9 @@ function payload(overrides = {}) {
 
 // 同一批按行规范里的第二条：与「引号用途」共用 quote 特征、与「括号」共用 parenthesis 特征，
 // 但各自独立裁剪与断言。成对标记（引号/括号）内侧句末点号的位置是中文规范问题，
-// 不能用 A（日文）的标点当判据——见下面的假阳性回归（第 898 行的引号、第 1087 行的括号）。
+// 不能用 A（日文）的标点当判据——见下面的假阳性回归（引号与括号的回归夹具）。
 const PAIR_PUNCT_MARKER = "内侧的句末点号按 B 的中文规范定位置";
-// 引号有无不是缺陷判据（真实假阳性第 1683 行：原文「野戦病院。」、译文「战地医院」。，全卷同形状 27 行），
+// 引号有无不是缺陷判据（回归形态：原文「野戦病院。」、译文「战地医院」。），
 // 以及「标记内只是词/短语时句末点号落在外侧是常规写法」：这两条与「引号用途」共用 quote 特征注入。
 const QUOTE_EVIDENCE_MARKER = "A 无引号不得判 B「误加引号」";
 const PAIR_PUNCT_SCOPE_MARKER = "标记内只是半句话、一个词、短语或拟声";
@@ -324,8 +324,8 @@ test("A 无引号不等于 B 误加引号：被提及的词用「」是成品写
 
 test("方向敏感的通信标识：竖排「∨」转横排「＞」不算擅改，且只在出现时注入", () => {
   const row = {
-    source: "『<ruby>半蔵<rt>はんぞう</rt></ruby>∨<ruby>浜面<rt>はまづら</rt></ruby>お前今どこにいる？』",
-    target: "「半藏＞滨面，你现在在哪？」",
+    source: "『<ruby>甲野<rt>こうの</rt></ruby>∨<ruby>乙川<rt>おとかわ</rt></ruby>次はどの駅だ？』",
+    target: "「甲野＞乙川，下一站是哪？」",
   };
   const hit = detectRowFeatures(row);
   assert.equal(hit.has("directionalSymbol"), true, "竖排通信标识与横排旋转变体必须命中");
@@ -342,8 +342,8 @@ test("方向敏感的通信标识：竖排「∨」转横排「＞」不算擅�
   assert.equal(detectRowFeatures({ source: "甲>乙", target: "甲＜乙" }).has("directionalSymbol"), true);
   assert.equal(
     detectRowFeatures({
-      source: "<ruby>半蔵<rt>はんぞう</rt></ruby>。",
-      target: "半藏。",
+      source: "<ruby>甲野<rt>こうの</rt></ruby>。",
+      target: "甲野。",
     }).has("directionalSymbol"),
     false,
     "<ruby> 这类标签里的尖括号不是通信标识",
@@ -479,7 +479,7 @@ test("裁剪可审计：报告给出各层长度与被省略的条目数", () =>
 
 // 实体闸门：只对某个角色/专有词成立的规则，按「本行有没有出现那个名字」注入。
 // 为什么单列一组断言：这类规则以前只能写成常驻条目，于是整卷每一行都背着它
-// （实测某卷 3119 行里，两条角色专属规则一次都没命中，却出现在每一次请求里），既花 token
+// （角色专属规则没有命中，却出现在每一次请求里），既花 token
 // 又把注意力从「这一行到底哪里有问题」上稀释掉。夹具用中性人名，与具体作品无关。
 const ENTITY_PROBES = [
   { label: "甲野一郎", marker: "实体探针：只在出现甲野一郎时注入。" },
@@ -628,7 +628,7 @@ test("真实行样本保持压缩后的请求预算", () => {
     context: [],
     contextMode: "none",
   }, { proofreadMode: "bilingual", profileId: "demo" });
-  // 预算按实测最坏行（带成对标记的 demo 行）定基线。第 1683 行的两处证据边界（引号有无不算缺陷、
+  // 预算按实测最坏行（带成对标记的 demo 行）定基线。回归夹具的两处证据边界（引号有无不算缺陷、
   // 成对标记内的点号规范只对完整引述/整行括注生效）让这一行 +148 字符；每行常驻的只有证据边界枚举 +6。
   // 2026-10 对齐 index-X `docs/translation-spec.md` 时新增两条常驻口径（二.3 行末点号不逐行比对日文、
   // 五.7 外国人名与外文专名按原语还原，最坏行 +106）与六条按行条目（一.3 间隔号与西文缩写、

@@ -14,9 +14,9 @@ function restore(target, revised) {
 }
 
 test("中文语境里的半角标点整体转全角", () => {
-  // 真实回归（第 1040 行）：模型在 revisedText 里打出「......」。
-  const row = normalizeTargetPunctuation("咚咚咚咚哗啦啦啦啦!!这足以震撼整块地板的粗重巨响,其真面目到底是......");
-  assert.equal(row.text, "咚咚咚咚哗啦啦啦啦！！这足以震撼整块地板的粗重巨响，其真面目到底是……");
+  // 合成回归夹具：模型在 revisedText 里打出「......」。
+  const row = normalizeTargetPunctuation("哗啦啦啦!!隔壁传来一阵纸箱落地的声音,究竟是谁在整理仓库......");
+  assert.equal(row.text, "哗啦啦啦！！隔壁传来一阵纸箱落地的声音，究竟是谁在整理仓库……");
   assert.equal(row.toFull, 3, "连续叹号、逗号、连点各算一处");
   assert.equal(row.toHalf, 0);
 
@@ -139,15 +139,15 @@ test("空值与纯文本不受影响", () => {
 });
 
 test("被删掉的成对标记内侧句末点号要补回来", () => {
-  // 真实回归（第 1087 行）：目标列整行括注、点号落在括号内，模型判「括号内句末添加了多余的句号」
+  // 回归形态：目标列整行括注、点号落在括号内，模型判「括号内句末添加了多余的句号」
   // 并在改写里删掉了它——这句话是中文规范写法，原文（日文）省略不等于译文该省。
-  const bracket = restoreTerminalPunctuation("（……现实中并没有变成那样。）", "（……现实中并没有变成那样）");
-  assert.equal(bracket.text, "（……现实中并没有变成那样。）");
+  const bracket = restoreTerminalPunctuation("（……现在还没有到达车站。）", "（……现在还没有到达车站）");
+  assert.equal(bracket.text, "（……现在还没有到达车站。）");
   assert.equal(bracket.restored, 1);
   assert.equal(bracket.changed, true);
-  // 真实回归（第 898 行）：同一个形状出现在引号里，模型同时删了点号、改写了措辞。
-  const quote = restoreTerminalPunctuation("「……御坂老老实实地报告道。」", "「……御坂恭恭敬敬地报告道」");
-  assert.equal(quote.text, "「……御坂恭恭敬敬地报告道。」");
+  // 回归形态：同一个形状出现在引号里，模型同时删了点号、改写了措辞。
+  const quote = restoreTerminalPunctuation("「……甲野简明扼要地说明道。」", "「……甲野认真仔细地说明道」");
+  assert.equal(quote.text, "「……甲野认真仔细地说明道。」");
   assert.equal(quote.restored, 1);
   // 只删点号、没有别的改动时同样补回。
   assert.equal(restore("（他说。）", "（他说）"), "（他说。）");

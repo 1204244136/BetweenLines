@@ -34,6 +34,15 @@ scripts/compare-epub-text.js
 *.rtf
 *.csv
 *.tsv
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.ods
+
+# Local source writeback backups (may contain the full original text)
+*.bak
+*.bak.*
 
 # Model and Python caches
 .cache/

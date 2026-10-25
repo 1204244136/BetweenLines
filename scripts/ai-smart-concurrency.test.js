@@ -193,15 +193,15 @@ test("多预设池：服务端清洗后保住预设身份与各自的并发上�
   const pool = cleanConfig({
     concurrency: 3,
     presetPool: [
-      { presetId: "p1", name: "词元聚合", protocol: "compatible", baseUrl: "https://a.example/v1", model: "m1", apiKey: "k1", concurrency: 3 },
-      { presetId: "p2", name: "火山方舟", protocol: "compatible", baseUrl: "https://b.example/v1", model: "m2", apiKey: "k2", concurrency: 32 },
+      { presetId: "p1", name: "服务甲", protocol: "compatible", baseUrl: "https://a.example/v1", model: "m1", apiKey: "k1", concurrency: 3 },
+      { presetId: "p2", name: "服务乙", protocol: "compatible", baseUrl: "https://b.example/v1", model: "m2", apiKey: "k2", concurrency: 32 },
       { presetId: "p3", name: "越界预设", protocol: "compatible", baseUrl: "https://c.example/v1", model: "m3", apiKey: "k3", concurrency: 99 },
     ],
   }).presetPool;
 
   assert.equal(pool.length, 3, "三个预设都要保留：漏掉 presetPool 就只剩主配置一条通道");
   assert.deepEqual(pool.map((item) => item.presetId), ["p1", "p2", "p3"], "预设身份必须保住，否则页面标签对不上运行数据");
-  assert.deepEqual(pool.map((item) => item.name), ["词元聚合", "火山方舟", "越界预设"]);
+  assert.deepEqual(pool.map((item) => item.name), ["服务甲", "服务乙", "越界预设"]);
   assert.deepEqual(pool.map((item) => item.concurrency), [3, 32, 99], "各自的并发上限独立保留，越界不再截断");
   assert.deepEqual(pool.map((item) => item.model), ["m1", "m2", "m3"], "每个预设用自己的模型，不借用主配置");
   assert.deepEqual(pool.map((item) => item.baseUrl), ["https://a.example/v1", "https://b.example/v1", "https://c.example/v1"]);

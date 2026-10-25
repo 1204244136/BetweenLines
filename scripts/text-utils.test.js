@@ -92,44 +92,44 @@ test("识别 index-X 标题中使用的 〇 与 X 章节编号标记", () => {
 test("正文起点检测：保留短于 18 字的开篇对话段落且不将其当作前言过滤", () => {
   const source = [
     "目錄",
-    "\n\n序章　四名少女",
-    "\n\n第一章　白井黑子毫不猶豫",
-    "\n\n「啊，御坂學姊！這裡這裡！」",
-    "\n\n身穿制服的佐天淚子，下意識地起身朝對方揮手。在放學後的鬧區若不做到這種地步，就算待在同個地方也很容易錯過彼此。",
+    "\n\n序章　雨後車站",
+    "\n\n第一章　月台邊的約定",
+    "\n\n「啊，林川學姊！看這邊！」",
+    "\n\n背著書包的甲野花子，起身朝車站入口招手。雨停後的月台上擠滿了等車的人，若不先確認彼此的位置，很容易隨著人潮走向不同的出口。",
   ].join("");
 
   const sliced = sliceMainDocument(source, "tw");
-  assert.match(sliced, /「啊，御坂學姊！這裡這裡！」/);
+  assert.match(sliced, /「啊，林川學姊！看這邊！」/);
   const paras = splitParagraphs(sliced, "tw");
-  assert.equal(paras[0].text, "「啊，御坂學姊！這裡這裡！」");
+  assert.equal(paras[0].text, "「啊，林川學姊！看這邊！」");
 });
 
 test("正文起点检测：保留紧挨正文开篇的章节标题而非切除降级为正文", () => {
   const source = [
     "彩页",
-    "\n\n序章 四位少女",
-    "\n\n「学姐，御坂学姐！看这边！我们在这！」",
-    "\n\n身穿校服的佐天泪子下意识地从座位上站了起来，使劲地挥着手。",
+    "\n\n序章 雨后车站",
+    "\n\n「学姐，林川学姐！看这里！座位在这！」",
+    "\n\n背着书包的甲野花子从候车椅上站了起来，举起手里的蓝色雨伞。",
   ].join("");
 
   const sliced = sliceMainDocument(source, "cn");
-  assert.match(sliced, /^序章 四位少女/);
+  assert.match(sliced, /^序章 雨后车站/);
   const paras = splitParagraphs(sliced, "cn");
-  assert.equal(paras[0].chapter, "序章 四位少女");
-  assert.equal(paras[0].text, "「学姐，御坂学姐！看这边！我们在这！」");
+  assert.equal(paras[0].chapter, "序章 雨后车站");
+  assert.equal(paras[0].text, "「学姐，林川学姐！看这里！座位在这！」");
 });
 
 test("正文起点检测：不丢弃短且无句末点号的开篇引子，标题经节号仍被保留", () => {
-  // 真实形态：正文页 <h1>第一章</h1><h2>1</h2><p>欢迎，上条当麻，</p><p>欢迎来到…</p>。
-  // 「欢迎，上条当麻，」既无引号也无句末点号且短于判定阈值，曾被当成非正文块，
+  // 合成夹具保留回归形态：正文页 <h1>第一章</h1><h2>1</h2><p>欢迎，甲野一郎，</p><p>欢迎来到…</p>。
+  // 「欢迎，甲野一郎，」既无引号也无句末点号且短于判定阈值，曾被当成非正文块，
   // 正文起点随之落到下一段，首段被整段切掉，整卷跨语言错位一行。
   const source = [
     "第一章",
     "\n\n1",
-    "\n\n欢迎，上条当麻，",
-    "\n\n欢迎来到绚丽多彩的Underground！",
+    "\n\n欢迎，甲野一郎，",
+    "\n\n欢迎来到灯火通明的Workshop！",
     "\n\n「唔……」",
-    "\n\n听到耳中传来的声音，上条当麻这才发现呻吟声出自自己的口中。",
+    "\n\n门口的风铃轻轻响起，甲野一郎这才注意到有人正在招呼自己。",
   ].join("");
 
   const sliced = sliceMainDocument(source, "cn");
@@ -137,10 +137,10 @@ test("正文起点检测：不丢弃短且无句末点号的开篇引子，标�
   const paras = splitParagraphs(sliced, "cn");
   assert.deepEqual(paras.map((p) => p.text), [
     "1",
-    "欢迎，上条当麻，",
-    "欢迎来到绚丽多彩的Underground！",
+    "欢迎，甲野一郎，",
+    "欢迎来到灯火通明的Workshop！",
     "「唔……」",
-    "听到耳中传来的声音，上条当麻这才发现呻吟声出自自己的口中。",
+    "门口的风铃轻轻响起，甲野一郎这才注意到有人正在招呼自己。",
   ]);
   assert.deepEqual(paras.map((p) => p.chapter), Array(5).fill("第一章"));
 });

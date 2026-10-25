@@ -408,11 +408,11 @@ test("仲裁备注格式化：记录各阶段特有修订文本以追踪演进�
     gatekeeperDecision: {
       summary: "指出语病重复与事实增补",
       needsEdit: true,
-      stage1RevisedText: "亚雷斯塔尚未登门",
+      stage1RevisedText: "甲野一郎尚未到访",
     },
     stylistReview: {
       critique: { attitude: "modify", rationale: "增强隐喻，提升文采" },
-      revisedText: "亚雷斯塔尚未叩响门扉",
+      revisedText: "甲野一郎尚未踏入小镇",
     },
     arbitration: {
       winner: "stylist",
@@ -420,9 +420,9 @@ test("仲裁备注格式化：记录各阶段特有修订文本以追踪演进�
     },
   });
   assert.ok(lines.some((l) => l === "Gatekeeper初审：指出语病重复与事实增补"));
-  assert.ok(lines.some((l) => l === "初审改案：亚雷斯塔尚未登门"));
+  assert.ok(lines.some((l) => l === "初审改案：甲野一郎尚未到访"));
   assert.ok(lines.some((l) => l.startsWith("Stylist复审[调整]：")));
-  assert.ok(lines.some((l) => l === "复审改案：亚雷斯塔尚未叩响门扉"));
+  assert.ok(lines.some((l) => l === "复审改案：甲野一郎尚未踏入小镇"));
   assert.ok(lines.some((l) => l.startsWith("Arbiter仲裁[复审方案]：")));
 });
 
