@@ -42,17 +42,17 @@ async function main() {
   }
   for (const error of speechHabits.errors) console.warn(`说话习惯表告警：${error}`);
 
-  // 对照表判定与模型无关：构建期算一次，页面在跑任务前就能看到哪些行会被对照表处理。
-  reportProgress(67, "计算对照表层");
+  // 译名表判定与模型无关：构建期算一次，页面在跑任务前就能看到哪些行会被译名表处理。
+  reportProgress(67, "计算译名表层");
   const termPrefilter = buildTermLayer({
     rows: exportRows(rows, comparisonMode),
     selectedTables: selection.termTables,
     comparisonMode,
   });
   for (const [profileId, entry] of Object.entries(termPrefilter.byProfile || {})) {
-    console.log(`对照表（构建期）${profileId}：${describeTermLayerEntry(entry)}`);
+    console.log(`译名表（构建期）${profileId}：${describeTermLayerEntry(entry)}`);
   }
-  for (const error of termPrefilter.errors) console.warn(`对照表告警：${error}`);
+  for (const error of termPrefilter.errors) console.warn(`译名表告警：${error}`);
 
   reportProgress(70, "渲染工作台页面");
   const html = makeHtml(rows, scopedSelection, projectContext, speechHabits, termPrefilter);
@@ -67,7 +67,7 @@ async function main() {
     rowsSignature: projectContext.rowsSignature,
     // 说话习惯层写在行数据之外（顶层块），不改变任何行字段与 signature。
     speechHabits,
-    // 对照表判定同理：只存行号结论（命中/一致/冲突），结果与备注仍由运行期生成。
+    // 译名表判定同理：只存行号结论（命中/一致/冲突），结果与备注仍由运行期生成。
     termPrefilter,
     rows: exportRows(rows, comparisonMode),
   }, null, 2), "utf8");
@@ -138,7 +138,7 @@ function rebuildCompareHtmlFromSnapshot(snapshotDir, options = {}) {
   );
   const projectContext = compareData.project
     || createProjectContext({ ...selection, comparisonMode }, compareData.rows || []);
-  // 对照表层有版本语义：展示口径或命中口径升级后，旧快照里的术语对不能继续原样复用。
+  // 译名表层有版本语义：展示口径或命中口径升级后，旧快照里的术语对不能继续原样复用。
   // 新项目按生成前选择重算（空数组也生效）；旧快照沿用档案来源与缺表兼容。
   let termPrefilter = compareData.termPrefilter || null;
   if ((termPrefilter?.version || 0) !== TERM_LAYER_VERSION && Array.isArray(compareData.rows) && compareData.rows.length) {

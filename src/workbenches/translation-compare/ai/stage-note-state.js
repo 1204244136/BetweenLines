@@ -1,6 +1,6 @@
 // 同一份纯函数同时供服务端队列和页面统计使用；工厂可直接序列化进快照。
 function createStageNoteTools() {
-  const marker = /^\[(AI校对|规则预筛|相似度预筛|对照表)\]/;
+  const marker = /^\[(AI校对|规则预筛|相似度预筛|译名表|对照表)\]/;
   const fieldHeader = /^(?:语义是否相同|是否需要修改|快速直通|Gatekeeper初审|(?:初审|复审|仲裁)(?:改案|建议)|修改结果|修改后|修改后文本|质量评分|评分|翻译得分|质量分级|质量等级|分级|严重程度|问题严重程度|建议改法|分析|原因|问题|分析过程|说话人|格式自动规范化|低分归因|线上查证|标点自动规范化)[：:]|^(?:Stylist复审|Arbiter仲裁)(?:\[.*?\])?：|^(?:(?:Stylist复审|文学复审|Arbiter仲裁|终审仲裁)调用(?:失败|异常)|调用失败|调用异常)[：:]|^调用失败（|^校对已终止[。：]/;
 
   function splitNoteFields(value) {
@@ -88,7 +88,7 @@ function createStageNoteTools() {
   function stageNoteState(value) {
     const text = latestAiNotePart(value).trim();
     const lines = splitNoteFields(text);
-    const automated = /^\[(AI校对|规则预筛|相似度预筛|对照表)\]/.test(lines[0] || "");
+    const automated = marker.test(lines[0] || "");
     const field = (name) => lines.find((line) => line.startsWith(name + "："))?.slice(name.length + 1).trim() || "";
     const modify = field("是否需要修改");
     const stage1 = field("Gatekeeper初审");

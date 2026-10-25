@@ -47,6 +47,50 @@ function loadFixture() {
   return tables;
 }
 
+test("说话习惯表支持通用列名并保留原格式语义", () => {
+  const file = path.join(tempDir, "generic-habits.csv");
+  fs.writeFileSync(file, [
+    "first-work,speaker,habit,type,target,other,reference,memo",
+    "S1_04,甲野一郎,オレ,第一人称,本大爷,我,俺,男性化自称",
+    ",乙川次郎,ですの,谓语形式,-,的说,,明确不作特殊处理",
+  ].join("\n"), "utf8");
+  const tables = loadSpeechTables([file]);
+  assert.deepEqual(tables.errors, []);
+  const [first, second] = tables.entries;
+  assert.equal(first.character, "甲野一郎");
+  assert.deepEqual(first.versions, { x: "本大爷", net: "我", tw: "俺" });
+  assert.equal(first.firstWorkKey.code, "S1_04");
+  assert.deepEqual(first.expectedWritings, ["本大爷"]);
+  assert.equal(second.noSpecialHandling, true);
+  assert.deepEqual(second.expectedWritings, []);
+});
+
+test("描述型习惯规则无需项目写法列，空白不等同于明确不处理", () => {
+  const file = path.join(tempDir, "descriptive-habits.json");
+  fs.writeFileSync(file, JSON.stringify([
+    { 角色: "甲野一郎", 备注: "句尾采用口语短句" },
+    { 角色: "乙川次郎", 备注: "语气正式", 项目写法: "" },
+  ]), "utf8");
+  const tables = loadSpeechTables([file]);
+  assert.deepEqual(tables.errors, []);
+  assert.equal(tables.entries.length, 2);
+  assert.deepEqual(tables.entries.map((entry) => entry.noSpecialHandling), [false, false]);
+  assert.deepEqual(tables.entries.map((entry) => entry.expectedWritings), [[], []]);
+});
+
+test("说话习惯表缺少角色或规则表头时报告格式要求", () => {
+  for (const [name, content, missing] of [
+    ["no-character.csv", "口癖,项目写法\nオレ,本大爷\n", /缺少必需表头：角色/],
+    ["no-rule.csv", "角色,自定义列\n甲野一郎,说明\n", /口癖 \/ 项目写法 \/ 备注/],
+  ]) {
+    const file = path.join(tempDir, name);
+    fs.writeFileSync(file, content, "utf8");
+    const tables = loadSpeechTables([file]);
+    assert.equal(tables.entries.length, 0);
+    assert.match(tables.errors[0], missing);
+  }
+});
+
 test("说话习惯表按表头解析，并生成强/弱名字关键词", () => {
   const tables = loadFixture();
   assert.equal(tables.entries.length, 6);

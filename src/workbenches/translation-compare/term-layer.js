@@ -1,21 +1,21 @@
 /**
- * 对照表层：构建期算判定 + 运行期交叉校验。
+ * 译名表层：构建期算判定 + 运行期交叉校验。
  *
  * 为什么和说话习惯层不一样：
  * - 说话习惯层产出的**提示词上下文**（章级命中角色），运行期复用它就等价于现算，所以直接复用；
- * - 对照表层产出的是**行级结果**（写进备注、作为「不调用模型」的唯一依据：整行只有术语），结果的生成必须留在运行期：
+ * - 译名表层产出的是**行级结果**（写进备注、作为「不调用模型」的唯一依据：整行只有术语），结果的生成必须留在运行期：
  *   它要带当次任务的标签、目标列与「已人工确认」的过滤，构建期不能替用户写备注空间。
- * - 但「哪些行会被对照表命中、命中是一致还是冲突、哪些行整行只有术语」只依赖「整卷行数据 + 对照表」，
+ * - 但「哪些行会被译名表命中、命中是一致还是冲突、哪些行整行只有术语」只依赖「整卷行数据 + 译名表」，
  *   与模型无关，因此在构建期算一次落盘：页面在跑任务之前就能标出待处理的行、给出预筛数字，
  *   离线脚本/AI/页面也能拿同一份结论对照，避免三处各算一份。
  *
  * 落盘块区分两类命中一致的行（`termOnly` / `injected`）：
- * - `termOnly`：原文的有效内容本身就是术语，对照表能给出完整结论，跳过模型；
+ * - `termOnly`：原文的有效内容本身就是术语，译名表能给出完整结论，跳过模型；
  * - `injected`：术语一致但句中还有别的内容，这一行仍要交给模型，只把术语当提示词注入。
- * 对照表只能证明「术语用对了」，证明不了「整句翻译没问题」，所以两者绝不能混为一谈。
+ * 译名表只能证明「术语用对了」，证明不了「整句翻译没问题」，所以两者绝不能混为一谈。
  *
  * 块里还带一份 `terms`（行号 → 该行命中的术语对，每行最多 `TERMS_PER_ROW_CAP` 条）：
- * 它只由「原文 + 对照表」决定，不涉及模型，因此可以随页面下发，让人在跑任务之前就能看见
+ * 它只由「原文 + 译名表」决定，不涉及模型，因此可以随页面下发，让人在跑任务之前就能看见
  * “这行到底命中了哪些术语”；**行文本与备注仍然不进产物**。
  *
  * 落盘块写在行数据之外（顶层 `termPrefilter`），不修改任何行字段，
@@ -52,7 +52,7 @@ const TERM_LAYER_VERSION = 8;
 const TERMS_PER_ROW_CAP = 8;
 
 /**
- * 对照表判定与「校对模式 + 目标列」绑定：双语只有目标列 cn，三语可以是 cn 或 tw。
+ * 译名表判定与「校对模式 + 目标列」绑定：双语只有目标列 cn，三语可以是 cn 或 tw。
  * 构建期把该模式可能用到的变体都算好（每行判定一次只要几十微秒），
  * 运行期无论用户选哪一列都能命中同一份结论。
  */
@@ -72,9 +72,9 @@ function termVariantKey(proofreadMode, targetKey) {
 function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
   // 命中但整行还有术语之外的内容：一致性只覆盖术语，这些行仍要交给模型（术语只作提示词注入）。
   const injected = [];
-  // 整行有效内容就是术语：对照表能给出完整结论，跳过模型（这是唯一跳过模型的情形）。
+  // 整行有效内容就是术语：译名表能给出完整结论，跳过模型（这是唯一跳过模型的情形）。
   const termOnly = [];
-  // 术语冲突行：对照表有强证据差异，但**结论仍由模型结合整句给出**（术语判断是模型分析的一环）。
+  // 术语冲突行：译名表有强证据差异，但**结论仍由模型结合整句给出**（术语判断是模型分析的一环）。
   // 这里单独列出是为了让页面标出“这行有术语冲突、注意模型怎么说”，不再表示“需人工确认”。
   const conflicts = [];
   // 其中「存疑」的那部分：命中的是假名写法（グループ、メンバー…），可能只是普通词。
@@ -137,7 +137,7 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
       // 同样没有双侧注音、但译文用了该译名，因而降级为「只作一致性证据」的候选条数：
       // 它们算命中，只是不再具备指控译名差异的能力。
       rubyDemoted: rubyDemotedCandidates.length,
-      // 对照表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
+      // 译名表直接出结论、不再交给模型的行数（其余还要过规则/相似度预筛与模型）。
       removedFromModel: termOnly.length,
       aiRows: Math.max(0, rows.length - termOnly.length),
       chapters: chapters.size,
@@ -146,7 +146,7 @@ function evaluateVariant({ rows = [], tables, proofreadMode, targetKey }) {
 }
 
 /**
- * 构建期：为每个声明了对照表的档案算出各变体下的命中判定。
+ * 构建期：为每个声明了译名表的档案算出各变体下的命中判定。
  * @returns {{ version: number, generatedAt: string, byProfile: Record<string, object>, errors: string[] }}
  */
 function buildTermLayer({ rows = [], profiles = null, envTables = [], selectedTables = null, comparisonMode = "bilingual" } = {}) {
@@ -158,7 +158,7 @@ function buildTermLayer({ rows = [], profiles = null, envTables = [], selectedTa
     selectedTables,
     tableKey: "termTables",
     normalize: normalizeTermTablePaths,
-    envName: "环境变量指定的对照表",
+    envName: "环境变量指定的译名表",
   });
 
   const variants = termVariantsFor(comparisonMode);
@@ -197,7 +197,7 @@ function buildTermLayer({ rows = [], profiles = null, envTables = [], selectedTa
 }
 
 /**
- * 运行期：本次实际用到的对照表路径。
+ * 运行期：本次实际用到的译名表路径。
  *
  * 指纹要 stat 真实文件，而落盘块里只有文件名，所以运行期必须自己解析路径——
  * 口径与构建期 `tableSourceCandidates` 相同（档案声明 → 环境变量，同一份归一化与去重），
@@ -258,7 +258,7 @@ function describeTermLayerEntry(entry, variantKey = "") {
   const detail = summary.termOnly === undefined
     ? `译名一致 ${summary.consistent}`
     : `译名一致 ${summary.consistent}（整行只有术语 ${summary.termOnly}，需注入术语 ${summary.injected}）`;
-  return `对照表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（${detail}，术语冲突交 AI 判断 ${summary.conflicts}，目标列 ${targetLabel}）`;
+  return `译名表：${(entry.files || []).length} 张表 / ${entry.entries} 条术语 / 命中 ${variant.hits} 行（${detail}，术语冲突交 AI 判断 ${summary.conflicts}，目标列 ${targetLabel}）`;
 }
 
 module.exports = {

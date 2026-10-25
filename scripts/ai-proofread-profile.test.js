@@ -124,7 +124,7 @@ test("特化档案可替换、可继承，未知档案回落到默认，坏档�
   })[1].content);
   assert.deepEqual(user.profile, { id: "novel", name: "小说成品（简中 EPUB）" });
 
-  // 特化侧的第二类内容：档案可以声明辅助判断数据（译名对照表），状态接口如实报告。
+  // 特化侧的第二类内容：档案可以声明辅助判断数据（译名表），状态接口如实报告。
   assert.deepEqual(resolveProfile("test-profile").termTables, [path.join(tempDir, "profile-terms.csv")]);
   const status = clientStatus({ includeResults: false, profileId: "test-profile" }).termTableStatus;
   assert.equal(status.files.length, 1);
@@ -294,9 +294,9 @@ test("AI 面板按注册表渲染特化规范下拉，并按档案嵌入默认�
 
   const html = makeHtml(rows, selection, projectContext);
   assert.match(html, /<label for="aiProfile">特化规范<\/label>/);
-  // 面板上能看到对照表状态，一眼确认表有没有生效。
+  // 面板上能看到译名表状态，一眼确认表有没有生效。
   assert.match(html, /id="aiTermTableHint"/);
-  assert.match(html, /控制台生成前选择的译名对照表/);
+  assert.match(html, /控制台生成前选择的译名表/);
   assert.match(html, /<option value="novel" selected>小说成品（简中 EPUB）<\/option>/);
   assert.match(html, new RegExp(`<option value="test-profile">${testProfileName}</option>`));
 
@@ -314,7 +314,7 @@ test("AI 面板按注册表渲染特化规范下拉，并按档案嵌入默认�
   assert.equal(pageMeta.proofreadPrompt.profileId, "novel");
 });
 
-test("对照表命中的术语作为提示词注入，且不会与自定义提示词里的残留段落重复", () => {
+test("译名表命中的术语作为提示词注入，且不会与自定义提示词里的残留段落重复", () => {
   const tables = loadTermTables([path.join(tempDir, "profile-terms.csv")]);
   // 整行不止术语：一致也只作提示，不能跳过模型，因此这里必须由提示词把术语告诉模型。
   const source = "【試作】の機体を動かす。";

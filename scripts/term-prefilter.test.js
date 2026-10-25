@@ -62,7 +62,7 @@ function publishRows(label, rows, extra = {}) {
   return project;
 }
 
-test("对照表只跳过整行都是术语的行，其余命中行注入术语后照常调用模型", async () => {
+test("译名表只跳过整行都是术语的行，其余命中行注入术语后照常调用模型", async () => {
   clearProofreadCache();
   const rows = [
     // 无注音条目命中强证据差异（译文用的是“其他译法”）——术语冲突行不通过预筛，
@@ -73,7 +73,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     // 但译文侧没有注音 → 降级为只作一致性证据，仍然可以判「整行只有术语」并跳过模型。
     { index: 3, jp: "<ruby>発信機<rt>はっしんき</rt></ruby>", cn: "【发信器】", tw: "", twCn: "", score: 0 },
     { index: 4, jp: "今日はいい天気だ。", cn: "今天天气不错。", tw: "", twCn: "", score: 0 },
-    // 命中的是假名写法（グループ）：可能只是普通词，对照表不得定论，必须交给模型判断。
+    // 命中的是假名写法（グループ）：可能只是普通词，译名表不得定论，必须交给模型判断。
     { index: 5, jp: "街の八割を分類する六段階評価の、まさに頂点グループ。", cn: "在把都市居民分成六级的评价系统中，处于顶级位置的一类人。", tw: "", twCn: "", score: 0 },
     // 注音条目降级、且译文没用该项目译名（正文里的「ＧＰＳ発信機」是普通词义的发射机）：
     // 不算命中、不注入、不指控——这是这条口径刻意选的保守方向。
@@ -126,20 +126,20 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     const finished = clientStatus();
     const byIndex = new Map(finished.results.map((result) => [result.index, result]));
 
-    // 第 1 行：术语冲突 → 不由对照表出结论，注入冲突线索后交给模型（相似度分再高也不通过预筛）。
-    assert.match(byIndex.get(1).note, /^\[AI校对\]/, "术语冲突行必须经过模型，不写面向人工的对照表结论");
-    // 第 2 行：术语一致，但句中还有别的内容 → 不写对照表备注，注入术语后由模型给结论。
+    // 第 1 行：术语冲突 → 不由译名表出结论，注入冲突线索后交给模型（相似度分再高也不通过预筛）。
+    assert.match(byIndex.get(1).note, /^\[AI校对\]/, "术语冲突行必须经过模型，不写面向人工的译名表结论");
+    // 第 2 行：术语一致，但句中还有别的内容 → 不写译名表备注，注入术语后由模型给结论。
     assert.match(byIndex.get(2).note, /^\[AI校对\]/);
     // 第 3 行：整行有效内容就是术语，直接标记完成（唯一跳过模型的情形）。
-    assert.match(byIndex.get(3).note, /^\[对照表\]/);
+    assert.match(byIndex.get(3).note, /^\[译名表\]/);
     assert.match(byIndex.get(3).note, /该行有效内容全部是本项目术语/);
     assert.match(byIndex.get(3).note, /是否需要修改：否/);
     assert.match(byIndex.get(3).note, /未双侧注音，只作一致性证据/, "降级命中不写指控口吻");
     assert.equal(byIndex.get(3).done, true);
-    // 第 4 行：没命中对照表，仍然交给模型。
+    // 第 4 行：没命中译名表，仍然交给模型。
     assert.match(byIndex.get(4).note, /^\[AI校对\]/);
-    // 第 5 行：命中的是假名写法（可能只是普通词）→ 对照表不得出结论，照常交给模型判断。
-    assert.match(byIndex.get(5).note, /^\[AI校对\]/, "存疑行不该写对照表结论");
+    // 第 5 行：命中的是假名写法（可能只是普通词）→ 译名表不得出结论，照常交给模型判断。
+    assert.match(byIndex.get(5).note, /^\[AI校对\]/, "存疑行不该写译名表结论");
     assert.equal(byIndex.get(5).done, true);
     // 第 6 行：降级且译文没用该项目译名 → 不算命中，普通 AI 行（不注入、不指控）。
     assert.match(byIndex.get(6).note, /^\[AI校对\]/);
@@ -147,9 +147,9 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     assert.equal(requestCount, 5, "第 1 行（术语冲突）、第 2 行（术语+别的词）、第 4 行（未命中）、第 5 行（存疑）、第 6 行（注音不足不算命中）都要调用模型");
     const injectedSystem = sentSystems.find((system) => system.includes("東雲太郎 → 東雲太郎"));
     assert.ok(injectedSystem, "命中术语但整行不止术语时，标签与术语要作为提示词注入");
-    assert.match(injectedSystem, /【术语（对照表命中）】/);
+    assert.match(injectedSystem, /【术语（译名表命中）】/);
     assert.match(injectedSystem, /- 東雲太郎 → 東雲太郎（人名\/日式全名）/);
-    assert.match(injectedSystem, /对照表只能证明术语译名对不对，不能证明整句翻译没有问题/);
+    assert.match(injectedSystem, /译名表只能证明术语译名对不对，不能证明整句翻译没有问题/);
     assert.match(injectedSystem, /术语判断是本次分析里的一个环节/, "提示词要说明术语判断是模型分析的一环");
     // 术语冲突同样注入，但措辞面向模型：给的是证据与线索，要不要改由模型结合整句判断。
     const conflictSystem = sentSystems.find((system) => system.includes("召喚陣 → 召唤阵"));
@@ -167,7 +167,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
     assert.equal(finished.termConflicts, 1);
     assert.equal(finished.termRubyDemoted, 1, "降级为只作一致性证据的候选要如实报数");
     assert.deepEqual(finished.termTables.entries, 4);
-    assert.match(finished.logs.join("\n"), /对照表：1 张表 \/ 4 条术语：命中 4 行（整行只有术语、跳过模型 1，术语冲突 1，存疑交模型判断 1），另有 3 行的术语作为提示词注入后照常交给模型/);
+    assert.match(finished.logs.join("\n"), /译名表：1 张表 \/ 4 条术语：命中 4 行（整行只有术语、跳过模型 1，术语冲突 1，存疑交模型判断 1），另有 3 行的术语作为提示词注入后照常交给模型/);
     assert.match(finished.logs.join("\n"), /1 条候选因中日两侧没有同时注音，降级为只作一致性证据/);
     assert.match(finished.logs.join("\n"), /1 条候选因没有同时注音、且译文未出现该译名而未参与判定/, "第 6 行的候选要如实报数");
     assert.match(finished.logs.join("\n"), /术语冲突 1 行不通过预筛，交给 AI 判断/);
@@ -179,7 +179,7 @@ test("对照表只跳过整行都是术语的行，其余命中行注入术语�
   }
 });
 
-test("状态接口给出对照表状态：条数、路径去重、失败告警", () => {
+test("状态接口给出译名表状态：条数、路径去重、失败告警", () => {
   const table = writeTermTable("status");
   try {
     // 同一张表的三种写法（原样、绝对路径、带 ./ 的相对写法）必须只算一张表。
@@ -200,7 +200,7 @@ test("状态接口给出对照表状态：条数、路径去重、失败告警",
   }
 
   const none = clientStatus({ includeResults: false, profileId: "novel" }).termTableStatus;
-  assert.deepEqual(none.files, [], "没有声明对照表时要如实报告未声明");
+  assert.deepEqual(none.files, [], "没有声明译名表时要如实报告未声明");
   assert.equal(none.entries, 0);
 });
 
@@ -213,7 +213,7 @@ test("运行期把本次判定与构建期落盘结论对照：一致时明说�
   ];
   const layer = buildTermLayer({
     rows,
-    profiles: [{ id: "novel", name: "对照表层测试档案", termTables: [table] }],
+    profiles: [{ id: "novel", name: "译名表层测试档案", termTables: [table] }],
     comparisonMode: "bilingual",
   });
   const project = publishRows("term-layer-match", rows, { termPrefilter: layer });
@@ -239,16 +239,16 @@ test("运行期把本次判定与构建期落盘结论对照：一致时明说�
 
   // 表没变：两次判定一致，日志要明确说出「与构建期预筛一致」。
   const matched = await run("match");
-  assert.match(matched, /对照表：与构建期预筛一致（构建期判定 2 行，本次参与 2 行）/);
+  assert.match(matched, /译名表：与构建期预筛一致（构建期判定 2 行，本次参与 2 行）/);
 
   // 表被改过：指纹过期，运行期按最新表判定并提示重新构建工作台。
   fs.appendFileSync(table, "\n【天気】,てんき,【天气】,,,常用词\n", "utf8");
   const stale = await run("stale");
-  assert.match(stale, /对照表文件在构建工作台之后被修改过/);
+  assert.match(stale, /译名表文件在构建工作台之后被修改过/);
   assert.equal(/与构建期预筛一致/.test(stale), false);
 });
 
-test("没有对照表时行为与之前一致，全部交给模型", async () => {
+test("没有译名表时行为与之前一致，全部交给模型", async () => {
   clearProofreadCache();
   const rows = [
     { index: 1, jp: "ＧＰＳ発信機を取り外す。", cn: "取下GPS信号发射机。", tw: "", twCn: "", score: 0 },

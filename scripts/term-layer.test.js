@@ -1,5 +1,5 @@
 /**
- * 对照表层：构建期落盘的判定必须可复用、可审计，并且不碰行数据。
+ * 译名表层：构建期落盘的判定必须可复用、可审计，并且不碰行数据。
  * 判定规则本身的测试在 term-table.test.js / term-prefilter.test.js，这里只测「层」。
  */
 const assert = require("node:assert/strict");
@@ -41,7 +41,7 @@ function writeTable(name = "terms.csv", content = TERM_CSV) {
 
 const profile = (file) => ({ id: "unit", name: "单元测试档案", termTables: [file] });
 
-/** 生成一个带对照表层的快照页面（页面徽标与离线脚本共用这一份数据）。 */
+/** 生成一个带译名表层的快照页面（页面徽标与离线脚本共用这一份数据）。 */
 function buildFixturePage(label) {
   const file = writeTable(`${label}-terms.csv`);
   const rows = fixtureRows().map((row) => ({ ...row, signature: `sig-${row.index}` }));
@@ -168,7 +168,7 @@ test("摘要与缺表行为", () => {
   });
   assert.deepEqual(Object.keys(layer.byProfile), ["unit"]);
   const text = describeTermLayerEntry(layer.byProfile.unit);
-  assert.match(text, /对照表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2（整行只有术语 0，需注入术语 2），术语冲突交 AI 判断 1，目标列 译文 B）/);
+  assert.match(text, /译名表：1 张表 \/ 2 条术语 \/ 命中 3 行（译名一致 2（整行只有术语 0，需注入术语 2），术语冲突交 AI 判断 1，目标列 译文 B）/);
   assert.equal(describeTermLayerEntry(null), "");
 });
 
@@ -181,10 +181,10 @@ test("构建期层不写进行数据，不影响行签名", () => {
   // 只存行号结论：块里不出现行文本，也不出现备注内容
   const text = JSON.stringify(layer);
   assert.equal(text.includes("山田太郎来了"), false);
-  assert.equal(text.includes("[对照表]"), false);
+  assert.equal(text.includes("[译名表]"), false);
 });
 
-test("从快照重建页面时沿用落盘的对照表判定", () => {
+test("从快照重建页面时沿用落盘的译名表判定", () => {
   const { html, pageMeta } = buildFixturePage("snapshot");
   assert.match(html, new RegExp(`"termPrefilter":\\{"version":${TERM_LAYER_VERSION}`));
   assert.deepEqual(pageMeta.termPrefilter.byProfile.unit.variants["bilingual:cn"].conflicts, [2]);
@@ -194,7 +194,7 @@ test("从快照重建页面时沿用落盘的对照表判定", () => {
   assert.equal(html.includes(tempDir), false, "页面不得出现本机完整路径");
 });
 
-test("从旧版快照重建页面时按当前对照表重算术语对", () => {
+test("从旧版快照重建页面时按当前译名表重算术语对", () => {
   const file = writeTable(
     "rebuild-separator-terms.csv",
     ["Base_Ori,Base_Trans,Type", "イスラエル＝リガルディ,伊斯瑞·雷加第,人名/西式全名"].join("\n"),
@@ -272,7 +272,7 @@ test("页面按构建期判定给未跑过的行标出术语徽标，并跟随�
   assert.equal(own.__verdicts.get("4"), undefined, "没命中的行不该有徽标");
   assert.match(own.__summary, /构建期预筛 3 行命中（整行只有术语、跳过模型 0；其余 3 行注入术语后交给模型，其中术语冲突 1 行），预计 4 行仍需 AI 判定/);
 
-  // 换档案：该档案没有对照表 → 不发徽标；换成没算过的变体 → 回落到默认变体
+  // 换档案：该档案没有译名表 → 不发徽标；换成没算过的变体 → 回落到默认变体
   assert.equal(run("other").__verdicts.size, 0);
   const otherVariant = run("unit", { proofreadMode: "trilingual", target: "tw" });
   assert.equal(otherVariant.__verdicts.get("2"), "conflict", "没有该变体时回落到默认变体");
@@ -296,7 +296,7 @@ test("术语预判将状态与命中条数合为单一入口，清单独立于�
   assert.match(hit, /aria-controls="term-list-1"/);
   assert.match(hit, /<ul id="term-list-1" class="term-chip-list" data-term-list="1"[^>]*\bhidden>/);
   assert.match(hit, /山田太郎 → 山田太郎（人名）/);
-  assert.match(hit, /构建期判定：本行原文命中对照表 1 条术语/);
+  assert.match(hit, /构建期判定：本行原文命中译名表 1 条术语/);
   assert.doesNotMatch(hit, /term-chip-state">预判</, "预判来源放在悬停说明里，不再重复占位");
   assert.match(hit, /<div class="confirm-status">[\s\S]*?<\/div><div class="term-chip-slot" data-term-chip-slot="1">/);
   assert.doesNotMatch(hit, /<div class="confirm-status">(?:(?!<\/div>)[\s\S])*data-term-chip/, "展开清单不能位于宽度受限的状态徽标组里");
@@ -406,7 +406,7 @@ test("校对备注到达后替换术语预判，保留清单与开合并避免�
   assert.match(markup, /term-chip-state">结论<\/span>/);
   assert.doesNotMatch(markup, /is-injected|术语注入|构建期判定/);
   assert.match(markup, /山田太郎 → 山田太郎（人名）/);
-  assert.match(markup, /术语清单来自对照表/);
+  assert.match(markup, /术语清单来自译名表/);
   assert.match(markup, /aria-expanded="true"/);
   assert.doesNotMatch(markup, /data-term-list="1"[^>]*\bhidden/);
   assert.equal(replacements, 1);

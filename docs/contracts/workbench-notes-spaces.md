@@ -189,7 +189,7 @@
 
 ## 客户端布局缓存边界
 
-- 术语判定与命中条数由 `renderTermChipHtml` 合成同一个原生按钮；有备注时移除构建期判定，清单仍来自当前对照表变体。旧快照缺少清单时保留静态判定，无命中则隐藏入口。`.term-chip-slot` 在 `.confirm-status` 外，按钮和整宽列表直接参与 `.confirm-row` 布局，展开不能改变顶部标签的位置。原生按钮仅走一次 `click`，同步 `aria-expanded` 与列表 `hidden`；`termOpenRows` 保留本页会话的开合选择，备注回包与分页重绘不得收起清单或触发整表量高。同内容回包复用 `termChipHtmlCache`，入口更新时保留键盘焦点。回归：`node --test scripts/term-layer.test.js`。
+- 术语判定与命中条数由 `renderTermChipHtml` 合成同一个原生按钮；有备注时移除构建期判定，清单仍来自当前译名表变体。旧快照缺少清单时保留静态判定，无命中则隐藏入口。`.term-chip-slot` 在 `.confirm-status` 外，按钮和整宽列表直接参与 `.confirm-row` 布局，展开不能改变顶部标签的位置。原生按钮仅走一次 `click`，同步 `aria-expanded` 与列表 `hidden`；`termOpenRows` 保留本页会话的开合选择，备注回包与分页重绘不得收起清单或触发整表量高。同内容回包复用 `termChipHtmlCache`，入口更新时保留键盘焦点。回归：`node --test scripts/term-layer.test.js`。
 - `workbench-client.js` 的 `syncVisibleRowLayout` 只在四种情况下重新量输入框高度：新节点（整页重渲染）、该行内容改写（`invalidateRevisionEditorHeight`）、视口高度变化、列宽变化（`remeasureEditors`）。面板与抽屉开合只经 `ifFrameMoved` 重算可用高度；开关审核轨迹不触发布局同步。
 - 批量量高由 `measureRevisionEditors` 执行「整批写 `height:auto` → 连续读 `scrollHeight` → 统一写回」。禁止逐行交错读写；单行量高仍走 `syncRevisionEditorHeight`。事件处理器不得逐行调用整批量高，`resize` 要合并到一帧并在尺寸稳定后重新测量。
 - `updateResultsMaxHeight` 的行数来自 `renderVisibleRows` 传入的切片长度或 `renderedRowsById.size`，不能为数行数读取表格 DOM。一次同步只查询一次 `.revision-editor`，失效与量高复用同一份列表。

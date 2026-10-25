@@ -5,7 +5,7 @@ const { FEATURE_IDS, unknownFeatureIds } = require("./row-features");
 // 实体闸门（只对某个角色/专有词成立的规则按行注入）：声明名单由档案给出，判定在 name-entities。
 const { detectRowEntities, entityGateReport, profileEntities } = require("./name-entities");
 // 段首标记的唯一定义在注入层（term-prefilter）：这里只借用前缀做剥离，不复制字面量。
-const { TERM_BLOCK_PREFIX } = require("./term-prefilter");
+const { TERM_BLOCK_PREFIX, LEGACY_TERM_BLOCK_PREFIX } = require("./term-prefilter");
 // 线上查证段的段首标记同样只在注入层定义一次。
 const { WEB_LOOKUP_PREFIX } = require("./web-lookup");
 // 低分归因段的段首标记同样只在注入层定义一次。
@@ -126,12 +126,12 @@ const genericHeader = "【通用校对规则】";
  * | 1 通用侧 | 与作品、模式无关的任务契约：证据优先级、needsContext、档位与字段约定；片段、noteref 语义与原文外内容按现象命中 | 本文件 `sharedInstructions` | 核心契约每行；三条条件规则命中 `fragment`/`noteref`/`outOfScope` 时 |
  * | 2 模式层 | 当前比较模式的列语义与结论字段（双语 A/B、三语 A/B/C） | 本文件 `modeContracts` | 每行 |
  * | 3 特化档案 | 作品/阶段规范，分三种条目：**常驻条目**（关系、作品专有、证据边界）、**按行条目**（排版层、文本层规范，声明 `features`）与**实体条目**（只对某个角色/专有词成立的规范，声明 `characters`） | `profiles/*.js` | 常驻每行；按行条目只在该行命中特征时（`row-features.js`）、实体条目只在该行真的出现那个名字时（`name-entities.js`） |
- * | 4 动态上下文 | 对照表命中段、说话习惯段、说话人判断段、低分归因段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`low-score.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
+ * | 4 动态上下文 | 译名表命中段、说话习惯段、说话人判断段、低分归因段、线上查证段 | `term-prefilter.js`、`speech-habit.js`、`low-score.js`、`web-lookup.js` | 命中该行/该章/该轮才注入 |
  * | 5 固定输出约束 | noteref 硬性约束、全局术语表、JSON 输出约定 | 本文件 + `ai/prompt-contract.js` | 每行，位于稳定前缀内且各只出现一次 |
  *
  * **分层（请求里注入了什么）与判定链（结论怎么一步步来的）是两个视角，别混为一谈**：
  *
- * 判定链：对照表（离线四类结论）→ 模型（基础轮 + 上下文轮）→ 低分归因与修复（极低分行的相邻行）→ 线上查证（按站点顺序 + 自行检索）→ 输出侧确定性工序（成品格式门禁 → 标点规范化：宽度统一、引号体例统一与成对标记内的句末点号还原 → 修订结果混入原文文字或残留无法配对的弯引号就作废转人工）→ 待人工
+ * 判定链：译名表（离线四类结论）→ 模型（基础轮 + 上下文轮）→ 低分归因与修复（极低分行的相邻行）→ 线上查证（按站点顺序 + 自行检索）→ 输出侧确定性工序（成品格式门禁 → 标点规范化：宽度统一、引号体例统一与成对标记内的句末点号还原 → 修订结果混入原文文字或残留无法配对的弯引号就作废转人工）→ 待人工
  * 对应层：第 4 层的术语段 ──── 第 1/2/3/5 层（+ 相邻行）── 第 4 层的低分归因段 ──── 第 4 层的线上查证段 ──── 无（输出侧的每一步都是结论产出**之后**的确定性工序，不读提示词，见 `format-guard.js`/`punctuation.js`/`ai-proofread.js` 的 `guardTargetScript`，三步顺序写在 `applyFormatGuard` → `normalizeDecisionPunctuation` → `guardTargetScript` 的调用处）──── 无（终局）
  *
  * 约束：
@@ -386,11 +386,14 @@ function stripProfileBlock(text) {
 
 // 说话习惯段与说话人判断段都是动态生成的（按章、按行）：自定义提示词里可能留着上一次的，
 // 先剥掉再注入本次的。段首标记用前缀匹配，避免与档案正文里提到的「【说话习惯】」混淆。
-// 对照表命中段、低分归因段与线上查证段同理（按行/按轮生成，只会出现在命中的那一次请求里）。
+// 译名表命中段、低分归因段与线上查证段同理（按行/按轮生成，只会出现在命中的那一次请求里）。
 const dynamicBlockPrefixes = [
   speechHabitPrefix,
   "【说话人判断（",
   TERM_BLOCK_PREFIX,
+  LEGACY_TERM_BLOCK_PREFIX,
+  "【译名表（",
+  "【译名对照表（",
   LOW_SCORE_PREFIX,
   WEB_LOOKUP_PREFIX,
 ];
@@ -438,7 +441,7 @@ function buildProofreadSystemPromptParts({
   const parts = defaultPromptParts(contract, profile, scope, glossary);
   // 界面预填的就是完整默认提示词（含 JSON 输出约定与硬性约束），用户可能只改了几个字：
   // 先剥掉旧的 JSON 尾巴、硬性约束行、上一次的特化档案块、上一章的说话习惯段、上一行的术语段与
-  // 低分归因段，再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层、对照表命中段与
+  // 低分归因段，再按“是否已带本模式规则”补模式规则，特化侧、说话习惯层、译名表命中段与
   // 低分归因段总是按本次上下文重新注入。
   const custom = stripSpeechHabitBlock(stripNoterefConstraint(stripProfileBlock(stripJsonContract(customSystem))));
   // 动态段按“由内到外补充资料”的顺序排列：术语命中 → 说话习惯 → 低分归因（相邻行）→ 线上查证（最外层）。

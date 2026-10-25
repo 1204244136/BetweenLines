@@ -103,7 +103,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     writebackBackup: Boolean(selection.writebackBackup),
     // 说话习惯层的构建期结果：页面用它显示“本卷命中概览”并标出疑似说话特色流失的行。
     speechHabits,
-    // 对照表的构建期判定：页面用它标出“纯术语（跳过模型）/术语注入/术语冲突”的行，并给出预筛数字。
+    // 译名表的构建期判定：页面用它标出“纯术语（跳过模型）/术语注入/术语冲突”的行，并给出预筛数字。
     termPrefilter,
     ...(notesRecovery ? { notesRecovery } : {}),
   };
@@ -279,7 +279,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   </select>
                 </div>
                 <div class="ai-field ai-field--wide">
-                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">对照表：检测中…</span>
+                  <span id="aiTermTableHint" class="ai-term-hint" data-state="pending" title="控制台生成前选择的译名表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突）都把术语作为提示词注入，整句交给模型判断。">译名表：检测中…</span>
                   <span id="aiSpeechHabitHint" class="ai-term-hint" data-state="pending" title="控制台生成前选择的说话习惯表：按章/按卷命中人名后，该角色的说话特色不会被判为翻译错误。">说话习惯：检测中…</span>
                 </div>
               </div>

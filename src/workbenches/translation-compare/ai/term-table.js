@@ -1,7 +1,7 @@
 /**
- * 特化侧的辅助判断数据：术语/译名对照表。
+ * 特化侧的辅助判断数据：术语/译名表。
  *
- * 与提示词的分工：提示词只放“判断规则”，动辄上千行的对照表不进提示词，
+ * 与提示词的分工：提示词只放“判断规则”，动辄上千行的译名表不进提示词，
  * 而是先做确定性预处理——整行有效内容都是术语时直接出结论（跳过模型），其余命中行把术语与
  * 冲突线索注入提示词后**照常交给模型**：术语判断是模型分析里的一个环节，不是面向人工的终局结果。
  *
@@ -43,7 +43,7 @@
  */
 const path = require("path");
 const { toCn } = require("../../../ingest/text-utils");
-const { readRecords } = require("../../../core/spreadsheet");
+const { readRecords, requireColumns } = require("../../../core/spreadsheet");
 const { firstColumn, stripInlineMarkup } = require("../../../core/text-helpers");
 
 const COLUMN_CANDIDATES = {
@@ -77,7 +77,7 @@ const HAS_EFFECTIVE_CHAR = /[^\p{P}\p{S}]/u;
 /**
  * 纯术语行的判定阈值。
  *
- * 对照表只能证明「术语用对了」，证明不了「整行的其余部分翻译没问题」。所以一行只有在
+ * 译名表只能证明「术语用对了」，证明不了「整行的其余部分翻译没问题」。所以一行只有在
  * **有效内容本身就是术语**（术语之外只剩句读之类的一两个字符）时才允许跳过模型；
  * 只要句中还有别的词，就必须把术语当提示词注入、照常交给模型。
  */
@@ -85,7 +85,7 @@ const TERM_ONLY_FREE_CHARS = 2;
 const TERM_ONLY_FREE_RATIO = 0.2;
 
 /**
- * 判定门槛：够长的**基文别名**才允许由对照表指控“译名不一致”（`strong`）。
+ * 判定门槛：够长的**基文别名**才允许由译名表指控“译名不一致”（`strong`）。
  *
  * 2 字词（時代、部屋、階層）在正文里常以普通词义出现，只能用来确认一致、不能指控译名错误；
  * 1 字别名在 `isAliasUsable` 阶段就被排除（会和长词片段撞车）。
@@ -414,9 +414,10 @@ function checkTargetConsistency(entry, targetKey) {
 
 function loadTermTable(file, options = {}) {
   const { sheet, headers, records } = readRecords(file, options);
+  requireColumns(headers, { 原文: COLUMN_CANDIDATES.source, 译名: COLUMN_CANDIDATES.target }, "译名表");
   const entries = records.map(normalizeTermEntry).filter(Boolean);
   if (!entries.length) {
-    throw new Error(`对照表没有可用条目（需要原文列与译名列）：${file}`);
+    throw new Error(`译名表没有可用条目（需要原文列与译名列）：${file}`);
   }
   return { file, sheet, headers, entries };
 }
@@ -647,7 +648,7 @@ function measureTermCoverage(sourceText, hits) {
 }
 
 /**
- * 判定一行：命中对照表则返回 { kind, hits, revisedText? }；证据不足时返回 null（交回后续流程）。
+ * 判定一行：命中译名表则返回 { kind, hits, revisedText? }；证据不足时返回 null（交回后续流程）。
  *
  * kind 的三种取值说明这行接下来怎么走：
  * - `term-only`：命中一致，且原文的有效内容本身就是这些术语（术语之外只剩句读），
@@ -666,7 +667,7 @@ function measureTermCoverage(sourceText, hits) {
  *    并把线索写进提示词交给模型；
  * 2. 2 字词、读音别名、分段别名只能“确认一致”，不能指控译名错误——2 字词常以普通词义出现，
  *    读音与基文可能对应不同中文，分段写法（只写姓或名）也说不清本行用的是哪一条；
- * 3. 一行若既没有强证据、也没被确认一致，就不由对照表处理，继续走 AI；
+ * 3. 一行若既没有强证据、也没被确认一致，就不由译名表处理，继续走 AI；
  * 4. 非人名条目声明了注音时，还要**中日两侧都注音**才算“表里那个专有名词”（见文件头）：
  *    只对上原文侧的候选**降级为只作一致性证据**——译文用了该译名才算命中，否则不算命中；
  *    `rubySkipped` 报出被排除的候选条数，`rubyDemoted` 报出降级命中的候选条数。
@@ -705,10 +706,10 @@ function evaluateTermRow({ source, target, tables, rejected = null, demoted = nu
       };
     }
     const variant = via ? null : findWrongVariant(plainTarget, entry);
-    // **存疑（advisory）**：命中的基文别名全是假名（グループ、メンバー、トリック…）时，对照表不足以定论。
+    // **存疑（advisory）**：命中的基文别名全是假名（グループ、メンバー、トリック…）时，译名表不足以定论。
     // 这类写法在正文里常常就是普通词，而术语表里它可能只是某个组织名/招式名的写法之一；译文没用该译名，
     // 既可能是译名没统一，也可能这里本来就是普通词义——只有结合上下文的模型（与最终的人工）能判断。
-    // 因此标为 advisory：不写对照表结论、不跳过模型，改为把该术语注入提示词后照常交给模型判断。
+    // 因此标为 advisory：不写译名表结论、不跳过模型，改为把该术语注入提示词后照常交给模型判断。
     const advisory = Boolean(variant === null && !via && KANA_ONLY_BASE.test(String(alias || "")));
     return { entry, alias, aliases: usableAliases(entry), scope, strong, demoted: false, consistent: via ? true : false, via, variant, advisory };
   });
@@ -825,11 +826,11 @@ function formatTermHitGroups(hits = []) {
 }
 
 function termTableSummary(tables) {
-  return `对照表：${tables.files.length} 张表 / ${tables.entries.length} 条术语`;
+  return `译名表：${tables.files.length} 张表 / ${tables.entries.length} 条术语`;
 }
 
 /**
- * 归一化对照表路径并去重：同一张表可能同时由特化档案、环境变量和命令行给出，
+ * 归一化译名表路径并去重：同一张表可能同时由特化档案、环境变量和命令行给出，
  * 路径写法（相对路径、重复分隔符、大小写）不同也必须只加载一次。
  */
 function normalizeTermTablePaths(paths = []) {

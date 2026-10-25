@@ -86,6 +86,31 @@
       color: var(--muted);
       font-size: 13px;
     }
+    .table-help {
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .table-help summary {
+      width: fit-content;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .table-help summary:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+    }
+    .table-help p { margin: 8px 0; }
+    .table-help pre {
+      padding: 8px;
+      margin: 8px 0;
+      white-space: pre-wrap;
+      background: var(--surface-subtle);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12px;
+    }
     main {
       display: grid;
       grid-template-columns: minmax(460px, 600px) minmax(0, 1fr);
@@ -1087,23 +1112,45 @@
 
       <div class="panel stack" id="translationTablesPanel">
         <h2>辅助表格 <span class="section-kicker">可选</span></h2>
-        <div class="subtle" title="生成前选择；留空即不挂载，多个路径用分号分隔。">XLSX / CSV / TSV / JSON；多文件用分号分隔。</div>
+        <div class="subtle">生成前选择，留空即不挂载；支持 XLSX / CSV / TSV / JSON，多文件路径用分号分隔。修改选择或表内容后需重新生成。</div>
         <div class="field">
-          <label class="field__label" for="termTables">对照表</label>
+          <label class="field__label" for="termTables">译名表</label>
           <div class="row">
-            <input id="termTables" type="text" placeholder="未挂载" aria-label="对照表路径">
+            <input id="termTables" type="text" placeholder="未挂载" aria-label="译名表路径" aria-describedby="termTablesHelp">
             <button id="termTablesPick" class="btn" type="button">选择文件</button>
             <button id="termTablesClear" class="btn" type="button">清空</button>
           </div>
+          <div class="subtle" id="termTablesHelp">必需列：原文 + 译名。兼容 Base_Ori + Base_Trans，也可用 source + target；列顺序不限。</div>
+          <details class="table-help">
+            <summary>译名表格式与示例</summary>
+            <p>一行一个词条，原文与译名都要有值；缺任一值的行不参与匹配。可选列：读音 / ruby、类型 / type、其他译名 / other、备注 / memo。原表的 Ruby_Ori、Ruby_Trans、Other_Fandom、Memo1 / Memo2 继续可用。</p>
+            <pre>原文,译名,类型,备注
+星の港,星之港,地名,固定译名</pre>
+            <p>普通词条直接写原词即可。沿用原表的分段注音时，原文中的【】标记注音位置，读音列用逗号按顺序对应；CSV 中含逗号的单元格需用双引号包住。</p>
+          </details>
         </div>
         <div class="field">
-          <label class="field__label" for="speechTables">说话习惯</label>
+          <label class="field__label" for="speechTables">说话习惯表</label>
           <div class="row">
-            <input id="speechTables" type="text" placeholder="未挂载" aria-label="说话习惯表路径">
+            <input id="speechTables" type="text" placeholder="未挂载" aria-label="说话习惯表路径" aria-describedby="speechTablesHelp">
             <button id="speechTablesPick" class="btn" type="button">选择文件</button>
             <button id="speechTablesClear" class="btn" type="button">清空</button>
           </div>
+          <div class="subtle" id="speechTablesHelp">必需列：角色，以及口癖 / 项目写法 / 备注中的至少一列。原表的 x版、网翻、台版等列继续可用。</div>
+          <details class="table-help">
+            <summary>说话习惯表格式与示例</summary>
+            <p>一行一条角色规则。同一角色可写多行；角色名应与正文中的写法一致。可用 character、habit、type、target、memo 等英文表头；项目写法是本项目采用的写法，其他版本列只作参考。</p>
+            <pre>角色,口癖,类型,项目写法,备注
+林夏,オレ,第一人称,我,保持第一人称一致</pre>
+            <p>项目写法填 <code>-</code> 表示明确不作特殊处理；留空表示未登记固定写法，仍可通过备注说明句式或语气。可选「首次出现」列仅适用于 S1_01 一类作品编号；普通项目请留空或省略该列。</p>
+          </details>
         </div>
+        <details class="table-help">
+          <summary>两类表共同的导入注意事项</summary>
+          <p>首行必须是表头，一行一条记录，不要在前面放标题或说明，不要合并表头。按已支持的列名识别，列顺序不限，可保留额外列；不会自动推断任意列的用途。缺少必需列或表头重名时会报错。</p>
+          <p>XLSX 优先读取名为 <code>data</code> 的工作表，否则读取第一张；请把要导入的数据放在该表。公式只读取文件中已保存的计算结果，导入前请在表格软件中重新计算并保存。不支持旧版 XLS，请先另存为 XLSX。</p>
+          <p>CSV / TSV 请使用 UTF-8 编码；JSON 可用对象数组（键为表头），或首项为表头的二维数组。多张表会合并使用，请避免同一词条或角色规则互相矛盾。表文件保留在本机，生成后仍需保留原文件供校对时读取。</p>
+        </details>
       </div>
     </section>
 

@@ -1,5 +1,5 @@
 /**
- * 读取表格文件（xlsx / csv / tsv / json）的共享能力，供对照表与术语表复用。
+ * 读取表格文件（xlsx / csv / tsv / json）的共享能力，供译名表与术语表复用。
  *
  * 设计要点：
  * - 纯 Node 实现，不调用外部命令，不新增依赖；xlsx 直接按 ZIP 中央目录解出 XML。
@@ -12,8 +12,7 @@ const zlib = require("zlib");
 const { XMLParser } = require("fast-xml-parser");
 
 // xlsx 的单元格文本可能整表被 ASCII-only 转义：`魔術師` 写成 `&#39764;&#34899;&#24072;`
-// （真实故障的译名对照表是 openpyxl 写出的：`sheet1.xml` 1,622,103 字节里 >127 的字节数为 0，
-// 17,602 个文本单元格里 14,894 个是这种数字字符引用）。fast-xml-parser 默认只解 XML 预定义实体
+// （例如 openpyxl 导出的工作表 XML 可能只含 ASCII 字节）。fast-xml-parser 默认只解 XML 预定义实体
 // （`&amp;`/`&lt;`…），数字字符引用原样返回——读出来的「原文」形如 `&#39764;&#34899;&#24072;`，
 // 按首字分桶全落进 `&` 桶，中日文条目一条也匹配不上（表现是术语段整段为空、模型只能按通用词典
 // 猜译名；整卷 3350 行的命中数为 5，解码后是 824）。
@@ -147,23 +146,39 @@ function readWorksheetRows(xml, sharedStrings) {
 }
 
 function readDelimitedRows(text) {
-  const lines = String(text).replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim() !== "");
-  if (!lines.length) return [];
-  const tabs = (lines[0].match(/\t/g) || []).length;
-  const commas = (lines[0].match(/,/g) || []).length;
-  const semicolons = (lines[0].match(/;/g) || []).length;
-  const delimiter = tabs >= Math.max(commas, semicolons) && tabs > 0 ? "\t" : (semicolons > commas ? ";" : ",");
-  return lines.map((line) => splitDelimitedLine(line, delimiter));
-}
-
-function splitDelimitedLine(line, delimiter) {
+  const content = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  // 只统计首条非空记录中引号外的分隔符，不让表头文字里的逗号改变列边界。
+  const counts = { "\t": 0, ",": 0, ";": 0 };
+  let inQuotes = false;
+  let hasContent = false;
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+    if (char === '"') {
+      if (inQuotes && content[i + 1] === '"') i += 1;
+      else inQuotes = !inQuotes;
+    } else if (!inQuotes && char === "\n") {
+      if (hasContent) break;
+    } else if (!inQuotes && Object.hasOwn(counts, char)) {
+      counts[char] += 1;
+    }
+    if (char.trim()) hasContent = true;
+  }
+  const delimiter = counts["\t"] >= Math.max(counts[","], counts[";"]) && counts["\t"] > 0
+    ? "\t" : (counts[";"] > counts[","] ? ";" : ",");
+  const rows = [];
   const cells = [];
   let value = "";
   let quoted = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
+  const finishRow = () => {
+    cells.push(value.trim());
+    if (cells.some(Boolean)) rows.push([...cells]);
+    cells.length = 0;
+    value = "";
+  };
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
     if (quoted) {
-      if (char === '"' && line[i + 1] === '"') {
+      if (char === '"' && content[i + 1] === '"') {
         value += '"';
         i += 1;
       } else if (char === '"') {
@@ -173,7 +188,7 @@ function splitDelimitedLine(line, delimiter) {
       }
       continue;
     }
-    if (char === '"') {
+    if (char === '"' && !value.trim()) {
       quoted = true;
       continue;
     }
@@ -182,10 +197,15 @@ function splitDelimitedLine(line, delimiter) {
       value = "";
       continue;
     }
+    if (char === "\n") {
+      finishRow();
+      continue;
+    }
     value += char;
   }
-  cells.push(value.trim());
-  return cells;
+  if (quoted) throw new Error("表格中的双引号未闭合；含分隔符或换行的单元格须用成对双引号包裹，内部双引号写成两个双引号。");
+  finishRow();
+  return rows;
 }
 
 function readJsonRows(file) {
@@ -231,10 +251,16 @@ function readSpreadsheet(file, options = {}) {
  */
 function readRecords(file, options = {}) {
   const { sheet, rows } = readSpreadsheet(file, options);
-  const headerRow = rows[0] || [];
+  const nonemptyRows = rows.filter((row) => row.some((cell) => String(cell ?? "").trim()));
+  const headerRow = nonemptyRows[0] || [];
   const headers = headerRow.map((cell) => normalizeHeader(cell));
-  const records = rows.slice(1)
-    .map((row) => Object.fromEntries(headers.map((header, index) => [header, String(row[index] ?? "").trim()])))
+  const seen = new Set();
+  for (const header of headers.filter(Boolean)) {
+    if (seen.has(header)) throw new Error(`表头重复：${header}。请保留唯一列名（大小写、空格和连字符归一化后不能重复）。`);
+    seen.add(header);
+  }
+  const records = nonemptyRows.slice(1)
+    .map((row) => Object.fromEntries(headers.flatMap((header, index) => header ? [[header, String(row[index] ?? "").trim()]] : [])))
     .filter((record) => Object.values(record).some(Boolean));
   return { file, sheet, headers, records };
 }
@@ -243,8 +269,19 @@ function normalizeHeader(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
+/** 领域读取器明确声明必需列；不按列位置猜测未识别的表头。 */
+function requireColumns(headers, required, tableName) {
+  const present = new Set(headers);
+  const missing = Object.entries(required)
+    .filter(([, candidates]) => !candidates.some((name) => present.has(normalizeHeader(name))));
+  if (missing.length) {
+    throw new Error(`${tableName}缺少必需表头：${missing.map(([label, candidates]) => `${label}（可用：${candidates.join(" / ")}）`).join("；")}。首个非空行须为表头，不支持标题行或合并表头。`);
+  }
+}
+
 module.exports = {
   readRecords,
   readSpreadsheet,
   normalizeHeader,
+  requireColumns,
 };

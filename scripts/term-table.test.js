@@ -21,7 +21,7 @@ const { conflictAnalysisHead, makeTermResult, TERM_MARKER, termGuidanceFor } = r
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "betweenlines-term-"));
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
-test("对照表解析：表头驱动、去装饰、分段与别名生成", () => {
+test("译名表解析：表头驱动、去装饰、分段与别名生成", () => {
   const entry = normalizeTermEntry({
     base_ori: "【東雲】【太郎】",
     ruby_ori: "しののめ,たろう",
@@ -76,7 +76,7 @@ test("对照表解析：表头驱动、去装饰、分段与别名生成", () =>
   assert.equal(stripInlineMarkup("<ruby>東雲<rt>しののめ</rt></ruby>は笑った"), "東雲は笑った");
 });
 
-test("对照表展示与提示词保留标准译名里的间隔号", () => {
+test("译名表展示与提示词保留标准译名里的间隔号", () => {
   const file = path.join(tempDir, "separator-terms.csv");
   fs.writeFileSync(file, [
     "Base_Ori,Base_Trans,Type",
@@ -272,9 +272,9 @@ test("注音只是这个词本身的普通读音时不再整条排除（魔術 �
   const tables = loadFixtureTables();
 
   // 原文与译文两侧都不注音（没有作者会给普通词标读音）：旧口径把它整条排除，行被裸着交给模型，
-  // 模型只能按通用词典把 魔術 判成「魔术」。新口径下它是降级命中：译文用了对照表译名 → 出一致结论。
+  // 模型只能按通用词典把 魔術 判成「魔术」。新口径下它是降级命中：译文用了译名表译名 → 出一致结论。
   const evaluation = evaluateTermRow({ source: "魔術。", target: "魔法。", tables });
-  assert.equal(evaluation.kind, "term-only", "整行有效内容就是术语 → 对照表直接出结论、跳过模型");
+  assert.equal(evaluation.kind, "term-only", "整行有效内容就是术语 → 译名表直接出结论、跳过模型");
   assert.equal(evaluation.hits[0].entry.plainSource, "魔術");
   assert.equal(evaluation.hits[0].demoted, true);
   assert.equal(evaluation.hits[0].consistent, true);
@@ -327,7 +327,7 @@ test("注音只是这个词本身的普通读音时不再整条排除（魔術 �
 test("只有整行有效内容都是术语时才跳过模型", () => {
   const tables = loadFixtureTables();
 
-  // 整行就是术语（术语之外只剩一个助词）：对照表能给出完整结论，允许跳过模型。
+  // 整行就是术语（术语之外只剩一个助词）：译名表能给出完整结论，允许跳过模型。
   const termOnly = evaluateTermRow({ source: `${withRuby("結界装置", "バリアユニット")}だ。`, target: "这是【结界装置】。", tables });
   assert.equal(termOnly.kind, "term-only");
   assert.equal(termOnly.coverage.residue, 1);
@@ -377,10 +377,10 @@ test("术语提示只注入本行真正用到的条目", () => {
   const evaluation = evaluateTermRow({ source, target: "那是名为结界装置的能力。", tables });
   const guidance = termGuidanceFor({ index: 5, jp: source }, { evaluation, targetKey: "cn", targetLabel: "主文本（待修改文本）" });
   assert.equal(guidance.count, 1);
-  assert.match(guidance.block, /^【术语（对照表命中）】/);
+  assert.match(guidance.block, /^【术语（译名表命中）】/);
   assert.match(guidance.block, /- 結界装置 → 结界装置（装置）/);
   assert.match(guidance.block, /术语判断是本次分析里的一个环节/);
-  assert.match(guidance.block, /边界：对照表只能证明术语译名对不对/);
+  assert.match(guidance.block, /边界：译名表只能证明术语译名对不对/);
   // 命中但译文里找不到该术语：仍要提示（可能是真漏译），措辞面向模型（要不要改由模型判断）。
   const missingSource = "東雲太郎は来なかった。";
   const missing = evaluateTermRow({ source: missingSource, target: "他没有来。", tables });
@@ -411,7 +411,7 @@ test("术语提示只注入本行真正用到的条目", () => {
   assert.equal(realGuidance.terms.some((term) => term.source.includes("東雲")), true);
 });
 
-test("对照表只写「整行只有术语」的备注，冲突行改由模型出结论", () => {
+test("译名表只写「整行只有术语」的备注，冲突行改由模型出结论", () => {
 
   const tables = loadFixtureTables();
   const labels = { jp: "原文 A", cn: "主文本（待修改文本）", tw: "非原文 C" };
@@ -429,7 +429,7 @@ test("对照表只写「整行只有术语」的备注，冲突行改由模型�
   assert.equal(termOnly.done, true);
   assert.equal(termOnly.status, "term-prefilter");
 
-  // 术语一致但句中还有别的内容：不写“无需修改”的完成态——那一行根本不由对照表出结论。
+  // 术语一致但句中还有别的内容：不写“无需修改”的完成态——那一行根本不由译名表出结论。
   const injected = evaluateTermRow({
     source: "東雲太郎は言った。",
     target: "東雲太郎说道。",
@@ -438,7 +438,7 @@ test("对照表只写「整行只有术语」的备注，冲突行改由模型�
   assert.equal(injected.kind, "consistent");
   assert.throws(() => makeTermResult({ index: 841 }, labels, injected, "bilingual", "cn"), /只写「整行只有术语」的结论/);
 
-  // 术语冲突同样不由对照表出结论：它注入提示词后交给模型，所以写备注的入口直接报错。
+  // 术语冲突同样不由译名表出结论：它注入提示词后交给模型，所以写备注的入口直接报错。
   const conflictSource = "召喚陣を使う。";
   const conflictEvaluation = evaluateTermRow({
     source: conflictSource,
@@ -486,7 +486,7 @@ test("冲突明细只列真正的译名差异，一致项与分段命中只给�
   const head = conflictAnalysisHead(evaluation.hits);
 
   // 明细只列差异项；标题的条数口径与明细一致。
-  assert.match(head, /命中对照表 3 条，其中 1 条存在译名差异：/);
+  assert.match(head, /命中译名表 3 条，其中 1 条存在译名差异：/);
   assert.match(head, /召喚陣 → 召唤阵/);
   assert.match(head, /（另有 1 条已确认一致、1 条原文只有分段或读音写法，未参与差异判定）/);
   // 一致项与分段命中的条目名不再进明细：旧版把它们贴在「存在译名差异」标题下，
@@ -497,7 +497,7 @@ test("冲突明细只列真正的译名差异，一致项与分段命中只给�
   assert.equal(/译文已使用该译名/.test(head), false);
 });
 
-test("假名写法的术语不由对照表定论，改为注入提示交给模型判断", () => {
+test("假名写法的术语不由译名表定论，改为注入提示交给模型判断", () => {
   const file = path.join(tempDir, "kana-terms.csv");
   fs.writeFileSync(file, [
     "Base_Ori,Ruby_Ori,Base_Trans,Type",
@@ -507,7 +507,7 @@ test("假名写法的术语不由对照表定论，改为注入提示交给模�
   assert.deepEqual(tables.errors, []);
 
   // 原文「頂点グループ」是普通名词用法，译文写成“一类人”是对的；但同一写法在别的场景确实指那个组织，
-  // 所以既不粗暴删条目、也不由对照表定论：标成 advisory，把判断权交给模型（人工核对模型结论）。
+  // 所以既不粗暴删条目、也不由译名表定论：标成 advisory，把判断权交给模型（人工核对模型结论）。
   const source = "街の八割、実に一八〇万人を一律で分類する六段階評価の、まさに頂点グループ。";
   const evaluation = evaluateTermRow({
     source,
@@ -519,7 +519,7 @@ test("假名写法的术语不由对照表定论，改为注入提示交给模�
   assert.equal(evaluation.advisory[0].entry.plainSource, "グループ");
   assert.equal(evaluation.advisory[0].variant, null);
 
-  // 对照表不给结论：advisory 行不许走 makeTermResult（它只写「整行只有术语」这一种结论）。
+  // 译名表不给结论：advisory 行不许走 makeTermResult（它只写「整行只有术语」这一种结论）。
   assert.throws(
     () => makeTermResult({ index: 843 }, { jp: "原文 A", cn: "主文本（待修改文本）", tw: "" }, evaluation, "bilingual", "cn"),
     /只写「整行只有术语」的结论/,
@@ -554,7 +554,7 @@ test("真差异与假名存疑同时命中时，明细只列真差异、存疑�
   // 有强证据差异时整行仍交给模型，差异明细只列真差异，存疑项不能被写成差异。
   assert.equal(evaluation.kind, "conflict");
   const head = conflictAnalysisHead(evaluation.hits);
-  assert.match(head, /命中对照表 2 条，其中 1 条存在译名差异：召喚陣 → 召唤阵/);
+  assert.match(head, /命中译名表 2 条，其中 1 条存在译名差异：召喚陣 → 召唤阵/);
   assert.match(head, /（另有 1 条命中的是假名写法、可能为普通词，需结合上下文判断）/);
   assert.equal(/グループ → GROUP（组织\/暗部）：译文未出现该译名/.test(head), false, "存疑项不得写成译名差异");
 });

@@ -86,7 +86,7 @@ function extractSpecializedRules(basePrompt = "", persona = "gatekeeper") {
     }
 
     // 2. 剥离 basePrompt 中可能残留的术语块，避免与 options.termBlock 重复注入
-    if (line.includes("【译名对照表")) {
+    if (/【译名(?:对照)?表|【术语（(?:译名表|对照表)命中）】/.test(line)) {
       skippingTermBlock = true;
       continue;
     }
@@ -181,7 +181,7 @@ function buildPersonaSystemPromptParts(persona, basePrompt = "", options = {}) {
       "   - modify: 认同需要修改（或在初审存疑时确诊存在硬伤/瑕疵），并在其建议基础上或独立给出更优雅生动的文学润色文本（revisedText）；",
       "   - reject: 认为 Gatekeeper 属于过度挑刺/将原作者意图误判为错误（或初审存疑实属虚惊一场、原译通顺准确），建议维持原译；",
       "   - escalate: 双方存在深层歧义，或初审存疑且复审依据依然严重不足，需提交终审仲裁。",
-      "3. 术语与规范红线：在文学润色与消除翻译腔的同时，必须严格遵守译名对照表（若提供）与专有名词规范，不得为了追求修辞或句式流畅而擅自变更标准译名；若 Gatekeeper 已纠正术语，复审方案不得改回错误译名。",
+      "3. 术语与规范红线：在文学润色与消除翻译腔的同时，必须严格遵守译名表（若提供）与专有名词规范，不得为了追求修辞或句式流畅而擅自变更标准译名；若 Gatekeeper 已纠正术语，复审方案不得改回错误译名。",
       "4. 必须输出合法 JSON，包含 critique 结构：attitude, rationale, acceptedChanges, rejectedChanges，以及 revisedText（修改结果）。",
       specializedBase ? `\n${specializedBase}` : "",
       customRules,
@@ -194,7 +194,7 @@ function buildPersonaSystemPromptParts(persona, basePrompt = "", options = {}) {
       `【当前身份与任务契约：${def.name}】`,
       "你是终审法官（Chief Arbiter），处理初审与复审的分歧、高风险语句或存疑未决行。",
       "1. 忠实度第一：依据原文和上下文裁决，驳回扭曲原意的修辞；原则上不重新翻译。",
-      "2. 术语裁决权威：遵守项目译名对照表与专有名词规范，不得回退已纠正的术语；结合方案也必须保留标准译名。",
+      "2. 术语裁决权威：遵守项目译名表与专有名词规范，不得回退已纠正的术语；结合方案也必须保留标准译名。",
       "3. 裁决机制：某方案完整正确时选 gatekeeper 或 stylist；原译准确恰当、无需修改时选 original。",
       "   【核心结合方案】双方各有可取之处时，主动融合初审纠错与复审表达，winner=synthesis，并在 revisedText 给出完整结合文本；两案均有严重缺陷且确需修改时，可选 neither 给出独立修复方案。",
       "4. 充分权衡上下文与证据后必须定案为修改或不修改；证据不足以支持修改时保守保留原译，winner=original、finalDecision=keep，并说明依据。不得输出存疑或待人工检查的结论。",
@@ -226,7 +226,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
   const context = options.context || null;
 
   const userPayload = {
-    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若初审为存疑待定行，请依据上下文与文学表现力判定原译是否妥当或给出润色修改案；若复审仍存疑无法定断，请设为 escalate 提交终审仲裁。若提供了译名对照表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
+    task: "请作为文学责编审查上述初审结果：给出你的 critique 评价（attitude: accept/modify/reject/escalate），并在需要修改时给出最终文学润色文本（revisedText）。若初审为存疑待定行，请依据上下文与文学表现力判定原译是否妥当或给出润色修改案；若复审仍存疑无法定断，请设为 escalate 提交终审仲裁。若提供了译名表/术语表，复审润色必须严格遵循标准译名，不得擅自回退或改动。",
     index: row.index,
     sourceText,
     targetText,
@@ -245,7 +245,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
     } : {}),
     ...(termGuidance ? {
       terms: {
-        source: "译名对照表（本行命中的条目）",
+        source: "译名表（本行命中的条目）",
         targetLabel,
         items: termGuidance.terms.map((term) => ({
           source: term.source,
@@ -254,7 +254,7 @@ function buildStylistMessages(row, gatekeeperDecision, options = {}) {
           type: term.type,
           note: term.note,
         })),
-        note: "译文出现这些概念时必须使用对照表给出的标准译名；复审润色时不得擅自变更或回退标准译名。",
+        note: "译文出现这些概念时必须使用译名表给出的标准译名；复审润色时不得擅自变更或回退标准译名。",
       },
     } : {}),
     ...(options.glossary ? {
@@ -292,7 +292,7 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
   const context = options.context || null;
 
   const userPayload = {
-    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名对照表，裁决必须严格遵循标准译名。最终结论只能是修改（finalDecision=replace）或不修改（finalDecision=keep）；证据不足以支持修改时保留原译，并在 reason 中说明，不得留下存疑或待人工检查。",
+    task: "请对比原文、原译以及初审与复审意见，做出终审裁决。仲裁不限于二选一：可裁定某方胜出或维持原译；若觉得初审和复审各有可取之处，请给出融合双方优点的结合修改方案（winner 设为 synthesis），并在 revisedText 中给出定案文本。若提供了术语表/译名表，裁决必须严格遵循标准译名。最终结论只能是修改（finalDecision=replace）或不修改（finalDecision=keep）；证据不足以支持修改时保留原译，并在 reason 中说明，不得留下存疑或待人工检查。",
     index: row.index,
     sourceText,
     targetText,
@@ -311,7 +311,7 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
     } : {}),
     ...(termGuidance ? {
       terms: {
-        source: "译名对照表（本行命中的条目）",
+        source: "译名表（本行命中的条目）",
         targetLabel,
         items: termGuidance.terms.map((term) => ({
           source: term.source,
@@ -320,7 +320,7 @@ function buildArbiterMessages(row, gatekeeperDecision, stylistCritique, options 
           type: term.type,
           note: term.note,
         })),
-        note: "译文出现这些概念时必须使用对照表给出的标准译名；术语一致性是硬性规范，仲裁裁决与结合方案必须遵守标准译名。",
+        note: "译文出现这些概念时必须使用译名表给出的标准译名；术语一致性是硬性规范，仲裁裁决与结合方案必须遵守标准译名。",
       },
     } : {}),
     ...(options.glossary ? {

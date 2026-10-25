@@ -112,7 +112,7 @@ test("真实构建入口使用生成前选表，空数组不被环境或档案�
   }
 });
 
-test("说话习惯与对照表采用相同外部格式，不执行 JavaScript 数据模块", () => {
+test("说话习惯与译名表采用相同外部格式，不执行 JavaScript 数据模块", () => {
   const marker = path.join(dir, "module-executed");
   const module = path.join(dir, "habits.js");
   fs.writeFileSync(module, `require("fs").writeFileSync(${JSON.stringify(marker)}, "bad"); module.exports = { entries: [] };`, "utf8");

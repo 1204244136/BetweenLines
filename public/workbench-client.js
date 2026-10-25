@@ -54,7 +54,7 @@
     };
     let savedGptReasoningEffort = "";
     let savedNonGptIntensity = "";
-    const automatedNoteMarkers = ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[对照表]"];
+    const automatedNoteMarkers = ["[AI校对]", "[规则预筛]", "[相似度预筛]", "[译名表]", "[对照表]"];
     const parsedAutomatedNoteCache = new Map();
     const MAX_PARSED_NOTE_CACHE = 5000;
     let cachedStageMetrics = null;
@@ -490,7 +490,7 @@
     /**
      * 多个历史空间对同一行有不同记录时，逐字段合并，而不是把这一行整条丢掉。
      * 依据是行内容签名（pair.verified）：各空间的签名都对上同一行，说明它们说的是同一行文本，
-     * 只是记录的内容不同——「确认预筛」写的是 [规则预筛]/[对照表] 结论且没有修改结果，
+     * 只是记录的内容不同——「确认预筛」写的是 [规则预筛]/[译名表] 结论且没有修改结果，
      * 同一个备注对象后来被 AI 结论替换（或反过来）就会造成这种差异，丢掉它等于把人工确认一起丢了。
      * 「人工确认」是布尔判定，任一空间确认过、且该行签名匹配，就应当保留；没有签名证据的行不会走到这里
      * （未校验的条目仍按 applyRecovery 的约定清除人工确认）。
@@ -821,7 +821,7 @@
       if (!entries.length) return "";
       return entries.map((entry) => `${entry.summary.activatedChapters}/${entry.summary.chapters} 章命中、${entry.summary.missRows} 行疑似流失`).join("；");
     }
-    // 构建期算好的对照表判定：跑任务之前就能看到哪些行会被对照表处理（一致的行不调用模型）。
+    // 构建期算好的译名表判定：跑任务之前就能看到哪些行会被译名表处理（一致的行不调用模型）。
     // 判定与「校对模式 + 目标列」绑定，切换后重新取用；跑过 AI/预筛的行以真实备注为准，不再叠徽标。
     const termLayer = pageMeta.termPrefilter || null;
     let termVerdicts = new Map();
@@ -2818,7 +2818,7 @@
           : { cls: "is-same", text: "规则通过" };
       }
       if (marker === "[相似度预筛]") return { cls: "is-same", text: "相似跳过" };
-      if (marker === "[对照表]") {
+      if (marker === "[译名表]" || marker === "[对照表]") {
         if (note.modify === "是") return { cls: "is-modify", text: "术语需改" };
         if (note.modify === "否") return { cls: "is-same", text: "术语一致" };
         return { cls: "is-unclear", text: "术语待判" };
@@ -2843,7 +2843,7 @@
       ].join(" ").toLowerCase();
     }
 
-    // 本行命中了哪些术语：构建期随页面下发的行级术语对（只由原文 + 对照表决定，与模型无关）。
+    // 本行命中了哪些术语：构建期随页面下发的行级术语对（只由原文 + 译名表决定，与模型无关）。
     // 有备注时以备注里的结论为准（那是当次任务的判定），这里退回构建期判定并说明出处。
     function renderTermChipHtml(id, noteText) {
       const fromNote = Boolean(noteText);
@@ -2855,7 +2855,7 @@
         },
         "term-only": {
           label: "纯术语", badgeClass: "is-same",
-          hint: "本行有效内容全部是项目术语，对照表能给出完整结论；跑预筛选时不会调用模型。",
+          hint: "本行有效内容全部是项目术语，译名表能给出完整结论；跑预筛选时不会调用模型。",
         },
         injected: {
           label: "术语注入", badgeClass: "is-unclear",
@@ -2870,10 +2870,10 @@
       }
       const cap = 8;
       const lines = pairs.slice(0, cap).map((pair) => "- " + pair);
-      if (pairs.length > cap) lines.push("- …（其余 " + (pairs.length - cap) + " 条见对照表）");
+      if (pairs.length > cap) lines.push("- …（其余 " + (pairs.length - cap) + " 条见译名表）");
       const source = fromNote
-        ? "备注已出（术语清单来自对照表）：命中 " + pairs.length + " 条术语"
-        : "构建期判定：本行原文命中对照表 " + pairs.length + " 条术语";
+        ? "备注已出（术语清单来自译名表）：命中 " + pairs.length + " 条术语"
+        : "构建期判定：本行原文命中译名表 " + pairs.length + " 条术语";
       const title = [source, state ? "构建期预判：" + state.hint : "", ...lines].filter(Boolean).join("\n");
       const open = termOpenRows.has(id);
       const listId = "term-list-" + id;
@@ -3273,7 +3273,7 @@
       const marker = automatedNoteMarker(notes[String(row.index)]?.note || "");
       if (marker === "[规则预筛]") return "rule";
       if (marker === "[相似度预筛]") return "similarity";
-      if (marker === "[对照表]") return "term";
+      if (marker === "[译名表]" || marker === "[对照表]") return "term";
       return "";
     }
 
@@ -4093,7 +4093,7 @@
         if (kind) result[kind] += 1;
         return result;
       }, { rule: 0, similarity: 0, term: 0 });
-      const message = "当前预筛结果共 " + rows.length + " 条：规则通过 " + counts.rule + " 条，相似度通过 " + counts.similarity + " 条，对照表命中 " + counts.term + " 条。\n\n确认后将为这些行勾选“人工确认”。是否继续？";
+      const message = "当前预筛结果共 " + rows.length + " 条：规则通过 " + counts.rule + " 条，相似度通过 " + counts.similarity + " 条，译名表命中 " + counts.term + " 条。\n\n确认后将为这些行勾选“人工确认”。是否继续？";
       if (!confirm(message)) return;
       for (const row of rows) {
         const id = String(row.index);
@@ -4241,8 +4241,8 @@
       if (!status) {
         // 状态还没回来（或本地服务是旧版本）时，至少把构建期结论显示出来。
         hint.dataset.state = built ? "ok" : "pending";
-        hint.textContent = built ? "对照表：" + built : "对照表：检测中…";
-        setLiveHoverTitle(hint, "控制台生成前选择的译名对照表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。");
+        hint.textContent = built ? "译名表：" + built : "译名表：检测中…";
+        setLiveHoverTitle(hint, "控制台生成前选择的译名表：只有整行有效内容都是术语时才跳过模型；其余命中行（含术语冲突、假名存疑）都把术语作为提示词注入，整句由模型判定，术语判断是模型分析里的一环。");
         return;
       }
       const files = status.files || [];
@@ -4250,19 +4250,19 @@
       const names = files.map((file) => String(file).split(/[\\/]/).pop()).join("、");
       if (!files.length) {
         hint.dataset.state = "off";
-        hint.textContent = "对照表：未挂载";
-        setLiveHoverTitle(hint, "本项目没有挂载对照表。可在控制台选择辅助表格后重新生成。", { reset: true });
+        hint.textContent = "译名表：未挂载";
+        setLiveHoverTitle(hint, "本项目没有挂载译名表。可在控制台选择辅助表格后重新生成。", { reset: true });
         return;
       }
       if (!status.entries) {
         hint.dataset.state = "warning";
-        hint.textContent = "对照表：加载失败";
+        hint.textContent = "译名表：加载失败";
         setLiveHoverTitle(hint, errors.length ? errors.join("\n") : files.join("\n"));
         return;
       }
       const ok = errors.length === 0;
       hint.dataset.state = ok ? "ok" : "warning";
-      hint.textContent = "对照表：" + names + "（" + status.entries + " 条术语" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (built ? "；" + built : "");
+      hint.textContent = "译名表：" + names + "（" + status.entries + " 条术语" + (ok ? "" : "，" + errors.length + " 个文件失败") + "）" + (built ? "；" + built : "");
       setLiveHoverTitle(hint, [files.join("\n"), ...errors].join("\n"));
     }
 
@@ -5085,7 +5085,7 @@
       const isPrefilter = ai.kind === "prefilter";
       const queueText = done + "/" + aiTotal;
       const skipText = "人工确认跳过 " + skippedDone;
-      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered + (termPrefiltered ? "，对照表跳过 " + termPrefiltered : "") + (termInjected ? "，对照表注入术语 " + termInjected : "");
+      const prefilterText = "规则跳过 " + rulePrefiltered + "，结构化冲突 " + structuredConflicts + "，相似度跳过 " + similarityPrefiltered + (termPrefiltered ? "，译名表跳过 " + termPrefiltered : "") + (termInjected ? "，译名表注入术语 " + termInjected : "");
       const pendingText = "待 AI 校对 " + aiTotal;
       prefilterIds.stats.textContent = aiRunId
         ? (ai.running ? "预筛选中：" : (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：")) + prefilterText + "，" + skipText + "，" + pendingText
@@ -5523,7 +5523,7 @@
       input.addEventListener("change", () => {
         invalidateConnectionMetadata();
         saveAiConfig();
-        // 目标列/校对模式决定对照表的哪个变体生效：重取构建期判定并重绘徽标。
+        // 目标列/校对模式决定译名表的哪个变体生效：重取构建期判定并重绘徽标。
         if (input === aiIds.target || input === aiIds.proofreadMode) {
           refreshTermVerdicts();
           setTermTableHint(null);
@@ -6726,7 +6726,7 @@
     initProviderCombobox();
     restoreAiConfig();
     document.querySelectorAll("select").forEach(syncEnhancedSelect);
-    // 特化规范 / 目标列都恢复后才有确定的对照表变体：这时再取构建期判定。
+    // 特化规范 / 目标列都恢复后才有确定的译名表变体：这时再取构建期判定。
     refreshTermVerdicts();
     updateStageMetricsDashboard();
     refreshAiStatus();

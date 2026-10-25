@@ -327,7 +327,7 @@ test("关闭开关或档案没声明站点时这一层完全不动（不注入�
   assert.equal(noSites.status.webLookups, 0);
 });
 
-test("非存疑行不进这一层：译名差异行由对照表交给模型判断", async () => {
+test("非存疑行不进这一层：译名差异行由译名表交给模型判断", async () => {
   const { tables } = writeTerms();
   const jp = "召喚陣を取り外す。";
   const targetText = "取下魔法阵。";

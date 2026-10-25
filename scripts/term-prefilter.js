@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 对照表预处理（离线脚本）：对当前项目的行先查译名对照表，输出命中的行与建议，
+ * 译名表预处理（离线脚本）：对当前项目的行先查译名表，输出命中的行与建议，
  * 不调用任何模型。用途是在真正跑 AI 之前先确认表格命中率与冲突是否可信。
  *
  * 用法：
@@ -43,11 +43,11 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    "对照表预处理（离线，不调用模型）",
+    "译名表预处理（离线，不调用模型）",
     "",
     "  node scripts/term-prefilter.js [--table <文件>]... [--profile <id>] [--target cn|tw] [--from-snapshot] [--limit N] [--all] [--json] [--out <文件>]",
     "",
-    "  --table          对照表文件（xlsx/csv/tsv/json），可重复；缺省取当前项目生成前选择的表",
+    "  --table          译名表文件（xlsx/csv/tsv/json），可重复；缺省取当前项目生成前选择的表",
     "  --profile        特化档案 id（决定规范与提示词口径）",
     "  --target         目标列：三语下 cn（非原文 B）或 tw（非原文 C）；双语恒为 cn",
     "  --from-snapshot  只输出构建期落盘的文本汇总（与页面徽标同源），不重新查表",
@@ -65,7 +65,7 @@ function loadRows() {
     project,
     file,
     rows,
-    // 构建期算好的对照表判定（老快照可能没有）。
+    // 构建期算好的译名表判定（老快照可能没有）。
     termPrefilter: data.termPrefilter || null,
   };
 }
@@ -75,10 +75,10 @@ function reportFromSnapshot({ layer, profileId, proofreadMode, targetKey, files 
   // 指纹按本次实际加载的表重算（落盘块里只有文件名，本机路径不回读产物）。
   const match = termLayerFor(layer, profileId, { proofreadMode, targetKey, files });
   if (!match) {
-    console.error("当前快照没有这个档案的对照表判定：请重新构建工作台（npm run build），或去掉 --from-snapshot 现算。");
+    console.error("当前快照没有这个档案的译名表判定：请重新构建工作台（npm run build），或去掉 --from-snapshot 现算。");
     return 1;
   }
-  if (match.stale) console.warn("对照表在构建之后被修改过：页面徽标已过期，请重新构建工作台。");
+  if (match.stale) console.warn("译名表在构建之后被修改过：页面徽标已过期，请重新构建工作台。");
   if (!match.variant) {
     console.error(`构建期没有算过「${match.variantKey}」这个变体：请重新构建工作台。`);
     return 1;
@@ -129,14 +129,14 @@ function main() {
   }
 
   if (!tables.length) {
-    console.error("没有可用的对照表：请在控制台选择后重新生成，或用 --table 临时指定。");
+    console.error("没有可用的译名表：请在控制台选择后重新生成，或用 --table 临时指定。");
     return 1;
   }
 
   const loaded = loadTermTables(tables);
-  for (const error of loaded.errors) console.warn(`对照表加载告警：${error}`);
+  for (const error of loaded.errors) console.warn(`译名表加载告警：${error}`);
   if (!loaded.entries.length) {
-    console.error("对照表没有可用条目，请检查表头是否包含原文列与译名列。");
+    console.error("译名表没有可用条目，请检查表头是否包含原文列与译名列。");
     return 1;
   }
 
@@ -185,12 +185,12 @@ function main() {
       report.injected += 1;
       report.consistent += 1;
     } else if (evaluation.kind === "advisory") {
-      // 存疑（假名写法，可能只是普通词）：不由对照表定论，照常交给模型判断，不能算进“需人工确认”。
+      // 存疑（假名写法，可能只是普通词）：不由译名表定论，照常交给模型判断，不能算进“需人工确认”。
       report.advisory += 1;
       report.injected += 1;
       report.consistent += 1;
     } else {
-      // 术语冲突：不由对照表出结论，注入提示词后交给模型（术语判断是模型分析的一环）。
+      // 术语冲突：不由译名表出结论，注入提示词后交给模型（术语判断是模型分析的一环）。
       // 它不算「译名一致」，所以只计入 injected，不计入 consistent。
       report.conflicts += 1;
       report.injected += 1;
@@ -254,7 +254,7 @@ function main() {
 function compareWithLayer({ layer, profileId, proofreadMode, targetKey, files = null, report }) {
   const match = termLayerFor(layer, profileId, { proofreadMode, targetKey, files });
   if (!match) return "";
-  if (match.stale) return "对照表在构建之后被修改过：页面徽标已过期，请重新构建工作台。";
+  if (match.stale) return "译名表在构建之后被修改过：页面徽标已过期，请重新构建工作台。";
   if (!match.variant) return "";
   const { consistent, conflicts } = variantIndexSets(match.variant);
   const predicted = new Set([...consistent, ...conflicts]);

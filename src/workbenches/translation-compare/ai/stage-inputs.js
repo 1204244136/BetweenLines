@@ -81,7 +81,7 @@ function prepareStageInputs({
     for (const row of rows) {
       const idx = Number(row.index);
       if (config.completedIndexes.has(idx)) continue;
-      // 对照表已经直接定案的行（term-only）不再送复审，否则会白花一次调用。
+      // 译名表已经直接定案的行（term-only）不再送复审，否则会白花一次调用。
       if (resolvedByTermTable.has(idx)) continue;
       const noteText = config.rowNotes[idx] || "";
       const memoryResult = memoryForRow(idx);

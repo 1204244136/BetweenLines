@@ -433,7 +433,7 @@ details[open] > summary .details-toggle::before {
   color: var(--ai-danger-fg);
 }
 
-/* ---- 对照表状态：特化规范声明的辅助判断数据是否可用 --------------------- */
+/* ---- 译名表状态：特化规范声明的辅助判断数据是否可用 --------------------- */
 
 .ai-field--wide {
   grid-column: 1 / -1;

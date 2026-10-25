@@ -355,7 +355,7 @@ test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规
         note: "魔術 → 魔术（术语）",
       },
     ],
-    block: "【译名对照表（本行命中）】\n- 魔術 → 魔术（术语）\n用法：译文里出现这些概念时，必须使用对照表给出的标准译名。",
+    block: "【译名表（本行命中）】\n- 魔術 → 魔术（术语）\n用法：译文里出现这些概念时，必须使用译名表给出的标准译名。",
   };
 
   const basePrompt = "【通用校对规则】\n核心校对规范A\n【成品校对规范：测试规范】\n— 小说文体要求\n注意人物语气与对话节奏。";
@@ -373,7 +373,7 @@ test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规
   const stylistSystem = stylistMessages[0].content;
   assert.ok(stylistSystem.includes("【当前身份与任务契约：文学责编 (Stylist)】"));
   assert.ok(stylistSystem.includes("术语与规范红线"));
-  assert.ok(stylistSystem.includes("【译名对照表（本行命中）】"));
+  assert.ok(stylistSystem.includes("【译名表（本行命中）】"));
   assert.ok(stylistSystem.includes("魔術 → 魔术（术语）"));
   assert.ok(stylistSystem.includes("术语表（全卷）"));
   assert.ok(stylistSystem.includes("注意人物语气与对话节奏"));
@@ -397,7 +397,7 @@ test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规
   const arbiterSystem = arbiterMessages[0].content;
   assert.ok(arbiterSystem.includes("【当前身份与任务契约：终审法官 (Chief Arbiter)】"));
   assert.ok(arbiterSystem.includes("术语裁决权威"));
-  assert.ok(arbiterSystem.includes("【译名对照表（本行命中）】"));
+  assert.ok(arbiterSystem.includes("【译名表（本行命中）】"));
   assert.ok(arbiterSystem.includes("魔術 → 魔术（术语）"));
   assert.ok(arbiterSystem.includes("术语表（全卷）"));
   assert.ok(arbiterSystem.includes("注意人物语气与对话节奏"));
@@ -407,7 +407,7 @@ test("多阶段流水线：Stylist 与 Arbiter 完整接收术语表与特化规
   assert.equal(arbiterUserJson.terms.items[0].source, "魔術");
   assert.equal(arbiterUserJson.terms.items[0].translation, "魔术");
   assert.equal(arbiterUserJson.glossary, glossary);
-  assert.ok(arbiterUserJson.task.includes("若提供了术语表/译名对照表，裁决必须严格遵循标准译名"));
+  assert.ok(arbiterUserJson.task.includes("若提供了术语表/译名表，裁决必须严格遵循标准译名"));
 });
 
 test("多阶段流水线：无术语命中行优雅降级，不引入多余 terms 结构", () => {

@@ -127,3 +127,54 @@ test("ASCII-only 导出的 xlsx：数字字符引用要解回真实字符", asyn
   const hits = findTermHits("魔術を使う。", tables, { target: "使用魔法。" });
   assert.equal(hits.some((hit) => hit.entry.plainSource === "魔術"), true);
 });
+
+test("CSV 保留引号内换行、分隔符与双引号，空记录不产生条目", () => {
+  const file = path.join(tempDir, "multiline.csv");
+  fs.writeFileSync(file, '\uFEFF原文,译名,备注\r\n"青い空","蓝天","第一行,含逗号\r\n第二行含""引号"""\r\n,,\r\n', "utf8");
+  const { records } = readRecords(file);
+  assert.deepEqual(records, [{ 原文: "青い空", 译名: "蓝天", 备注: '第一行,含逗号\n第二行含"引号"' }]);
+  const { loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+  assert.equal(tables.entries[0].target, "蓝天");
+  assert.deepEqual(tables.entries[0].memos, ['第一行,含逗号\n第二行含"引号"']);
+});
+
+test("TSV 和分号 CSV 判定分隔符时忽略表头引号内的标点", () => {
+  for (const [name, delimiter] of [["quoted.tsv", "\t"], ["quoted-semicolon.csv", ";"]]) {
+    const file = path.join(tempDir, name);
+    fs.writeFileSync(file, `source${delimiter}target${delimiter}"memo,with,many,commas"\n青い空${delimiter}蓝天${delimiter}说明\n`, "utf8");
+    assert.deepEqual(readRecords(file).records, [{ source: "青い空", target: "蓝天", "memo,with,many,commas": "说明" }]);
+  }
+});
+
+test("无效表头与未闭合 CSV 引号明确报错，不按任意两列猜译名", () => {
+  const { loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+  const missing = path.join(tempDir, "missing-target.csv");
+  fs.writeFileSync(missing, "原文,别的列\n青い空,蓝天\n", "utf8");
+  const tables = loadTermTables([missing]);
+  assert.equal(tables.entries.length, 0);
+  assert.match(tables.errors[0], /译名表缺少必需表头：译名/);
+
+  const duplicate = path.join(tempDir, "duplicate-header.csv");
+  fs.writeFileSync(duplicate, "Base_Ori,Base-Trans,BASE TRANS\n青い空,蓝天,晴空\n", "utf8");
+  assert.throws(() => readRecords(duplicate), /表头重复：base_trans/);
+
+  const broken = path.join(tempDir, "unclosed.csv");
+  fs.writeFileSync(broken, 'source,target\n青い空,"蓝天\n', "utf8");
+  assert.throws(() => readRecords(broken), /双引号未闭合/);
+});
+
+test("JSON 对象数组使用相同表头契约，空白表头不制造伪记录", () => {
+  const { loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+  const json = path.join(tempDir, "neutral-terms.json");
+  fs.writeFileSync(json, JSON.stringify({ entries: [{ Source: "青い空", Target: "蓝天", Type: "术语" }] }), "utf8");
+  const tables = loadTermTables([json]);
+  assert.deepEqual(tables.errors, []);
+  assert.equal(tables.entries[0].source, "青い空");
+  assert.equal(tables.entries[0].target, "蓝天");
+
+  const blanks = path.join(tempDir, "blank-headers.csv");
+  fs.writeFileSync(blanks, "\nsource,,target\n,忽略列,\n青い空,,蓝天\n", "utf8");
+  assert.deepEqual(readRecords(blanks).records, [{ source: "青い空", target: "蓝天" }]);
+});

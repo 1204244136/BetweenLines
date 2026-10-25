@@ -96,7 +96,7 @@ function normalizeProfile(profile) {
     id,
     name,
     summary: String(profile.summary || "").trim(),
-    // 特化侧除了提示词，还可以声明辅助判断数据：译名对照表与说话习惯表（只放本机路径）。
+    // 特化侧除了提示词，还可以声明辅助判断数据：译名表与说话习惯表（只放本机路径）。
     termTables: (Array.isArray(profile.termTables) ? profile.termTables : [profile.termTables])
       .map((item) => String(item || "").trim())
       .filter(Boolean),

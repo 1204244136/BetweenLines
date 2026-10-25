@@ -17,18 +17,18 @@
  */
 const path = require("path");
 const { workIdFromPath } = require("../../../core/work-id");
-const { readRecords } = require("../../../core/spreadsheet");
+const { readRecords, requireColumns } = require("../../../core/spreadsheet");
 const { firstColumn } = require("../../../core/text-helpers");
 
 const COLUMN_CANDIDATES = {
-  character: ["角色", "人物", "character", "name"],
+  character: ["角色", "人物", "character", "name", "说话人", "speaker"],
   habit: ["口癖", "habit", "特徴", "特征"],
   type: ["类型", "type"],
-  xVersion: ["x版", "x版本", "本项目", "成品"],
-  netVersion: ["网翻", "网络翻译", "网译"],
-  twVersion: ["台版（转简中）", "台版", "繁中"],
+  xVersion: ["x版", "x版本", "本项目", "成品", "项目写法", "目标写法", "target", "translation"],
+  netVersion: ["网翻", "网络翻译", "网译", "其他版本", "其他写法", "other"],
+  twVersion: ["台版（转简中）", "台版", "繁中", "参考写法", "reference"],
   memo: ["备注", "说明", "memo"],
-  firstWork: ["小说首次出现", "首次出现", "登场", "初登场"],
+  firstWork: ["小说首次出现", "首次出现", "登场", "初登场", "first_work"],
 };
 
 const EMPTY_VALUES = new Set(["", "-", "—", "－", "/", "无", "n/a", "na", "none"]);
@@ -146,7 +146,13 @@ function normalizeSpeechEntry(record) {
 function loadSpeechTable(file) {
   const text = String(file || "").trim();
   if (!text) throw new Error("说话习惯表路径为空。");
-  const { sheet, records } = readRecords(text);
+  const { sheet, headers, records } = readRecords(text);
+  requireColumns(headers, {
+    角色: COLUMN_CANDIDATES.character,
+    "口癖 / 项目写法 / 备注（至少一列）": [
+      ...COLUMN_CANDIDATES.habit, ...COLUMN_CANDIDATES.xVersion, ...COLUMN_CANDIDATES.memo,
+    ],
+  }, "说话习惯表");
   const entries = records.map(normalizeSpeechEntry).filter(Boolean);
   if (!entries.length) throw new Error(`说话习惯表没有可用条目（需要“角色”列）：${file}`);
   return { file, sheet, entries };
@@ -369,7 +375,7 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
  * 章级判定回答的是“这一章出现了哪些角色”，但一行台词里通常只有一个角色在场：把整章的规则
  * 全塞进每一行，等于让 90% 的行背着与它无关的角色规则（本层是第 3 层之外唯一按章注入的段，
  * 也正是“无脑加进每一个句子”的第二个来源）。收窄判据两条，满足任一即保留：
- * 1. **本行文本提到了该角色**——原文或译文里出现该角色的全名别名（与对照表/译名表口径一致）；
+ * 1. **本行文本提到了该角色**——原文或译文里出现该角色的全名别名（与译名表口径一致）；
  * 2. **本行原文出现了该角色的任一口癖**——说话人可能没被点名，规则必须留着，否则“特色流失”判不出来。
  *
  * 收窄单位是**角色，不是单条口癖**。一旦某条口癖或名字把角色定出来，该角色的全部可注入规则都要带上：

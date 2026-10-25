@@ -45,7 +45,7 @@ test("提示词缓存：常驻前缀不随行特征、实体或动态资料变�
       }
       const dynamic = buildProofreadSystemPromptParts({
         mode, profileId: profile.id, rowFeatures: new Set(), sourceText: "本文。", targetText: "正文。",
-        termBlock: "【术语（对照表命中）】\n本行术语甲。", speechHabitBlock: "【说话习惯（本章）】\n本行口吻乙。",
+        termBlock: "【术语（译名表命中）】\n本行术语甲。", speechHabitBlock: "【说话习惯（本章）】\n本行口吻乙。",
       });
       assert.equal(dynamic.cacheablePrefix, stablePrefix);
       assert.ok(dynamic.system.indexOf("本行术语甲") > stablePrefix.length);
@@ -95,7 +95,7 @@ test("提示词缓存：复审/仲裁的固定规则和schema先于本行术语�
   for (const build of [buildStylistMessages, (row, decision, options) => buildArbiterMessages(row, decision, {}, options)]) {
     const make = (index, term) => build({ index, jp: "本文。", cn: "正文。" }, { needsEdit: true, revisedText: "修文。" }, {
       basePrompt: "【成品校对规范：测试】\n标点必须正确。", glossary: "【全局术语表】\n全书固定条目。",
-      termBlock: `【译名对照表（本行命中）】\n${term}`,
+      termBlock: `【译名表（本行命中）】\n${term}`,
     });
     const first = make(1, "术语甲");
     const second = make(2, "术语乙");

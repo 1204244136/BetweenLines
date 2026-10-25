@@ -647,11 +647,11 @@ test("真实行样本保持压缩后的请求预算", () => {
 test("第 4 层的动态段：术语 → 说话习惯 → 低分归因 → 线上查证，各只出现一次且顺序固定", () => {
   // 每个段的段首标记都必须登记在 dynamicBlockPrefixes 里：自定义提示词残留的旧段先被剥掉，
   // 再按“由内到外补充资料”的顺序统一注入（新增动态段时若漏登记，这条测试会立刻失败）。
-  const termBlock = "【术语（对照表命中）】\n本行原文命中了本项目译名对照表的下列条目：\n- グループ → GROUP（组织/暗部）";
+  const termBlock = "【术语（译名表命中）】\n本行原文命中了本项目译名表的下列条目：\n- グループ → GROUP（组织/暗部）";
   const habitBlock = "【说话习惯（本章）】本章「第一章」出现了以下角色（按人名命中判定）：这些角色的说话特色是刻意的语言特征。\n- 山田太郎：第一人称 「オレ」 → 本项目写作「本大爷」";
   const scoreBlock = `${LOW_SCORE_PREFIX}\n本行刚被判为极低分（严重缺陷）……`;
   const lookupBlock = "【线上查证（作品维基）】 第 1/3 站：中文（灰机）\n站点入口：https://example.com/wiki/";
-  const markers = ["【术语（对照表命中）】", "【说话习惯（本章）】", LOW_SCORE_PREFIX, "【线上查证（作品维基）】"];
+  const markers = ["【术语（译名表命中）】", "【说话习惯（本章）】", LOW_SCORE_PREFIX, "【线上查证（作品维基）】"];
   const counts = (text, needle) => text.split(needle).length - 1;
 
   const system = buildProofreadSystemPrompt({

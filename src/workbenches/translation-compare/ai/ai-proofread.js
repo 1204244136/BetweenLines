@@ -487,7 +487,7 @@ function readRows(inputProject = {}) {
   return {
     // 构建期算好的说话习惯层（可能有，也可能没有：老快照或该档案没声明表）。
     speechHabits: data.speechHabits || null,
-    // 构建期算好的对照表判定（行号结论，不落备注）：运行期用来交叉校验，避免页面与任务结论分叉。
+    // 构建期算好的译名表判定（行号结论，不落备注）：运行期用来交叉校验，避免页面与任务结论分叉。
     termPrefilter: data.termPrefilter || null,
     project: data.project || null,
     rows: data.rows || [],
@@ -563,7 +563,7 @@ function cleanConfig(input = {}) {
     target,
     proofreadMode,
     profileId,
-    // 对照表：显式传入 > 特化档案声明 > 环境变量，去重后按顺序加载。
+    // 译名表：显式传入 > 特化档案声明 > 环境变量，去重后按顺序加载。
     termTables: normalizeTermTablePaths([
       ...toPathList(input.termTables),
       ...toPathList(profile.termTables),
@@ -636,7 +636,7 @@ function cleanConfig(input = {}) {
     arbiterPresets: cleanStagePresetPool(input.arbiterPresets || input.stage3Presets, input.arbiterConfig || input.stage3Preset, defaults, 2),
     // 本次任务里命中的行：术语提示段落按行号在此登记，跑任务时注入提示词（含术语冲突行）。
     termContext: new Map(),
-    // 术语冲突（对照表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
+    // 术语冲突（译名表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
     termConflictIndexes: new Set(),
   };
 }
@@ -974,7 +974,7 @@ async function startPrefilter(input) {
   };
 
   let pending = 0;
-  // 预筛选同样先过一遍对照表：只有整行都是术语的行会落地，其余命中行留给模型（含术语冲突行）。
+  // 预筛选同样先过一遍译名表：只有整行都是术语的行会落地，其余命中行留给模型（含术语冲突行）。
   const resolvedByTermTable = applyTermTable(config, rows, labels);
   for (const row of rows) {
     if (config.completedIndexes.has(Number(row.index))) {
@@ -1006,7 +1006,7 @@ async function startPrefilter(input) {
   }
 
   status.queued = pending;
-  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行；术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${pending} 行需要 AI 校对。`);
+  pushLog(`预筛选：人工确认跳过 ${status.skippedDone} 行，译名表跳过 ${status.termPrefiltered} 行，规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行；术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${pending} 行需要 AI 校对。`);
   finish();
   return clientStatus({ includeResults: false });
 }
@@ -1140,7 +1140,7 @@ async function startProofread(input) {
     return launchQueue();
   }
 
-  // 对照表预处理：先于规则/相似度预筛运行——命中的行直接用表里的内容判定，不再交给模型。
+  // 译名表预处理：先于规则/相似度预筛运行——命中的行直接用表里的内容判定，不再交给模型。
   const resolvedByTermTable = applyTermTable(config, rows, labels);
 
   const prepared = prepareInputs(resolvedByTermTable);
@@ -1178,7 +1178,7 @@ async function startProofread(input) {
 
   if (joining) status.queued += queue.length + resumedStage2Count + resumedStage3Count;
   else status.queued = queue.length + resumedStage2Count + resumedStage3Count;
-  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，对照表跳过 ${status.termPrefiltered} 行，对照表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2Count ? `；另有 ${resumedStage2Count} 行续跑复审` : ""}${resumedStage3Count ? `；另有 ${resumedStage3Count} 行续跑仲裁` : ""}。`);
+  pushLog(`${config.proofreadMode === "bilingual" ? "双语版本校对" : "三语语境校对"}：人工确认跳过 ${status.skippedDone} 行，译名表跳过 ${status.termPrefiltered} 行，译名表注入术语 ${status.termInjected} 行（照常交给模型，含术语冲突行），规则跳过 ${status.rulePrefiltered} 行，结构化冲突 ${status.structuredConflicts} 行，相似度跳过 ${status.similarityPrefiltered} 行，术语冲突 ${status.termConflicts} 行不通过预筛，交给 AI 判断，剩余 ${queue.length} 行进入 AI 校对${resumedStage2Count ? `；另有 ${resumedStage2Count} 行续跑复审` : ""}${resumedStage3Count ? `；另有 ${resumedStage3Count} 行续跑仲裁` : ""}。`);
   pushLog(describeConcurrencyPolicy(config.concurrency));
   pushLog(describePolicy());
   return launchQueue();
@@ -2230,7 +2230,7 @@ async function runStage1Gatekeeper(row, allRows, config, labels) {
     counterpartText,
     diffHelper,
     speechHabit: speechHabitFor(row, config.speechHabitContext),
-    // 对照表命中的术语：只作为提示词注入，不替模型下结论（跳过模型的行根本不会走到这里）。
+    // 译名表命中的术语：只作为提示词注入，不替模型下结论（跳过模型的行根本不会走到这里）。
     termGuidance: config.termContext?.get(Number(row.index)) || null,
     context: [],
     contextMode: "none",
@@ -2615,7 +2615,7 @@ function shouldRetryWithContext(decision) {
 }
 
 /**
- * 术语冲突行必须经过模型：对照表已经在这类行上给出强证据差异（译文现用别的写法、或整条没译出来），
+ * 术语冲突行必须经过模型：译名表已经在这类行上给出强证据差异（译文现用别的写法、或整条没译出来），
  * 若被规则/相似度预筛按“看起来差不多”挡掉，这一行的术语判断就没人做了——而术语判断正是模型分析的一环。
  */
 function isTermConflictRow(config, index) {
@@ -2624,15 +2624,15 @@ function isTermConflictRow(config, index) {
 }
 
 /**
- * 对照表预处理：命中行按「整行是否只有术语」分流，并返回被它直接处理掉的行号集合。
+ * 译名表预处理：命中行按「整行是否只有术语」分流，并返回被它直接处理掉的行号集合。
  * - `term-only`：整行有效内容就是术语，直接写成结果，不调用模型；
  * - `consistent`：术语一致但句中还有别的内容——照常交给模型，只把术语当提示词注入；
- * - `advisory`：命中的是假名写法（グループ、メンバー…），可能只是普通词——**不由对照表定论**，
+ * - `advisory`：命中的是假名写法（グループ、メンバー…），可能只是普通词——**不由译名表定论**，
  *   注入术语提示后照常交给模型，由模型结合上下文判断此处是否确指该术语（与人工核对模型结论）；
- * - `conflict`：译名不一致（强证据且非假名写法）——**同样交给模型**：对照表只提供证据与线索
+ * - `conflict`：译名不一致（强证据且非假名写法）——**同样交给模型**：译名表只提供证据与线索
  *   （译文现用某个写法、或整条没译出来），要不要改由模型结合整句判断，「术语判断」是模型分析里
  *   的一个环节。这些行还会登记进 `config.termConflictIndexes`，在预筛阶段豁免（不许被相似度挡掉）。
- * 只有 `term-only` 会由对照表直接写结论、跳过模型；AI 校对与预筛选共用这条路径，它不调用模型。
+ * 只有 `term-only` 会由译名表直接写结论、跳过模型；AI 校对与预筛选共用这条路径，它不调用模型。
  */
 function applyTermTable(config, rows, labels) {
   const resolved = new Set();
@@ -2689,20 +2689,20 @@ function applyTermTable(config, rows, labels) {
     // 如实说出来：这些条目声明了注音，但本行原文与译文没有同时注音——按新口径它们只作一致性证据
     // （译文用了该项目译名才留下），不能据此指控译名差异。
     const samples = [...new Set(rubyDemotedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
-    pushLog(`对照表：${rubyDemotedCandidates.length} 条候选因中日两侧没有同时注音，降级为只作一致性证据（例：${samples.join("、")}）。`);
+    pushLog(`译名表：${rubyDemotedCandidates.length} 条候选因中日两侧没有同时注音，降级为只作一致性证据（例：${samples.join("、")}）。`);
   }
   if (rubySkippedCandidates.length) {
     // 如实说出来：这些候选是“表里有这条、本行却没算命中”的——非人名条目带注音时的匹配口径。
     const samples = [...new Set(rubySkippedCandidates.map((item) => displayTermPair(item.entry)))].slice(0, 5);
-    pushLog(`对照表：${rubySkippedCandidates.length} 条候选因没有同时注音、且译文未出现该译名而未参与判定（例：${samples.join("、")}）。`);
+    pushLog(`译名表：${rubySkippedCandidates.length} 条候选因没有同时注音、且译文未出现该译名而未参与判定（例：${samples.join("、")}）。`);
   }
   compareWithTermLayer(config, { resolved, targetKey, skippedByTable });
   return resolved;
 }
 
 /**
- * 与构建期结论交叉校验：对照表判定是确定性函数，两条路径算出来的「命中行」与「跳过模型的纯术语行」
- * 必须一致。不一致只有两种可能——对照表在构建之后被改过（指纹过期），或者页面上的徽标已经过期。
+ * 与构建期结论交叉校验：译名表判定是确定性函数，两条路径算出来的「命中行」与「跳过模型的纯术语行」
+ * 必须一致。不一致只有两种可能——译名表在构建之后被改过（指纹过期），或者页面上的徽标已经过期。
  * 这里不改结论（运行期算的就是本次生效的判定），只把分叉显式说出来。
  */
 function compareWithTermLayer(config, { resolved, targetKey, skippedByTable = [] }) {
@@ -2714,7 +2714,7 @@ function compareWithTermLayer(config, { resolved, targetKey, skippedByTable = []
   });
   if (!match) return;
   if (match.stale) {
-    pushLog("对照表：对照表文件在构建工作台之后被修改过，本次按最新表判定；重新构建工作台可让页面徽标同步。");
+    pushLog("译名表：译名表文件在构建工作台之后被修改过，本次按最新表判定；重新构建工作台可让页面徽标同步。");
     return;
   }
   if (!match.variant) return;
@@ -2729,15 +2729,15 @@ function compareWithTermLayer(config, { resolved, targetKey, skippedByTable = []
   const builtSkips = [...built.termOnly].filter((index) => !config.completedIndexes.has(index));
   const skipMismatch = built.termOnly.size && (builtSkips.some((index) => !skips.has(index)) || [...skips].some((index) => !built.termOnly.has(index)));
   if (!missing.length && !extra.length && !skipMismatch) {
-    pushLog(`对照表：与构建期预筛一致（构建期判定 ${predicted.size} 行，本次参与 ${expected.size} 行）。`);
+    pushLog(`译名表：与构建期预筛一致（构建期判定 ${predicted.size} 行，本次参与 ${expected.size} 行）。`);
     return;
   }
-  pushLog(`对照表：运行期判定与构建期预筛不一致（少 ${missing.length} 行 / 多 ${extra.length} 行${skipMismatch ? " / 跳过模型的行集合不同" : ""}）；重新构建工作台后再核对页面徽标。`);
+  pushLog(`译名表：运行期判定与构建期预筛不一致（少 ${missing.length} 行 / 多 ${extra.length} 行${skipMismatch ? " / 跳过模型的行集合不同" : ""}）；重新构建工作台后再核对页面徽标。`);
 }
 
 // 表路径写法（数组 / `;` / 换行）的解析与构建期共用同一实现，避免两处口径漂移。
 
-// 对照表按“文件 + 修改时间”缓存：一次任务内只解析一次，表格改动后自动重载。
+// 译名表按“文件 + 修改时间”缓存：一次任务内只解析一次，表格改动后自动重载。
 // 即使解析结果为空（坏文件）也缓存，避免每次状态轮询都重读整张表。
 const termTableCache = new Map();
 
@@ -2765,12 +2765,12 @@ function loadTermTablesCached(files) {
 function termTablesFor(config) {
   const tables = loadTermTablesCached(config.termTables);
   if (!tables) return null;
-  if (tables.errors.length) pushLog(`对照表加载告警：${tables.errors.join("；")}`);
+  if (tables.errors.length) pushLog(`译名表加载告警：${tables.errors.join("；")}`);
   return tables.entries.length ? tables : null;
 }
 
 /**
- * 界面用的对照表状态：当前特化档案（加环境变量）声明了哪些表、能解析出多少条。
+ * 界面用的译名表状态：当前特化档案（加环境变量）声明了哪些表、能解析出多少条。
  * 不写日志，供状态轮询调用。
  */
 function termTableStatusFor(profileId, selection = null) {
@@ -3535,7 +3535,7 @@ function buildMessages(payload, config = {}) {
       // 术语提示只影响“概念该用哪个译名”，不改变整行判断：系统提示词里已有完整边界说明，
       // 这里只列出本行实际命中的条目，并把结论字段交回给模型的常规判断。
       terms: {
-        source: "译名对照表（本行命中的条目）",
+        source: "译名表（本行命中的条目）",
         targetLabel: payload.targetLabel,
         items: payload.termGuidance.terms.map((term) => ({
           source: term.source,
@@ -3544,7 +3544,7 @@ function buildMessages(payload, config = {}) {
           type: term.type,
           note: term.note,
         })),
-        note: "译文出现这些概念时必须使用对照表给出的标准译名；一致性只覆盖术语，句子的其余部分仍按常规规则逐项核对。",
+        note: "译文出现这些概念时必须使用译名表给出的标准译名；一致性只覆盖术语，句子的其余部分仍按常规规则逐项核对。",
       },
     } : {}),
     // 线上查询层：把「去哪个站点入口、查哪些词、问什么」给模型，由它自己站内查找（本机不抓网页）。
