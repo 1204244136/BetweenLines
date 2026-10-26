@@ -1,6 +1,6 @@
 # 模块所有权与依赖边界
 
-本文规定当前模块归属、依赖方向与对应验证；`AGENTS.md` 负责仓库级不变量和修改纪律。算法、存储键、提示词与客户端状态的细则按下述契约入口维护，不在模块表中再定义一份。按变化原因、共享状态与可独立验证性划分职责，不按文件行数机械拆分。
+本文规定当前模块归属、依赖方向与对应验证；根 [AGENTS](../../AGENTS.md) 保留仓库级纪律和按任务读取契约的入口。输入与行数据细则归 [文本输入与对齐契约](text-input-alignment.md)，快照与写回归 [项目存储与写回契约](project-storage-writeback.md)，其余领域按下述入口维护。按变化原因、共享状态与可独立验证性划分职责，不按文件行数机械拆分。
 
 ## 跨目录所有权
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `src/core/` | 文本、表格、指纹、项目身份、原子文件与路径等基础能力 | 修改时检查所有工作台及快照调用方；不持有某工作台的 rows、notes 或任务状态 |
 | `src/ingest/` | 输入选择、格式转换、正文准入、段落/派生行提取与源文件局部写回 | 通用转换扩展 `pandoc-utils.js`；格式专属业务准入独立实现；转换层不决定正文边界 |
-| `src/storage/` | 项目 staging、快照发布/保留、活动指针和产物定位 | 发布与重渲染遵守 `AGENTS.md` 的快照不变量；长期备注不纳入生成快照或项目删除范围 |
+| `src/storage/` | 项目 staging、快照发布/保留、活动指针和产物定位 | 发布与重渲染遵守 [项目存储契约](project-storage-writeback.md#运行时数据与不可变快照)；长期备注不纳入生成快照或项目删除范围 |
 | `src/runtime/` | 常驻服务、鉴权、HTTP 路由、任务生命周期与输入持久化 | 子模块不反向依赖服务入口；任务实现仍由各工作台拥有 |
 | `src/ai/` | 共享连接配置、LLM 传输、token 用量归一化、通用任务队列与基础 JSON 提示契约 | 不引入领域结果模型或任务运行状态；传输安全、用量统计、超时与重试细则见 [AI 契约](ai-proofread-contract.md) |
 | `src/workbenches/<name>/` | 该工作台的结果模型、构建器、提示词、缓存与备注空间 | 不用另一工作台的 rows 或 notes 充当自己的数据模型 |
@@ -45,7 +45,7 @@ node --test scripts/runtime-modules.test.js scripts/input-server.test.js scripts
 
 ## 翻译构建边界
 
-EPUB ingest 在 HTML 转纯文本时保留 h1–h6 的临时结构标题标记，供正文边界与段落切分消费；标记不得进入段落、AI 输入或生成物。数字节号不覆盖所属章名；普通 p 中的数字仍为正文。Pandoc 与内置 spine 路径使用同一规则，说话人构建共享该入口。
+Pandoc 与内置 spine 路径共用 ingest 正文准入，说话人构建也使用该入口。结构标题标记、段落索引、模式裁剪和对齐产物遵守 [文本输入与对齐契约](text-input-alignment.md)。
 
 | 模块（均相对 `src/workbenches/translation-compare/`） | 唯一职责 |
 | --- | --- |
@@ -68,17 +68,17 @@ EPUB ingest 在 HTML 转纯文本时保留 h1–h6 的临时结构标题标记�
 
 - 职责模块不得反向依赖 `build-compare.js`；新增领域调用直接引用职责模块，兼容入口只服务已有调用方。
 - 渲染器从默认配置、评分与 `proofread-contract.js` 读取契约，不为配置加载 `ai-proofread.js` 的任务运行状态。
-- 静态资源由 `readWorkbenchAssets()` 在 `makeHtml()` 内读取，不能改回导入模块时缓存；快照 HTML 内嵌资源，发布页面的更新动作按 `AGENTS.md` 的刷新契约执行。
+- 静态资源由 `readWorkbenchAssets()` 在 `makeHtml()` 内读取，不能改回导入模块时缓存；快照 HTML 内嵌资源，发布页面的更新动作按 [改动生效与交付提示](../agents/change-workflow.md#改动生效与交付提示) 执行。
 - 明确授权的备注定向恢复仅通过重渲染参数注入当前快照 HTML，仍经 staging 发布，不修改已发布快照或比较 JSON。恢复源与快照内容不提交；普通布局重渲染不注入备份。恢复规则与一次性标记归 [工作台契约](workbench-notes-spaces.md)。
 - 序列化到浏览器的函数不得捕获模块私有依赖；必需常量和纯函数须显式注入。
-- 跨语言语义对齐由 `align_jp.py` 持有；JS 对齐算法与展示标签分别归上表两模块。分数与标签来自算法或集中规则，不能手工覆盖；阈值改动要兼容旧快照展示。
+- 跨语言语义对齐由 `align_jp.py` 持有；JS 对齐算法与展示标签分别归上表两模块。算法、阈值与旧快照兼容遵守 [对齐产物与展示标签](text-input-alignment.md#对齐产物与展示标签)。
 
 修改这些边界执行 `npm test`，覆盖模式裁剪、备注恢复、快照重渲染与布局缓存。`scripts/translation-module-boundaries.test.js` 在独立进程检查渲染和纯计算模块不加载 AI 服务或构建入口；它不等于全仓库依赖图检查。纯结构移动不要求重跑语义对齐。
 
 ## 说话人工作台边界
 
 - 待判断行只提取 `「…」` 或 `『…』` 中的完整发话，不按内部标点拆分；叙述仅供上下文。完整发话生产预对齐最多 `1:1`，同段落合并仅在显式启用 `allowMergedParallel` 的诊断中允许，生产构建不得开启。
-- 单语/双语模式裁剪、原文准入与持久化对齐摘要遵守 `AGENTS.md` 的工作台不变量；对齐或注意力的启发式分数不能解释为判断正确率。
+- 单语/双语模式裁剪、原文准入与持久化对齐摘要遵守 [文本输入与对齐契约](text-input-alignment.md)，产物隔离遵守 [项目存储契约](project-storage-writeback.md)。对齐或注意力的启发式分数不能解释为判断正确率。
 
 验证：`node --test scripts/speaker-attribution.test.js scripts/speaker-ai.test.js`。
 

@@ -12,4 +12,4 @@
 
 完整发话与 `parentParagraphId` 来自共享 ingest 层；证据排序与对齐分数只作为审阅线索。模型执行复用共享 AI 传输和任务队列，不复用翻译校对的三阶段队列或备注模型。
 
-使用、命令、输出位置与写回说明见根 [README.md](../../../README.md)。正文准入、对齐和生成物边界见 [AGENTS.md](../../../AGENTS.md)；共享传输与模型能力约束见 [AI 校对契约](../../../docs/contracts/ai-proofread-contract.md)，公共 Toast 约束见 [工作台契约](../../../docs/contracts/workbench-notes-spaces.md)。本文件只记录模块归属，不维护第二份操作手册。
+使用、命令、输出位置与写回说明见根 [README.md](../../../README.md)。正文准入和对齐见 [文本输入与对齐契约](../../../docs/contracts/text-input-alignment.md)，产物隔离与写回见 [项目存储契约](../../../docs/contracts/project-storage-writeback.md)；共享传输与模型能力约束见 [AI 校对契约](../../../docs/contracts/ai-proofread-contract.md)，公共 Toast 约束见 [工作台契约](../../../docs/contracts/workbench-notes-spaces.md)。本文件只记录模块归属，不维护第二份操作手册。

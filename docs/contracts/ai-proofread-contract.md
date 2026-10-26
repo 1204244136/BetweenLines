@@ -214,6 +214,7 @@
 - **触发条件**：`needsEdit=true`、非 `needsContext`/`unclear`、扣分达 `lowScorePenalty`（默认 60，score ≤ 40）、前后至少有一行可供复核。不用档位兜底。
 - **纪律**：错位必查（核对相邻行配对）；**原文行序不动**（禁止建议对调两行译文）；上下文优先（归因不了继续补行）。
 - 归因结论写在备注分析栏（`分析：` 之后、「修改结果：」之前）。开关 `lowScoreCheck:false` / `TRANSCOMPARATOR_LOW_SCORE=0`，窗口 `lowScoreRows`（1–4）。
+- 阈值配置优先采用请求的 `lowScorePenalty`，否则读取 `TRANSCOMPARATOR_LOW_SCORE_PENALTY`，均限制在 0–100；未配置时使用默认值。
 
 ---
 
@@ -221,6 +222,7 @@
 
 排在低分归因之后、输出门禁与阶段结论分发之前：
 - 档案声明 `wikiSites`（有序：声明顺序即查询顺序）。
+- 站点列表按请求 `wikiSites` → 环境变量 `TRANSCOMPARATOR_WIKI_SITES` → 档案声明的顺序取首个非空来源；环境变量中的多个入口用分号或换行分隔。
 - **触发条件**：本行有 `advisory` 命中（假名写法存疑），且模型返回 `needsContext`/`unclear` 且已补过相邻行。
 - **执行方式**：程序分轮驱动，一轮只给一个站点，最后一轮为自行检索，最多 4 轮。模型定论后立即 break。
 - **纪律**：不给直达链接，只给站点入口与词条名；本机不抓网页；不许凭记忆猜；只发术语名与片段。开关 `webLookup:false` / `TRANSCOMPARATOR_WEB_LOOKUP=0`。
@@ -229,7 +231,7 @@
 
 ## 说话习惯与说话人判断层
 
-- 章级判定与模型无关，构建期算一次落盘到 `translation-compare.json` 顶层 `speechHabits` 块；指纹过期才回退现算。改动判定语义递增 `LAYER_VERSION`（当前为 **5**）。
+- 章级判定与模型无关，构建期算一次落盘到 `translation-compare.json` 顶层 `speechHabits` 块；指纹过期才回退现算。改动判定语义必须递增实现中的 `LAYER_VERSION`，本文不缓存其当前数值。
 - **按角色收窄**（`speechHabitBlockForRow`）：单行提示词只带“本行提到了该角色”或“本行原文出现了其任一口癖”的角色规则。收窄单位为角色而非单条口癖。
 - **口癖位置判据**（`hasHabitOccurrence`）：句末语气词必须落在句末；单字汉字口癖必须落在词首；判定前先剥掉注音标记。
 - 说话习惯表与译名表统一经 `core/spreadsheet.js` 读取外部表格；档案只持有规范和作用范围，不持有表条目。`-` 是明确不作特殊处理，保留为 `noSpecialHandling`。

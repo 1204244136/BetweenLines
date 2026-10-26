@@ -9,6 +9,6 @@
 | `notes-recovery.js`、`notes-spaces.js` | 翻译备注的匹配、恢复与空间管理 |
 | `ai/`、`ai-presets.js` | 翻译提示词、三阶段任务、输出门禁、预设与结果语义 |
 
-翻译行不作为说话人或其他分析的通用容器。原文准入、段落完整性、模式裁剪、签名和模块依赖方向由 [AGENTS.md](../../../AGENTS.md) 维护。
+翻译行不作为说话人或其他分析的通用容器。原文准入、段落完整性、模式裁剪和签名见 [文本输入与对齐契约](../../../docs/contracts/text-input-alignment.md)，依赖方向见 [模块边界](../../../docs/contracts/module-boundaries.md)；根 [AGENTS.md](../../../AGENTS.md) 只保留跨任务约束和读取入口。
 
-使用和命令见根 [README.md](../../../README.md)。AI 提示词及阶段规则见 [AI 校对契约](../../../docs/contracts/ai-proofread-contract.md)，备注和客户端状态见 [工作台契约](../../../docs/contracts/workbench-notes-spaces.md)。上游 index-X 的输入/翻译规范来源与同步义务也由 AGENTS 及 AI 契约维护，本文件不复制上游规范。
+使用和命令见根 [README.md](../../../README.md)。AI 提示词及阶段规则见 [AI 校对契约](../../../docs/contracts/ai-proofread-contract.md)，备注和客户端状态见 [工作台契约](../../../docs/contracts/workbench-notes-spaces.md)。上游 index-X 的输入规范归文本输入契约，翻译规范来源与同步义务归 AI 契约，本文件不复制这些细则。

@@ -1,6 +1,6 @@
 # 常见故障定位与排查手册
 
-本文档按故障现象定位实现与证据；模块所有权见 [module-boundaries.md](module-boundaries.md)，行为细则见相应领域契约。代码更新后的重启、应用布局或重新生成操作统一按 `AGENTS.md` 的「改动层级与刷新提示契约」执行，下文不另定义生效规则。
+本文档按故障现象定位实现与证据；模块所有权见 [模块边界](module-boundaries.md)，输入与对齐规则见 [文本输入契约](text-input-alignment.md)，快照与写回规则见 [项目存储契约](project-storage-writeback.md)。代码更新后的重启、应用布局或重新生成操作统一按 [改动生效与交付提示](../agents/change-workflow.md#改动生效与交付提示) 执行，下文不另定义生效规则。
 
 ---
 
