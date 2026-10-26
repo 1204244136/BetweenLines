@@ -110,8 +110,7 @@ test("预览找回时本页已有记录的行也按签名合并，不丢历史�
   assert.equal(ui.run(`localStorage.getItem(${JSON.stringify(siblingKey)})`), space, "来源空间始终保留");
 });
 
-// 「重新生成工作台后人工确认少一截」的真实形态：旧版规则把「内容重复的短行」整条丢掉、
-// 把「写回后内容变过的行」清成需核验。下面三条夹具就是按这两种损伤搭的。
+// 夹具同时包含重复短行和写回后签名变化的行，用于检查手工找回及既有数据保留。
 function healedRowSet() {
   return Array.from({ length: 14 }, (_, offset) => {
     const index = offset + 1;
@@ -148,27 +147,40 @@ function damagedCurrentSpace() {
   return space;
 }
 
-test("载入自愈：补回旧版规则漏掉的记录、还回能证明的人工确认", () => {
+test("载入已有未核验记录时保留原空间，手工找回才能补充内容并恢复有证据的确认", async () => {
+  const currentRaw = JSON.stringify(damagedCurrentSpace());
+  const historyRaw = JSON.stringify(healedHistorySpace());
   const storage = storageFixture({
-    [currentKey]: JSON.stringify(damagedCurrentSpace()),
-    [siblingKey]: JSON.stringify(healedHistorySpace()),
+    [currentKey]: currentRaw,
+    [siblingKey]: historyRaw,
   });
   const ui = createWorkbench(storage, { rows: healedRowSet() });
+  assert.equal(storage.getItem(currentKey), currentRaw, "载入不能自动改写现有空间");
+  assert.equal(storage.getItem(siblingKey), historyRaw);
+  assert.equal(ui.run('notes["13"]'), undefined, "用户操作前不能自动补入历史记录");
+  for (const index of [3, 5, 7]) {
+    assert.equal(ui.run(`notes["${index}"].manualDone`), false);
+    assert.equal(ui.run(`notes["${index}"].recoveredUnverified`), true);
+  }
+  assert.equal(ui.run("toasts.some((toast) => /已修复/.test(toast.message))"), false);
+  ui.run(`previewNotesRecovery(collectNotesSpaces().find((space) => space.key === ${JSON.stringify(siblingKey)}))`);
   for (const index of [3, 5, 7]) {
     assert.equal(ui.run(`notes["${index}"].manualDone`), true, `第 ${index} 行现在的正文就是写回的成品，人工确认必须还回来`);
     assert.equal(ui.run(`notes["${index}"].recoveredUnverified`), undefined, "还回确认的行不再需要逐行核验");
   }
+  assert.match(ui.element("notesRecoveryPreview").innerHTML, /恢复确认/);
+  await ui.element("applyNotesRecovery").dispatch("click");
   for (const index of [13, 14]) {
     assert.equal(ui.run(`notes["${index}"].manualDone`), true, `第 ${index} 行的记录必须补回`);
   }
-  assert.match(toastMessages(ui).join("|"), /已修复旧版找回规则漏掉的记录/);
   const saved = JSON.parse(ui.run("notesStorage.getItem(storageKey)"));
   assert.equal(saved[3].recoveredUnverified, undefined);
   assert.equal(saved[3].manualDone, true);
-  assert.equal(saved[13].manualDone, true, "自愈结果要落盘，下次打开工作台才不会又少一截");
+  assert.equal(saved[13].manualDone, true, "显式找回结果要保存");
+  assert.equal(storage.getItem(siblingKey), historyRaw, "手工找回始终保留来源空间");
 });
 
-test("载入自愈只碰挨过旧版损伤的空间：本页没有未校验记录时原样不动", () => {
+test("载入已保存空间不自动追加历史记录或人工确认", () => {
   const healthy = damagedCurrentSpace();
   for (const index of [3, 5, 7]) {
     healthy[index] = { note: aiNote, done: false, manualDone: false, aiDone: true, rowSig: `sig-${index}-new` };

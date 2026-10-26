@@ -2,12 +2,10 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createWorkbench, storageFixture, currentKey, siblingKey } = require("./workbench-fixture");
 
-// 浏览器 localStorage 由多个项目共享。当前工作台只对「本项目的空间」开放找回，
-// 但其他项目/旧版空间同样占着同一份容量——写满之后本页备注就再也存不进去，刷新即丢。
-// 这一区因此单独列出，只给导出与删除，不给找回。
+// 当前工作台只对「本项目的空间」开放找回；其他记录单独列出，只给导出与删除。
 const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
 
-test("其他项目/旧版空间单列一区：可导出可删除，但不进找回入口", () => {
+test("其他记录单列一区：可导出可删除，但不进找回入口", () => {
   const storage = storageFixture({
     [currentKey]: "{}",
     [siblingKey]: JSON.stringify({ 1: { note: "本项目历史" } }),
@@ -32,7 +30,7 @@ test("其他项目/旧版空间单列一区：可导出可删除，但不进找�
   assert.equal(ui.element("notesForeignList").hidden, false);
   const markup = ui.element("notesForeignList").innerHTML;
   assert.match(markup, /other-project/, "列表里能看到是哪个项目");
-  assert.match(markup, /data-notes-drop/, "可以删除，才能腾出浏览器容量");
+  assert.match(markup, /data-notes-drop/, "保留其他记录的独立删除入口");
   assert.match(markup, /data-notes-export/, "删除前可以单独导出");
   assert.equal(/data-notes-restore/.test(markup), false, "其他项目空间不给「预览找回」");
   assert.equal(/data-notes-index/.test(markup), false, "其他项目空间不给「按行号找回」");
@@ -48,6 +46,21 @@ test("其他项目/旧版空间单列一区：可导出可删除，但不进找�
   );
   // 隔离只影响当前页面：这一区不得顺手删掉别的项目的记录。
   assert.notEqual(ui.storage.getItem(foreignKey), null, "列出不等于删除");
+});
+
+test("未归属项目的既有记录使用通用入口，仍可原样备份且不会被自动归入本项目", () => {
+  const unassignedKey = "translation-compare-notes-legacy-file";
+  const raw = JSON.stringify({ 1: { note: "仍需保留的记录", manualDone: true } });
+  const ui = createWorkbench(storageFixture({ [currentKey]: "{}", [unassignedKey]: raw }));
+  assert.match(ui.html, /id="notesForeignHeading"[^>]*><strong>其他记录<\/strong>/);
+  const markup = ui.element("notesForeignList").innerHTML;
+  assert.match(markup, /未归属项目的记录/);
+  assert.doesNotMatch(markup, /旧版空间|旧版文件备份/);
+  assert.equal(ui.run(`freshNotesSpace(${JSON.stringify(unassignedKey)})`), undefined);
+  const backup = JSON.parse(ui.run("JSON.stringify(notesBackup(collectForeignNotesSpaces()))"));
+  assert.deepEqual(backup.spaces, [{ key: unassignedKey, raw }]);
+  assert.equal(ui.storage.getItem(unassignedKey), raw);
+  assert.equal(ui.storage.getItem(currentKey), "{}");
 });
 
 test("没有其他项目空间时，这一区整块收起", () => {

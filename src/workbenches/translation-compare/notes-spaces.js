@@ -163,29 +163,15 @@ function createNotesTools(alignLegacyNotes) {
   }
 
   function decodeBackup(payload) {
-    if (!record(payload)) throw new Error("文件不是备注备份对象。");
-    if (payload.format === "betweenlines-notes") {
-      if (payload.version !== 1 || !Array.isArray(payload.spaces) || !payload.spaces.length) throw new Error("不支持这个备注备份版本或备份为空。");
-      const seen = new Set();
-      return payload.spaces.map((space) => {
-        if (!record(space) || typeof space.key !== "string" || !space.key.startsWith(prefix)
-          || auxiliary(space.key) || typeof space.raw !== "string" || seen.has(space.key)) throw new Error("备份中含无效或重复的空间。");
-        seen.add(space.key);
-        return { key: space.key, raw: space.raw };
-      });
-    }
-    // 兼容旧的全空间备份，以及旧版单空间导出的裸备注对象。
-    if (Object.keys(payload).length && Object.keys(payload).every((key) => key.startsWith(prefix))) {
-      const spaces = Object.entries(payload).filter(([key]) => !auxiliary(key)).map(([key, data]) => {
-        const raw = JSON.stringify(data);
-        if (!parse(raw)) throw new Error("旧备份中含无法识别的备注数据。");
-        return { key, raw };
-      });
-      if (spaces.length) return spaces;
-    }
-    const raw = JSON.stringify(payload);
-    if (entries(payload).length && parse(raw)) return [{ key: prefix + "legacy-file", raw }];
-    throw new Error("文件里没有识别到备注空间，请选择本面板导出的 JSON。");
+    if (!record(payload) || payload.format !== "betweenlines-notes") throw new Error("文件不是备注备份，请选择本面板导出的 JSON。");
+    if (payload.version !== 1 || !Array.isArray(payload.spaces) || !payload.spaces.length) throw new Error("不支持这个备注备份版本或备份为空。");
+    const seen = new Set();
+    return payload.spaces.map((space) => {
+      if (!record(space) || typeof space.key !== "string" || !space.key.startsWith(prefix)
+        || auxiliary(space.key) || typeof space.raw !== "string" || seen.has(space.key)) throw new Error("备份中含无效或重复的空间。");
+      seen.add(space.key);
+      return { key: space.key, raw: space.raw };
+    });
   }
 
   // 文件备份只登记独立空间；同名数据不会覆盖正在使用的页面或任何历史空间。
@@ -193,15 +179,9 @@ function createNotesTools(alignLegacyNotes) {
     const imported = [];
     let skipped = 0;
     let error = null;
-    const currentInfo = identity(currentKey);
     for (const space of spaces) {
       let key = space.key;
       try {
-        // 裸备注对象没有来源项目。导入到具体工作台时把它归入当前项目的
-        // 命名空间；带有明确空间键的备份保留来源项目，避免跨项目记录混入当前历史。
-        if (key === prefix + "legacy-file" && currentInfo.project) {
-          key = `${prefix}${currentInfo.version || "v7"}:${currentInfo.project}:legacy-file`;
-        }
         const base = key.replace(/:import-\d+(?:-\d+)?$/, "");
         let duplicate = storage.getItem(key) === space.raw;
         for (let index = 0; !duplicate && index < storage.length; index += 1) {
@@ -211,7 +191,7 @@ function createNotesTools(alignLegacyNotes) {
           }
         }
         if (duplicate) { skipped += 1; continue; }
-        if (key === currentKey || storage.getItem(key) !== null || key === prefix + "legacy-file") {
+        if (key === currentKey || storage.getItem(key) !== null) {
           key = base + ":import-" + now;
           let counter = 1;
           while (storage.getItem(key) !== null) key = base + ":import-" + now + "-" + counter++;

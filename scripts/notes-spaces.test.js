@@ -82,13 +82,38 @@ test("预览需要显式索引操作且绝不覆盖预览期间新增的行", as
 
 test("文件导入使用相同备份解码器且不覆盖当前活动状态", async () => {
   const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: "当前备注" } }) }));
-  ui.element("importNotesFile").files = [{ text: async () => JSON.stringify({ 1: { note: "旧单空间备份" } }) }];
+  ui.element("importNotesFile").files = [{ text: async () => JSON.stringify(helpers.backup([
+    { key: sourceKey, raw: JSON.stringify({ 1: { note: "导入的历史备注" } }) },
+  ])) }];
   await ui.element("importNotesFile").dispatch("change");
   assert.equal(ui.run('notes["1"].note'), "当前备注");
   assert.equal(ui.storage.length, 2);
   assert.match(ui.element("notesPanelStatus").textContent, /已导入 1/);
   await ui.element("importNotesFile").dispatch("change");
   assert.equal(ui.storage.length, 2);
+});
+
+test("不支持的备份格式在导入前拒绝，不写入或改动已有备注", async () => {
+  const rawNotes = { 1: { note: "未登记来源的备注" } };
+  const unsupported = [
+    rawNotes,
+    { [sourceKey]: rawNotes },
+    { format: "betweenlines-notes", version: 2, spaces: [{ key: sourceKey, raw: JSON.stringify(rawNotes) }] },
+  ];
+  for (const payload of unsupported) {
+    assert.throws(() => helpers.decodeBackup(payload));
+    const ui = createWorkbench(storageFixture({ [key]: JSON.stringify({ 1: { note: "已有备注" } }) }));
+    const before = [...ui.storage.data];
+    let writes = 0;
+    const setItem = ui.storage.setItem.bind(ui.storage);
+    ui.storage.setItem = (...args) => { writes += 1; setItem(...args); };
+    ui.element("importNotesFile").files = [{ text: async () => JSON.stringify(payload) }];
+    await ui.element("importNotesFile").dispatch("change");
+    assert.equal(writes, 0, "格式不支持时不得产生空间或覆盖现有内容");
+    assert.deepEqual([...ui.storage.data], before);
+    assert.equal(ui.run('notes["1"].note'), "已有备注");
+    assert.doesNotMatch(ui.element("notesPanelStatus").textContent, /已导入/);
+  }
 });
 
 test("单行确认解除找回隔离并写入全新签名", async () => {
@@ -209,21 +234,34 @@ test("切换工作台项目时各自读取对应历史空间", () => {
   assert.deepEqual(visibleB, [historyB]);
 });
 
-test("导入裸备注归入当前项目，带来源项目键的空间保持来源隔离", () => {
+test("规范备份对既有空间键和原始数据原样往返，不重新分配项目归属", async () => {
   const storage = storageFixture({ [key]: "{}" });
-  const legacyRaw = JSON.stringify({ 1: { note: "裸备份" } });
-  const imported = helpers.importBackup(storage, [{ key: "translation-compare-notes-legacy-file", raw: legacyRaw }], key, 123);
-  assert.deepEqual(imported.imported, ["translation-compare-notes-v7:project:legacy-file"]);
-  assert.equal(storage.getItem("translation-compare-notes-v7:project:legacy-file"), legacyRaw);
+  const spaces = [
+    { key: "translation-compare-notes-v7:project:legacy-file", raw: JSON.stringify({ 1: { note: "已登记的备注" } }) },
+    { key: "translation-compare-notes-legacy-file", raw: JSON.stringify({ 2: { note: "未归属项目的记录" } }) },
+    { key: "translation-compare-notes-v4:project:historical", raw: JSON.stringify({ 3: { note: "已有确认", manualDone: true } }) },
+    { key: "translation-compare-notes-v5:other-project:broken", raw: "{broken" },
+  ];
+  const decoded = helpers.decodeBackup(JSON.parse(JSON.stringify(helpers.backup(spaces))));
+  assert.deepEqual(decoded, spaces);
+  const imported = helpers.importBackup(storage, decoded, key, 123);
+  assert.deepEqual(imported.imported, spaces.map((space) => space.key));
+  for (const space of spaces) assert.equal(storage.getItem(space.key), space.raw);
+  const saved = helpers.backup(helpers.inventory(storage, key, {}));
+  for (const space of spaces) assert.deepEqual(saved.spaces.find((item) => item.key === space.key), space);
+  assert.equal(storage.getItem(key), "{}", "保留当前空间，不把没有归属的记录改写到本项目");
 
-  const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
-  const foreignRaw = JSON.stringify({ 1: { note: "其他项目备份" } });
-  const foreign = helpers.importBackup(storage, [{ key: foreignKey, raw: foreignRaw }], key, 123);
-  assert.deepEqual(foreign.imported, [foreignKey]);
-  assert.equal(storage.getItem(foreignKey), foreignRaw);
+  const ui = createWorkbench(storageFixture({ [key]: "{}" }));
+  ui.element("importNotesFile").files = [{ text: async () => JSON.stringify(helpers.backup(spaces)) }];
+  await ui.element("importNotesFile").dispatch("change");
+  for (const space of spaces) {
+    assert.equal(ui.run(`notesStorage.getItem(${JSON.stringify(space.key)})`), space.raw, "页面导入也必须保持原键和原始数据");
+  }
+  assert.equal(ui.run('freshNotesSpace("translation-compare-notes-legacy-file")'), undefined);
+  assert.equal(ui.run('notesStorage.getItem(storageKey)'), "{}");
 });
 
-test("导入其他项目备份时明确提示当前页不会显示", async () => {
+test("导入其他项目备份时明确提示历史隔离与切换项目入口", async () => {
   const foreignKey = "translation-compare-notes-v7:other-project:otherRows";
   const ui = createWorkbench(storageFixture({ [key]: "{}" }));
   ui.element("importNotesFile").files = [{ text: async () => JSON.stringify({
@@ -231,9 +269,25 @@ test("导入其他项目备份时明确提示当前页不会显示", async () =>
     spaces: [{ key: foreignKey, raw: JSON.stringify({ 1: { note: "其他项目历史" } }) }],
   }) }];
   await ui.element("importNotesFile").dispatch("change");
-  assert.match(ui.element("notesPanelStatus").textContent, /其他项目.*当前页面不会显示/);
+  assert.match(ui.element("notesPanelStatus").textContent, /其他项目.*不会进入本项目历史.*切换到对应项目找回/);
   assert.equal(ui.run(`notesSpaceInventory.some((space) => space.key === ${JSON.stringify(foreignKey)})`), false);
   assert.notEqual(ui.storage.getItem(foreignKey), null);
+});
+
+test("导入未归属记录时指向其他记录入口，不误报为其他项目", async () => {
+  const unassignedKey = "translation-compare-notes-legacy-file";
+  const raw = JSON.stringify({ 1: { note: "未归属记录" } });
+  const ui = createWorkbench(storageFixture({ [key]: "{}" }));
+  ui.element("importNotesFile").files = [{ text: async () => JSON.stringify(helpers.backup([
+    { key: unassignedKey, raw },
+  ])) }];
+  await ui.element("importNotesFile").dispatch("change");
+  const receipt = ui.element("notesPanelStatus").textContent;
+  assert.match(receipt, /1 个未归属项目.*其他记录.*导出或删除/);
+  assert.doesNotMatch(receipt, /其他项目|切换到对应项目/);
+  assert.equal(ui.run(`notesStorage.getItem(${JSON.stringify(unassignedKey)})`), raw);
+  assert.equal(ui.run(`freshNotesSpace(${JSON.stringify(unassignedKey)})`), undefined);
+  assert.equal(ui.run("notesStorage.getItem(storageKey)"), "{}");
 });
 
 test("清空当前备注保留历史，清空历史保留当前空间", async () => {

@@ -532,10 +532,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div id="notesCurrentSpace"></div>
             <div class="notes-history-heading" id="notesHistoryHeading"><strong>当前项目历史记录</strong><span id="notesSpaceSummary"></span></div>
             <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
-            <div class="notes-history-heading" id="notesForeignHeading" hidden><strong>其他项目 / 旧版空间</strong><span id="notesForeignSummary"></span><button id="exportForeignNotes" class="btn btn--ghost" type="button">导出这些空间</button></div>
+            <div class="notes-history-heading" id="notesForeignHeading" hidden><strong>其他记录</strong><span id="notesForeignSummary"></span><button id="exportForeignNotes" class="btn btn--ghost" type="button">导出这些记录</button></div>
             <div id="notesForeignList" class="notes-space-list" hidden></div>
             <p id="notesPanelStatus" class="notes-panel-status" role="status"></p>
-            <p class="notes-hint">历史空间按项目标识隔离：其他项目与旧版空间单独列出，<strong>不参与本项目找回</strong>。旧浏览器记录会自动迁入电脑，核验成功后释放浏览器副本；同名但内容不同的记录保留为独立空间。磁盘空间不会随重新生成、旧快照清理或删除工作台项目而删除，只有显式清空或删除备注空间才会移除记录。优先按内容找回并保留本页已有记录；仅按行号或旧文本推断的记录需逐行核验后才能写回。直接打开 HTML 时仍只有浏览器保存，需从本地控制台打开才能写入电脑。</p>
+            <p class="notes-hint">历史记录按项目隔离；其他记录单独列出，<strong>不参与本项目找回</strong>。重新生成或删除工作台项目均保留磁盘备注，只有显式清空或删除记录才会移除。优先按内容找回；仅按行号或文本位置推断的记录需逐行核验后才能写回。可用本面板导出的 JSON 备份恢复记录。</p>
           </div>
         </details>
         </div>
