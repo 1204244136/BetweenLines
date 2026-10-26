@@ -46,7 +46,8 @@ const { tableFileNames, tablesFingerprint } = require("../../core/table-fingerpr
 //    必须靠版本号判过期。
 // 8：第 7 版那次放宽实测代价偏大（整卷新增 8 行冲突，多数是 2 字短词与专有名词同名的假差异），
 //    门槛回到 3 字——冲突集合变回去，同样要靠版本号判过期。
-const TERM_LAYER_VERSION = 8;
+// 9：人名完整写法支持受限行内断句，译文侧明确旧写法不能由正确姓氏掩盖；命中与跳过集合均变化。
+const TERM_LAYER_VERSION = 9;
 
 // 每行最多随页面带上这么多条术语：命中行平均 2~3 条，上限定得宽松但能挡住病态行（同一行命中几十条）。
 const TERMS_PER_ROW_CAP = 8;

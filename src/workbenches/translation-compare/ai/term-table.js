@@ -225,19 +225,45 @@ function targetRubyEvidenceMatches(entry, pairs = []) {
   });
 }
 
-// 片假名别名不能落在更长的片假名词内部（サンタクロース 里的「タク」不是「巧」）。
-function hasUsableMatch(text, alias) {
-  if (!KATAKANA.test(alias[0])) return text.includes(alias);
+// 人名只跨短的行内停顿，不越过句末、引号、换行或正文；长音符「ー」仍是姓名字符。
+const NAME_GAP = /[\t \u00a0\u2000-\u200a\u3000,，、…‥⋯·・—―–-]/u;
+const NAME_GAP_LIMIT = 8;
+
+/** 返回原文本区间，供查表、覆盖率与提示词共用，避免先删标点再跨句拼接。 */
+function findAliasSpans(text, alias, nameGaps = false) {
+  if (!alias) return [];
+  const spans = [];
   let from = 0;
   while (from <= text.length) {
-    const at = text.indexOf(alias, from);
-    if (at < 0) return false;
-    const before = text[at - 1] || "";
-    const after = text[at + alias.length] || "";
-    if (!KATAKANA.test(before) && !KATAKANA.test(after)) return true;
+    const at = text.indexOf(alias[0], from);
+    if (at < 0) break;
     from = at + 1;
+    let end = at;
+    let matched = true;
+    for (const char of alias) {
+      let gap = 0;
+      while (nameGaps && !text.startsWith(char, end) && NAME_GAP.test(text[end] || "") && gap < NAME_GAP_LIMIT) {
+        end += 1;
+        gap += 1;
+      }
+      if (!text.startsWith(char, end)) {
+        matched = false;
+        break;
+      }
+      end += char.length;
+    }
+    if (!matched) continue;
+    // 片假名别名不能落在更长的片假名词内部（サンタクロース 里的「タク」不是「巧」）。
+    const before = text[at - 1] || "";
+    const after = text[end] || "";
+    if (KATAKANA.test(alias[0]) && (KATAKANA.test(before) || KATAKANA.test(after))) continue;
+    spans.push({ start: at, end });
   }
-  return false;
+  return spans;
+}
+
+function hasUsableMatch(text, alias) {
+  return findAliasSpans(text, alias).length > 0;
 }
 
 function splitBracketed(value) {
@@ -305,7 +331,8 @@ function termAliases(entry) {
     if (!existing || existing.weight < weight) {
       // strong：基文别名达到门槛（见 TERM_STRONG_MIN_LENGTH）才够格判定“不一致”。
       // 读音别名永不算 strong：它只是发音证据。
-      aliases.set(value, { alias: value, scope, weight, strong: scope === "term" && value.length >= TERM_STRONG_MIN_LENGTH });
+      const strong = scope === "term" && value.length >= TERM_STRONG_MIN_LENGTH;
+      aliases.set(value, { alias: value, scope, weight, strong, nameGaps: strong && PERSON_TYPE.test(entry.type) });
     }
   };
 
@@ -406,7 +433,20 @@ function normalizeTermEntry(record) {
 /**
  * 一致性的三级判定：整条译名 → 对齐后的分段译名（只写姓或名）→ 都不成立才算冲突。
  */
-function checkTargetConsistency(entry, targetKey) {
+function checkTargetConsistency(entry, targetKey, targetText = "") {
+  if (PERSON_TYPE.test(entry.type)) {
+    // 保留标点边界，仅在匹配时略过姓名内部停顿。明确的原文/旧译写法优先于正确姓氏，
+    // 也优先于同一行另一处正确全名；没有这些证据时仍允许只写姓或名的正常承接。
+    const text = toCn(String(targetText)).toLowerCase();
+    const fullSpans = findAliasSpans(text, entry.compareKey, true);
+    const wrongKeys = [entry.source, entry.other].map(normalizeForCompare)
+      .filter((key) => key.length >= TERM_STRONG_MIN_LENGTH && key !== entry.compareKey);
+    const outsideStandardName = (span) => !fullSpans.some((full) => full.start <= span.start && full.end >= span.end);
+    if (wrongKeys.some((key) => findAliasSpans(text, key, true).some(outsideStandardName))) return "";
+    if (fullSpans.length) return "full";
+    if (entry.targetParts.length > 1 && entry.targetParts.some((part) => findAliasSpans(text, part.key).length)) return "part";
+    return "";
+  }
   if (entry.compareKey && targetKey.includes(entry.compareKey)) return "full";
   if (entry.targetParts.length > 1 && entry.targetParts.some((part) => targetKey.includes(part.key))) return "part";
   return "";
@@ -494,7 +534,7 @@ function findTermHits(sourceText, tables, options = {}) {
       const key = `${entry.source}\u0000${alias}`;
       if (tried.has(key)) continue;
       tried.add(key);
-      if (!hasUsableMatch(text, alias)) continue;
+      if (!findAliasSpans(text, alias, candidate.nameGaps).length) continue;
       // 读音别名（原文只写了读音）不设这道门槛：它只能确认一致、不能指控译名错误（strong 恒为 false），
       // 与「降级为只作一致性证据」等价。基文/分段别名则要在带注音的条目上过「双侧注音」这一关。
       let demotedHit = false;
@@ -503,7 +543,7 @@ function findTermHits(sourceText, tables, options = {}) {
         const full = hasTarget ? (sourceOk && targetRubyEvidenceMatches(entry, targetPairs)) : sourceOk;
         if (!full) {
           // 降级：只有译文确实用了该译名时才算命中（只作一致性证据），否则整条不算命中。
-          if (!checkTargetConsistency(entry, targetKey)) {
+          if (!checkTargetConsistency(entry, targetKey, options.target)) {
             if (rejected && !rejectedEntries.has(entry.source)) {
               rejectedEntries.add(entry.source);
               rejected.push({ entry, alias, scope });
@@ -572,29 +612,22 @@ function markUsedTermAliases(plainText, aliases = [], { includeParts = true } = 
   // 调用方可能直接给别名对象（`entry.aliases` 的元素），也可能给字符串：两种都接受。
   // `includeParts: false` 时忽略分段别名（只写姓或名）：分段写法能“确认一致”，但不能反过来说明
   // 本行用的是这个整条术语——「御坂」单独出现时既可能指美琴，也可能指美铃或旅挂。
-  const candidates = [...new Set((aliases || [])
-    .filter((item) => includeParts || !(item && typeof item === "object" && item.scope === "part"))
-    .map((item) => stripMarks(item && typeof item === "object" ? item.alias : item))
-    .filter(Boolean))]
-    .sort((a, b) => b.length - a.length);
-  for (const alias of candidates) {
-    const starts = [];
-    let from = 0;
-    while (from <= plain.length) {
-      const at = plain.indexOf(alias, from);
-      if (at < 0) break;
-      from = at + 1;
-      const end = at + alias.length;
-      // 与已占用区间重叠（例如「東雲寺」占掉后，其中的「東雲」不再计入）：跳过这一次出现。
-      if (occupied.slice(at, end).some(Boolean)) continue;
-      if (!hasUsableMatch(plain, alias)) continue;
-      starts.push(at);
-    }
+  const byAlias = new Map();
+  for (const item of aliases || []) {
+    if (!includeParts && item && typeof item === "object" && item.scope === "part") continue;
+    const alias = stripMarks(item && typeof item === "object" ? item.alias : item);
+    if (!alias) continue;
+    const nameGaps = Boolean(item && item.nameGaps) || Boolean(byAlias.get(alias)?.nameGaps);
+    byAlias.set(alias, { alias, nameGaps });
+  }
+  const candidates = [...byAlias.values()].sort((a, b) => b.alias.length - a.alias.length);
+  for (const { alias, nameGaps } of candidates) {
+    const spans = findAliasSpans(plain, alias, nameGaps);
     let usedHere = false;
-    for (const at of starts) {
-      const end = at + alias.length;
-      if (occupied.slice(at, end).some(Boolean)) continue;
-      occupied.fill(true, at, end);
+    for (const { start, end } of spans) {
+      // 与已占用区间重叠（例如「東雲寺」占掉后，其中的「東雲」不再计入）：跳过这一次出现。
+      if (occupied.slice(start, end).some(Boolean)) continue;
+      occupied.fill(true, start, end);
       usedHere = true;
     }
     // 该别名的每次出现都被更长的别名占掉了（例如「太郎」落在「東雲太郎」里）：不算它被用到。
@@ -689,7 +722,7 @@ function evaluateTermRow({ source, target, tables, rejected = null, demoted = nu
   const usableAliases = (entry) => entry.aliases || [];
   const results = hits.map(({ entry, alias, scope, strong, demoted: isDemoted }) => {
     const decidable = scope === "term" && strong;
-    const via = checkTargetConsistency(entry, targetKey);
+    const via = checkTargetConsistency(entry, targetKey, plainTarget);
     if (!decidable) {
       return {
         entry,
@@ -734,7 +767,11 @@ function evaluateTermRow({ source, target, tables, rejected = null, demoted = nu
   }
 
   let revisedText = "";
-  const replacements = conflicts.filter((result) => result.variant);
+  const replacements = conflicts.filter((result) => result.variant
+    // 一行同时出现标准姓名与旧写法时，全局 split 会连标准姓名中的相同子串也一起改坏。
+    // 这类冲突只提供证据交给模型定位，不构造机械改案。
+    && !(PERSON_TYPE.test(result.entry.type)
+      && findAliasSpans(toCn(plainTarget).toLowerCase(), result.entry.compareKey, true).length));
   if (replacements.length) {
     let text = plainTarget;
     for (const result of replacements) {

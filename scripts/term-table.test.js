@@ -153,6 +153,132 @@ function withRuby(base, ruby, tail = "") {
   return `<ruby>${base}<rt>${ruby}</rt></ruby>${tail}`;
 }
 
+function loadInterruptedNameTables() {
+  const file = path.join(tempDir, "interrupted-names.csv");
+  fs.writeFileSync(file, [
+    "Base_Ori,Ruby_Ori,Base_Trans,Other_Fandom,Type",
+    '【山田】【静香】,"やまだ,しずか",山田静华,山田静嘉,人名/日式全名',
+    '【山田】【花子】,"やまだ,はなこ",山田花子,,人名/日式全名',
+    "【タカハシ】,,高桥,,人名",
+    "【ハールマン】,,哈尔曼,,人名",
+    "【結界装置】,,结界装置,,装置",
+  ].join("\n"), "utf8");
+  const tables = loadTermTables([file]);
+  assert.deepEqual(tables.errors, []);
+  return tables;
+}
+
+test("人名旧译名嵌在标准译名内部时不误报，也不重复替换后缀", () => {
+  const file = path.join(tempDir, "nested-person-names.csv");
+  fs.writeFileSync(file, [
+    "Base_Ori,Base_Trans,Other_Fandom,Type",
+    "エリザベス,伊丽莎白二世,伊丽莎白,人名",
+  ].join("\n"), "utf8");
+  const tables = loadTermTables([file]);
+  for (const target of ["伊丽莎白二世", "伊丽莎白……二世"]) {
+    const evaluation = evaluateTermRow({ source: "エリザベスが来た。", target, tables });
+    assert.equal(evaluation.kind, "consistent", target);
+    assert.equal(evaluation.hits[0].via, "full");
+  }
+  const mixed = evaluateTermRow({ source: "エリザベスが来た。", target: "伊丽莎白二世与伊丽莎白", tables });
+  assert.equal(mixed.kind, "conflict", "标准译名之外独立出现的旧写法仍须提示");
+  assert.equal(mixed.revisedText, "", "无法用全局字符串替换安全地区分标准译名内外的旧写法");
+});
+
+test("人名内部的断句标点仍能命中完整姓名并提供标准译名", () => {
+  const tables = loadInterruptedNameTables();
+  for (const source of [
+    "「山田、静香……ッ」",
+    "「山田……静香……ッ」",
+    "「山田 静香……ッ」",
+    "「山、田静香……ッ」",
+    `「${withRuby("山田", "やまだ")}、${withRuby("静香", "しずか")}……ッ」`,
+  ]) {
+    const evaluation = evaluateTermRow({ source, target: "「山田……静华……！」", tables });
+    assert.ok(evaluation, source);
+    assert.equal(evaluation.kind, "term-only", source);
+    const name = evaluation.hits.find((hit) => hit.entry.plainSource === "山田静香");
+    assert.equal(name.scope, "term", source);
+    assert.equal(name.strong, true, source);
+    assert.equal(name.via, "full", source);
+    const guidance = termGuidanceFor({ jp: source }, { evaluation });
+    assert.equal(guidance.count, 1, "同姓的花子不应随姓氏一起进入提示词");
+    assert.match(guidance.block, /山田静香 → 山田静华/);
+    assert.doesNotMatch(guidance.block, /山田花子/);
+  }
+});
+
+test("断开的人名不能只凭正确姓氏掩盖名字中的错误字形", () => {
+  const tables = loadInterruptedNameTables();
+  for (const target of ["山田……静香", "山田、静香", "山……田静香", "山田静香"]) {
+    const source = "山田、静香が来た。";
+    const evaluation = evaluateTermRow({ source, target: `${target}来了。`, tables });
+    assert.equal(evaluation?.kind, "conflict", target);
+    const name = evaluation.hits.find((hit) => hit.entry.plainSource === "山田静香");
+    assert.equal(name.consistent, false, target);
+    const guidance = termGuidanceFor({ jp: source }, { evaluation });
+    assert.equal(guidance.count, 1);
+    assert.match(guidance.block, /山田静香 → 山田静华/);
+  }
+  const mixed = evaluateTermRow({
+    source: "山田、静香が来た。山田、静香は笑った。",
+    target: "山田……静华来了。山田……静香笑了。",
+    tables,
+  });
+  assert.equal(mixed?.kind, "conflict", "首次出现的正确姓名不能掩盖同一行后续错误写法");
+  assert.equal(evaluateTermRow({ source: "山田静香が来た。", target: "山田来了。", tables }).kind, "consistent", "真正只写姓氏的承接仍然允许");
+});
+
+test("人名跨标点匹配保留分段防撞车与句子边界", () => {
+  const tables = loadInterruptedNameTables();
+  for (const source of [
+    "山田は来た。",
+    "静香が来た。",
+    "山田。静香",
+    "「山田」「静香」",
+    "山田\n静香",
+    "山田と静香",
+  ]) {
+    assert.equal(evaluateTermRow({ source, target: "山田静华", tables }), null, source);
+  }
+  assert.equal(evaluateTermRow({ source: "結界、装置", target: "结界装置", tables }), null, "非人名术语不跨标点拼接");
+  const source = "山田、花子が来た。";
+  const evaluation = evaluateTermRow({ source, target: "山田花子来了。", tables });
+  const guidance = termGuidanceFor({ jp: source }, { evaluation });
+  assert.deepEqual(guidance.terms.map((term) => term.source), ["山田花子"]);
+});
+
+test("姓名内部停顿有长度上限，日语长音符仍是姓名字符", () => {
+  const tables = loadInterruptedNameTables();
+  const withinLimit = `山田${"…".repeat(8)}静香`;
+  const tooLong = `山田${"…".repeat(9)}静香`;
+  assert.equal(evaluateTermRow({ source: withinLimit, target: "山田静华", tables })?.kind, "term-only");
+  assert.equal(evaluateTermRow({ source: tooLong, target: "山田静华", tables }), null);
+  const source = "山田静香が来た。";
+  const targetWithinLimit = evaluateTermRow({ source, target: `山田${"…".repeat(8)}静华`, tables });
+  const targetTooLong = evaluateTermRow({ source, target: `山田${"…".repeat(9)}静华`, tables });
+  assert.equal(targetWithinLimit.hits.find((hit) => hit.entry.plainSource === "山田静香").via, "full");
+  assert.notEqual(targetTooLong.hits.find((hit) => hit.entry.plainSource === "山田静香").via, "full");
+  assert.equal(evaluateTermRow({ source: "タカー、ハシ", target: "高桥", tables }), null, "不能把额外长音符当成停顿删除");
+  assert.equal(evaluateTermRow({ source: "ハー、ルマン", target: "哈尔曼", tables })?.kind, "term-only", "表内原有长音符仍按姓名字符匹配");
+  assert.equal(evaluateTermRow({ source: "ハルマン", target: "哈尔曼", tables }), null, "不能忽略表内原有长音符");
+});
+
+test("译文不会跨句子拼成完整姓名，已知旧译名优先于另一处正确全名", () => {
+  const tables = loadInterruptedNameTables();
+  const source = "山田静香が来た。";
+  for (const target of ["山田。静华", "「山田」「静华」", "山田\n静华"]) {
+    const evaluation = evaluateTermRow({ source, target, tables });
+    assert.notEqual(evaluation?.hits.find((hit) => hit.entry.plainSource === "山田静香")?.via, "full", target);
+  }
+  const repeatedSource = "山田静香が来た。山田静香は笑った。";
+  for (const target of ["山田静华来了，山田静嘉笑了。", "山田……静华来了，山田……静嘉笑了。"]) {
+    const evaluation = evaluateTermRow({ source: repeatedSource, target, tables });
+    assert.equal(evaluation?.kind, "conflict", target);
+    assert.equal(evaluation.hits.find((hit) => hit.entry.plainSource === "山田静香").consistent, false);
+  }
+});
+
 test("判定规则：命中整条术语才判，短词/读音/分段只确认或记录", () => {
   const tables = loadFixtureTables();
 

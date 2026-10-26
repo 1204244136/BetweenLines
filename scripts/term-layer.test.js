@@ -19,8 +19,8 @@ const {
   variantIndexSets,
 } = require("../src/workbenches/translation-compare/term-layer");
 const { rebuildCompareHtmlFromSnapshot } = require("./build-compare");
-const { evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
-const { hitsUsedInRow } = require("../src/workbenches/translation-compare/ai/term-prefilter");
+const { displayTermPair, evaluateTermRow, loadTermTables } = require("../src/workbenches/translation-compare/ai/term-table");
+const { hitsUsedInRow, termGuidanceFor } = require("../src/workbenches/translation-compare/ai/term-prefilter");
 const { createClientFixture, storageFixture } = require("./workbench-fixture");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "betweenlines-term-layer-"));
@@ -465,4 +465,34 @@ test("只命中分段写法或读音撞车的行不算“用到这个术语”",
   assert.deepEqual(partOnly, []);
   const full = evaluateTermRow({ source: "山田太郎が来た。", target: "山田太郎来了。", tables });
   assert.deepEqual(hitsUsedInRow("山田太郎が来た。", full.hits).map((hit) => hit.entry.source), ["【山田太郎】"]);
+});
+
+test("断开人名的构建期术语与运行期提示一致，旧版判定失效", () => {
+  const file = writeTable("interrupted-names.csv", [
+    "Base_Ori,Ruby_Ori,Base_Trans,Type",
+    '【山田】【静香】,"やまだ,しずか",山田静华,人名/日式全名',
+    '【山田】【花子】,"やまだ,はなこ",山田花子,人名/日式全名',
+  ].join("\n"));
+  const rows = [
+    { index: 1, chapter: "第一章", jp: "「山田、静香……ッ」", cn: "「山田……静华……！」" },
+    { index: 2, chapter: "第一章", jp: "山田、静香が来た。", cn: "山田……静香来了。" },
+    { index: 3, chapter: "第一章", jp: "山田が来た。", cn: "山田来了。" },
+  ];
+  const layer = buildTermLayer({ rows, profiles: [profile(file)], comparisonMode: "bilingual" });
+  const variant = layer.byProfile.unit.variants["bilingual:cn"];
+  assert.deepEqual(variant.termOnly, [1]);
+  assert.deepEqual(variant.conflicts, [2]);
+  assert.equal(variant.terms[3], undefined);
+  const tables = loadTermTables([file]);
+  for (const row of rows.slice(0, 2)) {
+    const evaluation = evaluateTermRow({ source: row.jp, target: row.cn, tables });
+    const guidance = termGuidanceFor(row, { evaluation });
+    assert.deepEqual(variant.terms[row.index], guidance.terms.map(displayTermPair));
+    assert.equal(guidance.count, 1);
+  }
+  const { tablesFingerprint } = require("../src/core/table-fingerprint");
+  const legacy = structuredClone(layer);
+  legacy.version = 8;
+  legacy.byProfile.unit.fingerprint = tablesFingerprint(8, [file], tables.entries.length);
+  assert.equal(termLayerFor(legacy, "unit", { files: [file] }).stale, true);
 });
