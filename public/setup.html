@@ -87,21 +87,26 @@
       font-size: 13px;
     }
     .table-help {
+      min-width: 0;
+      padding: 9px 12px;
+      box-shadow: none;
       color: var(--muted);
       font-size: 13px;
       overflow-wrap: anywhere;
     }
     .table-help summary {
-      width: fit-content;
       cursor: pointer;
       color: var(--text);
+      line-height: 1.5;
     }
+    .table-help summary:hover { color: var(--focus); }
     .table-help summary:focus-visible {
       outline: 2px solid var(--focus);
       outline-offset: 3px;
     }
     .table-help p { margin: 8px 0; }
     .table-help pre {
+      max-width: 100%;
       padding: 8px;
       margin: 8px 0;
       white-space: pre-wrap;
@@ -610,20 +615,38 @@
       gap: 8px;
       align-items: end;
     }
-    #translationTablesPanel .row {
-      grid-template-columns: minmax(0, 1fr) auto auto;
+    .table-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 0;
+      gap: 8px;
     }
-    #translationTablesPanel .field {
-      grid-template-columns: 60px minmax(0, 1fr);
+    .table-field + .table-field {
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .table-field > .field__label {
+      color: var(--text);
+      font-size: 13px;
+    }
+    .table-input-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      min-width: 0;
       align-items: center;
       gap: 8px;
     }
-    #translationTablesPanel input {
+    .table-input-row input {
       min-width: 0;
     }
-    #translationTablesPanel .btn {
+    .table-input-row .btn {
       width: auto;
+      height: 36px;
       font-size: 12px;
+    }
+    .table-field > .subtle {
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .stack {
       display: grid;
@@ -942,6 +965,12 @@
       }
     }
     @media (max-width: 620px) {
+      .table-input-row {
+        grid-template-columns: max-content max-content minmax(0, 1fr);
+      }
+      .table-input-row input {
+        grid-column: 1 / -1;
+      }
       .scope-grid {
         grid-template-columns: 1fr;
       }
@@ -1113,9 +1142,9 @@
       <div class="panel stack" id="translationTablesPanel">
         <h2>辅助表格 <span class="section-kicker">可选</span></h2>
         <div class="subtle">生成前选择，留空即不挂载；支持 XLSX / CSV / TSV / JSON，多文件路径用分号分隔。修改选择或表内容后需重新生成。</div>
-        <div class="field">
+        <div class="table-field">
           <label class="field__label" for="termTables">译名表</label>
-          <div class="row">
+          <div class="table-input-row">
             <input id="termTables" type="text" placeholder="未挂载" aria-label="译名表路径" aria-describedby="termTablesHelp">
             <button id="termTablesPick" class="btn" type="button">选择文件</button>
             <button id="termTablesClear" class="btn" type="button">清空</button>
@@ -1129,9 +1158,9 @@
             <p>普通词条直接写原词即可。沿用原表的分段注音时，原文中的【】标记注音位置，读音列用逗号按顺序对应；CSV 中含逗号的单元格需用双引号包住。</p>
           </details>
         </div>
-        <div class="field">
+        <div class="table-field">
           <label class="field__label" for="speechTables">说话习惯表</label>
-          <div class="row">
+          <div class="table-input-row">
             <input id="speechTables" type="text" placeholder="未挂载" aria-label="说话习惯表路径" aria-describedby="speechTablesHelp">
             <button id="speechTablesPick" class="btn" type="button">选择文件</button>
             <button id="speechTablesClear" class="btn" type="button">清空</button>
