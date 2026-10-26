@@ -65,6 +65,31 @@ test("说话习惯表支持通用列名并保留原格式语义", () => {
   assert.deepEqual(second.expectedWritings, []);
 });
 
+test("旧表头只用于读取兼容，角色规则与模型线索统一使用通用版本名称", () => {
+  const common = { 角色: "甲野一郎", 口癖: "オレ", 类型: "第一人称" };
+  const legacy = normalizeSpeechEntry({ ...common, x版: "-", 网翻: "其他自称甲", "台版（转简中）": "其他自称乙" });
+  const generic = normalizeSpeechEntry({ ...common, 项目写法: "-", 其他版本: "其他自称甲", 参考写法: "其他自称乙" });
+  assert.deepEqual(legacy, generic, "表头变化不能改变规则或持久化数据形态");
+  assert.deepEqual(legacy.versions, { x: "", net: "其他自称甲", tw: "其他自称乙" });
+  const characters = [{ entry: legacy, activated: true }];
+  const candidates = habitCandidatesForRow({ row: { jp: "甲野一郎は「オレ」と言った。" }, characters });
+  assert.deepEqual(candidates[0].forbiddenWritings, [
+    { version: "其他版本", value: "其他自称甲" },
+    { version: "参考写法", value: "其他自称乙" },
+  ]);
+  const outputs = [
+    describeHabit(legacy),
+    chapterHabitBlock({ chapter: "第一章", characters }),
+    volumeHabitBlock({ characters }),
+    speakerCheckBlock({ chapter: "第一章", candidates }),
+  ];
+  for (const output of outputs) {
+    assert.match(output, /其他版本「其他自称甲」/);
+    assert.match(output, /参考写法「其他自称乙」/);
+    assert.doesNotMatch(output, /x版|x版本|网翻|台版/i);
+  }
+});
+
 test("描述型习惯规则无需项目写法列，空白不等同于明确不处理", () => {
   const file = path.join(tempDir, "descriptive-habits.json");
   fs.writeFileSync(file, JSON.stringify([
@@ -88,6 +113,7 @@ test("说话习惯表缺少角色或规则表头时报告格式要求", () => {
     const tables = loadSpeechTables([file]);
     assert.equal(tables.entries.length, 0);
     assert.match(tables.errors[0], missing);
+    assert.doesNotMatch(tables.errors[0], /x版|x版本|网翻|台版/i, "格式提示只列通用表头");
   }
 });
 
@@ -104,7 +130,7 @@ test("说话习惯表按表头解析，并生成强/弱名字关键词", () => {
   assert.deepEqual(western.strong, ["凯兹·诺克莱本", "凯兹诺克莱本"]);
   assert.deepEqual(western.weak, ["凯兹", "诺克莱本"]);
 
-  assert.equal(describeHabit(loadFixture().entries[0]), "甲野一郎：第一人称 「オレ」 → 本项目写作「本大爷」；「俺」（旧写法，不要回改）");
+  assert.equal(describeHabit(loadFixture().entries[0]), "甲野一郎：第一人称 「オレ」 → 本项目写作「本大爷」；「俺」（其他写法，不要替换项目写法）");
 });
 
 test("X版写 `-` 表示明确不作特殊处理，不得把网翻或台版当补回基准", () => {
@@ -119,7 +145,7 @@ test("X版写 `-` 表示明确不作特殊处理，不得把网翻或台版当�
   const characters = detectCharacters({ rows, tables });
   assert.deepEqual(findHabitMisses({ source: rows[0].jp, target: rows[0].cn, characters }), []);
   const block = chapterHabitBlock({ chapter: "第一章", characters });
-  assert.match(block, /戊田五郎：句末语气词 「なの」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「嗯」）/);
+  assert.match(block, /戊田五郎：句末语气词 「なの」 → 不作特殊翻译处理，不得采用所列其他写法（其他版本「嗯」）/);
   assert.doesNotMatch(block, /本项目写作「嗯」/);
 });
 
@@ -135,17 +161,17 @@ test("`わらわ` 按不作特殊处理注入，不能让模型回改成「妾�
   const candidates = habitCandidatesForRow({ row: rows[0], characters });
   assert.deepEqual(candidates.map((item) => item.character), ["安娜·施普伦格尔"]);
   assert.equal(candidates[0].noSpecialHandling, true);
-  assert.deepEqual(candidates[0].forbiddenWritings, [{ version: "网翻", value: "妾身" }]);
+  assert.deepEqual(candidates[0].forbiddenWritings, [{ version: "其他版本", value: "妾身" }]);
   assert.equal(candidates[0].detectable, false);
 
   const block = chapterHabitBlock({ chapter: "行间〇", characters });
-  assert.match(block, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「妾身」）/);
+  assert.match(block, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用所列其他写法（其他版本「妾身」）/);
   assert.doesNotMatch(block, /本项目写作「妾身」/);
   assert.deepEqual(findHabitMisses({ source: rows[0].jp, target: rows[0].cn, characters }), []);
 
   const speaker = speakerCheckBlock({ chapter: "行间〇", candidates });
   assert.match(speaker, /本项目明确不作特殊翻译处理的口癖/);
-  assert.match(speaker, /不得采用网翻版或台版写法：网翻「妾身」/);
+  assert.match(speaker, /不得采用所列其他写法：其他版本「妾身」/);
   assert.match(speaker, /不得据此判译文缺漏、扣分或要求补写/);
 });
 
@@ -161,7 +187,7 @@ test("X版为 `-` 时同时禁止网翻版与台版写法", () => {
   });
   assert.match(
     describeHabit(entry),
-    /不作特殊翻译处理，不得采用网翻版或台版写法（网翻「网翻测试值」；台版「台版测试值」）$/,
+    /不作特殊翻译处理，不得采用所列其他写法（其他版本「网翻测试值」；参考写法「台版测试值」）$/,
   );
 });
 

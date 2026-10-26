@@ -20,11 +20,7 @@ const bilingualLabels = {
   jp: "原文 A",
   cn: "译文 B",
 };
-const defaultDisplayLabels = {
-  jp: "日文",
-  cn: "简中",
-  tw: "台版",
-};
+const defaultDisplayLabels = { ...labels };
 const defaultInlineMarkup = {
   ruby: true,
   bold: true,

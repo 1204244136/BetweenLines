@@ -269,13 +269,13 @@ function normalizeHeader(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
-/** 领域读取器明确声明必需列；不按列位置猜测未识别的表头。 */
-function requireColumns(headers, required, tableName) {
+/** 领域读取器明确声明必需列；展示名称可独立于兼容别名配置，不按列位置猜测。 */
+function requireColumns(headers, required, tableName, displayCandidates = {}) {
   const present = new Set(headers);
   const missing = Object.entries(required)
     .filter(([, candidates]) => !candidates.some((name) => present.has(normalizeHeader(name))));
   if (missing.length) {
-    throw new Error(`${tableName}缺少必需表头：${missing.map(([label, candidates]) => `${label}（可用：${candidates.join(" / ")}）`).join("；")}。首个非空行须为表头，不支持标题行或合并表头。`);
+    throw new Error(`${tableName}缺少必需表头：${missing.map(([label, candidates]) => `${label}（可用：${(displayCandidates[label] || candidates).join(" / ")}）`).join("；")}。首个非空行须为表头，不支持标题行或合并表头。`);
   }
 }
 

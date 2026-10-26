@@ -98,18 +98,18 @@ test("X版为 `-` 的口癖注入不特殊处理硬约束，网翻写法不得�
   assert.equal(candidates[0].expected, "");
   assert.equal(candidates[0].detectable, false);
   assert.equal(candidates[0].noSpecialHandling, true);
-  assert.deepEqual(candidates[0].forbiddenWritings, [{ version: "网翻", value: "吧" }]);
+  assert.deepEqual(candidates[0].forbiddenWritings, [{ version: "其他版本", value: "吧" }]);
 
   const block = speakerCheckBlock({ chapter: "第一章", candidates });
   assert.match(block, /本项目明确不作特殊翻译处理的口癖/);
-  assert.match(block, /不得采用网翻版或台版写法：网翻「吧」/);
+  assert.match(block, /不得采用所列其他写法：其他版本「吧」/);
   assert.match(block, /不得据此判译文缺漏、扣分或要求补写/);
   assert.doesNotMatch(block, /可按本项目写法判断的口癖/);
 
   // 不得算遗漏；章级块仍要注入“明确不特殊处理”的规则。
   assert.deepEqual(findHabitMisses({ source: jp, target: cn, characters }), []);
   const chapterBlock = chapterHabitBlock({ chapter: "第一章", characters });
-  assert.match(chapterBlock, /乙川次郎：谓语形式 「じゃん」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「吧」）/);
+  assert.match(chapterBlock, /乙川次郎：谓语形式 「じゃん」 → 不作特殊翻译处理，不得采用所列其他写法（其他版本「吧」）/);
 });
 
 test("说话人判断段落要求先定人、再处理习惯", () => {

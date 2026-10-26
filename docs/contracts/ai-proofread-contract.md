@@ -97,9 +97,11 @@
 
 ### 规范来源与同步义务
 
-第 ③ 层的规范正文**不在本仓库**：上游 index-X 的 `docs/translation-spec.md` 是成品层的翻译与语言规范正文（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），`tools/check_translation_spec.py` 的 `P1`–`P16` 是同一规范的机器检查实现；`translation-name-selection-spec.md` 管译名在候选之间怎么取舍，`translation-name-rulings.md` 是已生效裁定的总表，`x-translation-differences.md` 是与维基译名表的人为固有差异（属取舍，不得按表回改）。
+通用档案 `profiles/novel.js` 提供不依赖具体作品的成品校对规则，默认供不同作品使用。项目采用的译名与说话习惯由所选档案和导入表格决定；`profiles/demo.js` 是显式选用的作品示范，其设定与译名裁定不成为其他项目的默认前提。
 
-`profiles/novel.js`（通用成品规范）与 `profiles/demo.js`（作品取值）是同一规范在 AI 校对层的实现，属上游声明的「规范正文 → 机器检查 → AI 档案」三处同步之一：上游改规范要同步这里的条目，这里补条目也要回头校准 `translation-spec.md` §七 的「AI 档案」列。三处口径不一致时以上游规范正文为准。逐条对应关系见 `translation-spec.md` §七；其中 `P12`（单个省略号）有意不在 AI 档案里单列。
+维护与 index-X 共享的内置规范条目或该项目适配时，规范正文来自 index-X 的 `docs/translation-spec.md`（标点与字形、成对标记与句末点号、注音与译注、语气词与拟声词、语义、译名、证据边界），`tools/check_translation_spec.py` 的 `P1`–`P16` 是同一规范的机器检查实现。其 `translation-name-selection-spec.md` 管译名取舍，`translation-name-rulings.md` 管该项目已生效的译名裁定，`x-translation-differences.md` 记录其与维基译名表的人为固有差异；这些作品或版本裁定只约束相应档案与适配。
+
+上述共享条目仍须遵守「规范正文 → 机器检查 → AI 档案」三处同步：上游改规范时同步本仓库对应条目，修改共享条目时回头校准 `translation-spec.md` §七 的「AI 档案」列；共享范围内口径不一致时以上游规范正文为准。逐条对应关系见该节，其中 `P12`（单个省略号）有意不在 AI 档案里单列。其他项目独立档案不自动继承示范作品的裁定。
 
 上游新增的整句语义分轨、防过度修改及超 BMP 码位证据边界由 novel 常驻条目实现；核心设定、達人三层裁定和材料字码位由 demo 持有。标题译名不进入正文校对；维护脚本中的超 BMP 字面量使用显式码位转义。
 
@@ -175,6 +177,7 @@
 - 本机档案走**叠加**：文件写 `{ extends: "<既有 id>", ...差异字段 }`，合并后沿用基底 id（`name`/`summary`/`speechHabitScope` 覆盖，`sections` 按标题追加/替换，`termTables`/`speechTables` 合并去重）。
 - 档案 id 是稳定槽位，文档与测试一律按 id 引用档案。
 - 作品相关具体内容集中在 `profiles/demo.js` 与 `text-utils.js` 正文边界清单；测试夹具优先使用中性人名。
+- 通用界面、用户文档、错误提示和模型上下文使用「项目写法 / 其他版本 / 参考写法」。历史表头只在读取边界兼容：`x版` / `x版本` 对应项目写法，`网翻` 对应其他版本，`台版` / `台版（转简中）` 对应参考写法；`Base_Ori` / `Base_Trans` 等旧译名表列名也继续识别。保留内部 `x` / `net` / `tw` 键以读取已发布快照，不把这些兼容细节写成产品的版本前提。
 
 ---
 

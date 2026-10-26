@@ -33,7 +33,7 @@
 | 修改模块归属、共享能力、构建入口或浏览器资源 | [模块边界](docs/contracts/module-boundaries.md) |
 | 修改输入格式、上游 index-X 适配、正文过滤、标题、段落、对齐或模式输出 | [文本输入与对齐](docs/contracts/text-input-alignment.md) |
 | 修改快照发布、项目切换、清理、输入选择持久化或源文件写回 | [项目存储与写回](docs/contracts/project-storage-writeback.md) |
-| 修改 AI 提示词、翻译规范档案、模型传输、预筛或阶段编排 | [AI 校对契约](docs/contracts/ai-proofread-contract.md)；译名规范以其链接的上游正文为准 |
+| 修改 AI 提示词、翻译规范档案、模型传输、预筛或阶段编排 | [AI 校对契约](docs/contracts/ai-proofread-contract.md)；按通用规则、作品档案与输入适配分别维护规范 |
 | 修改备注保存、迁移、恢复、删除、模型预设、Toast 或客户端状态 | [工作台与备注契约](docs/contracts/workbench-notes-spaces.md) |
 | 定位运行异常，或修复已记录的故障规则 | [排查手册](docs/contracts/troubleshooting.md)，并同步相关故障条目 |
 | 新增、移动、删除文档、工具或 npm 命令 | [文档与工具登记](docs/contracts/documentation-tools.md) |

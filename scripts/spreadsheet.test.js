@@ -9,12 +9,24 @@ const path = require("node:path");
 const test = require("node:test");
 const JSZip = require("jszip");
 
-const { readRecords, readSpreadsheet } = require("../src/core/spreadsheet");
+const { readRecords, readSpreadsheet, requireColumns } = require("../src/core/spreadsheet");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "betweenlines-spreadsheet-"));
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
 const HEADERS = ["Debuts", "Base_Ori", "Ruby_Ori", "Base_Trans", "Ruby_Trans", "Other_Fandom", "Type", "Memo1", "Memo2"];
+
+test("必需列表头的读取别名与错误展示名称可以独立配置", () => {
+  const required = { 项目写法: ["target", "legacy_target"] };
+  const hints = { 项目写法: ["项目写法", "target"] };
+  assert.doesNotThrow(() => requireColumns(["legacy_target"], required, "测试表", hints));
+  assert.throws(() => requireColumns([], required, "测试表", hints), (error) => {
+    assert.match(error.message, /项目写法（可用：项目写法 \/ target）/);
+    assert.doesNotMatch(error.message, /legacy_target/);
+    return true;
+  });
+  assert.throws(() => requireColumns([], required, "测试表"), /legacy_target/, "未配置展示名称时保留既有提示");
+});
 
 function columnLetter(index) {
   let value = index + 1;

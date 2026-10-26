@@ -9,11 +9,11 @@
  * - 角色：人物名（必填）
  * - 口癖：日文原词（如「オレ」「なの」），可为空（此时只有备注描述，如“句尾最后一个假名变为片假名”）
  * - 类型：第一人称 / 句末语气词 / 句首语气词 / 接续词 / 谓语形式 / 句式 / 称谓 / 名词前缀 / 名词后缀 / 短句
- * - x版：本项目（成品）的写法，是“补回”的唯一标准；`-` 表示本项目明确不作特殊处理
- * - 网翻 / 台版（转简中）：其他版本写法；固定写法条目用它提醒模型不要回改，
+ * - 项目写法：本项目（成品）的写法，是“补回”的唯一标准；`-` 表示本项目明确不作特殊处理
+ * - 其他版本 / 参考写法：其他材料中的写法；固定写法条目用它提醒模型不要替换项目写法，
  *   明确不作特殊处理的条目用它提醒模型不要套用旧译法
  * - 备注：说明
- * - 小说首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
+ * - 首次出现：该角色首次登场的卷号（如 S1_01），用于按卷过滤不可能出现的角色
  */
 const path = require("path");
 const { workIdFromPath } = require("../../../core/work-id");
@@ -136,7 +136,7 @@ function normalizeSpeechEntry(record) {
   };
   entry.firstWorkKey = volumeKey(entry.firstWork);
   entry.aliases = characterAliases(character);
-  // 只有实际登记的 x版 才能作为“特色流失”的判定基准。
+  // 只有实际登记的项目写法才能作为“特色流失”的判定基准。
   // `-` 表示明确不特殊处理，版本列只用于提示模型不要套用那些写法，不参与补回。
   entry.expectedWritings = entry.versions.x ? [entry.versions.x] : [];
   entry.hasLiteralHabit = Boolean(entry.habit) && !isPlaceholder(entry.habit);
@@ -147,12 +147,16 @@ function loadSpeechTable(file) {
   const text = String(file || "").trim();
   if (!text) throw new Error("说话习惯表路径为空。");
   const { sheet, headers, records } = readRecords(text);
+  const ruleColumn = "口癖 / 项目写法 / 备注（至少一列）";
   requireColumns(headers, {
     角色: COLUMN_CANDIDATES.character,
-    "口癖 / 项目写法 / 备注（至少一列）": [
+    [ruleColumn]: [
       ...COLUMN_CANDIDATES.habit, ...COLUMN_CANDIDATES.xVersion, ...COLUMN_CANDIDATES.memo,
     ],
-  }, "说话习惯表");
+  }, "说话习惯表", {
+    角色: ["角色", "character"],
+    [ruleColumn]: ["口癖", "habit", "项目写法", "target", "备注", "memo"],
+  });
   const entries = records.map(normalizeSpeechEntry).filter(Boolean);
   if (!entries.length) throw new Error(`说话习惯表没有可用条目（需要“角色”列）：${file}`);
   return { file, sheet, entries };
@@ -256,16 +260,16 @@ function describeHabit(entry) {
   const writings = [];
   if (entry.versions.x) {
     writings.push(`本项目写作「${entry.versions.x}」`);
-    const legacy = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
-    if (legacy.length) writings.push(`${legacy.map((value) => `「${value}」`).join("、")}（旧写法，不要回改）`);
+    const alternatives = [entry.versions.net, entry.versions.tw].filter((value) => value && value !== entry.versions.x);
+    if (alternatives.length) writings.push(`${alternatives.map((value) => `「${value}」`).join("、")}（其他写法，不要替换项目写法）`);
   } else if (entry.noSpecialHandling) {
     const forbidden = [
-      entry.versions.net ? `网翻「${entry.versions.net}」` : "",
-      entry.versions.tw ? `台版「${entry.versions.tw}」` : "",
+      entry.versions.net ? `其他版本「${entry.versions.net}」` : "",
+      entry.versions.tw ? `参考写法「${entry.versions.tw}」` : "",
     ].filter(Boolean);
     writings.push(forbidden.length
-      ? `不作特殊翻译处理，不得采用网翻版或台版写法（${forbidden.join("；")}）`
-      : "不作特殊翻译处理，不得采用网翻版或台版写法");
+      ? `不作特殊翻译处理，不得采用所列其他写法（${forbidden.join("；")}）`
+      : "不作特殊翻译处理，不得套用其他版本的特殊写法");
   }
   if (!writings.length && entry.memo) writings.push(`备注：${entry.memo}`);
   return `${entry.character}：${head}${writings.length ? ` → ${writings.join("；")}` : ""}`;
@@ -293,7 +297,7 @@ function activatedCharacterNames(items = []) {
 /**
  * 注入提示词的角色行：只保留系统真正会用它们做判断的条目。
  * `fixed` 用于补回特色，`no-special` 用于明确禁止套用旧版写法；
- * `locked` 用于中日同形的既有写法（如食蜂操祈的「XX力」），它不参与流失检测，
+ * `locked` 用于中日同形的既有写法（如刻意使用的「XX力」），它不参与流失检测，
  * 但必须随角色一起注入，否则模型会把刻意保留的「问题力」当作错字或 OCR 瑕疵删掉。
  */
 function habitBlockLines(characters = []) {
@@ -309,7 +313,7 @@ function chapterHabitBlock({ chapter, characters = [] } = {}) {
   const lines = habitBlockLines(characters);
   if (!lines.length) return "";
   return [
-    `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
+    `【说话习惯（本章）】本章「${chapter}」出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，不要用其他版本或参考写法替换本项目写法。`,
     "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
@@ -323,7 +327,7 @@ function volumeHabitBlock({ volume, characters = [] } = {}) {
   if (!lines.length) return "";
   const label = volume?.code ? `本卷 ${volume.code}` : "本卷";
   return [
-    `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，网翻/台版旧写法不要回改。`,
+    `【说话习惯（${label}）】${label}出现了以下角色（按人名命中判定）：角色口癖、第一人称、句尾语气词、称谓与特殊句式是刻意特征；保留它们不算翻译腔、病句、错字或 OCR 瑕疵，不得按“通顺中文”改写或建议删除，不要用其他版本或参考写法替换本项目写法。`,
     "对已登记本项目写法的条目，原文有该角色的口癖而译文完全没有对应写法时，属于说话特色流失，可给补回特色的最小 revisedText，并在 summary 说明依据；标为“不作特殊翻译处理”的条目不适用这一步。译文多出原文没有的口癖或语气词按增译处理。先确认本行确是该角色在说话且原文有该表达，拿不准就转人工，不凭空加语气。",
     ...lines,
   ].join("\n");
@@ -358,8 +362,8 @@ function habitCandidatesForRow({ row, characters = [] } = {}) {
       noSpecialHandling,
       forbiddenWritings: noSpecialHandling
         ? [
-          entry.versions.net ? { version: "网翻", value: entry.versions.net } : null,
-          entry.versions.tw ? { version: "台版", value: entry.versions.tw } : null,
+          entry.versions.net ? { version: "其他版本", value: entry.versions.net } : null,
+          entry.versions.tw ? { version: "参考写法", value: entry.versions.tw } : null,
         ].filter(Boolean)
         : [],
       confidence: item.activated === false ? "low" : "high",
@@ -432,7 +436,7 @@ function isSameShapeWriting(entry) {
  * 说话习惯条目的提示词处置方式：
  * - fixed：登记了不同的本项目写法，可做“特色流失”检测；
  * - locked：本项目写法与日文同形，不参与流失检测，但必须注入锁定写法；
- * - no-special：X版为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
+ * - no-special：项目写法为 `-`，是明确的不特殊处理，必须注入反回改约束，但不做流失检测；
  * - clue-only：没有本项目写法，也只作为说话人线索；
  * - none：缺少字面口癖或类型不可靠，不进提示词。
  *
@@ -460,7 +464,7 @@ function isHabitInjectable(entry) {
  * - 必须有字面口癖，且类型属于 DETECTABLE_TYPES；
  * - 单字口癖（力、超、訳）会撞普通词，不检测；
  * - 本项目写法与日文原词同形时（力→力、少女→少女）没有“补回”可言，也不检测；
- * - X版为 `-` 时是明确的不特殊处理；没有 X版写法时“译文少了这个特色”也无从判定。
+ * - 项目写法为 `-` 时是明确的不特殊处理；没有项目写法时“译文少了这个特色”也无从判定。
  */
 function isHabitDetectable(entry) {
   return habitRuleMode(entry) === "fixed";
@@ -484,7 +488,7 @@ function speechHabitBlockForRow({ chapter = "", row = null, characters = [], vol
  * 说话人判断与习惯处理的提示块：附在章级习惯之后，只在有候选时出现。
  *
  * 候选按**能不能判译文遗漏**分三类：① 登记了本项目写法且类型可靠（`fixed`）→ 可按写法判特色流失
- * 并给最小补回；② X版为 `-`（`no-special`）→ 注入“不得采用网翻/台版写法”，但不判缺漏；③ 其余
+ * 并给最小补回；② 项目写法为 `-`（`no-special`）→ 注入“不得套用其他特殊写法”，但不判缺漏；③ 其余
  * （`locked` 同形锁定写法 / `clue-only` 未登记写法 / `none` 类型或长度不适合逐字比对）只说明
  * “这句可能是谁在说”，**不能**用来判译文遗漏——没有可比对的基准，模型只能凭感觉补一句，
  * 那是误报的源头。三类都保留，但要求分开处理。
@@ -520,8 +524,8 @@ function speakerCheckBlock({ chapter, candidates = [] } = {}) {
     const noSpecialList = noSpecial.map((candidate) => {
       const forbidden = candidate.forbiddenWritings || [];
       const suffix = forbidden.length
-        ? `（不得采用网翻版或台版写法：${forbidden.map((item) => `${item.version}「${item.value}」`).join("；")}）`
-        : "（不得采用网翻版或台版写法）";
+        ? `（不得采用所列其他写法：${forbidden.map((item) => `${item.version}「${item.value}」`).join("；")}）`
+        : "（不得套用其他版本的特殊写法）";
       return `${candidate.character}「${candidate.habit}」${suffix}`;
     }).join("、");
     lines.push(`本项目明确不作特殊翻译处理的口癖：${noSpecialList}；不得据此判译文缺漏、扣分或要求补写。`);

@@ -10,6 +10,7 @@ const {
   validateSelection,
 } = require("./input-selection");
 const { loadParagraphs } = require("./text-utils");
+const { projectSignature } = require("../src/core/project-context");
 
 function withTextFiles(count, callback) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trans-comparator-selection-"));
@@ -61,6 +62,25 @@ test("三语模式严格要求提供三份文件", () => {
       () => validateSelection({ comparisonMode: "trilingual", files: { jp, cn, tw: "" } }),
       /Missing tw input file/,
     );
+  });
+});
+
+test("默认显示标签使用文本角色，已保存标签及项目身份保持不变", () => {
+  withTextFiles(3, ([jp, cn, tw]) => {
+    for (const comparisonMode of ["bilingual", "trilingual"]) {
+      const input = { comparisonMode, files: { jp, cn, tw } };
+      const generic = validateSelection(input);
+      const expected = { jp: "原文 A", cn: "非原文 B" };
+      if (comparisonMode === "trilingual") expected.tw = "非原文 C";
+      assert.deepEqual(generic.labels, expected);
+
+      const saved = validateSelection({ ...input, labels: { jp: "英文原稿", cn: "译稿甲", tw: "校订稿乙" } });
+      assert.equal(saved.labels.jp, "英文原稿");
+      assert.equal(saved.labels.cn, "译稿甲");
+      if (comparisonMode === "trilingual") assert.equal(saved.labels.tw, "校订稿乙");
+      assert.deepEqual(validateSelection(saved), saved, "重新读取输入登记时保留用户已保存的标签");
+      assert.equal(projectSignature(saved), projectSignature(generic), "显示标签不改变项目或备注身份");
+    }
   });
 });
 

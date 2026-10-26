@@ -126,7 +126,7 @@ test("X版 `-` 的不特殊处理状态随落盘层还原并逐字一致", () =>
 
   const context = contextFromLayerEntry(entry);
   const snapshot = context.blocks.get("行间〇").block;
-  assert.match(snapshot, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用网翻版或台版写法（网翻「妾身」）/);
+  assert.match(snapshot, /第一人称 「わらわ」 → 不作特殊翻译处理，不得采用所列其他写法（其他版本「妾身」）/);
 
   const liveTables = loadSpeechTables([file]);
   const live = chapterHabitBlock({
