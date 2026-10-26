@@ -606,22 +606,13 @@
     @media (min-width: 1200px) {
       .notes-body {
         grid-template-columns: minmax(380px, 1.15fr) minmax(360px, 1fr);
-        grid-template-areas:
-          "toolbar toolbar"
-          "storage storage"
-          "current history-head"
-          "current history-list"
-          "status  status"
-          "hint    hint";
         gap: 6px 16px;
       }
-      .notes-toolbar { grid-area: toolbar; }
-      #notesStorageUsage { grid-area: storage; }
-      #notesCurrentSpace { grid-area: current; align-self: start; }
-      .notes-history-heading { grid-area: history-head; margin: 0; }
-      #notesSpaceList { grid-area: history-list; max-height: 200px; }
-      .notes-panel-status { grid-area: status; }
-      .notes-hint { grid-area: hint; }
+      .notes-body > * { grid-column: 1 / -1; min-width: 0; }
+      /* 相邻的本页记录、历史标题和历史列表组成双列；其余内容按 DOM 顺序各占整行。 */
+      #notesCurrentSpace { grid-column: 1; grid-row: span 2; align-self: start; }
+      #notesHistoryHeading { grid-column: 2; }
+      #notesSpaceList { grid-column: 2; max-height: 200px; }
     }
     .notes-toolbar, .notes-history-heading {
       display: flex;
@@ -639,7 +630,7 @@
       gap: var(--space-2);
     }
     .notes-actions { flex: 0 0 auto; }
-    .notes-history-heading { font-size: 13px; }
+    .notes-history-heading { margin: 0; font-size: 13px; }
     .notes-history-heading span { color: var(--muted); font-size: var(--fs-caption); }
     .notes-space-list {
       max-height: 240px;

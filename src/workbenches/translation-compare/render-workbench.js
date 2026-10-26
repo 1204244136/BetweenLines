@@ -530,7 +530,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             <div id="notesSaveWarning" class="notes-save-warning" role="status" hidden></div>
             <button id="retryNotesSave" class="btn btn--subtle" type="button" hidden>重试保存</button>
             <div id="notesCurrentSpace"></div>
-            <div class="notes-history-heading"><strong>当前项目历史记录</strong><span id="notesSpaceSummary"></span></div>
+            <div class="notes-history-heading" id="notesHistoryHeading"><strong>当前项目历史记录</strong><span id="notesSpaceSummary"></span></div>
             <div id="notesSpaceList" class="notes-space-list">正在读取本机备注空间...</div>
             <div class="notes-history-heading" id="notesForeignHeading" hidden><strong>其他项目 / 旧版空间</strong><span id="notesForeignSummary"></span><button id="exportForeignNotes" class="btn btn--ghost" type="button">导出这些空间</button></div>
             <div id="notesForeignList" class="notes-space-list" hidden></div>
