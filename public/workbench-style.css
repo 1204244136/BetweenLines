@@ -267,23 +267,25 @@
     }
     .workbench-tabs-bar {
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       justify-content: space-between;
       gap: 8px;
-      padding: 4px 6px 0;
+      padding: 6px;
       border-bottom: 1px solid var(--line);
       background: var(--surface-subtle);
       border-radius: var(--radius) var(--radius) 0 0;
       user-select: none;
-      min-height: 38px;
+      min-height: 50px;
     }
     .workbench-tabs-list {
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       gap: 4px;
       min-width: 0;
       flex: 1 1 auto;
       overflow-x: auto;
+      padding: 3px;
+      scroll-padding-inline: 3px;
       scrollbar-width: none;
     }
     .workbench-tabs-list::-webkit-scrollbar {
@@ -294,75 +296,86 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      height: 34px;
-      padding: 0 14px;
+      flex: 0 0 auto;
+      height: 36px;
+      padding: 0 12px;
       border: 1px solid transparent;
-      border-bottom: 0;
-      border-radius: 6px 6px 0 0;
+      border-radius: var(--radius-sm);
       background: transparent;
-      color: var(--muted);
+      color: var(--text-emphasis);
       font-size: 13px;
       font-weight: 600;
       white-space: nowrap;
       cursor: pointer;
-      margin-bottom: -1px;
-      transition: all 140ms ease;
+      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
     }
     .workbench-tab:hover:not(.is-active) {
-      background: color-mix(in srgb, var(--surface) 70%, transparent);
+      background: var(--surface);
+      border-color: var(--line);
       color: var(--text);
     }
     .workbench-tab.is-active {
-      background: var(--surface);
+      background: var(--surface-selected);
       color: var(--focus-hover);
-      font-weight: 700;
-      border-color: var(--line);
-      border-bottom: 1px solid var(--surface);
-      z-index: 2;
+      border-color: var(--info-border);
     }
-    .workbench-tab.is-active::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: 10px;
-      right: 10px;
-      height: 2px;
-      background: var(--focus);
-      border-radius: 2px;
+    .workbench-tab:focus {
+      outline: none;
+    }
+    .workbench-tab:focus:not(.is-active):not(:hover) {
+      border-color: transparent;
+    }
+    .workbench-tab:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 1px;
     }
     .workbench-tab-icon {
+      flex: 0 0 auto;
       font-size: 13px;
       line-height: 1;
       opacity: 0.85;
     }
     .workbench-tab-title {
+      flex: 0 0 auto;
       font-size: 13px;
       line-height: 1.2;
     }
     .workbench-tab-badge {
+      max-width: 18ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
       font-size: 11px;
       font-weight: 600;
-      line-height: 1;
-      padding: 2px 6px;
-      border-radius: var(--radius-badge, 4px);
-      background: color-mix(in srgb, var(--muted-2) 15%, transparent);
+      line-height: 1.4;
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-pill);
+      background: var(--surface);
       color: var(--muted);
-      transition: all 140ms ease;
     }
     .workbench-tab-badge:empty {
       display: none;
     }
-    .workbench-tab.is-active .workbench-tab-badge {
-      background: var(--info);
-      color: var(--focus);
+    .workbench-tab.is-active .workbench-tab-badge:not(.is-running):not(.is-warn) {
+      border-color: var(--info-border);
     }
     .workbench-tab-badge.is-running {
-      background: var(--watch) !important;
-      color: var(--watch-strong) !important;
+      background: var(--watch);
+      color: var(--watch-strong);
+      border-color: var(--status-warning-border);
     }
     .workbench-tab-badge.is-warn {
-      background: var(--review) !important;
-      color: var(--review-strong) !important;
+      background: var(--review);
+      color: var(--review-strong);
+      border-color: var(--status-danger-border);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .workbench-tab {
+        transition: none;
+      }
+      .has-workbench-tabs > details.panel-details[open] {
+        animation: none;
+      }
     }
     .workbench-tabs-actions {
       display: flex;

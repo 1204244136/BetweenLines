@@ -14,6 +14,7 @@
 - `预筛选`（`#prefilterPanel`）内的 `.prefilter-runbar` 持有阈值与开始/停止，`.prefilter-results` 持有统计、原生复选开关 `#prefilterResultFilter` 与确认预筛；结果查看入口不再放入 `#filterPanel`。结果栏允许统计换行与操作组折行，不能用 `white-space: nowrap` 锁住整条统计。
 - `筛选与批处理`（`#filterPanel`，原「筛选与显示」与「批量操作」合并）收纳 filter-bar、显示开关与会改源文件的批量按钮。单个 `.action-bar` 内 `显示设置` 组在前、`修改结果操作` 组在后，靠 `.action-group + .action-group` 的分隔线区隔，批量按钮必须保持最后一组。默认全部折叠（不带 `open` 属性），避免机器任务被覆盖式展开。
 - 四个抽屉统一置于父抽屉 `#controlStackPanel`（`.panel-group`，带 `data-panel-group`）的 `.panel-group-body` 内用于整组折叠/展开；父抽屉默认带 `open`。父摘要由客户端 `bindPanelGroups()` 在捕获阶段监听 `toggle` 事件同步展开数。
+- 客户端将四个抽屉增强为互斥标签：点击未展开项只打开该项，再次点击当前项收起全部。`.is-active` 与 `aria-selected` 同步原生 `open` 状态；选中项使用浅蓝底和单层边框，鼠标焦点不叠加全局按钮外框，键盘焦点由 `:focus-visible` 独立显示。标签与标题不收缩，空间不足时标签栏横向滚动；状态徽标限制显示宽度，完整文字同步到 `title`，运行与警告颜色独立于选中状态，减少动态效果偏好同时关闭切换动画。
 
 ---
 

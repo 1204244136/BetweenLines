@@ -1643,6 +1643,7 @@
         badgeSpan.className = "workbench-tab-badge";
         const stateEl = document.getElementById(stateId);
         badgeSpan.textContent = stateEl ? stateEl.textContent.trim() : "";
+        badgeSpan.title = badgeSpan.textContent;
 
         appendChildSafe(tabBtn, iconSpan);
         appendChildSafe(tabBtn, titleSpan);
@@ -1714,6 +1715,7 @@
           const src = document.getElementById(stateId);
           if (src) {
             badge.textContent = src.textContent.trim();
+            badge.title = badge.textContent;
             if (src.classList.contains("is-running")) {
               badge.classList.add("is-running");
             } else {
