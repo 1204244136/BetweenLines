@@ -130,7 +130,7 @@
   - 长别名优先；
   - 必须能审计（走 `profileLineStats().entityGated/entitySkipped`、`promptLayerReport().entities` 与 `promptTrimSummary()`）。
 - `profiles/index.js` 的 `normalizeLine` 必须保留对象形态；声明了未注册特征的条目按常驻处理并告警一次。页面预填和审计用全量（`proofreadPromptFor(...).system`）；只有发请求时才按行裁剪，`TRANSCOMPARATOR_FULL_PROMPT=1` 可退回全量。
-- **常驻条目直接抬高每一行的成本**：`scripts/proofread-prompt-layers.test.js` 的「真实行样本保持压缩后的请求预算」用实测最坏行（带成对标记的 demo 行）锁定 system ≤ 4400、单行请求 ≤ 5300。新增规范时优先挂到按行特征上；确实要常驻的按实测值同步改基线，并在测试注释里写明本次新增了哪几条。
+- **常驻条目直接抬高每一行的成本**：`scripts/proofread-prompt-layers.test.js` 的「真实行样本保持压缩后的请求预算」用带成对标记的 demo 样本分别约束 system、user 与单行请求总字符数，上限以测试断言为准，字符数不等于 token 或费用。新增规范时优先挂到按行特征上；确实要常驻或调整预算时，先运行该测试并测量样本，按实测值调整对应基线，在所属契约说明规则归属，在提交正文记录扩容原因与验证结果。历次条目与测量变化归档到 [AI 审核历史](../architecture/AI_REVIEW_HISTORY.md#规范同步与请求预算演变)，测试注释只解释当前样本和测量口径。
 
 ---
 

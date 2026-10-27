@@ -177,10 +177,8 @@ test("规范要点确实进入了特化侧提示词", () => {
   // 作品专有信息：通用档案只描述形态，具体作品名留在本机档案里
   assert.match(novel, /角色口癖、固定语尾与人物专属书写方式以译名表\/口癖表为准/);
   assert.match(novel, /咒语、咏唱与仪式台词允许为了美感和中文语感调整句式/);
-  // 与 index-X `docs/translation-spec.md`（成品层规范正文）逐条对齐的条款：规范正文改动时按
-  // 「规范正文 → 机器检查 → BetweenLines 的 novel.js/demo.js」三处同步，这里锁住 AI 校对层这一侧，
-  // 避免上游新增口径后提示词档案悄悄落后（2026-09/10 的招呼语、否定拟声、赛事项目名、凭空创建注音、
-  // 间隔号与西文缩写、行末点号裁定、原语还原都属这一批）。
+  // 锁定与 index-X 共享规范在 AI 档案中的覆盖；来源与同步要求见
+  // docs/contracts/ai-proofread-contract.md「规范来源与同步义务」。
   assert.match(novel, /招呼语（やっほー 一类/);
   assert.match(novel, /不得音译成「呀吼」/);
   assert.match(novel, /非人声的纯音效（游戏机失败音、喇叭与引擎声）保持既有写法/);

@@ -628,17 +628,8 @@ test("真实行样本保持压缩后的请求预算", () => {
     context: [],
     contextMode: "none",
   }, { proofreadMode: "bilingual", profileId: "demo" });
-  // 预算按实测最坏行（带成对标记的 demo 行）定基线。回归夹具的两处证据边界（引号有无不算缺陷、
-  // 成对标记内的点号规范只对完整引述/整行括注生效）让这一行 +148 字符；每行常驻的只有证据边界枚举 +6。
-  // 2026-10 对齐 index-X `docs/translation-spec.md` 时新增两条常驻口径（二.3 行末点号不逐行比对日文、
-  // 五.7 外国人名与外文专名按原语还原，最坏行 +106）与六条按行条目（一.3 间隔号与西文缩写、
-  // 一.5 省略号后不跟点号、一.6 赛事项目名写「公里」、一.7 招呼语与否定拟声不音译、
-  // 三.1 不得凭空创建注音与其证据边界），基线相应上调；再增条目时同样按实测值改这里。
-  // 随后又同步一批上游口径：一.9 异形词与五.4 的繁简混杂各自新增为常驻条目，一.3 的半角「-」例外、
-  // 三.1 收窄后的拉丁保留范围（灵装与种族名一律汉译）、一.7 的 ひゃっほー／ぶーぶー 分流则落在已有
-  // 按行条目里（只增本行长度）。最坏行实测 system 4712、单行请求 4712+858=5570，两个基线同步上调。
-  // 新增上游语义分轨、专词裁定与码位边界后，真实最坏行 system 5457，总长 6315。
-  // 缓存分区增加两个段首及分区标题共 36 字符，规则正文与裁剪集合保持不变。
+  // 带成对标记的 demo 样本分别约束 system、user 和单行请求总字符数，不代表 token 或费用。
+  // 预算维护要求见 docs/contracts/ai-proofread-contract.md；历次调整见 docs/architecture/AI_REVIEW_HISTORY.md。
   assert.ok(messages[0].content.length <= 5493, `system 前缀仍过长：${messages[0].content.length}`);
   assert.ok(messages[1].content.length <= 900, `user 载荷仍过长：${messages[1].content.length}`);
   assert.ok(messages[0].content.length + messages[1].content.length <= 6351, "单行请求总长度超过预算");

@@ -36,7 +36,7 @@
 | 修改 AI 提示词、翻译规范档案、模型传输、预筛或阶段编排 | [AI 校对契约](docs/contracts/ai-proofread-contract.md)；按通用规则、作品档案与输入适配分别维护规范 |
 | 修改备注保存、迁移、恢复、删除、模型预设、Toast 或客户端状态 | [工作台与备注契约](docs/contracts/workbench-notes-spaces.md) |
 | 定位运行异常，或修复已记录的故障规则 | [排查手册](docs/contracts/troubleshooting.md)，并同步相关故障条目 |
-| 新增、移动、删除文档、工具或 npm 命令 | [文档与工具登记](docs/contracts/documentation-tools.md) |
+| 修改代码说明或注释归属；新增、移动、删除文档、工具或 npm 命令 | [文档与工具登记](docs/contracts/documentation-tools.md) |
 | 处理 GitHub issue/spec、triage 或领域术语/ADR | [Issue tracker](docs/agents/issue-tracker.md)、[Triage 标签](docs/agents/triage-labels.md)、[领域文档](docs/agents/domain.md) 中与任务有关的部分 |
 
 只加载当前任务需要的细则；新增细则优先写入已有职责文档，确需独立职责时再新建子路径文档并补上触发入口，不继续扩充根 AGENTS。
