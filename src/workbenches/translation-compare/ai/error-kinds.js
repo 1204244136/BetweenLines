@@ -63,6 +63,7 @@ function classifyAiError(input) {
 
   // 1. 用户主动终止：不是故障，但备注口径把它记成失败行，单列一类以免与真实错误混淆。
   if (/校对已终止|任务已终止|已终止|stoprequested/.test(haystack)) return "stopped";
+  if (code === "ACCOUNT_RESTRICTED" || /账号访问受限[:：]/.test(text)) return "auth";
   // 2. 模型拒答（内容安全审查）：上游正常应答，不是接口故障。
   if (code === "MODEL_REFUSAL" || code === "CONTENT_FILTER") return "refusal";
   if (/拒答|内容安全|content_filter|content management policy|responsible ai|safety policy|policy violation|declined to answer|敏感内容/.test(haystack)) {

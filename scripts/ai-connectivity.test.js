@@ -608,7 +608,7 @@ test("共享 LLM 传输层：HTTP 200 后响应流中断时有限重试并恢复
   }
 });
 
-test("共享 LLM 传输层：响应流中断重试期间调用方取消会立即结束，不继续重发", async () => {
+test("共享 LLM 传输层：响应流中断重试期间调用方取消会立即结束，不继续重发", async (t) => {
   let calls = 0;
   const server = http.createServer((request, response) => {
     calls += 1;
@@ -618,19 +618,39 @@ test("共享 LLM 传输层：响应流中断重试期间调用方取消会立即
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const controller = new AbortController();
+  const originalSetTimeout = globalThis.setTimeout;
+  let retryWaitStarted;
+  let rejectRetryWait;
+  let retryDeadline;
+  const retryWaiting = new Promise((resolve, reject) => { retryWaitStarted = resolve; rejectRetryWait = reject; });
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    const timer = originalSetTimeout(callback, delay, ...args);
+    if (delay === 1000) retryWaitStarted();
+    return timer;
+  });
   try {
     const address = server.address();
     const pending = fetchJson(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
       method: "POST",
       body: "{}",
     }, { signal: controller.signal, streamRetryDelayMs: 1000 });
-    setTimeout(() => controller.abort(), 10);
-    await assert.rejects(pending, (error) => {
+    const rejected = assert.rejects(pending, (error) => {
       assert.equal(error.code, "ABORTED");
       return true;
     });
+    retryDeadline = originalSetTimeout(() => rejectRetryWait(new Error("未在期限内建立响应流中断重试等待")), 5000);
+    await Promise.race([
+      retryWaiting,
+      rejected.then(() => { throw new Error("请求不应在建立流重试等待前完成"); }),
+    ]);
+    clearTimeout(retryDeadline);
+    assert.equal(calls, 1, "先确认真实请求已经中断并进入重试等待，再取消");
+    controller.abort();
+    await rejected;
     assert.equal(calls, 1, "取消后不得发起下一次流重试");
   } finally {
+    controller.abort();
+    clearTimeout(retryDeadline);
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });

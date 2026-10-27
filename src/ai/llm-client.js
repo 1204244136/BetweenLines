@@ -251,12 +251,25 @@ function displayRequestUrl(value) {
 }
 
 function isRetryableStreamInterruption(error) {
-  if (!error || error.name === "AbortError" || error.code === "HTTP_ERROR") return false;
+  if (!error || error.name === "AbortError" || error.code === "HTTP_ERROR" || error.code === "ACCOUNT_RESTRICTED") return false;
   const text = [error.message, error.cause?.message].filter(Boolean).join(" ").toLowerCase();
   const code = String(error.code || error.cause?.code || "").toUpperCase();
   return error.code === "STREAM_INTERRUPTED"
     || code === "UND_ERR_SOCKET"
     || /terminated|socket hang up|error reading a body from connection|connection reset|other side closed|body.*(?:closed|aborted)/.test(text);
+}
+
+function isAccountRestrictionResponse(text) {
+  let payload;
+  try { payload = JSON.parse(text); } catch { return false; }
+  const detail = payload?.error && typeof payload.error === "object" ? payload.error : payload;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return false;
+  const codes = [detail.code, detail.type].map((value) => String(value ?? "").trim().toUpperCase());
+  if (codes.some((code) => ["ACCOUNT_RESTRICTED", "ACCOUNT_BLOCKED", "ACCOUNT_SUSPENDED", "ACCOUNT_BANNED"].includes(code))) return true;
+  const message = typeof detail.message === "string" ? detail.message : "";
+  const knownRiskCode = codes.includes("11140") || /\bcode\s*[:=]?\s*11140\b/i.test(message);
+  // 网关可能把上游账号拒绝包装成 429；业务码与账号限制语义同时成立才覆盖频控分类。
+  return knownRiskCode && /(?:账号|账户)[^。！？\n]{0,80}(?:异常行为|限制|受限|封禁|冻结|停用)|(?:限制|封禁|冻结|停用)[^。！？\n]{0,40}(?:账号|账户)|\baccount\b.{0,80}\b(?:restricted|blocked|suspended|banned|abnormal behavior)\b/i.test(message);
 }
 
 function waitForStreamRetry(delayMs, signal) {
@@ -342,8 +355,9 @@ async function fetchJson(url, options, {
         const detail = bodyError
           ? (timedOut ? `错误正文未能完整读取（本地等待上限 ${Math.ceil(timeoutMs / 1000)} 秒）` : "错误正文读取中断")
           : text.slice(0, 500);
-        const error = new Error(`${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${detail}`);
-        error.code = "HTTP_ERROR";
+        const accountRestricted = !bodyError && isAccountRestrictionResponse(text);
+        const error = new Error(`${accountRestricted ? "账号访问受限：" : ""}${displayRequestUrl(url)} 返回 HTTP ${response.status}: ${detail}`);
+        error.code = accountRestricted ? "ACCOUNT_RESTRICTED" : "HTTP_ERROR";
         error.httpStatus = response.status;
         error.responseBody = text;
         error.receivedHeaders = true;
@@ -388,7 +402,7 @@ async function fetchJson(url, options, {
         abortError.code = "ABORTED";
         throw abortError;
       }
-      if (timedOut && requestStarted && controller.signal.aborted && error?.code !== "HTTP_ERROR") {
+      if (timedOut && requestStarted && controller.signal.aborted && !["HTTP_ERROR", "ACCOUNT_RESTRICTED"].includes(error?.code)) {
         const phase = response ? `已收到 HTTP ${response.status}，读取响应正文` : "等待响应头";
         const timeoutError = new Error(`本地请求超时（${Math.ceil(timeoutMs / 1000)} 秒；${phase}）`);
         timeoutError.code = "REQUEST_TIMEOUT";
@@ -507,6 +521,14 @@ function diagnoseConnectivityError(error, context = {}) {
   const rawMessage = error?.message || String(error || "");
   const httpStatus = error?.httpStatus || (rawMessage.match(/HTTP (\d+)/i) ? Number(RegExp.$1) : null);
   const code = error?.code || error?.cause?.code || "";
+
+  if (code === "ACCOUNT_RESTRICTED") {
+    return {
+      message: "账号访问受限：上游账号被限制，请检查账号状态或选择可用的模型预设后重试。",
+      code: "ACCOUNT_RESTRICTED",
+      httpStatus,
+    };
+  }
 
   if (code === "ECONNREFUSED" || error?.cause?.code === "ECONNREFUSED" || /ECONNREFUSED/i.test(rawMessage)) {
     return {

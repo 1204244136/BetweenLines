@@ -137,6 +137,8 @@ function createStagePipelines(value = {}) {
     // 熔断按预设汇总：只有全部选中预设熔断，阶段才算熔断。
     breakerTrippedCount: Math.max(0, Number(stage.breakerTrippedCount) || 0),
     breakerBroken: stage.breakerBroken === true,
+    waitReason: ["rate_limit", "cooldown"].includes(stage.waitReason) ? stage.waitReason : "",
+    retryAt: Number.isFinite(Number(stage.retryAt)) ? Math.max(0, Number(stage.retryAt)) : 0,
     activeRows: Array.isArray(stage.activeRows) ? stage.activeRows.map(Number).filter(Number.isFinite) : [],
   });
   return {

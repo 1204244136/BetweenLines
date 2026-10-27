@@ -182,3 +182,138 @@ test("热更新保持现有连接参数，删空回落；drainPending 返回完�
   assert.deepEqual(dispatcher.drainPending(), [item]);
   assert.equal(dispatcher.snapshot().pending, 0);
 });
+
+test("限流等待状态：真实退避期间报告原因与重试时间，到期由原有定时器唤醒", (t) => {
+  const { dispatcher, clock, wakes } = fixture(t, [preset("same", 128)]);
+  dispatcher.enqueue([1, 2].map((index) => ({ index })));
+  const request = dispatcher.take();
+  dispatcher.feedback(request.request, { kind: "rate-limit", error: rateError });
+  dispatcher.release(request.request);
+  const state = dispatcher.snapshot();
+  assert.equal(state.inFlight, 0);
+  assert.equal(state.pending, 2);
+  assert.equal(state.concurrency, 2);
+  assert.equal(state.waitReason, "rate_limit");
+  assert.ok(state.retryAt > clock.now());
+  assert.equal(state.presets[0].waitReason, "rate_limit");
+  assert.equal(state.presets[0].retryAt, state.retryAt);
+  assert.equal(clock.pendingCount, 1);
+  assert.deepEqual(dispatcher.snapshot(), state, "读取等待状态不修改计时器或派发状态");
+  assert.equal(clock.pendingCount, 1);
+  assert.equal(dispatcher.take(), null);
+  clock.advance(state.retryAt - clock.now() - 1);
+  assert.equal(wakes(), 0);
+  assert.equal(dispatcher.snapshot().waitReason, "rate_limit");
+  clock.advance(1);
+  assert.equal(wakes(), 1);
+  assert.equal(dispatcher.snapshot().waitReason, "");
+  assert.equal(dispatcher.snapshot().retryAt, 0);
+  assert.equal(dispatcher.snapshot().presets[0].waitReason, "");
+  assert.ok(dispatcher.take(), "到期后仍由真实派发闸门放行");
+});
+
+test("持续限流冷却报告 cooldown，半开探测不残留过期等待", (t) => {
+  const { dispatcher, clock } = fixture(t);
+  dispatcher.enqueue([1, 2, 3, 4].map((index) => ({ index })));
+  for (let row = 1; row <= 3; row += 1) {
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const request = dispatcher.take();
+      assert.equal(request.item.index, row);
+      const feedback = dispatcher.feedback(request.request, { kind: "rate-limit", error: rateError });
+      dispatcher.release(request.request, { ok: false });
+      const state = dispatcher.snapshot();
+      if (row === 3 && attempt === 4) {
+        assert.equal(feedback.retry, true);
+        assert.equal(state.waitReason, "cooldown");
+        assert.equal(state.presets[0].waitReason, "cooldown");
+        assert.equal(state.presets[0].breakerState, "open");
+        assert.equal(state.retryAt, clock.now() + 30000);
+        assert.equal(dispatcher.take(), null);
+        clock.advance(state.retryAt - clock.now());
+      } else {
+        assert.equal(feedback.retry, attempt <= 3);
+        clock.advance(state.retryAt - clock.now());
+      }
+    }
+  }
+  const state = dispatcher.snapshot();
+  assert.equal(state.waitReason, "");
+  assert.equal(state.retryAt, 0);
+  assert.equal(state.presets[0].breakerState, "half-open");
+  const probe = dispatcher.take();
+  assert.ok(probe);
+  assert.equal(dispatcher.take(), null, "半开仍只放行一个探测，不因状态读取改变");
+  dispatcher.feedback(probe.request, { kind: "success" });
+  dispatcher.release(probe.request);
+  assert.equal(dispatcher.snapshot().presets[0].waitReason, "");
+});
+
+test("多预设分别等待：健康预设可接队头，全部受阻时阶段报告最早恢复时间", (t) => {
+  const { dispatcher, clock } = fixture(t, [preset("a"), preset("b")]);
+  dispatcher.enqueue([1, 2].map((index) => ({ index })));
+  const first = dispatcher.take();
+  dispatcher.feedback(first.request, { kind: "rate-limit", error: { ...rateError, retryAfter: "2" } });
+  dispatcher.release(first.request);
+  let state = dispatcher.snapshot();
+  assert.equal(state.presets.find((item) => item.presetId === "a").waitReason, "rate_limit");
+  assert.equal(state.presets.find((item) => item.presetId === "b").waitReason, "");
+  assert.equal(state.waitReason, "", "单个预设等待不代表整个阶段等待");
+  assert.equal(state.retryAt, 0);
+  const second = dispatcher.take();
+  assert.equal(second.item.presetId, "b");
+  dispatcher.feedback(second.request, { kind: "rate-limit", error: rateError });
+  dispatcher.release(second.request);
+  state = dispatcher.snapshot();
+  assert.equal(state.waitReason, "rate_limit");
+  assert.equal(state.retryAt, Math.min(...state.presets.map((item) => item.retryAt)));
+  clock.advance(state.retryAt - clock.now());
+  assert.equal(dispatcher.snapshot().waitReason, "");
+  assert.ok(dispatcher.take());
+});
+
+test("移除、清空待办与 dispose 后不再报告旧等待", (t) => {
+  const { dispatcher } = fixture(t);
+  dispatcher.enqueue({ index: 1 });
+  const request = dispatcher.take();
+  dispatcher.feedback(request.request, { kind: "rate-limit", error: rateError });
+  dispatcher.release(request.request);
+  assert.equal(dispatcher.snapshot().waitReason, "rate_limit");
+  dispatcher.updatePresets([preset("replacement")]);
+  assert.equal(dispatcher.snapshot().waitReason, "");
+  assert.equal(dispatcher.snapshot().presets[0].retryAt, 0);
+  const replacement = dispatcher.take();
+  dispatcher.feedback(replacement.request, { kind: "rate-limit", error: rateError });
+  dispatcher.release(replacement.request);
+  assert.equal(dispatcher.snapshot().waitReason, "rate_limit");
+  const pending = dispatcher.drainPending();
+  assert.equal(dispatcher.snapshot().waitReason, "");
+  assert.equal(dispatcher.snapshot().presets[0].waitReason, "");
+  dispatcher.enqueue(pending);
+  assert.equal(dispatcher.snapshot().waitReason, "rate_limit");
+  dispatcher.dispose();
+  assert.equal(dispatcher.snapshot().waitReason, "");
+  assert.equal(dispatcher.snapshot().retryAt, 0);
+  assert.equal(dispatcher.snapshot().presets[0].waitReason, "");
+  assert.equal(dispatcher.snapshot().presets[0].retryAt, 0);
+});
+
+test("阶段等待仅汇总未熔断通道，已经熔断的预设不遮住剩余通道的退避", (t) => {
+  const { dispatcher } = fixture(t, [preset("broken"), preset("waiting")]);
+  dispatcher.enqueue(Array.from({ length: 12 }, (_, index) => ({ index: index + 1 })));
+  let failed = dispatcher.take();
+  const waiting = dispatcher.take();
+  dispatcher.feedback(waiting.request, { kind: "rate-limit", error: { ...rateError, retryAfter: "15" } });
+  dispatcher.release(waiting.request);
+  for (let count = 0; count < 10; count += 1) {
+    if (count > 0) failed = dispatcher.take();
+    assert.equal(failed.item.presetId, "broken");
+    dispatcher.feedback(failed.request, { kind: "failure", error: { httpStatus: 500, message: "server error" } });
+    dispatcher.release(failed.request, { ok: false });
+  }
+  const state = dispatcher.snapshot();
+  assert.equal(state.presets.find((item) => item.presetId === "broken").breakerTripped, true);
+  assert.equal(state.presets.find((item) => item.presetId === "broken").waitReason, "");
+  assert.equal(state.breakerBroken, false);
+  assert.equal(state.waitReason, "rate_limit");
+  assert.equal(state.retryAt, state.presets.find((item) => item.presetId === "waiting").retryAt);
+});

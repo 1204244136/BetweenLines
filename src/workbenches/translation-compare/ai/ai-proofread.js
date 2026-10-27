@@ -895,6 +895,7 @@ function resetIdleTaskStatus() {
   status.stageErrors = createStageErrors();
   status.stagePipelines = createStagePipelines();
   status.metrics = createModelCallMetrics();
+  status.presetPipelines = { stage1: [], stage2: [], stage3: [] };
   status.logs = [];
   resultMetricDeltas = new Map();
   controllers = new Set();
@@ -1355,6 +1356,7 @@ let activePresetPoolUpdater = null;
 
 function isConcurrencyOrRateLimitError(error) {
   if (!error) return false;
+  if (error.code === "ACCOUNT_RESTRICTED") return false;
   if (isModelRefusalError(error)) return false;
 
   const httpStatus = Number(error.httpStatus || error.status || error.statusCode);
@@ -1492,6 +1494,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   function syncStagePipelineQueues() {
     for (const [stageKey, dispatcher] of Object.entries(dispatchers)) {
       const { presets, initialConcurrency, pendingRows, ...pipeline } = dispatcher.snapshot();
+      if (status.stopRequested || status.stageControls[stageKey].stopRequested) {
+        pipeline.waitReason = "";
+        pipeline.retryAt = 0;
+        for (const preset of presets) { preset.waitReason = ""; preset.retryAt = 0; }
+      }
       Object.assign(status.stagePipelines[stageKey], pipeline);
       status.presetPipelines[stageKey] = presets;
     }
@@ -1713,6 +1720,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
     function dispatch() {
       if (status.stopRequested || settled) {
+        syncStagePipelineQueues();
         checkDone();
         return;
       }
@@ -1726,6 +1734,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           requestStageContext.run(stageKey, () => execute[stageKey](next.item, next.request));
         }
       }
+      syncStagePipelineQueues();
       checkDone();
     }
 
@@ -1981,6 +1990,9 @@ function finish() {
   status.finishedAt = new Date().toISOString();
   status.active = [];
   status.stagePipelines = createStagePipelines();
+  for (const presets of Object.values(status.presetPipelines)) {
+    for (const preset of presets) { preset.waitReason = ""; preset.retryAt = 0; }
+  }
   for (const control of Object.values(status.stageControls)) control.running = false;
   activeStageRuntime = null;
   // 收尾时立即落盘、不等节流：这是刷新页面后能把本轮成果重新交付出去的关键一份。
@@ -2060,6 +2072,7 @@ function clearProofreadResults(input = {}) {
 
 function isModelRefusalError(error) {
   if (!error) return false;
+  if (error.code === "ACCOUNT_RESTRICTED") return false;
   if (error.code === "MODEL_REFUSAL" || error.code === "CONTENT_FILTER") return true;
 
   const textToCheck = [
@@ -2121,6 +2134,7 @@ function makeRefusalResult(row, error, targetKey = "") {
 }
 
 function isFatalRequestError(error) {
+  if (error?.code === "ACCOUNT_RESTRICTED") return true;
   if (isModelRefusalError(error)) return false;
   if (isConcurrencyOrRateLimitError(error)) return false;
   return error?.code === "INVALID_JSON_RESPONSE"

@@ -19,6 +19,7 @@ const {
   isModelRefusalError,
   isPureSymmetricFragmentRow,
   startProofread,
+  stopProofread,
 } = require("./ai-proofread");
 const { createProjectContext } = require("./project-context");
 const {
@@ -416,6 +417,73 @@ async function runProofreadAgainst({ label, rowCount, breaker, respond, rowsFor 
     });
   }
 }
+
+test("真实任务状态回报限流等待，停止和清空后不残留阶段或预设等待", async () => {
+  clearProofreadCache();
+  const { project } = await publishModelRows("dispatch-wait", 3);
+  let requestCount = 0;
+  const heldResponses = [];
+  const limit = (response, retryAfter) => {
+    response.writeHead(429, { "content-type": "application/json", "retry-after": retryAfter });
+    response.end(JSON.stringify({ error: { message: "rate limit" } }));
+  };
+  const server = http.createServer((request, response) => {
+    request.resume();
+    requestCount += 1;
+    if (requestCount === 1) limit(response, "0.5");
+    else heldResponses.push(response);
+  });
+  const waitForStatus = async (predicate) => {
+    const deadline = Date.now() + 3000;
+    let snapshot;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      snapshot = clientStatus({ includeResults: false });
+    } while (!predicate(snapshot) && Date.now() < deadline);
+    assert.ok(predicate(snapshot), "任务应在期限内进入预期状态");
+    return snapshot;
+  };
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await startProofread({
+      protocol: "compatible", baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
+      model: "test-model", concurrency: 3, targetStage: "stage1",
+      projectKey: project.projectKey, rowsSignature: project.rowsSignature,
+    });
+    let snapshot = await waitForStatus((state) => state.stagePipelines.stage1.waitReason === "rate_limit");
+    assert.equal(snapshot.running, true);
+    assert.equal(snapshot.stagePipelines.stage1.inFlight, 2);
+    assert.equal(snapshot.stagePipelines.stage1.waitReason, "rate_limit");
+    assert.ok(snapshot.stagePipelines.stage1.retryAt > Date.now());
+    assert.equal(snapshot.presetPipelines.stage1[0].waitReason, "rate_limit");
+    assert.equal(snapshot.presetPipelines.stage1[0].retryAt, snapshot.stagePipelines.stage1.retryAt);
+    snapshot = await waitForStatus((state) => state.stagePipelines.stage1.waitReason === "");
+    assert.equal(snapshot.stagePipelines.stage1.retryAt, 0, "到期后即使其它请求占满配额，真实唤醒也撤销过期等待");
+    assert.equal(snapshot.stagePipelines.stage1.inFlight, 2);
+    assert.equal(snapshot.presetPipelines.stage1[0].retryAt, 0);
+    assert.equal(requestCount, 3, "到期读取状态不能绕过正在处理请求占用的配额");
+    limit(heldResponses[0], "15");
+    await waitForStatus((state) => state.concurrencyLimits === 2 && state.stagePipelines.stage1.waitReason === "rate_limit");
+    const stopped = stopProofread({ stage: "stage1" });
+    assert.equal(stopped.stageControls.stage1.stopRequested, true);
+    assert.equal(stopped.stagePipelines.stage1.inFlight, 1, "正在取消的请求仍保留真实运行计数");
+    assert.equal(stopped.stagePipelines.stage1.waitReason, "");
+    assert.equal(stopped.stagePipelines.stage1.retryAt, 0);
+    assert.equal(stopped.presetPipelines.stage1[0].waitReason, "");
+    assert.equal(stopped.presetPipelines.stage1[0].retryAt, 0);
+    await waitForStatus((state) => !state.running);
+    const cleared = clearProofreadCache();
+    assert.equal(cleared.stagePipelines.stage1.waitReason, "");
+    assert.equal(cleared.stagePipelines.stage1.retryAt, 0);
+    assert.deepEqual(cleared.presetPipelines, { stage1: [], stage2: [], stage3: [] });
+  } finally {
+    if (clientStatus({ includeResults: false }).running) stopProofread();
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+      server.closeAllConnections();
+    });
+  }
+});
 
 test("任务收到重复行号时，新结果撤销旧指标贡献，修订分页仍保留两次更新", async () => {
   // 模拟同一行两次进入实际任务入口，验证 addResult 与结果 module 的协作，

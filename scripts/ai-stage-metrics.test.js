@@ -167,6 +167,136 @@ test("运行信息：无活跃行号也显示队列与容量，停止后清理�
   assert.equal(ui.element("stage1RuntimeInfo").title || "", "");
 });
 
+function renderWaitingStage(ui, stage, pipeline, overrides = {}) {
+  ui.run(`renderAiStatus(${JSON.stringify({
+    kind: "ai", runId: "waiting-run", running: true,
+    projectKey: "project", rowsSignature: "rows", results: [],
+    stageControls: { [stage]: { running: true, stopRequested: false } },
+    stagePipelines: { [stage]: pipeline },
+    ...overrides,
+  })});`);
+}
+
+test("等待原因：三阶段区分限流退避与冷却，倒计时到期只等待重新派发", async () => {
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    for (const [waitReason, label] of [["rate_limit", "限流退避"], ["cooldown", "冷却中"]]) {
+      const ui = createWorkbench(undefined, { strictIds: true });
+      await ui.settle();
+      ui.run("let waitingNow = 100000; Date.now = () => waitingNow;");
+      const pipeline = { inFlight: 0, pending: 12, concurrency: 2, concurrencyMax: 128, waitReason, retryAt: 115000 };
+      const pill = ui.element(stage + "StatusPill");
+      const info = ui.element(stage + "RuntimeInfo");
+
+      renderWaitingStage(ui, stage, pipeline);
+      assert.equal(pill.textContent, label);
+      assert.equal(pill.dataset.state, "queued");
+      assert.match(info.textContent, new RegExp(label + " · 15 秒后尝试重新派发"));
+      assert.match(pill.title, /15 秒后尝试重新派发/);
+      ui.run("waitingNow += 1500;");
+      renderWaitingStage(ui, stage, pipeline);
+      assert.match(info.textContent, /14 秒后尝试重新派发/);
+      ui.run("waitingNow = 116000;");
+      renderWaitingStage(ui, stage, pipeline);
+      assert.match(info.textContent, /等待重新派发/);
+      assert.doesNotMatch(info.textContent, /-\d|已恢复|0 秒后/);
+
+      renderWaitingStage(ui, stage, { ...pipeline, inFlight: 1 });
+      assert.equal(pill.textContent, "处理中", "已有请求继续处理时不把整个阶段显示为暂停");
+      renderWaitingStage(ui, stage, { inFlight: 0, pending: 12, concurrency: 2, concurrencyMax: 128 });
+      assert.equal(pill.textContent, "排队中", "旧服务或普通队列不推测等待原因");
+      assert.doesNotMatch(info.textContent + (info.title || ""), /限流退避|冷却中|重新派发/);
+    }
+  }
+});
+
+test("等待原因：单个预设的退避只显示在自身详情，健康预设不受牵连", async () => {
+  const storage = storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify([
+      { id: "waiting", name: "等待预设", protocol: "compatible", model: "m1", concurrency: 4 },
+      { id: "healthy", name: "健康预设", protocol: "compatible", model: "m2", concurrency: 4 },
+    ]),
+  });
+  const ui = createWorkbench(storage, { strictIds: true });
+  await ui.settle();
+  ui.run('Date.now = () => 100000; for (const stage of ["stage1", "stage2", "stage3"]) stagePresetSelections[stage] = ["waiting", "healthy"];');
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    const pipeline = { inFlight: 1, pending: 12, concurrency: 4, concurrencyMax: 8 };
+    const presets = [
+      { presetId: "waiting", inFlight: 0, pending: 6, quota: 1, configuredConcurrency: 4, waitReason: "rate_limit", retryAt: 115000 },
+      { presetId: "healthy", inFlight: 1, pending: 6, quota: 3, configuredConcurrency: 4, waitReason: "", retryAt: 0 },
+    ];
+    renderWaitingStage(ui, stage, pipeline, { presetPipelines: { [stage]: presets } });
+    const tags = ui.element(stage + "PresetTags");
+    assert.match(tags.children[0].children[1].textContent, /限流退避 · 15 秒后尝试重新派发/);
+    assert.match(tags.children[0].children[1].title, /限流退避 · 15 秒后尝试重新派发/);
+    assert.doesNotMatch(tags.children[1].children[1].textContent, /限流退避|冷却中/);
+    assert.match(ui.element(stage + "AppliedTrigger").title, /等待预设[^\n]+限流退避/);
+    assert.doesNotMatch(ui.element(stage + "AppliedTrigger").title, /健康预设[^\n]+限流退避/);
+    assert.equal(ui.element(stage + "StatusPill").textContent, "处理中");
+    assert.doesNotMatch(ui.element(stage + "RuntimeInfo").textContent, /限流退避|冷却中/);
+    renderWaitingStage(ui, stage, { ...pipeline, inFlight: 0 }, { presetPipelines: { [stage]: presets } });
+    assert.equal(ui.element(stage + "StatusPill").textContent, "排队中", "不从单个预设推断整个阶段都受阻");
+  }
+});
+
+test("等待原因：轮询更新可见倒计时，悬停稳定且停止与完成立即清理", async () => {
+  const storage = storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify([
+      { id: "waiting", name: "等待预设", protocol: "compatible", model: "m1", concurrency: 4 },
+    ]),
+  });
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    const ui = createWorkbench(storage, { strictIds: true });
+    await ui.settle();
+    ui.run(`let waitingNow = 100000; Date.now = () => waitingNow; stagePresetSelections.${stage} = ["waiting"];`);
+    const pipeline = { inFlight: 0, pending: 12, concurrency: 1, concurrencyMax: 4, waitReason: "cooldown", retryAt: 115000 };
+    const presetPipelines = { [stage]: [{ ...pipeline, presetId: "waiting", quota: 1, configuredConcurrency: 4 }] };
+    const render = (overrides) => renderWaitingStage(ui, stage, pipeline, { presetPipelines, ...overrides });
+    render();
+    const pill = ui.element(stage + "StatusPill");
+    const info = ui.element(stage + "RuntimeInfo");
+    const runtime = ui.element(stage + "PresetTags").children[0].children[1];
+    const trigger = ui.element(stage + "AppliedTrigger");
+    const nodes = [pill, info, runtime, trigger];
+    const titles = nodes.map((node) => node.title);
+    for (const node of nodes) await node.dispatch("mouseenter");
+    const timerCount = ui.timeouts.length;
+    ui.run("waitingNow += 5000;");
+    render();
+    assert.equal(ui.timeouts.length, timerCount, "倒计时复用状态刷新，不新增定时器");
+    assert.match(info.textContent, /10 秒后尝试重新派发/);
+    assert.match(runtime.textContent, /10 秒后尝试重新派发/);
+    assert.equal(ui.element(stage + "PresetTags").children[0].children[1], runtime, "倒计时不得重建悬停锚点");
+    assert.deepEqual(nodes.map((node) => node.title), titles);
+    for (const node of nodes) await node.dispatch("mouseleave");
+    for (const node of nodes) assert.match(node.title, /10 秒后尝试重新派发/);
+    for (const node of nodes) await node.dispatch("mouseenter");
+
+    for (const stopped of [
+      { stageControls: { [stage]: { running: true, stopRequested: true } } },
+      { stageControls: { [stage]: { running: true, stopRequested: true } },
+        presetPipelines: { [stage]: [{ ...presetPipelines[stage][0], inFlight: 1 }] } },
+      { stopRequested: true },
+      { running: false, finishedAt: "2026-10-27T00:00:00.000Z" },
+    ]) {
+      render(stopped);
+      for (const node of nodes) assert.doesNotMatch((node.textContent || "") + (node.title || ""), /限流退避|冷却中|重新派发/);
+      for (const node of nodes) await node.dispatch("mouseleave");
+      for (const node of nodes) assert.doesNotMatch(node.title || "", /限流退避|冷却中|重新派发/);
+      render();
+      for (const node of nodes) await node.dispatch("mouseenter");
+    }
+    for (const cancel of [`pendingStageStops.add("${stage}");`, "pendingStopAll = true;"]) {
+      ui.run(cancel);
+      render();
+      for (const node of nodes) assert.doesNotMatch((node.textContent || "") + (node.title || ""), /限流退避|冷却中|重新派发/);
+      ui.run("pendingStageStops.clear(); pendingStopAll = false;");
+      render();
+      for (const node of nodes) await node.dispatch("mouseenter");
+    }
+  }
+});
+
 test("紧凑看板：零异常不占位，失败与待办出现后保留筛选入口", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
   ui.run("renderStageMetricsDashboard({});");

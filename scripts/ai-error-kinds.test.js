@@ -28,6 +28,12 @@ test("异常归类：重试耗尽的响应流中断归入网络连接失败", ()
   assert.equal(classifyAiError("stream interrupted: error reading a body from connection"), "network");
 });
 
+test("异常归类：明确账号访问受限优先于网关外层的 429", () => {
+  assert.equal(classifyAiError({ code: "ACCOUNT_RESTRICTED", httpStatus: 429, message: "请求失败" }), "auth");
+  assert.equal(classifyAiError("调用失败：账号访问受限：网关返回 HTTP 429，上游账号触发风控。"), "auth");
+  assert.equal(classifyAiError({ httpStatus: 429, message: "账号请求过多，请稍后重试。Request id 11140." }), "rate_limit");
+});
+
 test("异常归类：客户端的备注文本同样能落到对应类别", () => {
   assert.equal(classifyAiError("调用失败：请求超时，网络连接超时或模型响应过慢。"), "timeout");
   assert.equal(classifyAiError("调用失败（频控限制已达重试上限）：请求受限或额度不足（HTTP 429）。"), "rate_limit");

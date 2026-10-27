@@ -278,18 +278,30 @@ function createStageDispatch({
     },
     snapshot() {
       syncPending();
-      const presets = pool.snapshot().map((item) => ({
-        ...item,
-        breakerState: current.get(item.presetId).trip ? "tripped" : current.get(item.presetId).breaker.state,
-        breakerTripped: Boolean(current.get(item.presetId).trip),
-      }));
+      const timestamp = now();
+      const presets = pool.snapshot().map((item) => {
+        const generation = current.get(item.presetId);
+        const breakerState = generation.trip ? "tripped" : generation.breaker.state;
+        const waiting = !disposed && pending.length > 0 && !generation.trip && generation.channel.backoffUntil > timestamp;
+        return {
+          ...item,
+          breakerState,
+          breakerTripped: Boolean(generation.trip),
+          waitReason: waiting ? (breakerState === "open" ? "cooldown" : "rate_limit") : "",
+          retryAt: waiting ? generation.channel.backoffUntil : 0,
+        };
+      });
       const breakerTrippedCount = presets.filter((item) => item.breakerTripped).length;
+      const healthy = presets.filter((item) => !item.breakerTripped);
+      const waiting = healthy.length > 0 && healthy.every((item) => item.waitReason);
+      const next = waiting ? healthy.reduce((earliest, item) => item.retryAt < earliest.retryAt ? item : earliest) : null;
       return {
         pending: pending.length, pendingRows: pending.map(rowIndexOf), inFlight: requests.size, activeRows: [...activeRows],
         concurrency: quota(), concurrencyMax: quotaMax(),
         initialConcurrency: pool.totalInitialQuota() || fallback.initialConcurrency,
         presetCount: presets.length, toppedCount: pool.toppedCount(), breakerTrippedCount,
         breakerBroken: presets.length > 0 && breakerTrippedCount === presets.length,
+        waitReason: next?.waitReason || "", retryAt: next?.retryAt || 0,
         presets,
       };
     },

@@ -570,6 +570,36 @@ test("独立阶段的致命请求失败只终止自身，健康仲裁连接继�
   assert.match(clientStatus().results.find((result) => result.index === 2).note, /仲裁定案。/);
 });
 
+for (const stage of ["stage1", "stage2", "stage3"]) {
+  test(`账号风控：${stage} 收到网关 429 后停止自身且不重试，健康阶段继续完成`, async (t) => {
+    const { config, calls, post, respond, nextCall } = await fixture(t, 4);
+    const healthyStage = stage === "stage3" ? "stage2" : "stage3";
+    await post("start", {
+      ...config, stage: healthyStage, rowNotes: { 4: healthyStage === "stage2" ? initial : reviewed }, completedIndexes: [1, 2, 3],
+    });
+    const healthyCall = await nextCall(healthyStage);
+    const rowNotes = stage === "stage1" ? {} : Object.fromEntries([1, 2, 3].map((index) => [index, stage === "stage2" ? initial : reviewed]));
+    assert.equal((await post("start", { ...config, stage, rowNotes, completedIndexes: [4] })).status, 202);
+    const rejectedCall = await nextCall(stage);
+    rejectedCall.res.writeHead(429, { "content-type": "application/json", "retry-after": "15" });
+    rejectedCall.res.end(JSON.stringify({ error: { message: "上游风控已限制本区域账号（403 / code 11140，账号存在异常行为）。网关暂时无法处理请求。" } }));
+    await until(() => !clientStatus().stageControls[stage].running, "账号限制必须当场停止所属阶段，不进入退避");
+    const failed = clientStatus();
+    assert.equal(failed.stageControls[stage].stopRequested, true);
+    assert.equal(failed.stageControls[healthyStage].running, true);
+    assert.equal(healthyCall.closed, false);
+    assert.equal(failed.stageErrors[stage].auth.count, 1);
+    assert.equal(failed.concurrencyLimits, 0, "账号限制不计入频控采样");
+    assert.match(failed.error, /账号访问受限/);
+    assert.doesNotMatch(failed.logs.join("\n"), /\[频控退避\]/);
+    respond(healthyCall);
+    await until(() => !clientStatus().running);
+    assert.equal(calls.filter((call) => call.stage === stage).length, 1, "不重试失败行，也不向同阶段后续行继续发请求");
+    assert.deepEqual(clientStatus().stageErrors[healthyStage], {});
+    assert.match(clientStatus().results.find((result) => result.index === 4).note, healthyStage === "stage3" ? /仲裁定案。/ : /Stylist复审/);
+  });
+}
+
 test("一键开始：没有复审预设也会消费已有仲裁待办，初审不会跳过复审直达仲裁", async (t) => {
   const { config, calls, post, respond } = await fixture(t, 2);
   const { stylistConfig, ...withoutStylist } = config;

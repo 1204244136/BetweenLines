@@ -6,6 +6,7 @@
 
 - `src/workbenches/translation-compare/ai/` 的预筛选、提示词和校对结果属于翻译工作台；共享 AI 传输、连接配置、任务队列与基础 JSON 提示契约已位于 `src/ai/`。目录所有权与跨工作台依赖见 [module-boundaries.md](module-boundaries.md)，共享层不得引入领域 rows、notes 或任务运行状态。
 - 共享 LLM 传输层只能请求 `http:`/`https:`，不得接受带用户名/密码的 URL，必须拒绝云元数据、link-local、多播和未指定地址，并禁止自动跟随重定向；本机 Ollama 的回环地址仍属于允许范围。HTTP 200 后读取响应体若发生 `terminated`、`socket hang up`、`UND_ERR_SOCKET` 等流中断，只在传输层对完整请求做最多两次短退避重试；HTTP 错误、超时、JSON 格式错误和调用方取消不得走这条重试。重试成功的断流不进入阶段错误、熔断或并发下调；重试耗尽才交给既有网络异常与并发调度口径。
+- 非成功 HTTP 响应的 JSON 错误明确声明账号受限，或同时具有 `code 11140` 与账号限制语义时，传输层标记 `ACCOUNT_RESTRICTED`，保留外层 HTTP 状态、原始响应正文及重试头。该错误优先归入认证/访问限制，不能因外层 429 而进入限流退避，也不进入失败熔断采样；三个翻译阶段沿用致命请求错误的定向停止。普通 429/503/529、任意正文中的 403 或偶合数字不得据此升级。
 - 初审模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。终审在两种模式下都只允许 `finalDecision=keep|replace`，兼容旧模型的存疑输出按下文「终审二元定案」收敛。
 
 ---
@@ -377,7 +378,8 @@
 - `take` 原子取行并占用配额，返回不可变的请求句柄，内部固定实际预设条目、并发通道、熔断记录与发出时间。调用方不直接读取通道实例或池内 Map。
 - 成功 `feedback` 先于领域结果处理执行，成功后领域处理抛错时仍允许该请求再反馈失败；普通失败先登记领域异常，再反馈通道；限流反馈先决定是否回队。`release` 在 `finally` 中归还计数且只能生效一次，成功统计仍按是否登记 `stageErrors` 决定，不改成 HTTP 成功率口径。
 - 热移除后，请求保持原通道归属；同 ID 加回创建新通道。旧响应不会改变新通道的配额、完成计数或熔断窗口，已移除通道的熔断不进入当前阶段汇总。旧 429 仍按原规则反馈并将待办放回当前队头，下一次派发重新取得当前配置，不继承旧退避时间或样本。
-- 阶段正在处理的请求总数包含已移除通道中尚未完成的请求；预设列表及配额只投影当前集合，两者不能互相替代。`snapshot` 的内部待办行号、起步配额和预设列表由调用方投影，HTTP 字段保持原形状。
+- 阶段正在处理的请求总数包含已移除通道中尚未完成的请求；预设列表及配额只投影当前集合，两者不能互相替代。`snapshot` 的内部待办行号、起步配额和预设列表由调用方投影，现有 HTTP 字段保持原形状。
+- 等待状态由派发实例投影为 `waitReason`（空串、`rate_limit` 或 `cooldown`）与 `retryAt`（下一次尝试的 epoch 毫秒；无等待为 0），预设分别报告。阶段只在有待办且全部未熔断通道均被退避/冷却阻挡时汇总，取最早可重试通道的原因与时间；部分通道等待不代表整个阶段暂停。到期、恢复、移除、停止与收尾必须撤销失效读数；读取等待状态不重设退避期限或启动请求。
 - `updatePresets` 保留已有 ID 的连接及上限，只增删预设，预设全部移除时改用阶段配置；`drainPending` 仅取出待办，异常结果仍由调度生成。`cancelWakeups` 与 `dispose` 覆盖当前及已移除的通道；已移除的通道最后一条请求 `release` 时清理其定时器，结束后晚到收尾仍可归还句柄。
 
 验证：`node --test scripts/stage-dispatch.test.js scripts/ai-smart-concurrency.test.js scripts/ai-preset-pool.test.js scripts/circuit-breaker.test.js scripts/concurrency-controller.test.js`。包含真实 HTTP 的同 ID 移除重加交错、迟到成功/失败/429，以及可控时钟下对已移除通道的清理。

@@ -193,6 +193,17 @@
       return row.configuredConcurrency > 0 && row.inFlight >= row.configuredConcurrency;
     }
 
+    function pipelineWaitState(stage, pipeline, running = currentAiRunning) {
+      if (!running || latestAiStopRequested || pendingStopAll || pendingStageStops.has(stage)
+        || latestStageControls?.[stage]?.stopRequested) return null;
+      const label = pipeline?.waitReason === "rate_limit" ? "限流退避"
+        : pipeline?.waitReason === "cooldown" ? "冷却中" : "";
+      if (!label) return null;
+      const retryAt = Number(pipeline.retryAt);
+      const seconds = Number.isFinite(retryAt) ? Math.max(0, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
+      return { label, text: label + " · " + (seconds > 0 ? seconds + " 秒后尝试重新派发" : "等待重新派发") };
+    }
+
     function renderStagePresetSelection(stage) {
       const controls = stagePresetControls[stage];
       const tags = aiIds[controls.tags];
@@ -222,6 +233,7 @@
           quota: Math.max(0, Number(runtime?.quota) || 0),
           pending: Math.max(0, Number(runtime?.pending) || 0),
           breakerTripped: runtime?.breakerTripped === true || runtime?.breakerState === "tripped",
+          wait: runtime ? pipelineWaitState(stage, runtime) : null,
         };
         row.topped = stagePresetTopped(row);
         return row;
@@ -264,13 +276,16 @@
           runtimeText = `运行 ${row.inFlight} · 当前配额 ${row.quota} · 配置上限 ${row.configuredConcurrency}`
             + (row.topped ? " · 触顶" : "")
             + (row.breakerTripped ? " · 熔断" : "")
-            + (row.pending > 0 ? ` · 排队 ${row.pending}` : "");
+            + (row.pending > 0 ? ` · 排队 ${row.pending}` : "")
+            + (row.wait ? " · " + row.wait.text : "");
           const activeRows = Array.isArray(row.runtime.activeRows) ? row.runtime.activeRows : [];
           setLiveHoverTitle(runtimeLabel, `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
             + (row.topped ? "（已触顶）" : "")
             + (row.breakerTripped ? "（该预设已熔断，后续行改派给其它预设）" : "")
+            + (row.wait ? "；" + row.wait.text : "")
             + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : ""),
-          { reset: !currentAiRunning || Boolean(latestStageControls?.[stage]?.stopRequested && !row.inFlight) });
+          { reset: !currentAiRunning || latestAiStopRequested || pendingStopAll || pendingStageStops.has(stage)
+            || Boolean(latestStageControls?.[stage]?.stopRequested) });
         } else {
           // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
           setLiveHoverTitle(runtimeLabel, `额定并发上限 ${row.configuredConcurrency}`, { reset: true });
@@ -308,13 +323,14 @@
           valueEl.textContent = ids.length === 1 ? "适用：" + rows[0].label : "适用 (" + rows.length + ")";
           const presetList = rows.map((row, index) => {
             const stateText = row.runtime
-              ? "（运行 " + row.inFlight + "，当前配额 " + row.quota + "，配置上限 " + row.configuredConcurrency + (row.topped ? " · 已触顶" : "") + (row.breakerTripped ? " · 已熔断" : "") + "）"
+              ? "（运行 " + row.inFlight + "，当前配额 " + row.quota + "，配置上限 " + row.configuredConcurrency + (row.topped ? " · 已触顶" : "") + (row.breakerTripped ? " · 已熔断" : "") + (row.wait ? " · " + row.wait.text : "") + "）"
               : "（配置上限 " + row.configuredConcurrency + "）";
             return (index + 1) + ". " + row.label + stateText;
           }).join("\n");
           setLiveHoverTitle(trigger, "当前阶段适用预设：\n" + presetList
             + (stageToppedCount > 0 ? "\n已触顶 " + stageToppedCount + "/" + rows.length + " 个预设" + (stageToppedCount >= rows.length ? "（全部触顶）" : "") + "。" : ""),
-          { reset: !currentAiRunning || stagePipelines.length === 0 });
+          { reset: !currentAiRunning || stagePipelines.length === 0 || latestAiStopRequested
+            || pendingStopAll || pendingStageStops.has(stage) || Boolean(latestStageControls?.[stage]?.stopRequested) });
         }
       }
     }
@@ -4253,7 +4269,7 @@
 
     // 阶段运行区分别标出正在处理的行数、队列、动态配额和配置上限。
     // 触顶仍以服务端通道反馈为准；旧服务端按正在处理的请求数与配置上限折算。
-    function stageConcurrencyText(pipeline, activeInfoEl = null) {
+    function stageConcurrencyText(pipeline, activeInfoEl = null, wait = null, resetHover = false) {
       const inFlight = Math.max(0, Number(pipeline?.inFlight) || 0);
       const allowed = Math.max(0, Number(pipeline?.concurrency) || 0);
       const cap = Math.max(0, Number(pipeline?.concurrencyMax) || 0);
@@ -4276,9 +4292,11 @@
           : (allTopped ? "正在处理的请求数已达预设并发上限（触顶）。" : "");
         setLiveHoverTitle(activeInfoEl, "正在处理 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
           + "；队列待派发 " + pending + " 行。" + toppedDetail
-          + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。");
+          + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。"
+          + (wait ? "\n" + wait.text : ""), { reset: resetHover });
       }
-      return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText;
+      return "运行 " + inFlight + " 行 · 排队 " + pending + " 行 · 当前配额 " + allowed + (cap ? " · 配置上限 " + cap : "") + toppedText
+        + (wait ? " · " + wait.text : "");
     }
 
     function renderStageProgress(stageKey, done, total, { enabled = true, label = "", errors = 0, activeRows = [], resetHover = false } = {}) {
@@ -4510,6 +4528,9 @@
       const p1 = stagePipelines?.stage1 || { inFlight: 0, pending: 0, activeRows: [] };
       const p2 = stagePipelines?.stage2 || { inFlight: 0, pending: 0, activeRows: [] };
       const p3 = stagePipelines?.stage3 || { inFlight: 0, pending: 0, activeRows: [] };
+      const waitStates = Object.fromEntries([["stage1", p1], ["stage2", p2], ["stage3", p3]].map(([stage, pipeline]) => [
+        stage, Number(pipeline.pending) > 0 ? pipelineWaitState(stage, pipeline, aiRunning) : null,
+      ]));
       const activeStages = getStageActiveStates(aiRunning, stagePipelines);
       for (const stage of ["stage1", "stage2", "stage3"]) renderStagePresetSelection(stage);
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
@@ -4531,7 +4552,8 @@
             pill1.textContent = "处理中";
           } else {
             pill1.dataset.state = "queued";
-            pill1.textContent = "排队中";
+            pill1.textContent = waitStates.stage1?.label || "排队中";
+            pillTitle = waitStates.stage1?.text || "";
           }
         } else if (s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0 || aiRunning)) {
           pill1.dataset.state = "queued";
@@ -4570,7 +4592,8 @@
             pill2.textContent = "处理中";
           } else {
             pill2.dataset.state = "queued";
-            pill2.textContent = "排队中";
+            pill2.textContent = waitStates.stage2?.label || "排队中";
+            pillTitle = waitStates.stage2?.text || "";
           }
         } else if (s2Errors > 0) {
           pill2.dataset.state = "queued";
@@ -4602,7 +4625,8 @@
             pill3.textContent = "处理中";
           } else {
             pill3.dataset.state = "queued";
-            pill3.textContent = "排队中";
+            pill3.textContent = waitStates.stage3?.label || "排队中";
+            pillTitle = waitStates.stage3?.text || "";
           }
         } else if (s3Errors > 0) {
           pill3.dataset.state = "queued";
@@ -4624,7 +4648,9 @@
         const hasRuntime = aiRunning && (pipeline.inFlight > 0 || pipeline.pending > 0);
         info.hidden = !hasRuntime && !(number === 1 && s1Unreviewed > 0 && (s1Total > 0 || s1Errors > 0));
         info.textContent = hasRuntime
-          ? (stageConcurrencyText(pipeline, info) || "运行 " + (Number(pipeline.inFlight) || 0) + " 行 · 排队 " + (Number(pipeline.pending) || 0) + " 行")
+          ? (stageConcurrencyText(pipeline, info, waitStates["stage" + number], latestAiStopRequested || pendingStopAll
+            || pendingStageStops.has("stage" + number) || Boolean(latestStageControls?.["stage" + number]?.stopRequested))
+            || "运行 " + (Number(pipeline.inFlight) || 0) + " 行 · 排队 " + (Number(pipeline.pending) || 0) + " 行")
           : (info.hidden ? "" : "未审 " + s1Unreviewed + " 行");
         if (!hasRuntime) { setLiveHoverTitle(info, ""); info.removeAttribute("title"); }
       }
