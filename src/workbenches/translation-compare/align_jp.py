@@ -16,6 +16,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from accelerator_detect import (  # noqa: E402
     TORCHVISION_UNUSABLE,
+    choose_torch_device,
     expected_backends,
     torch_backend,
     torchvision_probe,
@@ -103,13 +104,23 @@ def report_progress(percent: float, label: str, current: int = 0, total: int = 0
     print(f"{PROGRESS_PREFIX}{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}", flush=True)
 
 
-def select_device() -> str:
+def select_device() -> tuple[str, dict | None]:
     print(f"torch: {torch.__version__}")
     print(f"torch.version.cuda: {torch.version.cuda}")
     print(f"torch.version.hip: {getattr(torch.version, 'hip', None)}")
 
-    if torch.cuda.is_available():
-        return "cuda"
+    try:
+        device, info = choose_torch_device()
+    except RuntimeError as exc:
+        if os.environ.get("TRANS_COMPARATOR_ALLOW_CPU") == "1":
+            print(f"warning: {exc}", file=sys.stderr)
+            print("warning: falling back to CPU because TRANS_COMPARATOR_ALLOW_CPU=1", file=sys.stderr)
+            return "cpu", None
+        raise
+
+    if info is not None:
+        torch.cuda.set_device(info["index"])
+        return device, info
 
     expected = expected_backends()
     if expected:
@@ -125,7 +136,7 @@ def select_device() -> str:
                 "or set TRANS_COMPARATOR_ALLOW_CPU=1 to run on CPU intentionally."
             )
 
-    return "cpu"
+    return "cpu", None
 
 
 def trimmed(text: str) -> str:
@@ -312,10 +323,10 @@ def main() -> None:
     pivot = data[pivot_lang]
 
     report_progress(10, "检测计算设备")
-    device = select_device()
+    device, device_info = select_device()
     print(f"device: {device}")
-    if device == "cuda":
-        print(f"gpu: {torch.cuda.get_device_name(0)}")
+    if device_info is not None:
+        print(f"gpu: {device_info['name']} ({device_info['arch']})")
 
     report_progress(12, "加载语义模型")
     # ROCm Windows wheel 的 fused attention（sdpa/AOTriton 后端）在部分 GPU（如 gfx1201）上
@@ -348,7 +359,8 @@ def main() -> None:
         "torchCudaVersion": torch.version.cuda,
         "torchHipVersion": getattr(torch.version, "hip", None),
         "acceleratorBackend": torch_backend(),
-        "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
+        "gpu": device_info["name"] if device_info is not None else None,
+        "gpuArch": device_info["arch"] if device_info is not None else None,
         "searchWindow": SEARCH_WINDOW,
         "counts": {"jp": len(jp), pivot_lang: len(pivot)},
         "groups": groups,

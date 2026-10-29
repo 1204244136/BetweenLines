@@ -6,6 +6,9 @@ import torch
 from accelerator_detect import (
     TORCHVISION_ABSENT,
     TORCHVISION_UNUSABLE,
+    accelerator_devices,
+    choose_torch_device,
+    device_support_detail,
     expected_backends,
     torch_backend,
     torchvision_probe,
@@ -13,16 +16,6 @@ from accelerator_detect import (
 
 
 ALLOW_CPU = os.environ.get("TRANS_COMPARATOR_ALLOW_CPU") == "1"
-
-
-def device_name() -> str | None:
-    if not torch.cuda.is_available():
-        return None
-
-    try:
-        return torch.cuda.get_device_name(0)
-    except Exception:
-        return None
 
 
 def torchvision_repair_hint(backend: str) -> str:
@@ -73,11 +66,24 @@ def report_torchvision(backend: str) -> None:
     )
 
 
+def report_devices() -> None:
+    """逐块列出 PyTorch 设备；多 GPU 时设备 0 不一定是能跑 kernel 的独显。"""
+    devices = accelerator_devices()
+    if not devices:
+        return
+
+    print(f"torch devices: {len(devices)}")
+    for device in devices:
+        print(
+            f"device cuda:{device['index']}: {device['name']} "
+            f"({device['arch']}, {device['memoryMiB']} MiB) - {device_support_detail(device)}"
+        )
+
+
 def main() -> int:
     backend = torch_backend()
     expected = expected_backends()
     accelerator_available = torch.cuda.is_available()
-    gpu_name = device_name()
 
     print(f"torch: {torch.__version__}")
     print(f"torch.version.cuda: {torch.version.cuda}")
@@ -86,11 +92,23 @@ def main() -> int:
     print(f"torch accelerator available: {accelerator_available}")
     print(f"detected accelerator backends: {', '.join(expected) if expected else 'none'}")
     report_torchvision(backend)
+    report_devices()
 
     if accelerator_available:
+        try:
+            device, info = choose_torch_device()
+        except RuntimeError as exc:
+            if ALLOW_CPU:
+                print(f"warning: {exc}", file=sys.stderr)
+                print("accelerator backend: cpu (explicitly allowed by TRANS_COMPARATOR_ALLOW_CPU=1)")
+                return 0
+            print(str(exc), file=sys.stderr)
+            return 1
+
         print(f"accelerator backend: {backend}")
-        if gpu_name:
-            print(f"gpu: {gpu_name}")
+        print(f"selected device: {device}")
+        if info is not None:
+            print(f"gpu: {info['name']}")
         return 0
 
     if expected and not ALLOW_CPU:

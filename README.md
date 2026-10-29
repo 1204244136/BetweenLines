@@ -79,6 +79,15 @@ $env:TRANS_COMPARATOR_ALLOW_CPU = "1"
 npm run align:jp
 ```
 
+多 GPU 机器默认选择能执行 kernel、计算单元更多的设备（通常是独显），不会默认使用 `cuda:0`。需要固定设备索引时：
+
+```powershell
+$env:TRANS_COMPARATOR_DEVICE = "1"
+npm run align:jp
+```
+
+`npm run check:accelerator` 会逐块列出 `device cuda:N` 与 `selected device`；指定的设备不可用时会直接报错，不会进入对齐。
+
 在浏览器打开终端显示的地址（通常是 `http://127.0.0.1:4317/`），为每个角色登记本机文件或解压目录，保存选择后点击“生成”。单个文件支持 EPUB、TXT、DOCX 等格式；解压目录必须是单本书的根目录，并包含 `META-INF/container.xml`。控制台会校验文件类型与 EPUB 结构；系统选择窗口不可用时可粘贴本机路径。双语模式中 `A` 是原文、`B` 是非原文；三语模式中 `A` 是原文、`B` 和 `C` 是两份同级非原文。
 
 每个导入入口（原文 / 主文本 / 参考文本）各自记住自己的默认目录：再次点击同一张卡片时，系统选择窗口直接停在这个入口上次用的位置，三个入口互不干扰（首次使用仍需各自导航一次）；粘贴本机路径登记的入口同样计入。

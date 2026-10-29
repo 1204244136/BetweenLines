@@ -60,6 +60,14 @@
 - **处置**：torch / torchvision / torchaudio 必须来自同一次安装、同一来源；换 torch 后端时连 torchvision 一起换。ROCm 侧对应 TheRock 多架构索引 `https://rocm.nightlies.amd.com/whl-multi-arch/`，torchvision 版本需与 torch 对应，GPU 算子还要 `amd-torchvision-device-<gfx>` 内核包（只装基础轮子时 CPU 算子正常、GPU 算子报 `hipErrorInvalidImage`）。设备内核包的 METADATA 把 `rocm-sdk-device-<gfx>` 锁到同日 nightly，与本机发布版并存时 `pip check` 会报一条版本不一致，属预期，按同一条 ROCm 线工作即可。对齐流程本身不需要 torchvision，`align_jp.py` 会把它标记为缺失后继续；确认不再需要时可 `pip uninstall torchvision`。
 - **回归**：`npm run check:accelerator` 应打印 `torchvision: <版本>`；出现 `installed but unusable` 即复发。
 
+### 多块 AMD GPU：核显排在设备 0，对齐以 0xC0000005 崩溃
+- **现象**：`npm run align:jp` 通过环境检查后启动，打印 `gpu: AMD Radeon(TM) Graphics`（`gfx1036`）后输出 `Exception Code: 0xC0000005`，栈顶落在 `_rocm_sdk_core\bin\amdhip64_7.dll` 的 `hipLaunchKernel`，进程退出码 `3221225477`；Python 没有 traceback。`check:accelerator` 仍显示 `torch accelerator available: True`。
+- **根因**：PyTorch/HIP 按枚举顺序编号；核显与独显同时可见时核显可能占 `cuda:0`。本机 `amd-torch-device-<gfx>` / `rocm-sdk-device-<gfx>` 只覆盖独显架构（如 `gfx1201`），对没有设备内核包的架构 launch kernel 会直接访问违例，而不是抛 Python 异常。`torch.cuda.is_available()` 只说明后端可用，不能证明设备 0 有可执行 kernel；历史 `jp-align.json` 的 `gpu` 字段可对比枚举顺序是否变化。
+- **证据入口**：`.venv\Scripts\python.exe -c "import torch; print([(i, torch.cuda.get_device_name(i), torch.cuda.get_device_properties(i).gcnArchName) for i in range(torch.cuda.device_count())])"` 列出设备顺序与架构；`npm run check:accelerator` 的 `device cuda:N` 行标出每块设备的架构与不可用原因，末尾 `selected device:` 是实际选择。
+- **当前实现**：`scripts/accelerator_detect.py` 按已安装设备内核包（ROCm）或编译架构挑选可执行设备；`align_jp.py` 使用选中的索引，并在 `jp-align.json` 记录 `device` / `gpu` / `gpuArch`。CUDA 不按 `sm_XX` 预先拒绝，因为 PTX 可向前兼容。可用 `TRANS_COMPARATOR_DEVICE=1`（或 `cuda:1`）指定设备；指定不可用设备时在启动前报错，不会崩溃。
+- **处置**：默认让脚本自动选择独显；需要固定设备时设 `$env:TRANS_COMPARATOR_DEVICE = "1"`。所有设备都缺少内核包时，安装对应 `amd-torch-device-<gfx>` / `rocm-sdk-device-<gfx>`，或按 README 显式允许 CPU。
+- **回归**：`npm run check:accelerator` 应列出设备并打印 `selected device: cuda:<N>`；`npm run align:jp` 不再以 `0xC0000005` 退出，新 `jp-align.json` 的 `gpuArch` 与选中设备一致。旧 `jp-align.json` 没有 `gpuArch` 仍可读取，不需要重建。
+
 ---
 
 ## 模式裁剪与第三列泄露

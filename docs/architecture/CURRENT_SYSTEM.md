@@ -18,7 +18,7 @@
 | --- | --- |
 | 转换与正文提取 | `src/ingest/text-utils.js` 组织 TXT 读取、Pandoc 转换、正文过滤与必要的 OpenCC 归一化；`pandoc-utils.js` 封装转换，`epub-utils.js` 保留内置 EPUB reader 作为诊断与 fallback |
 | 导出段落 | `scripts/export-paragraphs.js` 转发 ingest 输入逻辑，写入当前构建目录的 `paragraphs.json` 与输入选择快照；`npm run align:jp` 自动包含这一步 |
-| 跨语言对齐 | 翻译工作台 `align_jp.py` 使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` 生成 `jp-align.json`；运行后端由环境检查与 PyTorch 可用设备决定 |
+| 跨语言对齐 | 翻译工作台 `align_jp.py` 使用 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` 生成 `jp-align.json`；运行设备按能否执行 kernel 与计算单元选择，见排查手册 |
 | 翻译构建 | `build-compare.js` 读取段落与跨语言分组，三语时另对齐两份非原文，经行组装与渲染输出 HTML、CSV、JSON |
 | 发布与切换 | 运行管线在 staging 构建，项目存储发布快照并切换活动指针；重新应用布局走新的快照发布 |
 | 说话人构建 | `speaker-selection.js` 接收单语或双语输入，`prealign.js` 做双语预对齐，`attention.js` 压缩证据，`build-workbench.js` 生成独立结果 |
