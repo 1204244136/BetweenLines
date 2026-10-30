@@ -65,22 +65,25 @@ test("说话习惯表支持通用列名并保留原格式语义", () => {
   assert.deepEqual(second.expectedWritings, []);
 });
 
-test("中文状态记号与短横线等价：不处理即明确不处理，未查到与不适用是空值", () => {
+test("方括号状态记号与短横线等价：不处理即明确不处理，未查到与不适用是空值", () => {
   const file = path.join(tempDir, "chinese-markers.csv");
   fs.writeFileSync(file, [
     "角色,口癖,类型,x版,网翻,台版（转简中）,备注",
-    "甲野一郎,オレ,第一人称,不处理,未查到,不适用,方言条目按普通口语译出",
-    "乙川次郎,ですの,谓语形式,本大爷,未查到,未查到,",
+    "甲野一郎,オレ,第一人称,【不处理】,【未查到】,【不适用】,方言条目按普通口语译出",
+    "乙川次郎,ですの,谓语形式,本大爷,【未查到】,【未查到】,",
+    "丙山三郎,じゃん,谓语形式,不处理,未查到,未查到,旧写法继续识别",
   ].join("\n"), "utf8");
   const tables = loadSpeechTables([file]);
   assert.deepEqual(tables.errors, []);
-  const [noHandle, ruled] = tables.entries;
+  const [noHandle, ruled, legacy] = tables.entries;
   assert.equal(noHandle.noSpecialHandling, true);
   assert.deepEqual(noHandle.versions, { x: "", net: "", tw: "" });
   assert.deepEqual(noHandle.expectedWritings, []);
   assert.equal(ruled.noSpecialHandling, false);
   assert.deepEqual(ruled.versions, { x: "本大爷", net: "", tw: "" });
   assert.deepEqual(ruled.expectedWritings, ["本大爷"]);
+  assert.equal(legacy.noSpecialHandling, true);
+  assert.deepEqual(legacy.versions, { x: "", net: "", tw: "" });
 });
 
 test("旧表头只用于读取兼容，角色规则与模型线索统一使用通用版本名称", () => {
