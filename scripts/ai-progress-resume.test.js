@@ -89,8 +89,6 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
   const storedBeforeStart = ui.storage.getItem(currentKey);
 
   await ui.element("stage1Start").dispatch("click");
-  assert.equal(ui.element("aiConfirmDialog").open, true);
-  await ui.element("aiConfirmKeep").dispatch("click");
   await ui.settle();
   const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
   assert.ok(post);
@@ -119,7 +117,7 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
 test("初审失败重试：请求处理中不计为完成，取得可用结论才增加全页进度", async () => {
   const ui = fixture();
   await ui.settle();
-  await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');
+  await ui.element("stage1Start").dispatch("click");
   await ui.settle();
   assertProgress(ui, 2, 40);
   assert.equal(ui.element("metricStage1Errors").textContent, 1);
@@ -151,7 +149,7 @@ test("全页初审范围与服务端一致：空原文和双列空行也保持�
   const ui = fixture({ pageRows });
   await ui.settle();
   assertProgress(ui, 2, 40);
-  await ui.run('startAiProofread({ continueOnly: true, stage: "stage1" })');
+  await ui.element("stage1Start").dispatch("click");
   await ui.settle();
   assertProgress(ui, 2, 40);
   const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
@@ -163,7 +161,7 @@ for (const stage of ["stage2", "stage3"]) {
     const ui = fixture({ stage });
     await ui.settle();
     assertProgress(ui, 2, 40);
-    await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
+    await ui.run(`startAiProofread({ stage: ${JSON.stringify(stage)} })`);
     await ui.settle();
     ui.run(`renderAiStatus(${JSON.stringify(status(true, {
       stageMode: stage,

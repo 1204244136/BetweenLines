@@ -986,9 +986,9 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
       await ui.element("stage2PendingItem").dispatch("click");
       assert.equal(ui.run("filteredRows.length"), 20);
       await ui.element(stage === "all" ? "aiStartAll" : stage + "Start").dispatch("click");
-      await ui.element("aiConfirmKeep").dispatch("click");
       const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
       assert.ok(post);
+      assert.equal(post.body.continueOnly, true);
       assert.deepEqual(post.body.completedIndexes.sort((a, b) => a - b), [21, 22]);
       const requestStart = requests.length;
       await startProofread(post.body);

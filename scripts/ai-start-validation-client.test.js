@@ -20,10 +20,9 @@ for (const model of ["", "   ", "custom"]) {
     ui.run(`aiIds.model.value = ${JSON.stringify(model)}; notes["1"] = { note: ${JSON.stringify(initial)}, aiDone: true }; saveAiConfig();`);
     assert.equal(ui.element("stage1Start").disabled, true);
     assert.equal(ui.element("aiStartAll").disabled, true);
-    for (const stage of ["stage1", "all"]) await ui.run(`promptAndStartAi("${stage}")`);
+    for (const stage of ["stage1", "all"]) await ui.run(`startAiStage("${stage}")`);
     await ui.settle();
     assert.equal(starts(ui).length, 0);
-    assert.equal(ui.element("aiConfirmDialog").open, false);
     assert.equal(ui.run('notes["1"].note'), initial);
     assert.match(toastMessages(ui).join("|"), /阶段一.*模型/);
   });
@@ -38,7 +37,7 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
     ui.run(`stagePresetSelections.${stage} = ["good", "empty"]; updateStagePresetDependencies();`);
     assert.equal(ui.element(`${stage}Start`).disabled, true);
     assert.equal(ui.element("aiStartAll").disabled, true);
-    for (const target of [stage, "all"]) await ui.run(`promptAndStartAi("${target}")`);
+    for (const target of [stage, "all"]) await ui.run(`startAiStage("${target}")`);
     await ui.settle();
     assert.equal(starts(ui).length, 0);
     assert.match(toastMessages(ui).join("|"), /未配置.*模型/);
@@ -75,26 +74,14 @@ for (const stage of ["stage2", "stage3"]) {
   });
 }
 
-test("重跑弹窗打开后模型失效，确认清空仍应保留已有备注", async () => {
-  const ui = await workbench();
-  ui.run(`notes["1"] = { note: ${JSON.stringify(initial)}, aiDone: true };`);
-  await ui.element("stage1Start").dispatch("click");
-  assert.equal(ui.element("aiConfirmDialog").open, true);
-  ui.run('aiIds.model.value = ""; saveAiConfig();');
-  await ui.element("aiConfirmClear").dispatch("click");
-  await ui.settle();
-  assert.equal(starts(ui).length, 0);
-  assert.equal(ui.run('notes["1"].note'), initial);
-});
-
 for (const stage of ["stage1", "stage2", "stage3"]) {
   test(`${stage} 失效预设不得回落，移除后立即恢复按钮`, async () => {
     const ui = await workbench();
     ui.run(`stagePresetSelections.${stage} = ["deleted"]; updateStagePresetDependencies();`);
     assert.equal(ui.element(`${stage}Start`).disabled, true);
     assert.equal(ui.element("aiStartAll").disabled, true);
-    await ui.run(`promptAndStartAi("${stage}")`);
-    await ui.run('promptAndStartAi("all")');
+    await ui.run(`startAiStage("${stage}")`);
+    await ui.run('startAiStage("all")');
     assert.equal(starts(ui).length, 0);
     assert.match(toastMessages(ui).join("|"), /预设已失效/);
     ui.run(`stagePresetSelections.${stage} = []; updateStagePresetDependencies();`);

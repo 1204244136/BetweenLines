@@ -678,7 +678,7 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("stage3StatusPill").textContent, "待处理");
 });
 
-test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不得塌回「已仲裁数」", async () => {
+test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌回「已仲裁数」", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-arb", results: [] } },
@@ -726,13 +726,11 @@ test("复审分歧与启动弹窗同源：仲裁队列跑空后「分歧」不�
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
   assert.equal(ui.element("metricStage3Pending").textContent, 3, "待仲裁 = 分歧 4 − 已仲裁 1");
 
-  // 「启动 AI 校对」弹窗里的待仲裁行数必须与卡片同源
   await ui.element("stage3Start").dispatch("click");
-  assert.equal(ui.element("aiConfirmDialog").open, true, "已有仲裁方案且仍有分歧行时必须弹确认窗");
-  assert.match(
-    ui.element("aiConfirmMessage").innerHTML,
-    /<strong>1<\/strong> 条终审仲裁方案，<strong>3<\/strong> 条分歧行待仲裁/
-  );
+  const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
+  assert.ok(post, "仲裁开始直接继续卡片中的待仲裁行");
+  assert.equal(post.body.continueOnly, true);
+  assert.deepEqual(post.body.completedIndexes, [4], "仅跳过已有仲裁结论的行，保留三条待仲裁行");
 });
 
 test("空闲且全为零的 AI 状态不覆盖从备注中恢复的阶段指标", () => {

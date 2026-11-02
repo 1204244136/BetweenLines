@@ -107,8 +107,7 @@ test("阶段可并行启停：初审运行中直接消费已有候选，停止�
   await ui.element("stage1Start").dispatch("click");
   seedNotes(ui, { 1: initial, 2: dispute });
   await ui.element("stage2Start").dispatch("click");
-  assert.equal(ui.element("aiConfirmDialog").open, true, "已有复审记录时仍允许选择继续");
-  await ui.element("aiConfirmKeep").dispatch("click");
+  assert.equal(ui.run('document.getElementById("aiConfirmDialog")'), null, "已有复审记录也直接继续");
   await ui.settle();
   assertButtons(ui, ["stage1", "stage2"]);
   await ui.element("stage3Start").dispatch("click");
@@ -176,7 +175,7 @@ for (const stage of ["stage2", "stage3"]) {
     await ui.settle();
     await ui.element(`${stage}Start`).dispatch("click");
     assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/start").length, 0);
-    assert.equal(ui.element("aiConfirmDialog").open, false);
+    assert.equal(ui.run('document.getElementById("aiConfirmDialog")'), null);
     assertButtons(ui, ["stage1"]);
     assert.match(toastMessages(ui).join("|"), /暂无|没有|尚无/);
     assert.doesNotMatch(toastMessages(ui).join("|"), /已排队|自动接力/);
@@ -190,26 +189,20 @@ for (const stage of ["stage2", "stage3"]) {
   });
 }
 
-test("其它阶段活动时拒绝清空重跑：保留备注，仍可选择继续已有候选", async () => {
+test("其它阶段活动时直接继续已有候选并保留备注", async () => {
   const { ui } = stageControlWorkbench({ active: ["stage1"] });
   await ui.settle();
   seedNotes(ui, { 1: arbitrated, 2: initial });
   const before = ui.run('notes["1"].note');
   await ui.element("stage2Start").dispatch("click");
-  assert.equal(ui.element("aiConfirmDialog").open, true);
-  await ui.element("aiConfirmClear").dispatch("click");
   await ui.settle();
+  assert.equal(ui.run('document.getElementById("aiConfirmDialog")'), null);
   assert.equal(ui.run('notes["1"].note'), before);
-  assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/start").length, 0);
-  assert.match(toastMessages(ui).join("|"), /停止|运行/);
-  assertButtons(ui, ["stage1"]);
-  // 如果拒绝清空后弹窗保留，关闭再重新选择，避免依赖弹窗的关闭策略。
-  if (ui.element("aiConfirmDialog").open) await ui.element("aiConfirmCancel").dispatch("click");
-  await ui.element("stage2Start").dispatch("click");
-  await ui.element("aiConfirmKeep").dispatch("click");
-  await ui.settle();
-  assert.equal(ui.posts.find((post) => post.url === "/api/ai-proofread/start").body.stage, "stage2");
-  assert.equal(ui.run('notes["1"].note'), before);
+  const starts = ui.posts.filter((post) => post.url === "/api/ai-proofread/start");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].body.stage, "stage2");
+  assert.equal(starts[0].body.continueOnly, true);
+  assert.equal(ui.posts.some((post) => /\/clear$/.test(post.url)), false);
   assertButtons(ui, ["stage1", "stage2"]);
 });
 

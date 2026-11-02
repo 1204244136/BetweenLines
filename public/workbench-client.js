@@ -718,13 +718,6 @@
       confirm: document.getElementById("prefilterConfirm"),
       stop: document.getElementById("prefilterStop"),
     };
-    const aiConfirmIds = {
-      dialog: document.getElementById("aiConfirmDialog"),
-      message: document.getElementById("aiConfirmMessage"),
-      cancel: document.getElementById("aiConfirmCancel"),
-      keep: document.getElementById("aiConfirmKeep"),
-      clear: document.getElementById("aiConfirmClear"),
-    };
     // 备注空间与写回共用跨工作台确认实现，不保留原生 confirm 回退。
     const { askConfirm } = createConfirmDialog({ showToast: (message, options) => showToast(message, options) });
     let writebackPending = false;
@@ -2502,7 +2495,7 @@
     }
 
     // 复审与初审产生立场或方案分歧的判据：阶段二卡片「分歧」、阶段三「待仲裁」、
-    // 「待终审仲裁」筛选与「启动 AI 校对」弹窗共用这一份，避免同一批行各处各说各话。
+    // 「待终审仲裁」筛选与 AI 启动条件共用这一份，避免同一批行各处各说各话。
     function isStage2DivergedNote(parsed, noteText = "") {
       return stageNoteState(noteText).diverged;
     }
@@ -5701,142 +5694,6 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) flushNotes();
     });
-    function hasUnconfirmedAiProofreadNote(item) {
-      if (!item || item.manualDone) return false;
-      const note = String(item.note || "").trim();
-      if (!note) return false;
-      if (automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note)) return true;
-      return splitAiNoteParts(note).some((part) => part.startsWith("[AI校对]"));
-    }
-
-    function countUnconfirmedAiProofreadNotes() {
-      let count = 0;
-      for (const [, item] of Object.entries(notes)) {
-        if (hasUnconfirmedAiProofreadNote(item)) count += 1;
-      }
-      return count;
-    }
-
-    function clearUnconfirmedStageNotes(targetStage = "stage1") {
-      if (targetStage === "stage1") {
-        return clearUnconfirmedAiProofreadNotes();
-      }
-      let clearedCount = 0;
-      const clearedIndexes = [];
-      for (const [id, item] of Object.entries(notes)) {
-        if (!item || item.manualDone) continue;
-        const fullNote = String(item.note || "");
-        const note = latestAiNotePart(fullNote).trim();
-        if (!note || !hasAutomatedDecisionNote(note)) continue;
-        const p = parseAutomatedNote(note);
-        if (!p) continue;
-        const state = stageNoteState(note);
-        const noteStart = fullNote.lastIndexOf(note);
-        const replaceCurrentNote = (replacement) => fullNote.slice(0, noteStart) + replacement + fullNote.slice(noteStart + note.length);
-
-        if (targetStage === "stage2") {
-          if (!p.stage2 && !state.errors.stage2 && !state.errors.stage3) continue;
-          // 清理 Stylist 复审及后续仲裁，保留初审改案
-          const lines = splitNoteFields(note).filter((line) => {
-            return line !== state.errors.stage2 && line !== state.errors.stage3 &&
-              !line.startsWith("Stylist复审") &&
-              !line.startsWith("复审改案：") &&
-              !line.startsWith("复审建议：") &&
-              !line.startsWith("Arbiter仲裁") &&
-              !line.startsWith("仲裁改案：") &&
-              !line.startsWith("仲裁建议：");
-          });
-          const revIdx = lines.findIndex((l) => l.startsWith("修改结果："));
-          if (p.stage1Revision) {
-            if (revIdx >= 0) {
-              lines[revIdx] = `修改结果：${p.stage1Revision}`;
-            } else {
-              lines.push(`修改结果：${p.stage1Revision}`);
-            }
-            item.revisionText = p.stage1Revision;
-          }
-          item.note = replaceCurrentNote(lines.join("\n"));
-          clearedIndexes.push(Number(id));
-          clearedCount += 1;
-        } else if (targetStage === "stage3") {
-          if (!p.stage3 && !state.errors.stage3) continue;
-          // 清理 Arbiter 仲裁，保留复审方案
-          const lines = splitNoteFields(note).filter((line) => {
-            return line !== state.errors.stage3 && !line.startsWith("Arbiter仲裁") &&
-              !line.startsWith("仲裁改案：") &&
-              !line.startsWith("仲裁建议：");
-          });
-          const revIdx = lines.findIndex((l) => l.startsWith("修改结果："));
-          const fallbackRev = p.stage2Revision || p.stage1Revision;
-          if (fallbackRev) {
-            if (revIdx >= 0) {
-              lines[revIdx] = `修改结果：${fallbackRev}`;
-            } else {
-              lines.push(`修改结果：${fallbackRev}`);
-            }
-            item.revisionText = fallbackRev;
-          }
-          item.note = replaceCurrentNote(lines.join("\n"));
-          clearedIndexes.push(Number(id));
-          clearedCount += 1;
-        }
-      }
-      if (clearedCount > 0) {
-        forgetPersistedAiResults(clearedIndexes);
-        saveNotes();
-        applyFilters({ reset: false });
-        updateStageMetricsDashboard();
-      }
-      return clearedCount;
-    }
-
-    function clearUnconfirmedAiProofreadNotes() {
-      let clearedCount = 0;
-      const clearedIndexes = [];
-      for (const [id, item] of Object.entries(notes)) {
-        if (!item || item.manualDone) continue;
-        const note = String(item.note || "").trim();
-        if (!note) continue;
-        const parts = splitAiNoteParts(note);
-        const isFullAiNote = parts.length === 1 && (automatedNoteMarker(note) === "[AI校对]" || isAiFailureNote(note));
-        if (isFullAiNote) {
-          item.note = "";
-          item.revisionText = "";
-          item.revisionTarget = "";
-          item.aiDone = false;
-          cleanAiFailureState(item);
-          pruneEmptyNote(id);
-          clearedIndexes.push(Number(id));
-          clearedCount += 1;
-        } else if (parts.some((part) => part.startsWith("[AI校对]"))) {
-          const remainingParts = parts.filter((part) => !part.startsWith("[AI校对]"));
-          item.note = remainingParts.join("\n\n").trim();
-          const remainingAutomated = parseAutomatedNote(item.note);
-          if (remainingAutomated?.revision) {
-            item.revisionText = remainingAutomated.revision;
-          } else {
-            item.revisionText = "";
-            item.revisionTarget = "";
-          }
-          item.aiDone = Boolean(hasAutomatedDecisionNote(item.note));
-          cleanAiFailureState(item);
-          pruneEmptyNote(id);
-          clearedIndexes.push(Number(id));
-          clearedCount += 1;
-        }
-      }
-      if (clearedCount > 0) {
-        forgetPersistedAiResults(clearedIndexes);
-        aiResultReception.discardCurrentRun();
-        aiActiveIds.clear();
-        updateRenderedAiActive();
-        saveNotes();
-        applyFilters({ reset: false });
-        updateDoneCount();
-      }
-      return clearedCount;
-    }
-
     function forgetPersistedAiResults(indexes) {
       return aiResultReception.forgetRows(indexes);
     }
@@ -5937,150 +5794,31 @@
     }
     setAllStageButtonsRunning(false);
 
-    let pendingStartStage = "stage1";
-
-    function canClearStageForRestart() {
-      if (!validateAiStart(pendingStartStage)) return false;
-      if (!currentAiRunning && pendingStageStarts.size === 0) return true;
-      showToast("仍有阶段正在运行，请先停止后再清空重跑；也可选择继续剩下的。", { tone: "watch", durationMs: 6000 });
-      return false;
-    }
-
-    async function promptAndStartAi(stage = "stage1") {
+    async function startAiStage(stage = "stage1") {
       const active = getStageActiveStates(currentAiRunning);
       if (pendingStopAll || latestAiStopRequested || pendingStageStops.has(stage) || active[stage]
         || (stage === "all" && (currentAiRunning || pendingStageStarts.size || pendingStageStops.size))) return;
       if (!validateAiStart(stage)) return;
-      pendingStartStage = stage;
 
-      if (stage === "stage2") {
-        const hasStage1Suggestions = Object.values(notes).some((item) => {
-          return getStage2RowStatus(item).isRelevant;
-        });
-        if (!hasStage1Suggestions) {
-          showToast("当前没有未人工确认的初审提改或存疑行，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
-          return;
-        }
-
-        let reviewedCount = 0;
-        let pendingCount = 0;
-        for (const [id, item] of Object.entries(notes)) {
-          const state = getStage2RowStatus(item);
-          if (state.isReviewed) reviewedCount += 1;
-          else if (state.isPending) pendingCount += 1;
-        }
-
-        if (reviewedCount > 0) {
-          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
-            if (aiConfirmIds.message) {
-              aiConfirmIds.message.innerHTML = `检测到当前已有 <strong>${reviewedCount}</strong> 条文学复审方案${pendingCount > 0 ? `，<strong>${pendingCount}</strong> 条初审建议待复审` : ""}。<br>请选择本次启动方式：`;
-            }
-            aiConfirmIds.dialog.showModal();
-            return;
-          }
-          if (confirm(`检测到已有 ${reviewedCount} 条文学复审方案${pendingCount > 0 ? `，${pendingCount} 条待复审` : ""}。\n\n点击「确定」：继续复审剩余待处理行（保留已有 ${reviewedCount} 条方案，推荐）\n点击「取消」：全部重新复审（清空已有复审方案重新执行）`)) {
-            await startAiProofread({ continueOnly: true, stage: "stage2" });
-          } else {
-            if (!canClearStageForRestart()) return;
-            const cleared = clearUnconfirmedStageNotes("stage2");
-            if (cleared > 0) {
-              showToast(`已清空 ${cleared} 条未人工确认的文学复审方案。`, { tone: "info", durationMs: 6000 });
-            }
-            await startAiProofread({ continueOnly: false, stage: "stage2" });
-          }
-          return;
-        }
-        await startAiProofread({ continueOnly: true, stage: "stage2" });
-        return;
-      } else if (stage === "stage3") {
-        let arbitratedCount = 0;
-        let pendingArbCount = 0;
-        for (const [id, item] of Object.entries(notes)) {
-          const s = getStage3RowStatus(item);
-          if (s.isArbitrated) arbitratedCount += 1;
-          else if (s.isPending) pendingArbCount += 1;
-        }
-
-        if (arbitratedCount === 0 && pendingArbCount === 0) {
-          showToast("当前没有需要终审仲裁的分歧行。", { tone: "info", durationMs: 5000 });
-          return;
-        }
-
-        if (arbitratedCount > 0) {
-          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
-            if (aiConfirmIds.message) {
-              const statusDesc = pendingArbCount > 0
-                ? `<strong>${arbitratedCount}</strong> 条终审仲裁方案${pendingArbCount > 0 ? `，<strong>${pendingArbCount}</strong> 条分歧行待仲裁` : ""}`
-                : `<strong>${arbitratedCount}</strong> 条终审仲裁方案（已全部完成仲裁）`;
-              aiConfirmIds.message.innerHTML = `检测到当前已有 ${statusDesc}。<br>请选择本次启动方式：`;
-            }
-            aiConfirmIds.dialog.showModal();
-            return;
-          }
-          const promptDesc = pendingArbCount > 0
-            ? `检测到已有 ${arbitratedCount} 条终审仲裁方案，${pendingArbCount} 条待仲裁。\n\n点击「确定」：继续仲裁剩余待处理分歧行（保留已有 ${arbitratedCount} 条方案，推荐）\n点击「取消」：全部重新仲裁（清空已有仲裁重新执行）`
-            : `检测到所有 ${arbitratedCount} 条分歧行均已完成终审仲裁。\n\n点击「确定」：保留已有仲裁方案\n点击「取消」：全部重新仲裁（清空未人工确认的仲裁重新执行）`;
-          if (confirm(promptDesc)) {
-            if (pendingArbCount === 0) {
-              showToast("所有分歧行均已完成终审仲裁；如需重跑请点击「全部重新仲裁」。", { tone: "info", durationMs: 5000 });
-              return;
-            }
-            await startAiProofread({ continueOnly: true, stage: "stage3" });
-          } else {
-            if (!canClearStageForRestart()) return;
-            const cleared = clearUnconfirmedStageNotes("stage3");
-            if (cleared > 0) {
-              showToast(`已清空 ${cleared} 条未人工确认的终审仲裁方案。`, { tone: "info", durationMs: 6000 });
-            }
-            await startAiProofread({ continueOnly: false, stage: "stage3" });
-          }
-          return;
-        }
-        await startAiProofread({ continueOnly: true, stage: "stage3" });
+      if (stage === "stage2" && !Object.values(notes).some((item) => getStage2RowStatus(item).isPending)) {
+        showToast("当前没有未人工确认的初审提改或存疑行待复审，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
         return;
       }
-
-      if (stage === "stage1" || stage === "all") {
-        // 一键开始才推进配置好的下游，单独初审只消费初审队列。
-        const plan = cascadeFromStage(stage);
-        const tailText = plan.toStylist
-          ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
-          : (plan.toArbiter ? "初审；仲裁处理已有分歧" : "");
-        const cascadeNote = tailText ? `\n\n本次会一路推进：${tailText}。` : "";
-        const unconfirmedCount = countUnconfirmedAiProofreadNotes();
-        if (unconfirmedCount > 0) {
-          if (aiConfirmIds.dialog && typeof aiConfirmIds.dialog.showModal === "function") {
-            if (aiConfirmIds.message) {
-              aiConfirmIds.message.innerHTML = `检测到当前有 <strong>${unconfirmedCount}</strong> 条未人工确认的 AI 校对信息。`
-                + (tailText ? `<br>本次会一路推进：<strong>${tailText}</strong>。` : "")
-                + "<br>请选择本次启动方式：";
-            }
-            aiConfirmIds.dialog.showModal();
-            return;
-          }
-          // 「继续剩下的」在级联时会续跑：已有初审结论、只差复审的行直接进复审队列，不重跑初审。
-          const resumeHint = plan.toStylist
-            ? "\n点击「取消」：继续剩下的（保留已有方案；已有初审结论、只差复审的行直接进复审，其余行继续校对）"
-            : "\n点击「取消」：继续剩下的（保留已有方案，仅校对未处理的空白行）";
-          if (confirm(`检测到之前有 ${unconfirmedCount} 条未人工确认的 AI 校对信息。\n\n点击「确定」：从未人工确认处开始（清空未确认的 AI 方案并重新校对）${resumeHint}${cascadeNote}`)) {
-            if (!canClearStageForRestart()) return;
-            const cleared = clearUnconfirmedAiProofreadNotes();
-            if (cleared > 0) {
-              showToast(`已清空 ${cleared} 条未人工确认的 AI 校对信息。`, { tone: "info", durationMs: 6000 });
-            }
-            await startAiProofread({ continueOnly: false, stage });
-          } else {
-            await startAiProofread({ continueOnly: true, stage });
-          }
+      if (stage === "stage3") {
+        const states = Object.values(notes).map(getStage3RowStatus);
+        if (!states.some((state) => state.isPending)) {
+          const message = states.some((state) => state.isArbitrated)
+            ? "所有分歧行均已完成终审仲裁。"
+            : "当前没有需要终审仲裁的分歧行。";
+          showToast(message, { tone: "info", durationMs: 5000 });
           return;
         }
-        await startAiProofread({ continueOnly: false, stage });
-      } else {
-        await startAiProofread({ continueOnly: false, stage });
       }
+
+      await startAiProofread({ stage });
     }
 
-    async function startAiProofread({ continueOnly = false, stage = "stage1" } = {}) {
+    async function startAiProofread({ stage = "stage1" } = {}) {
       if (!validateAiStart(stage)) return;
       const plan = cascadeFromStage(stage);
       const startingStages = stage === "all"
@@ -6095,7 +5833,7 @@
 
       const baseConfig = aiConfig();
       baseConfig.stage = stage;
-      baseConfig.continueOnly = Boolean(continueOnly);
+      baseConfig.continueOnly = true;
 
       const rowNotes = {};
       for (const [id, item] of Object.entries(notes)) {
@@ -6105,59 +5843,57 @@
       const forgetResultIndexes = aiResultReception.snapshot().forgottenIndexes;
       baseConfig.forgetResultIndexes = forgetResultIndexes;
 
-      if (continueOnly) {
-        // 跳过口径取决于本次是「从起点一路推进到尽头」还是「只跑这一段」：
-        // 级联时整行必须走完从起点往下的所有阶段才算处理过，单阶段时只看本阶段有没有结论。
-        const cascadeToStylist = stage === "all"
-          && Boolean(baseConfig.stylistConfig || baseConfig.singleModelPersona);
-        const cascadeToArbiter = stage === "all"
-          && Boolean(baseConfig.arbiterConfig || baseConfig.singleModelPersona)
-          && baseConfig.arbiterEnabled !== false;
-        const completedSet = new Set(baseConfig.completedIndexes || []);
-        for (const [id, item] of Object.entries(notes)) {
-          if (!item) continue;
-          const num = Number(id);
-          if (!Number.isInteger(num) || num <= 0) continue;
-          if (item.manualDone) {
+      // 跳过口径取决于本次是「从起点一路推进到尽头」还是「只跑这一段」：
+      // 级联时整行必须走完从起点往下的所有阶段才算处理过，单阶段时只看本阶段有没有结论。
+      const cascadeToStylist = stage === "all"
+        && Boolean(baseConfig.stylistConfig || baseConfig.singleModelPersona);
+      const cascadeToArbiter = stage === "all"
+        && Boolean(baseConfig.arbiterConfig || baseConfig.singleModelPersona)
+        && baseConfig.arbiterEnabled !== false;
+      const completedSet = new Set(baseConfig.completedIndexes || []);
+      for (const [id, item] of Object.entries(notes)) {
+        if (!item) continue;
+        const num = Number(id);
+        if (!Number.isInteger(num) || num <= 0) continue;
+        if (item.manualDone) {
+          completedSet.add(num);
+          continue;
+        }
+        const noteText = latestAiNotePart(item.note).trim();
+        // 初审续跑必须先有可用结论才可跳过。失败/终止/空备注不属于复审候选，
+        // 但不能因此被下面的「无需复审」分支误判为整行已经完成。
+        if ((stage === "stage1" || stage === "all") && !hasAutomatedDecisionNote(noteText)) {
+          completedSet.delete(num);
+          continue;
+        }
+        const p = parseAutomatedNote(noteText);
+        if (cascadeToStylist || cascadeToArbiter) {
+          // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。
+          // 「提交仲裁/升级仲裁」是复审的中途态不是结论——有分歧却还没仲裁的行必须留在流水线里，
+          // 初审提改却还没复审的行同理，都不能被当成已完成跳过。
+          const hasPendingArbitration = cascadeToArbiter && stageNoteState(noteText).pendingArbitration;
+          const stage3Done = stageNoteState(noteText).arbitrated;
+          const stage2Settled = !hasPendingArbitration
+            && (hasCompletedStage2Note(p, noteText) || !isStage2CandidateNote(p, noteText));
+          const stage1Clear = p?.modify === "否" && !isStage2CandidateNote(p, noteText);
+          const settled = cascadeToArbiter
+            ? (stage3Done || stage2Settled || stage1Clear)
+            : (stage2Settled || stage1Clear);
+          if (settled) completedSet.add(num);
+        } else if (stage === "stage1" || stage === "all") {
+          if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
+        } else if (stage === "stage2") {
+          if (!getStage2RowStatus(item).isPending) {
             completedSet.add(num);
-            continue;
           }
-          const noteText = latestAiNotePart(item.note).trim();
-          // 初审续跑必须先有可用结论才可跳过。失败/终止/空备注不属于复审候选，
-          // 但不能因此被下面的「无需复审」分支误判为整行已经完成。
-          if ((stage === "stage1" || stage === "all") && !hasAutomatedDecisionNote(noteText)) {
-            completedSet.delete(num);
-            continue;
-          }
-          const p = parseAutomatedNote(noteText);
-          if (cascadeToStylist || cascadeToArbiter) {
-            // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。
-            // 「提交仲裁/升级仲裁」是复审的中途态不是结论——有分歧却还没仲裁的行必须留在流水线里，
-            // 初审提改却还没复审的行同理，都不能被当成已完成跳过。
-            const hasPendingArbitration = cascadeToArbiter && stageNoteState(noteText).pendingArbitration;
-            const stage3Done = stageNoteState(noteText).arbitrated;
-            const stage2Settled = !hasPendingArbitration
-              && (hasCompletedStage2Note(p, noteText) || !isStage2CandidateNote(p, noteText));
-            const stage1Clear = p?.modify === "否" && !isStage2CandidateNote(p, noteText);
-            const settled = cascadeToArbiter
-              ? (stage3Done || stage2Settled || stage1Clear)
-              : (stage2Settled || stage1Clear);
-            if (settled) completedSet.add(num);
-          } else if (stage === "stage1" || stage === "all") {
-            if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
-          } else if (stage === "stage2") {
-            if (!getStage2RowStatus(item).isPending) {
-              completedSet.add(num);
-            }
-          } else if (stage === "stage3") {
-            const hasS3 = stageNoteState(noteText).arbitrated;
-            if (hasS3) {
-              completedSet.add(num);
-            }
+        } else if (stage === "stage3") {
+          const hasS3 = stageNoteState(noteText).arbitrated;
+          if (hasS3) {
+            completedSet.add(num);
           }
         }
-        baseConfig.completedIndexes = [...completedSet];
       }
+      baseConfig.completedIndexes = [...completedSet];
 
       try {
         const response = await apiFetch("/api/ai-proofread/start", {
@@ -6214,78 +5950,27 @@
       }
     }
 
-    if (aiConfirmIds.dialog) {
-      if (aiConfirmIds.clear) {
-        aiConfirmIds.clear.addEventListener("click", async () => {
-          aiConfirmIds.dialog.close();
-          if (!canClearStageForRestart()) return;
-          const cleared = clearUnconfirmedStageNotes(pendingStartStage === "all" ? "stage1" : pendingStartStage);
-          if (cleared > 0) {
-            const msg = (pendingStartStage === "stage1" || pendingStartStage === "all")
-              ? `已清空 ${cleared} 条未人工确认的 AI 校对信息。`
-              : (pendingStartStage === "stage3"
-                ? `已清空 ${cleared} 条未人工确认的终审仲裁方案。`
-                : (pendingStartStage === "stage2"
-                  ? `已清空 ${cleared} 条未人工确认的文学复审方案。`
-                  : `已清空 ${cleared} 条未人工确认的方案。`));
-            showToast(msg, { tone: "info", durationMs: 6000 });
-          }
-          // 弹窗只选择重跑方式，保留独立阶段或一键开始的范围。
-          await startAiProofread({ continueOnly: false, stage: pendingStartStage });
-        });
-      }
-      if (aiConfirmIds.keep) {
-        aiConfirmIds.keep.addEventListener("click", async () => {
-          aiConfirmIds.dialog.close();
-          if (pendingStartStage === "stage3") {
-            let pendingArb = 0;
-            for (const [, item] of Object.entries(notes)) {
-              if (getStage3RowStatus(item).isPending) pendingArb += 1;
-            }
-            if (pendingArb === 0) {
-              showToast("所有分歧行均已完成终审仲裁；如需重跑请选择「从未人工确认处开始」。", { tone: "info", durationMs: 5000 });
-              return;
-            }
-          }
-          const plan = cascadeFromStage(pendingStartStage);
-          const tailText = plan.toStylist
-            ? (plan.toArbiter ? "初审 → 复审 → 仲裁" : "初审 → 复审")
-            : (plan.toArbiter ? "初审；仲裁处理已有分歧" : "");
-          const resumeText = plan.toStylist
-            ? "已有初审结论、只差复审的行直接进复审，其余行继续校对。"
-            : "仅校对剩余未处理行。";
-          showToast(`保留已有方案；${resumeText}${tailText ? `本次会一路推进：${tailText}。` : ""}`, { tone: "info", durationMs: 4000 });
-          await startAiProofread({ continueOnly: true, stage: pendingStartStage });
-        });
-      }
-      if (aiConfirmIds.cancel) {
-        aiConfirmIds.cancel.addEventListener("click", () => {
-          aiConfirmIds.dialog.close();
-        });
-      }
-    }
-
     const boundStartButtons = new Set();
     const stage1StartEl = document.getElementById("stage1Start") || aiIds.start;
     if (stage1StartEl) {
-      stage1StartEl.addEventListener("click", async () => { await promptAndStartAi("stage1"); });
+      stage1StartEl.addEventListener("click", async () => { await startAiStage("stage1"); });
       boundStartButtons.add(stage1StartEl);
     }
     const stage2StartEl = document.getElementById("stage2Start");
     if (stage2StartEl && !boundStartButtons.has(stage2StartEl)) {
-      stage2StartEl.addEventListener("click", async () => { await promptAndStartAi("stage2"); });
+      stage2StartEl.addEventListener("click", async () => { await startAiStage("stage2"); });
       boundStartButtons.add(stage2StartEl);
     }
     const stage3StartEl = document.getElementById("stage3Start");
     if (stage3StartEl && !boundStartButtons.has(stage3StartEl)) {
-      stage3StartEl.addEventListener("click", async () => { await promptAndStartAi("stage3"); });
+      stage3StartEl.addEventListener("click", async () => { await startAiStage("stage3"); });
       boundStartButtons.add(stage3StartEl);
     }
     if (aiIds.start && !boundStartButtons.has(aiIds.start)) {
-      aiIds.start.addEventListener("click", async () => { await promptAndStartAi("stage1"); });
+      aiIds.start.addEventListener("click", async () => { await startAiStage("stage1"); });
     }
 
-    document.getElementById("aiStartAll")?.addEventListener("click", () => promptAndStartAi("all"));
+    document.getElementById("aiStartAll")?.addEventListener("click", () => startAiStage("all"));
     document.getElementById("aiStopAll")?.addEventListener("click", () => stopAiProofread("all"));
 
     const stage1StopEl = document.getElementById("stage1Stop");
