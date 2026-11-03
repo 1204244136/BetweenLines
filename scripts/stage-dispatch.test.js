@@ -58,6 +58,71 @@ test("可用预设仍接 FIFO 队头，待办绑定不变成严格路由", (t) =
   assert.equal(retry.item.presetId, "b", "健康预设接手冷却预设的队头");
 });
 
+test("致命反馈只停请求所属通道，全部通道失效才汇总阶段熔断", (t) => {
+  const { dispatcher } = fixture(t, [preset("a", 1), preset("b", 1)]);
+  dispatcher.enqueue([1, 2, 3, 4].map((index) => ({ index })));
+  const first = dispatcher.take();
+  const healthy = dispatcher.take();
+  assert.equal(first.item.presetId, "a");
+  assert.equal(healthy.item.presetId, "b");
+  const fatal = dispatcher.feedback(first.request, { kind: "fatal", error: { httpStatus: 401, message: "invalid api key" } });
+  assert.equal(fatal.retry, false);
+  assert.deepEqual(fatal.events, [{ type: "trip", trip: { kind: "fatal-request" }, presetId: "a" }]);
+  dispatcher.release(first.request, { ok: false });
+  let state = dispatcher.snapshot();
+  assert.equal(state.breakerTrippedCount, 1);
+  assert.equal(state.breakerBroken, false);
+  assert.equal(state.presets.find((item) => item.presetId === "a").breakerTripped, true);
+  assert.equal(state.presets.find((item) => item.presetId === "b").breakerTripped, false);
+  assert.equal(dispatcher.take(), null, "故障通道即使空闲也不能接替仍占满的健康通道");
+  dispatcher.feedback(healthy.request, { kind: "success" });
+  dispatcher.release(healthy.request);
+  const next = dispatcher.take();
+  assert.equal(next.item.index, 3);
+  assert.equal(next.item.presetId, "b", "剩余待办由健康通道继续派发");
+  dispatcher.feedback(next.request, { kind: "fatal", error: { code: "ACCOUNT_RESTRICTED" } });
+  dispatcher.release(next.request, { ok: false });
+  state = dispatcher.snapshot();
+  assert.equal(state.breakerTrippedCount, 2);
+  assert.equal(state.breakerBroken, true);
+  assert.deepEqual(state.pendingRows, [4]);
+  assert.equal(dispatcher.take(), null);
+});
+
+test("热移除后的致命反馈不影响替换通道或同 id 重加的新通道", (t) => {
+  for (const newId of ["replacement", "same"]) {
+    const { dispatcher } = fixture(t, [preset("same", 1)]);
+    dispatcher.enqueue([1, 2, 3].map((index) => ({ index })));
+    const old = dispatcher.take();
+    dispatcher.updatePresets([preset("temporary", 1)]);
+    dispatcher.updatePresets([{ ...preset(newId, 1), model: "new-model" }]);
+    const fresh = dispatcher.take();
+    assert.equal(fresh.item.presetId, newId);
+    assert.equal(fresh.item.presetConfig.model, "new-model");
+    const fatal = dispatcher.feedback(old.request, { kind: "fatal", error: { httpStatus: 401, message: "old key expired" } });
+    assert.equal(fatal.retry, false);
+    assert.deepEqual(fatal.events, [], "退休请求的故障不得进入当前阶段汇总");
+    dispatcher.release(old.request, { ok: false });
+    let state = dispatcher.snapshot();
+    assert.equal(state.breakerBroken, false);
+    assert.equal(state.breakerTrippedCount, 0);
+    assert.equal(state.inFlight, 1);
+    assert.equal(state.presets[0].breakerState, "closed");
+    assert.equal(state.presets[0].failures, 0);
+    assert.equal(state.presets[0].completed, 0);
+    assert.equal(state.presets[0].inFlight, 1);
+    dispatcher.feedback(fresh.request, { kind: "success" });
+    dispatcher.release(fresh.request);
+    const next = dispatcher.take();
+    assert.equal(next.item.index, 3);
+    assert.equal(next.item.presetId, newId, "旧请求的致命反馈不能封锁当前通道");
+    assert.equal(next.item.presetConfig.model, "new-model");
+    state = dispatcher.snapshot();
+    assert.equal(state.presets[0].completed, 1);
+    dispatcher.release(next.request);
+  }
+});
+
 test("同 id 重加：旧成功只归还旧通道，新通道配额与完成统计保持不变", (t) => {
   const { dispatcher, clock } = fixture(t, [preset("same", 6)]);
   dispatcher.enqueue([1, 2, 3].map((index) => ({ index })));

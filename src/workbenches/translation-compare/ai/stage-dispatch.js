@@ -235,6 +235,7 @@ function createStageDispatch({
       let retry = false;
       if (kind === "success") noteSuccess(generation, events, stopped);
       else if (kind === "failure") noteFailure(generation, request, error, events, stopped);
+      else if (kind === "fatal") markTrip(generation, { kind: "fatal-request" }, events, stopped);
       else if (kind === "not-limited") recordOutcome(generation, "not-limited", events, stopped);
       else if (kind === "rate-limit") retry = noteRateLimit(generation, request, error, rateLimitReason, events, stopped);
       syncPending();

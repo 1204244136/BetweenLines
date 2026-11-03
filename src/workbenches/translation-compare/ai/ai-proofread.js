@@ -1552,7 +1552,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     });
     for (const event of result.events) {
       if (event.type === "log") pushLog(event.message);
-      else if (event.type === "trip") stopForBreakerTrip(event.trip, stageKey, event.presetId);
+      else if (event.type === "trip") {
+        if (event.trip.kind === "fatal-request") stopForFatalRequestError(error, stageKey, event.presetId);
+        else stopForBreakerTrip(event.trip, stageKey, event.presetId);
+      }
       else if (event.type === "limit") status.concurrencyLimits += 1;
       else if (event.type === "concurrency") {
         if (event.direction === "up") status.concurrencyUps += 1;
@@ -1816,7 +1819,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             note: `[AI校对]\n${isStopped ? "校对已终止。" : `调用失败：${error.message || String(error)}`}`,
           });
           if (fatalRequestError) {
-            stopForFatalRequestError(error);
+            feedback("stage1", request, "fatal", error);
           } else if (!isStageStopped("stage1")) {
             feedback("stage1", request, "failure", error);
           }
@@ -1884,7 +1887,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage2");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
-        // 必须立刻终止所属阶段；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
+        // 必须立刻停用所属预设；其余非频控失败也要进熔断采样，否则「复审全失败」永远拦不住。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage2");
         if (isRateLimit && feedback("stage2", request, "rate-limit", error)) {
           // 派发 module 已将本行放回复审队头。
@@ -1902,7 +1905,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const result = withStageFailureNote(finalizeRowResult(s1Item, config), "stage2", error, { stopped: isStopped, refusal: isRefusal });
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
-          if (fatalRequestError) stopForFatalRequestError(error);
+          if (fatalRequestError) feedback("stage2", request, "fatal", error);
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
           else if (isRefusal) feedback("stage2", request, "not-limited");
           else if (!isStageStopped("stage2") && !isRateLimit) {
@@ -1945,7 +1948,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage3");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
-        // 必须立刻终止所属阶段；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
+        // 必须立刻停用所属预设；其余非频控失败也要进熔断采样，否则「仲裁全失败」永远拦不住
         // （现象：阶段三「异常」一路涨到队列尽头，定案数却不动，用户只能眼睁睁看着）。
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage3");
         if (isRateLimit && feedback("stage3", request, "rate-limit", error)) {
@@ -1964,7 +1967,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const result = withStageFailureNote(finalizeRowResult(s2Item, config), "stage3", error, { stopped: isStopped, refusal: isRefusal });
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
-          if (fatalRequestError) stopForFatalRequestError(error);
+          if (fatalRequestError) feedback("stage3", request, "fatal", error);
           else if (isRefusal) feedback("stage3", request, "not-limited");
           else if (!isStageStopped("stage3") && !isRateLimit) {
             feedback("stage3", request, "failure", error);
@@ -2141,18 +2144,16 @@ function isFatalRequestError(error) {
     || [400, 401, 403, 404, 405, 415, 422].includes(error?.httpStatus);
 }
 
-function stopForFatalRequestError(error) {
-  const stage = requestStageContext.getStore();
-  if (stage && activeStageRuntime) {
-    status.error = `${STAGE_OUTCOME_LABELS[stage]}接口配置或响应异常，该阶段已自动终止：${error.message || String(error)}`;
-    pushLog(status.error);
-    activeStageRuntime.stop(stage);
-    return;
-  }
-  status.stopRequested = true;
-  status.error = `AI 接口配置或响应异常，任务已自动终止：${error.message || String(error)}`;
+function stopForFatalRequestError(error, stage, presetId) {
+  const stageBroken = isStageBreakerBroken(stage);
+  status.error = `${presetBreakerLabel(stage, presetId)}接口配置或响应异常，${stageBroken ? "该阶段已自动终止" : "该预设已暂停"}：${error.message || String(error)}`;
   pushLog(status.error);
-  for (const controller of controllers) controller.abort();
+  if (stageBroken) {
+    status.breakerWarning = "";
+    activeStageRuntime.stop(stage);
+  } else {
+    status.breakerWarning = status.error;
+  }
 }
 
 function breakerPresetId(presetId) {

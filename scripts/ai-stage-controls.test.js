@@ -600,6 +600,54 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
   });
 }
 
+for (const stage of ["stage1", "stage2", "stage3"]) {
+  for (const failure of [
+    { name: "401", status: 401, message: "invalid api key" },
+    { name: "账号受限 429", status: 429, message: "上游风控已限制本区域账号（403 / code 11140，账号存在异常行为）。网关暂时无法处理请求。" },
+  ]) {
+    test(`多预设故障隔离：${stage} 的 ${failure.name} 只暂停故障预设，健康预设继续完成待办`, async (t) => {
+      const { config, calls, post, respond } = await fixture(t, 4);
+      const connection = stage === "stage1" ? config : (stage === "stage2" ? config.stylistConfig : config.arbiterConfig);
+      const poolKey = stage === "stage1" ? "presetPool" : (stage === "stage2" ? "stylistPresets" : "arbiterPresets");
+      const rowNotes = stage === "stage1" ? {} : Object.fromEntries([1, 2, 3, 4].map((index) => [index, stage === "stage2" ? initial : reviewed]));
+      const started = await post("start", {
+        ...config, stage, rowNotes,
+        [poolKey]: [
+          { ...connection, presetId: "broken", name: "故障预设", model: "broken-model" },
+          { ...connection, presetId: "healthy", name: "健康预设", model: "healthy-model" },
+        ],
+      });
+      assert.equal(started.status, 202);
+      await until(() => calls.length === 2);
+      const rejectedCall = calls.find((call) => call.body.model === "broken-model");
+      const healthyCall = calls.find((call) => call.body.model === "healthy-model");
+      rejectedCall.res.writeHead(failure.status, { "content-type": "application/json", "retry-after": "15" });
+      rejectedCall.res.end(JSON.stringify({ error: { message: failure.message } }));
+      await until(() => clientStatus().stageErrors[stage].auth?.count === 1);
+      assert.equal(clientStatus().stageControls[stage].stopRequested, false, "单预设失败不能设置阶段停止信号");
+      assert.equal(healthyCall.closed, false, "同阶段的健康请求不能被取消");
+      assert.equal(clientStatus().stageControls[stage].running, true);
+      respond(healthyCall);
+      while (clientStatus().running) {
+        const before = calls.length;
+        await until(() => calls.length > before || !clientStatus().running);
+        for (const call of calls.slice(before)) respond(call);
+      }
+      const finished = clientStatus();
+      assert.equal(calls.filter((call) => call.body.model === "broken-model").length, 1, "故障预设后续不再接收请求");
+      assert.equal(calls.filter((call) => call.body.model === "healthy-model").length, 3, "剩余待办必须交给健康预设");
+      assert.equal(finished.results.length, 4);
+      assert.equal(finished.stageErrors[stage].auth.count, 1);
+      assert.equal(finished.stageErrors[stage].stopped, undefined, "健康行不能被登记为用户终止");
+      assert.equal(stage === "stage1" ? finished.errors : finished.stageMetrics[`${stage}Errors`], 1, "只统计实际失败的行");
+      assert.equal(finished.concurrencyLimits, 0, "致命错误不进入限流重试与采样");
+      assert.doesNotMatch(finished.logs.join("\n"), /\[频控退避\]/);
+      assert.doesNotMatch(finished.results.map((result) => result.note).join("\n"), /校对已终止/);
+      assert.ok(finished.results.some((result) => result.note.includes(failure.name === "401" ? "invalid api key" : "账号访问受限")), "故障行保留具体失败原因");
+    });
+  }
+}
+
 test("一键开始：没有复审预设也会消费已有仲裁待办，初审不会跳过复审直达仲裁", async (t) => {
   const { config, calls, post, respond } = await fixture(t, 2);
   const { stylistConfig, ...withoutStylist } = config;
