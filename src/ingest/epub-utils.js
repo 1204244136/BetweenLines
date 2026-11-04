@@ -212,13 +212,15 @@ function findNavDocument(manifest) {
 function isNonBodyNavLabel(label) {
   if (!label) return false;
   if (/禁[书書]目[录録]|魔[導道][书書]目[录録]/i.test(label)) return false;
-  return /後記|后记|あとがき|特典|番外|extra|bonus|版權|版权|colophon|copyright|cover|書封|封面|(?:^|\s|[【\[（(])(?:目錄|目录|目\s*次|目\s*录|contents)(?:\s|$|[：:】\]）)])|制作信息|製作信息|簡介|简介|^(?:备注|備註|注释|註釋|译注|譯注|notes?)(?:\s|$|[：:])/i.test(label);
+  return /後記|后记|あとがき|特典|番外|extra|bonus|版權|版权|colophon|copyright|cover|書封|封面|彩[页頁]|插[图圖]|illustrations?|(?:^|\s|[【\[（(])(?:目錄|目录|目\s*次|目\s*录|contents)(?:\s|$|[：:】\]）)])|制作信息|製作信息|簡介|简介|^(?:备注|備註|注释|註釋|译注|譯注|notes?)(?:\s|$|[：:])/i.test(label);
 }
 
 function isNonBodyDocument(filePath, labels) {
   const basename = path.posix.basename(filePath).replace(/\.x?html?$/i, "");
-  const packagingName = /(?:^|[-_])(?:information|introduction|notes?|navigation|contents|toc|cover|back_cover)(?:_p-\d+)?$/i;
-  const packagingLabel = /^(?:制作信息|製作信息|简介|簡介|备注|備註|译注|譯注|注释|註釋|notes?|navigation|contents|目录|目錄|目\s*次|cover|封面|書封)(?:\s|$|[：:])/i;
+  // 彩页/插画页整页属于包装内容：中文 EPUB 常把彩页文字写成 <p>，日文 EPUB 同页只有图片。
+  // 若只按段落过滤，彩页文字会被当成正文起点，导致非原文侧多出一段无对应原文的行。
+  const packagingName = /(?:^|[-_])(?:information|introduction|notes?|navigation|contents|toc|cover|back_cover|illustrations?)(?:_p-\d+)?$/i;
+  const packagingLabel = /^(?:制作信息|製作信息|简介|簡介|备注|備註|译注|譯注|注释|註釋|notes?|navigation|contents|目录|目錄|目\s*次|cover|封面|書封|彩[页頁]|插[图圖]|illustrations?)(?:\s|$|[：:])/i;
   // Keep afterwords/copyright markers for the downstream end-boundary rules.
   return packagingName.test(basename) || (!labels.some(isBodyNavLabel) && labels.some((label) => packagingLabel.test(label)));
 }

@@ -282,3 +282,37 @@ for (const [converter, read, available] of [
     }
   }
 }
+
+// 中文 EPUB 会把彩页上的文字写成正文 <p>，日文 EPUB 同页只有图片；若按段落过滤，
+// 这段彩页文字会成为非原文侧多出的首段，对齐时被并进第一行（1:2 段落粘连）。
+for (const [converter, read, available] of [
+  ["internal", readEpubTextFromSpine, true],
+  ["pandoc", readEpubTextWithPandoc, pandocAvailable],
+]) {
+  test(`${converter} 整页排除彩页文字，序章首段仍是正文起点`, { skip: !available && "Pandoc unavailable" }, async () => {
+    const fixture = await bodyBoundaryEpub(true, false, {
+      names: ["S2_09-Illustrations.xhtml", "S2_09-01_Prologue.xhtml"],
+      labels: ["彩页", "序　章 某一个世界的终结 Game_Over"],
+      documents: [
+        '<h1>彩页</h1><p>控制「魔神」之力的灵装。经过撷取夏威夷群岛的庞大火山性能源、巴格吉城的总体论能力开发实证测试后完成。</p><p><img src="p001.jpg"/></p>',
+        '<h1>序　章 某一个世界的终结 Game_Over</h1><p>纽约，联合国总部大楼。美国总统罗伯特·卡崔当着聚集至此的各国首脑这么说道：</p>',
+      ],
+    });
+    const previousDataDir = process.env.TRANSCOMPARATOR_DATA_DIR;
+    process.env.TRANSCOMPARATOR_DATA_DIR = path.join(fixture.dir, "runtime-data");
+    try {
+      const spine = await readEpubSpineDocuments(fixture.file);
+      assert.equal(spine[0].isNonBodyDocument, true);
+      assert.equal(spine[0].bodySelected, false);
+      const text = await read(fixture.file);
+      assert.doesNotMatch(text, /灵装/);
+      assert.deepEqual(splitParagraphs(sliceMainDocument(text, "cn"), "cn").map((paragraph) => paragraph.text), [
+        "纽约，联合国总部大楼。美国总统罗伯特·卡崔当着聚集至此的各国首脑这么说道：",
+      ]);
+    } finally {
+      if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;
+      else process.env.TRANSCOMPARATOR_DATA_DIR = previousDataDir;
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+}
