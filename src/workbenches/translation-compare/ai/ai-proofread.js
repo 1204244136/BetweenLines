@@ -11,6 +11,7 @@ const { parseOptionalNumber, computeScoreAndGrade, normalizeGrade, normalizeSeve
 const fs = require("fs");
 const path = require("path");
 const { AsyncLocalStorage } = require("node:async_hooks");
+const { randomUUID } = require("node:crypto");
 const { diffWordsWithSpace, diffChars } = require("diff");
 const OpenCC = require("opencc-js");
 const { toCn } = require("../../../ingest/text-utils");
@@ -348,7 +349,7 @@ const requestStageContext = new AsyncLocalStorage();
 const stageControllers = { stage1: new Set(), stage2: new Set(), stage3: new Set() };
 let activeStageRuntime = null;
 
-function isStageStopped(stage = requestStageContext.getStore()) {
+function isStageStopped(stage = requestStageContext.getStore()?.stage) {
   return status.stopRequested || Boolean(stage && status.stageControls[stage]?.stopRequested);
 }
 // 每行当前结果对 stageMetrics 的贡献快照；行被重写/重跑时按同一份快照整体撤销，保证添加与撤销对称。
@@ -1449,6 +1450,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   // 流水线阶段解耦队列（Staged Pipelining Queues）
   // 阶段内派发由各自 module 持有；这里保留初审到复审、复审到仲裁的级联业务。
   const plan = stagePlan(config);
+  const sessionId = randomUUID();
+  const stageSessionIds = { stage1: sessionId, stage2: sessionId, stage3: sessionId };
   const stageConfigs = { stage1: config, stage2: config, stage3: config };
   const stageLabels = { stage1: labels, stage2: labels, stage3: labels };
   const links = { stage2: plan.cascadeToStylist, stage3: plan.cascadeToStylist && plan.cascadeToArbiter };
@@ -1686,6 +1689,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         });
         stageConfigs[stage] = nextConfig;
         stageLabels[stage] = nextLabels;
+        stageSessionIds[stage] = randomUUID();
         status.stageControls[stage] = { running: true, stopRequested: false };
         activeStages.add(stage);
         breakerRuntime.brokenStages.delete(stage);
@@ -1734,7 +1738,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           const next = dispatchers[stageKey].take();
           if (!next) break;
           syncStagePipelineQueues();
-          requestStageContext.run(stageKey, () => execute[stageKey](next.item, next.request));
+          requestStageContext.run(
+            { stage: stageKey, sessionId: stageSessionIds[stageKey] },
+            () => execute[stageKey](next.item, next.request),
+          );
         }
       }
       syncStagePipelineQueues();
@@ -3698,9 +3705,10 @@ async function callModel(messages, config) {
 
 async function callOpenAiCompatible(messages, config) {
   const startTime = Date.now();
-  const headers = buildProtocolHeaders(config);
+  const endpoint = buildApiUrl(config.baseUrl, "/v1/chat/completions");
+  const headers = buildProtocolHeaders(config, { endpoint, sessionId: requestStageContext.getStore()?.sessionId });
   const body = buildChatCompletionBody(messages, config);
-  const data = await fetchJson(buildApiUrl(config.baseUrl, "/v1/chat/completions"), {
+  const data = await fetchJson(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -3751,7 +3759,7 @@ function buildChatCompletionBody(messages, config = {}, modelMeta = null) {
 
 async function fetchJson(url, options, fetchOptions = {}) {
   const track = fetchOptions.track !== false;
-  const stage = requestStageContext.getStore();
+  const stage = requestStageContext.getStore()?.stage;
   const abortIfStopped = () => {
     if (track && stage && isStageStopped(stage)) {
       throw Object.assign(new Error("审核阶段已终止。"), { code: "ABORTED" });

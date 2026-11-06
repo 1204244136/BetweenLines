@@ -18,6 +18,16 @@
 
 并发由程序自动调节，只需设置不小于 1 的「并发上限」，默认 3。遇到限流或过载会自动降速；「当前配额」是当前允许的并发，「配置上限」是适用预设上限之和，实际运行数还受队列数量与退避等待影响。「运行 0 行」表示此刻没有请求正在执行；限流等待时会显示「限流退避」或「冷却中」，运行区标出距下次尝试的时间，到期后重新尝试派发。
 
+### OpenCode Go
+
+在「校对设置」中新建预设，接口类型选择「第三方兼容服务」，地址填写 `https://opencode.ai/inference/go/openai/v1`。API Key 使用已订阅 Go 的 OpenCode 工作区的个人密钥。
+
+已有预设可继续使用 `https://opencode.ai/zen/go`、`https://opencode.ai/zen/go/v1` 或 `https://opencode.ai/zen/go/v1/chat/completions`。
+
+点模型旁的「刷新」从列表选择，或通过「自定义...」输入模型 ID，例如 `glm-5.3-flash`。推理强度可保留「模型默认」。点「测试」检查模型响应后保存预设。
+
+OpenCode Go 面向发送典型编程代理流量的客户端。批量翻译校对是否适用 Go 额度，以 OpenCode 对该用途的说明为准。 [OpenCode Go 使用范围](https://opencode.ai/v2/docs/console/go/#where-can-i-use-it)
+
 ## 选择阶段与开始范围
 
 | 阶段 | 用途 |

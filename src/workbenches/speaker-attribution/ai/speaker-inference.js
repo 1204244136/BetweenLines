@@ -73,6 +73,7 @@ async function inferSpeakerBatch(rows, config = {}, {
   signal = null,
 } = {}) {
   const list = Array.isArray(rows) ? rows : [];
+  const sessionId = crypto.randomUUID();
   const cacheMap = loadCache(cacheFile);
   let cachedCount = 0;
   let inferredCount = 0;
@@ -105,7 +106,7 @@ async function inferSpeakerBatch(rows, config = {}, {
     }
 
     try {
-      const result = await inferSpeakerRow(row, config, { prompt, signal });
+      const result = await inferSpeakerRow(row, config, { prompt, signal, sessionId });
       cacheMap.set(cacheKey, result);
       inferredCount += 1;
       row.prediction = result;

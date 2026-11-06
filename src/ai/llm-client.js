@@ -10,8 +10,10 @@ const { CACHEABLE_PREFIX_LENGTH } = require("./prompt-contract");
  * 支持请求超时、取消信号、思考/推理参数映射以及安全 JSON 反序列化。
  */
 
+const { randomUUID } = require("node:crypto");
 const dns = require("node:dns").promises;
 const net = require("node:net");
+const { version } = require("../../package.json");
 // 非流式生成要等完整正文（含推理）才返回，预算与模型列表/连通测试分开。
 const MODEL_RESPONSE_TIMEOUT_MS = 300000;
 const {
@@ -28,6 +30,10 @@ const blockedMetadataHosts = new Set([
 ]);
 const outboundHostCache = new Map();
 const outboundHostCacheTtlMs = 60 * 1000;
+const openCodeGoChatEndpoints = new Set([
+  "https://opencode.ai/inference/go/openai/v1/chat/completions",
+  "https://opencode.ai/zen/go/v1/chat/completions",
+]);
 
 function isBlockedAddress(address) {
   const value = String(address || "").toLowerCase().split("%")[0];
@@ -109,7 +115,7 @@ function buildApiUrl(baseUrl, endpoint) {
   }
 }
 
-function buildProtocolHeaders(config = {}) {
+function buildProtocolHeaders(config = {}, { endpoint = "", sessionId } = {}) {
   const { protocol } = normalizeConnectionConfig(config, "compatible");
   const headers = { "content-type": "application/json" };
   if (protocol === "claude") {
@@ -117,6 +123,10 @@ function buildProtocolHeaders(config = {}) {
     if (config.apiKey) headers["x-api-key"] = config.apiKey;
   } else if (config.apiKey) {
     headers.authorization = `Bearer ${config.apiKey}`;
+  }
+  if (openCodeGoChatEndpoints.has(endpoint.split(/[?#]/, 1)[0])) {
+    headers["user-agent"] = `BetweenLines/${version}`;
+    headers["x-opencode-session"] = `ses_${sessionId || randomUUID()}`;
   }
   return headers;
 }
@@ -445,7 +455,10 @@ async function callChatCompletions(messages, config = {}, options = {}) {
   }
 
   const endpoint = buildApiUrl(config.baseUrl || "http://127.0.0.1:11434/v1", "/v1/chat/completions");
-  const headers = buildProtocolHeaders({ protocol: "compatible", apiKey: config.apiKey });
+  const headers = buildProtocolHeaders({ protocol: "compatible", apiKey: config.apiKey }, {
+    endpoint,
+    sessionId: options.sessionId,
+  });
   const body = buildChatCompletionBody(messages, config);
   const data = await fetchJson(endpoint, {
     method: "POST",
@@ -674,7 +687,7 @@ async function testModelConnectivity(config = {}, options = {}) {
     }
 
     const endpoint = buildApiUrl(baseUrl || "http://127.0.0.1:11434/v1", "/v1/chat/completions");
-    const headers = buildProtocolHeaders({ protocol: "compatible", apiKey });
+    const headers = buildProtocolHeaders({ protocol: "compatible", apiKey }, { endpoint });
     const caps = detectModelCapabilities(model, provider);
 
     const makeProbeBody = (useCompletionTokens) => {

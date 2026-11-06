@@ -104,6 +104,18 @@
 
 ---
 
+## AI 连通性异常
+
+### OpenCode Go 返回 `MissingSessionID`
+
+使用 `https://opencode.ai/zen/go` 一类旧版 Go 地址时，旧服务的模型测试会返回 HTTP 400 `MissingSessionID`，因为会话头只附加到了新版地址的推理请求。当前服务已将旧版推理地址纳入匹配范围。 [AI 契约](ai-proofread-contract.md#共享传输层的等待预算与错误证据)
+
+重启控制台服务，用原预设重新点「测试」。若网关改报 `api_key_expired`，在 OpenCode Console 新建 Key，并在预设里更新后再测试。
+
+运行 `node --test scripts/ai-opencode-go.test.js` 可验证旧版地址的请求头和会话复用。
+
+---
+
 ## AI 阶段进度异常
 
 ### 有待办和并发配额，却显示「运行 0 行」
