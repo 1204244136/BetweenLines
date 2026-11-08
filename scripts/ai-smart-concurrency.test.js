@@ -106,7 +106,7 @@ test("智能并发：错误检测准确识别速率限制、过载与并发信�
   // Message patterns
   assert.equal(isConcurrencyOrRateLimitError(new Error("Rate limit reached for requests per minute")), true);
   assert.equal(isConcurrencyOrRateLimitError(new Error("Too Many Requests - TPM exceeded")), true);
-  assert.equal(isConcurrencyOrRateLimitError(new Error("Exceeded your current quota, please check your plan")), true);
+  assert.equal(isConcurrencyOrRateLimitError(new Error("Exceeded your current quota, please check your plan")), false);
   assert.equal(isConcurrencyOrRateLimitError(new Error("Concurrency limit exceeded: max 3 concurrent requests")), true);
   assert.equal(isConcurrencyOrRateLimitError(new Error("The server is temporarily overloaded, please try again in 5s")), true);
   assert.equal(isConcurrencyOrRateLimitError({ responseBody: "resource_exhausted: slow down" }), true);
@@ -126,6 +126,16 @@ test("智能并发：错误检测准确识别速率限制、过载与并发信�
   assert.equal(parseRateLimitReason({ httpStatus: 529 }), "HTTP 529 服务过载");
   assert.equal(parseRateLimitReason({ message: "concurrency limit exceeded" }), "并发超限");
   assert.equal(parseRateLimitReason({ message: "exceeded tokens per minute" }), "Token 速率限制 (TPM)");
+});
+
+test("智能并发：余额或账单额度不足不进入频控退避", () => {
+  for (const failure of [
+    { httpStatus: 402, message: "Insufficient Balance" },
+    { httpStatus: 429, responseBody: '{"error":{"type":"insufficient_quota","message":"Check your plan and billing details"}}' },
+    { httpStatus: 429, message: "API Key 关联账户额度耗尽" },
+    { code: "billing_hard_limit_reached", message: "Billing limit reached" },
+  ]) assert.equal(isConcurrencyOrRateLimitError(failure), false, JSON.stringify(failure));
+  assert.equal(isConcurrencyOrRateLimitError({ httpStatus: 429, message: "Token quota exceeded: tokens per minute (TPM)" }), true);
 });
 
 test("并发上限：预设只保存一个并发上限，旧预设的智能并发字段折算后丢弃", () => {

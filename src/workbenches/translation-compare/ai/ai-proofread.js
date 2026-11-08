@@ -1358,6 +1358,7 @@ let activePresetPoolUpdater = null;
 function isConcurrencyOrRateLimitError(error) {
   if (!error) return false;
   if (error.code === "ACCOUNT_RESTRICTED") return false;
+  if (classifyAiError(error) === "billing") return false;
   if (isModelRefusalError(error)) return false;
 
   const httpStatus = Number(error.httpStatus || error.status || error.statusCode);
@@ -2145,6 +2146,7 @@ function makeRefusalResult(row, error, targetKey = "") {
 
 function isFatalRequestError(error) {
   if (error?.code === "ACCOUNT_RESTRICTED") return true;
+  if (classifyAiError(error) === "billing") return true;
   if (isModelRefusalError(error)) return false;
   if (isConcurrencyOrRateLimitError(error)) return false;
   return error?.code === "INVALID_JSON_RESPONSE"
@@ -2153,7 +2155,10 @@ function isFatalRequestError(error) {
 
 function stopForFatalRequestError(error, stage, presetId) {
   const stageBroken = isStageBreakerBroken(stage);
-  status.error = `${presetBreakerLabel(stage, presetId)}接口配置或响应异常，${stageBroken ? "该阶段已自动终止" : "该预设已暂停"}：${error.message || String(error)}`;
+  const billing = classifyAiError(error) === "billing";
+  const reason = billing ? "余额或额度不足" : "接口配置或响应异常";
+  const recovery = billing ? " 请检查该 API Key 的余额和额度，或更换可用预设后继续失败行。" : "";
+  status.error = `${presetBreakerLabel(stage, presetId)}${reason}，${stageBroken ? "该阶段已自动终止" : "该预设已暂停"}：${error.message || String(error)}${recovery}`;
   pushLog(status.error);
   if (stageBroken) {
     status.breakerWarning = "";

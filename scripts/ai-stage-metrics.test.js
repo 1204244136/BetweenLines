@@ -968,6 +968,33 @@ test("客户端看板：异常悬停提示只给类别与数量，不列行号",
   ], "同类问题合并计数、按固定展示顺序排列，但不列行号、不带代表性错误消息");
 });
 
+test("客户端看板：三阶段旧备注恢复余额额度分类，服务重启后仍保留", () => {
+  const failureNotes = [
+    "[AI校对]\n调用失败：接口返回 HTTP 402: Insufficient Balance",
+    "[AI校对]\n是否需要修改：是\nGatekeeper初审：需要修改\n初审改案：修订稿\nStylist复审调用异常：HTTP 429 insufficient_quota",
+    "[AI校对]\n是否需要修改：是\nGatekeeper初审：需要修改\nStylist复审[调整]：调整表述\n复审改案：复审稿\nArbiter仲裁调用异常：billing_hard_limit_reached",
+  ];
+  const storedNotes = Object.fromEntries(failureNotes.map((note, offset) => [offset + 1, { note, aiDone: false }]));
+  const ui = createWorkbench(storageFixture({
+    "translation-compare-notes-v7:project:rows": JSON.stringify(storedNotes),
+  }), {
+    rows: failureNotes.map((_, offset) => ({ index: offset + 1, jp: "A", cn: "B", relation: "1:1", score: 0.9, signature: `sig-${offset + 1}` })),
+  });
+  const assertBillingTitles = () => {
+    for (const stage of [1, 2, 3]) {
+      const title = ui.element(`stage${stage}ErrorItem`).title;
+      assert.match(title, /余额或额度不足：1 行/);
+      assert.doesNotMatch(title, /其他错误|频控限流/);
+    }
+  };
+  assertBillingTitles();
+  ui.run(`renderAiStatus({ kind: "ai", running: false, stageMetrics: {}, stageErrors: {} });`);
+  assertBillingTitles();
+  for (const [index, original] of Object.entries(storedNotes)) {
+    assert.equal(ui.run(`notes[${JSON.stringify(index)}].note`), original.note);
+  }
+});
+
 test("客户端看板：服务端回报的异常分类明细并入悬停提示", () => {
   const ui = createWorkbench(storageFixture({}), {
     rows: [{ index: 7, jp: "A7", cn: "B7", relation: "1:1", score: 0.9, signature: "sig-7" }],

@@ -12,6 +12,7 @@
 
 /** 分类展示顺序：越靠前越常见、越该被用户先看到。 */
 const AI_ERROR_KIND_ORDER = [
+  "billing",
   "rate_limit",
   "timeout",
   "auth",
@@ -26,6 +27,7 @@ const AI_ERROR_KIND_ORDER = [
 ];
 
 const AI_ERROR_KIND_LABELS = {
+  billing: "余额或额度不足",
   rate_limit: "频控限流",
   timeout: "请求超时",
   auth: "认证失败",
@@ -54,7 +56,8 @@ function classifyAiError(input) {
   const code = String((isObject ? (input.code || input.errorCode) : "") || "").toUpperCase();
   const httpStatus = isObject ? Number(input.httpStatus || input.status || input.statusCode) || 0 : 0;
   const text = String(isObject
-    ? (input.message || input.error?.message || input.responseBody || input.error || "")
+    ? [input.message, input.responseBody, input.type, input.error?.message, input.error?.code, input.error?.type,
+      typeof input.error === "string" ? input.error : ""].filter(Boolean).join(" ")
     : input);
   const haystack = `${code} ${text}`.toLowerCase();
   // 客户端只有备注文本、拿不到 httpStatus，用消息里的三位状态码兜底（错误文本里的 4xx/5xx 基本就是它）。
@@ -66,12 +69,26 @@ function classifyAiError(input) {
   if (code === "ACCOUNT_RESTRICTED" || /账号访问受限[:：]/.test(text)) return "auth";
   // 2. 模型拒答（内容安全审查）：上游正常应答，不是接口故障。
   if (code === "MODEL_REFUSAL" || code === "CONTENT_FILTER") return "refusal";
+  // 账单额度可能被包装成 429；先认明确余额证据，不能当成速率限制自动重试。
+  // 旧版通用 429 提示里的「或额度不足」不是上游给出的账单证据。
+  const billingText = haystack.replace(/请求受限或额度不足/g, "请求受限");
+  const billingPatterns = [
+    /payment[_ -]required|insufficient[_ -](?:balance|quota|credits?|funds)/,
+    /billing[_ -](?:hard[_ -])?limit[_ -](?:reached|exceeded)/,
+    /(?:credit[_ -])?balance.{0,30}(?:too low|insufficient)|out of (?:credits|funds)/,
+    /余额(?:不足|已?耗尽|已?用尽|为零)|欠费|额度(?:不足|已?耗尽|已?用尽)/,
+    /quota.{0,100}check.{0,40}(?:plan|billing)/,
+  ];
+  if (httpStatus === 402 || /\bhttp(?:\s+status)?\s*[:=]?\s*402\b/.test(haystack)
+    || billingPatterns.some((pattern) => pattern.test(billingText))) {
+    return "billing";
+  }
   if (/拒答|内容安全|content_filter|content management policy|responsible ai|safety policy|policy violation|declined to answer|敏感内容/.test(haystack)) {
     return "refusal";
   }
   // 3. 频控限流：429/503/529 与服务端 isConcurrencyOrRateLimitError 同口径（503/529 算过载，不算 5xx）。
   if (status === 429 || status === 503 || status === 529) return "rate_limit";
-  if (/rate_limit|rate limit|too many requests|resource_exhausted|overloaded|concurrency_limit|频控|限流|频次超限|并发超限|额度不足|额度频控|重试上限|速率限制|负载过高|请求受限|服务暂时不可用/.test(haystack)) {
+  if (/rate_limit|rate limit|too many requests|resource_exhausted|overloaded|concurrency_limit|quota[_ -]exceeded|exceeded (?:your )?(?:current )?quota|requests? per (?:minute|second|hour|day)|tokens? per minute|\brpm\b|\btpm\b|频控|限流|频次超限|并发超限|额度频控|重试上限|速率限制|负载过高|请求受限|服务暂时不可用/.test(haystack)) {
     return "rate_limit";
   }
   // 4. 超时

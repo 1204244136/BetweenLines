@@ -34,6 +34,35 @@ test("异常归类：明确账号访问受限优先于网关外层的 429", () =
   assert.equal(classifyAiError({ httpStatus: 429, message: "账号请求过多，请稍后重试。Request id 11140." }), "rate_limit");
 });
 
+test("异常归类：余额或账单额度不足独立归类，优先于限流和 API Key 措辞", () => {
+  const failures = [
+    { httpStatus: 402, message: "Payment Required" },
+    { code: "insufficient_balance", message: "Insufficient Balance" },
+    { error: { code: "insufficient_quota", message: "API Key request rejected" } },
+    { message: "请求失败", error: { type: "insufficient_quota" } },
+    { httpStatus: 429, responseBody: '{"error":{"type":"insufficient_quota","message":"Check your API key billing plan"}}' },
+    { httpStatus: 429, responseBody: '{"error":{"code":"billing_hard_limit_reached","message":"Billing limit reached"}}' },
+    "调用失败：模型接口 api.example.test 返回 HTTP 402：Insufficient Balance，insufficient_balance_error。",
+    "调用失败：API Key 关联账户余额不足，请充值。",
+    "Stylist复审调用异常：账户额度耗尽，请检查账单。",
+    "调用失败：Exceeded your current quota, please check your plan and billing details.",
+  ];
+  for (const failure of failures) assert.equal(classifyAiError(failure), "billing", JSON.stringify(failure));
+  assert.deepEqual(sortAiErrorKinds({ billing: { count: 1, rows: [7] } }).map(({ label }) => label), ["余额或额度不足"]);
+});
+
+test("异常归类：普通频控、过载及 RPM/TPM 不误判为账单额度不足", () => {
+  for (const failure of [
+    { httpStatus: 429, message: "Too many requests" },
+    { httpStatus: 503, message: "Service unavailable" },
+    { httpStatus: 529, message: "Overloaded" },
+    "调用失败：请求受限（HTTP 429），request_id=job-402-test。",
+    "Rate limit reached for requests per minute (RPM)",
+    "Token quota exceeded: tokens per minute (TPM)",
+  ]) assert.equal(classifyAiError(failure), "rate_limit", JSON.stringify(failure));
+  assert.equal(classifyAiError("调用失败：request_id=job-402-test，未知故障。"), "unknown");
+});
+
 test("异常归类：客户端的备注文本同样能落到对应类别", () => {
   assert.equal(classifyAiError("调用失败：请求超时，网络连接超时或模型响应过慢。"), "timeout");
   assert.equal(classifyAiError("调用失败（频控限制已达重试上限）：请求受限或额度不足（HTTP 429）。"), "rate_limit");

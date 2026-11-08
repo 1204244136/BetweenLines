@@ -571,6 +571,36 @@ test("独立阶段的致命请求失败只终止自身，健康仲裁连接继�
 });
 
 for (const stage of ["stage1", "stage2", "stage3"]) {
+  test(`余额不足：${stage} 收到 HTTP 402 后停止自身，健康阶段继续完成`, async (t) => {
+    const { config, calls, post, respond, nextCall } = await fixture(t, 4);
+    const healthyStage = stage === "stage3" ? "stage2" : "stage3";
+    await post("start", {
+      ...config, stage: healthyStage, rowNotes: { 4: healthyStage === "stage2" ? initial : reviewed }, completedIndexes: [1, 2, 3],
+    });
+    const healthyCall = await nextCall(healthyStage);
+    const rowNotes = stage === "stage1" ? {} : Object.fromEntries([1, 2, 3].map((index) => [index, stage === "stage2" ? initial : reviewed]));
+    assert.equal((await post("start", { ...config, stage, rowNotes, completedIndexes: [4] })).status, 202);
+    const rejectedCall = await nextCall(stage);
+    rejectedCall.res.writeHead(402, { "content-type": "application/json" });
+    rejectedCall.res.end(JSON.stringify({ error: { type: "insufficient_balance_error", message: "Insufficient Balance" } }));
+    await until(() => !clientStatus().stageControls[stage].running, "余额不足必须当场停止所属阶段，不继续派发后续行");
+    const failed = clientStatus();
+    assert.equal(failed.stageControls[stage].stopRequested, true);
+    assert.equal(failed.stageControls[healthyStage].running, true);
+    assert.equal(healthyCall.closed, false);
+    assert.equal(failed.stageErrors[stage].billing.count, 1);
+    assert.equal(failed.concurrencyLimits, 0);
+    assert.match(failed.error, /余额或额度不足/);
+    assert.match(failed.logs.join("\n"), /检查.*余额.*额度|充值|更换.*预设/);
+    assert.doesNotMatch(failed.logs.join("\n"), /\[频控退避\]/);
+    respond(healthyCall);
+    await until(() => !clientStatus().running);
+    assert.equal(calls.filter((call) => call.stage === stage).length, 1);
+    assert.deepEqual(clientStatus().stageErrors[healthyStage], {});
+    assert.match(clientStatus().results.find((result) => result.index === 4).note, healthyStage === "stage3" ? /仲裁定案。/ : /Stylist复审/);
+    assert.ok(clientStatus().results.some((result) => /Insufficient Balance|余额或额度不足/.test(result.note)), "实际失败行保留余额不足原因以便续跑");
+  });
+
   test(`账号风控：${stage} 收到网关 429 后停止自身且不重试，健康阶段继续完成`, async (t) => {
     const { config, calls, post, respond, nextCall } = await fixture(t, 4);
     const healthyStage = stage === "stage3" ? "stage2" : "stage3";
@@ -602,8 +632,10 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
 
 for (const stage of ["stage1", "stage2", "stage3"]) {
   for (const failure of [
-    { name: "401", status: 401, message: "invalid api key" },
-    { name: "账号受限 429", status: 429, message: "上游风控已限制本区域账号（403 / code 11140，账号存在异常行为）。网关暂时无法处理请求。" },
+    { name: "401", status: 401, kind: "auth", message: "invalid api key", notePattern: /invalid api key/ },
+    { name: "账号受限 429", status: 429, kind: "auth", message: "上游风控已限制本区域账号（403 / code 11140，账号存在异常行为）。网关暂时无法处理请求。", notePattern: /账号访问受限/ },
+    { name: "余额不足 402", status: 402, kind: "billing", message: "Insufficient Balance", type: "insufficient_balance_error", notePattern: /Insufficient Balance|余额或额度不足/ },
+    { name: "账单额度不足 429", status: 429, kind: "billing", message: "Check your API key plan and billing details", type: "insufficient_quota", notePattern: /insufficient_quota|余额或额度不足/ },
   ]) {
     test(`多预设故障隔离：${stage} 的 ${failure.name} 只暂停故障预设，健康预设继续完成待办`, async (t) => {
       const { config, calls, post, respond } = await fixture(t, 4);
@@ -622,8 +654,8 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
       const rejectedCall = calls.find((call) => call.body.model === "broken-model");
       const healthyCall = calls.find((call) => call.body.model === "healthy-model");
       rejectedCall.res.writeHead(failure.status, { "content-type": "application/json", "retry-after": "15" });
-      rejectedCall.res.end(JSON.stringify({ error: { message: failure.message } }));
-      await until(() => clientStatus().stageErrors[stage].auth?.count === 1);
+      rejectedCall.res.end(JSON.stringify({ error: { message: failure.message, type: failure.type } }));
+      await until(() => clientStatus().stageErrors[stage][failure.kind]?.count === 1);
       assert.equal(clientStatus().stageControls[stage].stopRequested, false, "单预设失败不能设置阶段停止信号");
       assert.equal(healthyCall.closed, false, "同阶段的健康请求不能被取消");
       assert.equal(clientStatus().stageControls[stage].running, true);
@@ -637,13 +669,19 @@ for (const stage of ["stage1", "stage2", "stage3"]) {
       assert.equal(calls.filter((call) => call.body.model === "broken-model").length, 1, "故障预设后续不再接收请求");
       assert.equal(calls.filter((call) => call.body.model === "healthy-model").length, 3, "剩余待办必须交给健康预设");
       assert.equal(finished.results.length, 4);
-      assert.equal(finished.stageErrors[stage].auth.count, 1);
+      assert.equal(finished.stageErrors[stage][failure.kind].count, 1);
       assert.equal(finished.stageErrors[stage].stopped, undefined, "健康行不能被登记为用户终止");
       assert.equal(stage === "stage1" ? finished.errors : finished.stageMetrics[`${stage}Errors`], 1, "只统计实际失败的行");
       assert.equal(finished.concurrencyLimits, 0, "致命错误不进入限流重试与采样");
       assert.doesNotMatch(finished.logs.join("\n"), /\[频控退避\]/);
       assert.doesNotMatch(finished.results.map((result) => result.note).join("\n"), /校对已终止/);
-      assert.ok(finished.results.some((result) => result.note.includes(failure.name === "401" ? "invalid api key" : "账号访问受限")), "故障行保留具体失败原因");
+      const failedResult = finished.results.find((result) => failure.notePattern.test(result.note));
+      assert.ok(failedResult, "故障行保留具体失败原因");
+      assert.ok(stageNoteState(failedResult.note).errors[stage], "故障行保留所属阶段的失败标记，允许继续失败行");
+      if (failure.kind === "billing") {
+        assert.match(finished.logs.join("\n"), /余额或额度不足/);
+        assert.match(finished.logs.join("\n"), /检查.*余额.*额度|充值|更换.*预设/);
+      }
     });
   }
 }
