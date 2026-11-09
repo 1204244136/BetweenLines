@@ -791,6 +791,18 @@
   const AI_CONFIG_KEY = "between-lines:speaker-ai:config-v2";
   const AI_PREDICTIONS_KEY = window.speakerStorageKey + ":predictions";
 
+  // 接口服务完全由 API 地址决定：界面不提供类型控件，也没有手动覆盖入口。
+  // 地址认不出（留空或无法解析）时保留当前值，缺省 local。
+  function inferProtocol(value) {
+    return typeof inferProtocolFromBaseUrl === "function" ? inferProtocolFromBaseUrl(value) : { protocol: "", reason: "" };
+  }
+
+  function syncProtocolFromAddress() {
+    const inferred = inferProtocol(aiBaseUrl?.value || "");
+    if (inferred.protocol) aiProtocol.value = inferred.protocol;
+    else if (aiProtocol && !aiProtocol.value) aiProtocol.value = "local";
+  }
+
   let aiRunning = false;
   let aiAbortController = null;
   let aiRunSequence = 0;
@@ -834,6 +846,8 @@
       if (saved.reasoningEffort != null && aiReasoningEffort) aiReasoningEffort.value = saved.reasoningEffort;
     } catch {}
     updateInferenceSettingOptions();
+    // 地址是接口类型的唯一依据：恢复配置后按地址重判，地址认不出才沿用保存值。
+    syncProtocolFromAddress();
   }
 
   function saveAiConfig() {
@@ -1343,9 +1357,10 @@
   if (aiStartBtn) aiStartBtn.addEventListener("click", startAiInference);
   if (aiStopBtn) aiStopBtn.addEventListener("click", stopAiInference);
   if (aiClearCacheBtn) aiClearCacheBtn.addEventListener("click", clearAiPredictions);
-  if (aiProtocol) aiProtocol.addEventListener("change", saveAiConfig);
   if (aiBaseUrl) {
+    aiBaseUrl.addEventListener("input", syncProtocolFromAddress);
     aiBaseUrl.addEventListener("change", () => {
+      syncProtocolFromAddress();
       saveAiConfig();
       loadCachedModelsForUrl(aiBaseUrl.value);
     });

@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { normalizeConnectionConfig } = require("../src/ai/connection-config");
+const { inferProtocolFromBaseUrl, normalizeConnectionConfig } = require("../src/ai/connection-config");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 const { cleanConfig, clientStatus } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 const { buildProtocolHeaders } = require("../src/ai/llm-client");
@@ -33,6 +33,52 @@ test("连接契约：protocol 决定传输，provider 只保留供应商；旧�
   assert.equal(buildProtocolHeaders({ protocol: "claude", provider: "本地服务", apiKey: "test-key" })["x-api-key"], "test-key");
   assert.ok(clientStatus().protocolDefaults);
   assert.equal("providerDefaults" in clientStatus(), false);
+});
+
+test("接口类型：按地址自动推断，显式值优先，识别不出才回落调用方默认档", () => {
+  const cases = [
+    ["http://127.0.0.1:11434/v1", "local"],
+    ["localhost:8080", "local"],
+    ["http://192.168.1.9:8000/v1", "local"],
+    ["http://10.0.0.7/v1", "local"],
+    ["http://[::1]:11434/v1", "local"],
+    ["http://[fd00::1]:11434/v1", "local"],
+    ["https://api.anthropic.com", "claude"],
+    ["https://api.anthropic.com/v1", "claude"],
+    ["https://claude.ai/api", "claude"],
+    ["http://127.0.0.1:8080/v1/messages", "claude"],
+    ["https://api.deepseek.com/v1", "compatible"],
+    ["https://opencode.ai/inference/go/openai/v1", "compatible"],
+    ["", ""],
+    ["ftp://example.test", ""],
+  ];
+  for (const [url, expected] of cases) assert.equal(inferProtocolFromBaseUrl(url).protocol, expected, url);
+  // 本机转发 Claude Messages 端点仍按 Claude 协议处理：路径信号优先于回环地址。
+  assert.equal(inferProtocolFromBaseUrl("http://127.0.0.1:8080/v1/messages").protocol, "claude");
+  assert.equal(normalizeConnectionConfig({ baseUrl: "https://api.deepseek.com" }).protocol, "compatible");
+  assert.equal(normalizeConnectionConfig({ baseUrl: "" }, "compatible").protocol, "compatible");
+  assert.equal(normalizeConnectionConfig({ protocol: "claude", baseUrl: "https://api.deepseek.com" }).protocol, "claude");
+});
+
+test("界面：接口类型不占控件，地址变化直接切换协议，恢复预设也以地址为准", async () => {
+  const ui = createWorkbench();
+  // 隐藏字段承载协议，页面不出现类型下拉或手动指定入口。
+  assert.equal(ui.element("aiProtocol").value, "local");
+  assert.equal(ui.html.includes("aiProtocolToggle"), false);
+  assert.equal(ui.html.includes("aiProtocolSummary"), false);
+  assert.equal(/<select id="aiProtocol"/.test(ui.html), false);
+
+  ui.element("aiBaseUrl").value = "https://api.anthropic.com";
+  await ui.element("aiBaseUrl").dispatch("input");
+  assert.equal(ui.element("aiProtocol").value, "claude");
+
+  ui.element("aiBaseUrl").value = "https://proxy.example.com/v1";
+  await ui.element("aiBaseUrl").dispatch("input");
+  assert.equal(ui.element("aiProtocol").value, "compatible");
+
+  ui.element("aiBaseUrl").value = "http://127.0.0.1:3425/v1";
+  await ui.element("aiBaseUrl").dispatch("input");
+  assert.equal(ui.element("aiProtocol").value, "local");
 });
 
 test("提供商预设：相同模型与名称跨供应商独立保存、更新和删除", () => {
@@ -216,7 +262,7 @@ test("提供商控件：复用现有菜单和箭头样式，去除原生 datalis
   const html = makeHtml([], { comparisonMode: "bilingual", files: {}, labels: {} }, {
     projectKey: "test", generatedAt: "2026-10-01", rowsSignature: "rows", notesStorage: { key: "notes" },
   });
-  const field = html.slice(html.indexOf('<div class="ai-field ai-provider-name-field">'), html.indexOf('<div class="ai-field ai-protocol-field">'));
+  const field = html.slice(html.indexOf('<div class="ai-field ai-provider-name-field">'), html.indexOf('<div class="ai-field ai-url-field">'));
   assert.match(field, /class="select-combobox provider-combobox"/);
   assert.match(field, /id="aiProvider"[^>]*role="combobox"/);
   assert.match(field, /class="select-trigger provider-toggle"/);

@@ -8,6 +8,7 @@
 - 共享 LLM 传输层只能请求 `http:`/`https:`，不得接受带用户名/密码的 URL，必须拒绝云元数据、link-local、多播和未指定地址，并禁止自动跟随重定向；本机 Ollama 的回环地址仍属于允许范围。HTTP 200 后读取响应体若发生 `terminated`、`socket hang up`、`UND_ERR_SOCKET` 等流中断，只在传输层对完整请求做最多两次短退避重试；HTTP 错误、超时、JSON 格式错误和调用方取消不得走这条重试。重试成功的断流不进入阶段错误、熔断或并发下调；重试耗尽才交给既有网络异常与并发调度口径。
 - 非成功 HTTP 响应的 JSON 错误明确声明账号受限，或同时具有 `code 11140` 与账号限制语义时，传输层标记 `ACCOUNT_RESTRICTED`，保留外层 HTTP 状态、原始响应正文及重试头。该错误优先归入认证/访问限制，不能因外层 429 而进入限流退避，也不进入失败熔断采样；三个翻译阶段沿用致命请求错误的预设通道停用规则。普通 429/503/529、任意正文中的 403 或偶合数字不得据此升级。
 - 初审模式契约按 `proofread-contract.js` 的 `modeSchemas` 裁剪：双语对外只用 `decision=keep|replace|unclear` 表达结论、不出现 `better`/`counterpart`，三语保留 `better=target|counterpart|neither|unclear`；解析层把 `keep`/`replace` 归一为内部 `target`/`neither`，双语下 `counterpart` 也归一到 `neither`，旧提示词里的 `better` 必须继续可用。终审在两种模式下都只允许 `finalDecision=keep|replace`，兼容旧模型的存疑输出按下文「终审二元定案」收敛。
+- 接口类型（`protocol`）不是必填前置，也不占界面：`src/ai/connection-config.js` 的 `inferProtocolFromBaseUrl` 是页面与服务端共用的唯一推断规则（本机/局域网 → `local`，Anthropic/Claude 主机或 `/v1/messages` 路径 → `claude`，且优先于本地判定，其余可解析公网地址 → `compatible`；显式 `protocol` 优先于推断）。地址是唯一依据，界面不提供手动选择；地址认不出时保留当前值。传输层只认最终 `protocol`，不得在协议选择上再猜供应商或模型。`local` 与 `compatible` 共用 OpenAI-compatible 传输，差别只在默认地址、模型与提示。回归：`node --test scripts/ai-provider-config.test.js scripts/ai-model-presets.test.js`。
 
 ---
 

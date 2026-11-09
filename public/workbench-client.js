@@ -1341,7 +1341,6 @@
       aiIds.provider.value = presetTools.providerName(preset);
       if (preset.protocol && ["local", "claude", "compatible"].includes(preset.protocol)) {
         aiIds.protocol.value = preset.protocol;
-        syncEnhancedSelect(aiIds.protocol);
       }
       if (typeof preset.baseUrl === "string") {
         aiIds.baseUrl.value = preset.baseUrl;
@@ -1372,6 +1371,8 @@
       if (aiIds.presetSelect) aiIds.presetSelect.value = preset.id;
       syncEnhancedSelect(aiIds.presetSelect);
       updatePresetActionButtons();
+      // 预设里的 protocol 只在地址认不出时沿用；地址能判断就以地址为准。
+      syncProtocolFromAddress();
       saveAiConfig();
     }
 
@@ -1394,12 +1395,11 @@
     }
 
     // 「新建预设」：清空 AI 服务区域，让用户从零填写一条连接，再点「另存为预设」保存。
-    // 没有空值语义的控件回落到各自默认档——接口类型 → 本地默认、推理强度 → 模型默认、
+    // 没有空值语义的控件回落到各自默认档——接口类型 → 本地默认（地址决定）、推理强度 → 模型默认、
     // 并发上限 → 默认值（留空会被折算成 1，等于静默降速）。
     function clearPresetFields() {
       aiIds.provider.value = "";
       aiIds.protocol.value = "local";
-      syncEnhancedSelect(aiIds.protocol);
       setProtocolHint(protocolDefaults.local);
       // 清空后的地址必须标记为已手改：否则状态轮询会用本地默认地址把它填回来。
       aiIds.baseUrl.value = "";
@@ -1465,7 +1465,10 @@
         syncEnhancedSelect(aiIds.presetSelect);
         updatePresetActionButtons();
       }
-      if (!saved || typeof saved !== "object") return;
+      if (!saved || typeof saved !== "object") {
+        syncProtocolFromAddress();
+        return;
+      }
       if (saved.protocol && protocolDefaults[saved.protocol]) aiIds.protocol.value = saved.protocol;
       aiIds.provider.value = presetTools.providerName(saved);
       if (typeof saved.baseUrl === "string") {
@@ -1529,6 +1532,8 @@
       renderStagePresetSelection("stage2");
       renderStagePresetSelection("stage3");
       updateStagePresetDependencies();
+      // 接好地址后再判定接口类型：地址是唯一依据，保存的 protocol 只在地址认不出时沿用。
+      syncProtocolFromAddress();
     }
 
     function bindDetailsToggle(scope = document) {
@@ -4157,10 +4162,35 @@
       };
     }
 
+    // 接口类型完全由地址决定：界面不提供类型控件，也没有手动覆盖入口。
+    // 地址认不出（留空或无法解析）时保留当前值，缺省 local。
+    function inferredProtocolFor(value) {
+      return typeof inferProtocolFromBaseUrl === "function"
+        ? inferProtocolFromBaseUrl(value)
+        : { protocol: "", reason: "" };
+    }
+
+    function protocolLabel(protocol) {
+      const defaults = protocolDefaults[protocol] || {};
+      return defaults.name || protocol || "";
+    }
+
     function setProtocolHint(defaults) {
-      if (!defaults) return;
-      aiIds.apiKey.placeholder = defaults.apiKeyPlaceholder || "";
-      setLiveHoverTitle(aiIds.protocol, defaults.note || "");
+      const resolved = defaults || protocolDefaults[aiIds.protocol?.value || "local"] || {};
+      if (aiIds.apiKey) aiIds.apiKey.placeholder = resolved.apiKeyPlaceholder || "";
+      setLiveHoverTitle(aiIds.baseUrl, resolved.note || "");
+    }
+
+    // 地址变了就重新判定；地址认不出时保留当前协议（清空地址不会把协议改回 local）。
+    function syncProtocolFromAddress({ notify = false } = {}) {
+      const inferred = inferredProtocolFor(aiIds.baseUrl?.value || "");
+      const previous = aiIds.protocol?.value || "";
+      if (inferred.protocol) aiIds.protocol.value = inferred.protocol;
+      else if (!previous) aiIds.protocol.value = "local";
+      setProtocolHint();
+      if (notify && inferred.protocol && inferred.protocol !== previous) {
+        showToast("接口类型：" + protocolLabel(inferred.protocol) + "（按地址自动识别）", { tone: "info", durationMs: 4000 });
+      }
     }
 
     function applyProtocolDefaults(defaults, { force = false } = {}) {
@@ -5304,33 +5334,16 @@
       }
     }
 
-    aiIds.protocol.addEventListener("change", async () => {
-      aiIds.baseUrl.dataset.touched = "";
-      aiIds.model.dataset.touched = "";
-      aiModelOptions = [];
-      if (protocolDefaults[aiIds.protocol.value]) {
-        applyProtocolDefaults(protocolDefaults[aiIds.protocol.value], { force: true });
-        saveAiConfig();
-        return;
-      }
-      try {
-        const response = await apiFetch("/api/ai-proofread/status");
-        const data = await response.json();
-        protocolDefaults = data.ai?.protocolDefaults || protocolDefaults;
-        applyProtocolDefaults(protocolDefaults[aiIds.protocol.value], { force: true });
-      } catch {
-        setProtocolHint(null);
-      }
-      saveAiConfig();
-    });
     aiIds.baseUrl.addEventListener("input", () => {
       aiIds.baseUrl.dataset.touched = "1";
       aiIds.model.dataset.touched = "";
       setModelOptions([], { selected: "" });
+      syncProtocolFromAddress();
       showToast("地址已修改，可点击刷新获取模型列表。", { tone: "info", durationMs: 6000 });
       saveAiConfig();
     });
     aiIds.baseUrl.addEventListener("change", () => {
+      syncProtocolFromAddress({ notify: true });
       showToast("地址已更新，可点击刷新获取模型列表。", { tone: "info", durationMs: 9000 });
       saveAiConfig();
     });

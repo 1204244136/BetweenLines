@@ -435,6 +435,10 @@ test("说话人工作台渲染带分页的复核工作区", () => {
   assert.match(html, /data-field="speaker"/);
   assert.match(html, /谁在说话/);
   assert.match(html, /<tbody><\/tbody>/);
+  // 接口服务由地址决定：页面不出现类型下拉或手动指定入口，协议用隐藏字段承载。
+  assert.match(html, /<input id="speakerAiProtocol" type="hidden" value="local">/);
+  assert.equal(/speakerAiProtocolSummary|speakerAiProtocolToggle|<select id="speakerAiProtocol"/.test(html), false);
+  assert.match(scripts.at(-1)[1], /function inferProtocolFromBaseUrl/);
   assert.equal(rows[0].sourceText, "谁在说话？");
   assert.doesNotThrow(() => new Function(scripts.at(-1)[1]));
 });

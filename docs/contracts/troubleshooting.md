@@ -120,6 +120,13 @@
 
 运行 `node --test scripts/ai-opencode-go.test.js` 可验证旧版地址的请求头和会话复用。
 
+### 地址和实际协议对不上（代理转发 Claude Messages）
+
+- **现象**：地址是第三方代理或本机转发，实际走 Claude Messages 协议，但程序按 OpenAI 兼容接口发请求，测试返回 404 / `not found` / `invalid request`。
+- **当前实现**：接口类型完全由地址推断，界面不提供手动切换。`inferProtocolFromBaseUrl` 只认地址信号：官方 Anthropic/Claude 主机、主机或路径中的 `anthropic` / `claude` 词元，或 `/v1/messages` 路径判为 `claude`；本机/局域网判 `local`，其余公网地址判 `compatible`。
+- **处置**：把地址改成能表露协议的端点，例如直接填 `https://代理域名/v1/messages`（路径命中 Messages），或使用含 `claude` 的代理路径；不要只填根地址再期望程序猜出上游协议。
+- **回归**：`node --test scripts/ai-provider-config.test.js`。
+
 ---
 
 ## AI 阶段进度异常

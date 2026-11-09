@@ -12,7 +12,7 @@ const { createDiskNotesStorage } = require("./notes-disk-storage");
 const { createNotesPersistence } = require("./notes-persistence");
 const { createAiResultReception } = require("./ai-result-reception");
 const { createPresetTools } = require("./ai-presets");
-const { normalizeConnectionConfig } = require("../../ai/connection-config");
+const { inferProtocolFromBaseUrl, normalizeConnectionConfig } = require("../../ai/connection-config");
 const { createStageNoteTools } = require("./ai/stage-note-state");
 const { AI_CONCURRENCY_LIMITS: concurrencyLimits } = require("./ai/concurrency-limits");
 const { escapeHtml, safeJson } = require("../../core/text-helpers");
@@ -206,17 +206,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                         <div id="aiProviderNames" class="select-menu" role="listbox" aria-label="已保存的提供商" hidden></div>
                       </div>
                     </div>
-                    <div class="ai-field ai-protocol-field">
-                      <label for="aiProtocol">接口类型</label>
-                      <select id="aiProtocol">
-                        <option value="local">本地默认</option>
-                        <option value="claude">Claude</option>
-                        <option value="compatible">第三方兼容服务</option>
-                      </select>
-                    </div>
                     <div class="ai-field ai-url-field">
                       <label for="aiBaseUrl">地址</label>
                       <input id="aiBaseUrl" type="url" value="${escapeHtml(protocolDefaults.local.baseUrl)}">
+                      <input id="aiProtocol" type="hidden" value="local">
                     </div>
                   </div>
                   <div class="ai-service-row">
@@ -596,6 +589,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
     ${alignLegacyNotes.toString()}
     ${alignNotesByIndex.toString()}
     ${createNotesTools.toString()}
+    ${inferProtocolFromBaseUrl.toString()}
     ${normalizeConnectionConfig.toString()}
     ${sanitizeModelMetadata.toString()}
     ${createPresetTools.toString()}

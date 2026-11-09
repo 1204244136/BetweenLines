@@ -26,6 +26,7 @@ const {
 } = require("./attention");
 const { inferSpeakerBatch } = require("./ai/speaker-inference");
 const { browserModelCapabilitiesSource } = require("../translation-compare/ai/model-capabilities");
+const { inferProtocolFromBaseUrl } = require("../../ai/connection-config");
 
 const outputDir = path.resolve(
   process.env.BETWEENLINES_SPEAKER_OUTPUT_DIR
@@ -374,16 +375,9 @@ function renderHtml(model) {
           <div id="speakerAiServiceLabel" class="ai-config-label">AI 服务</div>
           <div class="ai-service-fields has-reasoning">
             <div class="ai-field">
-              <label for="speakerAiProtocol">接口服务</label>
-              <select id="speakerAiProtocol">
-                <option value="local">本地默认 (Ollama/vLLM)</option>
-                <option value="compatible">第三方兼容 (OpenAI 协议)</option>
-                <option value="claude">Claude 原生</option>
-              </select>
-            </div>
-            <div class="ai-field">
               <label for="speakerAiBaseUrl">API 地址 (Base URL)</label>
               <input id="speakerAiBaseUrl" type="text" placeholder="http://127.0.0.1:11434/v1" value="http://127.0.0.1:11434/v1">
+              <input id="speakerAiProtocol" type="hidden" value="local">
             </div>
             <div class="ai-field">
               <div class="ai-field-head">
@@ -470,6 +464,7 @@ function renderHtml(model) {
 window.speakerStorageKey = ${safeJson(`between-lines:speaker-attribution:${model.analysisKey}:v2`)};
 window.speakerPageMeta = ${safeJson(pageMeta)};
 ${browserModelCapabilitiesSource()}
+${inferProtocolFromBaseUrl.toString()}
 ${assets.workbenchShared}
 ${assets.workbenchClient}
 </script></body></html>`;

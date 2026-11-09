@@ -10,7 +10,7 @@
 
 ## 配置连接与模型预设
 
-保持控制台服务运行，在「AI 辅助校对 → 校对设置」填写接口类型、地址、模型、API Key 和并发上限。支持 Claude 原生接口、OpenAI-compatible 服务和 Ollama 等本地接口。三语模式可选择校对 B 或 C，双语模式只校对 B。
+保持控制台服务运行，在「AI 辅助校对 → 校对设置」填写地址、模型、API Key 和并发上限。接口类型不需要选择，也不占界面：地址指向本机或局域网时按本地 OpenAI 兼容服务处理，指向 Anthropic / Claude 或 `/v1/messages` 端点时按 Claude 原生接口处理，其他公网地址按 OpenAI-compatible 处理。三语模式可选择校对 B 或 C，双语模式只校对 B。
 
 配置可另存为模型预设。提供商名称用于区分服务或账号，不同提供商可以保存同名预设；同一提供商下的同名预设经确认后更新。选择「新建预设」会清空连接和模型参数，再填写并另存即可。
 
@@ -20,7 +20,7 @@
 
 ### OpenCode Go
 
-在「校对设置」中新建预设，接口类型选择「第三方兼容服务」，地址填写 `https://opencode.ai/inference/go/openai/v1`。API Key 使用已订阅 Go 的 OpenCode 工作区的个人密钥。
+在「校对设置」中新建预设，地址填写 `https://opencode.ai/inference/go/openai/v1`（会按地址自动识别为 OpenAI 兼容接口）。API Key 使用已订阅 Go 的 OpenCode 工作区的个人密钥。
 
 已有预设可继续使用 `https://opencode.ai/zen/go`、`https://opencode.ai/zen/go/v1` 或 `https://opencode.ai/zen/go/v1/chat/completions`。
 

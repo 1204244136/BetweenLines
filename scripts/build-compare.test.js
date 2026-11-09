@@ -113,7 +113,9 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(html, /目标固定为译文 B，参考原文 A/);
   assert.match(html, /\.ai-config-band\s*\{[^}]*grid-template-columns: 88px minmax\(0, 1fr\);/);
   assert.match(html, /id="aiServiceLabel" class="ai-config-label">AI 服务/);
-  assert.match(html, /<option value="claude">Claude<\/option>/);
+  // 接口类型不占界面：协议由隐藏字段承载，页面不再出现类型下拉。
+  assert.match(html, /<input id="aiProtocol" type="hidden" value="local">/);
+  assert.doesNotMatch(html, /<select id="aiProtocol"/);
   assert.match(html, /id="aiProofreadLabel" class="ai-config-label">校对设置/);
   // 熔断由服务端内部决策，页面不得再提供阈值或开关控件，也不得把这类字段带进请求
   assert.doesNotMatch(html, /aiBreaker|ai-breaker|熔断阈值/);

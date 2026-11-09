@@ -143,7 +143,8 @@
 ## AI 模型预设管理（`ai-presets.js`）
 
 - 存储键：`translation-compare-ai-presets-v2`。
-- 包含完整连接与模型参数（`protocol`、`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`modelMetadata`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。`modelMetadata` 只保存能力白名单，恢复预设时与模型 ID 对应，避免丢失端点专属思考档位。`protocol` 只表示接口类型（`local` / `claude` / `compatible`）；`provider` 是可选的供应商名称，不参与传输协议选择。缺少 `protocol` 却携带 `provider` 的请求直接拒绝，运行路径不得将旧 `provider` 当接口类型。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
+- 包含完整连接与模型参数（`protocol`、`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`modelMetadata`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。`modelMetadata` 只保存能力白名单，恢复预设时与模型 ID 对应，避免丢失端点专属思考档位。`protocol` 只表示接口类型（`local` / `claude` / `compatible`）；`provider` 是可选的供应商名称，不参与传输协议选择。`protocol` 由 `src/ai/connection-config.js` 的 `inferProtocolFromBaseUrl` 按地址决定：地址指向本机/局域网给 `local`，命中 Anthropic/Claude 主机或 `/v1/messages` 路径给 `claude`（优先于本地判定），其余可解析公网地址给 `compatible`；地址为空或无法解析时保留当前值，缺省 `local`。界面不提供手动选择，`provider` 仍然不参与传输。缺少 `protocol` 却携带 `provider` 的请求直接拒绝，运行路径不得将旧 `provider` 当接口类型。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
+- 接口类型不占界面：地址是唯一依据，「地址」字段只有输入框，协议用隐藏字段随配置与预设保存。恢复预设或配置时先填入保存值，再按地址重判；地址能判断就以地址为准（例如预设里遗留 `compatible`、地址是 `127.0.0.1` 时按 `local` 传输），地址认不出才保留保存值。旧预设无需迁移。回归：`node --test scripts/ai-provider-config.test.js`。
 - 当前预设 ID 保存在 `translation-compare-ai-config-v2` 与 `translation-compare-ai-project-config-v2:<projectKey>` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。共享传输层、模型列表、连通性测试、任务状态和子阶段配置均使用新字段，接口默认配置统一名为 `protocolDefaults`。
 - 阶段适用预设以 `stagePresetSelections` 为唯一配置来源；`committedStagePresetIds` 不得回退读取候选选择器。候选须经「添加」进入列表，显示、启动请求、热更新及 `stageNPresetIds` 持久化均读取同一列表。空列表表示阶段一用主配置、阶段二/三未启用；移除最后一项后，残留候选不得重新加入配置。阶段三的候选选择、添加与适用列表不依赖阶段二是否配置，执行仲裁仍要求已有复审分歧。旧 `stageNPresetId` 仅由恢复入口迁入列表，显式的空数组优先于旧字段。
 - 开始按钮及启动处理共用模型就绪检查：独立阶段只检查自身，一键开始检查初审及已添加下游预设的阶段。缺失预设、空白模型与 `custom` 占位值禁用对应开始入口并提供原因；配置保存、适用列表变化及状态轮询后重新计算，不影响停止入口。校验必须早于启动接收状态变更与启动请求。适用预设池保留无效条目交由服务端拒绝，不得先过滤再回退主配置。回归：`node --test scripts/ai-start-validation-client.test.js scripts/ai-stage-controls-client.test.js`。
@@ -153,7 +154,7 @@
 - 提供商名称使用可输入 combobox，复用工作台的 `select-menu` / `select-option` 与箭头样式；不得使用浏览器原生 `datalist` 弹层。支持输入筛选、鼠标选择、方向键和 Enter 确认、Escape/Tab/失焦关闭；公共下拉关闭逻辑须同步清理 `aria-expanded` 与 `aria-activedescendant`。
 - 回归：`node --test scripts/ai-model-presets.test.js scripts/ai-provider-config.test.js scripts/stage-preset-binding.test.js scripts/ai-connectivity.test.js`。
 - 支持下拉切换、覆盖保存、另存为和删除预设，操作回执均通过 Toast 提示。
-- 下拉首项是空值的「新建预设」：切到该项按「从零建一条连接」处理，清空 AI 服务区域的连接与模型参数（提供商名称、地址、API Key、模型选择与模型能力缓存），并立即写入全局与项目配置，刷新页面不得把上一条连接的地址与 Key 带回来。没有空值语义的控件回落到默认档：接口类型 → `local`（同时刷新 API Key 占位与接口说明）、推理强度 → 模型默认、并发上限 → `ai/concurrency-limits.js` 的 `defaultConcurrency`（页面从构建期注入 `AI_CONCURRENCY_DEFAULT`，不得自带字面量；留空会被折算成 1，等于静默降速）。清空后的地址标记为已手改，状态轮询不得用协议默认地址把它填回来；模型下拉保留「自定义...」入口，接口没列出模型名时仍可手填。
+- 下拉首项是空值的「新建预设」：切到该项按「从零建一条连接」处理，清空 AI 服务区域的连接与模型参数（提供商名称、地址、API Key、模型选择与模型能力缓存），并立即写入全局与项目配置，刷新页面不得把上一条连接的地址与 Key 带回来。没有空值语义的控件回落到默认档：接口类型 → `local`（地址为空时的默认档，地址填好后按地址自动判定；同时刷新 API Key 占位与地址说明）、推理强度 → 模型默认、并发上限 → `ai/concurrency-limits.js` 的 `defaultConcurrency`（页面从构建期注入 `AI_CONCURRENCY_DEFAULT`，不得自带字面量；留空会被折算成 1，等于静默降速）。清空后的地址标记为已手改，状态轮询不得用协议默认地址把它填回来；模型下拉保留「自定义...」入口，接口没列出模型名时仍可手填。
 
 ---
 

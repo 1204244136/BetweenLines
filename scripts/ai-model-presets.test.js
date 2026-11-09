@@ -43,7 +43,7 @@ test("模型预设：sanitizePreset 校验清洗所有字段并提供安全回�
   });
 
   assert.equal(cleaned.name, "DeepSeek-V3");
-  assert.equal(cleaned.protocol, "local"); // 非法 provider 回退为 local
+  assert.equal(cleaned.protocol, "compatible"); // 非法接口类型不再固定回落 local：按地址推断
   assert.equal(cleaned.baseUrl, "https://api.example.com/v1");
   assert.equal(cleaned.apiKey, "sk-secret-key");
   assert.equal(cleaned.model, "deepseek-chat");
@@ -262,7 +262,8 @@ test("模型预设界面：切到「新建预设」清空 AI 服务区域并即�
 
   // 先确认预设真的填进了区域，否则下面的「清空」断言可能因为字段本来就是空而假通过。
   assert.equal(ui.element("aiProvider").value, "Antigravity");
-  assert.equal(ui.element("aiProtocol").value, "compatible");
+  // 地址可判断时以地址为准：127.0.0.1 判为本地兼容服务，预设里遗留的 compatible 不再决定传输。
+  assert.equal(ui.element("aiProtocol").value, "local");
   assert.equal(ui.element("aiBaseUrl").value, "http://127.0.0.1:8045/v1");
   assert.equal(ui.element("aiApiKey").value, "sk-antigravity");
   assert.equal(ui.element("aiModel").value, "gemini-3.8-flash-high");

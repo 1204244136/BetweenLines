@@ -312,9 +312,9 @@ details[open] > summary .details-toggle::before {
   align-items: start;
 }
 
-/* 第一行：模型预设（含操作按钮）、提供商名称、接口类型、地址。 */
+/* 第一行：模型预设（含操作按钮）、提供商名称、地址（接口类型由地址自动判断，不占界面）。 */
 .ai-service-row:first-child {
-  grid-template-columns: minmax(380px, 1.7fr) minmax(150px, 0.8fr) minmax(130px, 0.7fr) minmax(210px, 1.2fr);
+  grid-template-columns: minmax(380px, 1.7fr) minmax(150px, 0.8fr) minmax(260px, 1.5fr);
 }
 .select-option-group {
   padding: 8px 10px 4px;
