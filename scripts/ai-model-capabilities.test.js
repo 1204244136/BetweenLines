@@ -72,6 +72,40 @@ test("网关名称不在 models.dev 时，优先真实厂商而非随机网关",
   assert.deepEqual(result.reasoningEfforts, ["low", "high"]);
 });
 
+test("端点声明：网关的 supported_reasoning_levels 与 reasoning_levels 都能识别档位", () => {
+  // 真实网关（magpie）对带 vendor 前缀的模型声明 reasoning + 两套档位表；只认旧字段会退化成「只有模型默认」。
+  const declared = {
+    id: "loomy/DeepSeek-V4.1-Flash",
+    reasoning: true,
+    reasoning_levels: ["none", "low", "medium", "high", "xhigh"],
+    supported_reasoning_levels: [{ effort: "none" }, { effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
+  };
+  const c = detectModelCapabilities("loomy/DeepSeek-V4.1-Flash", "magpie", {}, declared);
+  assert.equal(c.reasoning, true);
+  assert.equal(c.source, "provider");
+  assert.equal(c.supportsTemperature, false);
+  assert.deepEqual(c.reasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal(normalizeModelReasoningEffort("high", "loomy/DeepSeek-V4.1-Flash", c), "high");
+
+  // 词汇表外的档位（网关给 codex 系列声明的 ultra）不进入档位，避免发出未登记的参数值。
+  const codex = detectModelCapabilities("codex/gpt-6.1-sol", "", {}, {
+    reasoning: true,
+    supported_reasoning_levels: [{ effort: "low" }, { effort: "ultra" }, { effort: "max" }],
+  });
+  assert.deepEqual(codex.reasoningEfforts, ["low", "max"]);
+  assert.equal(normalizeModelReasoningEffort("ultra", "codex/gpt-6.1-sol", codex), "");
+});
+
+test("浏览器解析器与服务端一致识别网关档位声明", () => {
+  const vm = require("node:vm");
+  const resolve = vm.runInNewContext(browserModelCapabilitiesSource() + "\nresolveClientModelCapabilities;");
+  const declared = { reasoning: true, supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] };
+  const remote = JSON.parse(JSON.stringify(resolve("loomy/DeepSeek-V4.1-Flash", "", {}, declared)));
+  const server = JSON.parse(JSON.stringify(detectModelCapabilities("loomy/DeepSeek-V4.1-Flash", "", {}, declared)));
+  assert.deepEqual(remote.reasoningEfforts, ["low", "high"]);
+  assert.deepEqual(remote, server);
+});
+
 test("纯浏览器解析器与服务端共用清单与别名匹配，无 Node 或网络依赖", () => {
   const vm = require("node:vm");
   const resolve = vm.runInNewContext(browserModelCapabilitiesSource() + "\nresolveClientModelCapabilities;");
@@ -268,6 +302,49 @@ test("模型列表发现会富化推理能力与思考档位", async (t) => {
   }
 });
 
+test("模型列表发现保留网关声明的档位，带 vendor 前缀的 ID 照常识别", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (String(url) === "https://models.dev/api.json") {
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }
+    return realFetch(url, options);
+  });
+  // 复刻 magpie 网关的真实回包形状：reasoning 为布尔，档位只在 reasoning_levels / supported_reasoning_levels 里。
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({
+      data: [{
+        id: "loomy/DeepSeek-V4.1-Flash",
+        display_name: "DeepSeek V4.1 Flash",
+        owned_by: "loomy",
+        reasoning: true,
+        reasoning_levels: ["none", "low", "medium", "high", "xhigh"],
+        supported_reasoning_levels: [{ effort: "none" }, { effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }],
+        supported_parameters: ["tools", "tool_choice", "reasoning"],
+      }],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const address = server.address();
+    const result = await listModels({
+      protocol: "compatible",
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      provider: "magpie",
+    });
+    const model = result.models.find((item) => item.id === "loomy/DeepSeek-V4.1-Flash");
+    assert.equal(model.reasoning, true);
+    assert.deepEqual(model.reasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+    const body = buildChatCompletionBody([], { model: model.id, modelMeta: model, reasoningEffort: "high" });
+    assert.equal(body.reasoning_effort, "high");
+    assert.equal("temperature" in body, false);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("页面首次打开、手填模型与恢复旧预设均显示 Gemini 专属三档", async () => {
   const storage = storageFixture();
   const tools = createPresetTools();
@@ -313,6 +390,14 @@ test("端点专属档位随配置和预设保存，刷新后经各阶段进入�
     assert.equal(body.reasoning_effort, "high");
     assert.equal("temperature" in body, false);
   }
+});
+
+test("带 vendor 前缀的模型按端点声明显示思考档位，而不是只剩模型默认", () => {
+  const ui = createWorkbench();
+  ui.run('setModelOptions([{id:"loomy/DeepSeek-V4.1-Flash",reasoning:true,reasoningEfforts:["none","low","medium","high","xhigh"],source:"provider"}])');
+  assert.deepEqual(Array.from(ui.element("aiReasoningEffort").children, (item) => item.value), ["", "none", "low", "medium", "high", "xhigh"]);
+  assert.equal(ui.element("aiReasoningEffort").dataset.mode, "reasoning");
+  assert.deepEqual(Array.from(ui.element("aiReasoningEffort").children, (item) => item.textContent).slice(1), ["无", "低", "中", "高", "极高"]);
 });
 
 test("未知档位与跨模型元数据不得扩展思考范围，普通模型保留采样强度", () => {

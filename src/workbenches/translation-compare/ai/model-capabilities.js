@@ -359,6 +359,37 @@ function extractEffortsFromModelsDev(md) {
 }
 
 /**
+ * 端点声明的思考档位字段。
+ * 网关既可能给扁平值列表（reasoning_efforts / reasoning_levels），
+ * 也可能给对象列表（supported_reasoning_levels: [{ effort: "low" }]）；
+ * 这里只做字段归一，取值合法性交给 extractEffortsFromModelsDev 按词汇表过滤。
+ */
+function declaredEffortValues(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const fields = [
+    "reasoning_supported_efforts",
+    "reasoningSupportedEfforts",
+    "reasoning_efforts",
+    "reasoningEfforts",
+    "supported_reasoning_levels",
+    "supportedReasoningLevels",
+    "reasoning_levels",
+    "reasoningLevels",
+  ];
+  for (const field of fields) {
+    const list = raw[field];
+    if (!Array.isArray(list) || list.length === 0) continue;
+    const values = list.map((item) => {
+      if (typeof item === "string") return item;
+      if (!item || typeof item !== "object") return "";
+      return item.effort ?? item.level ?? item.value ?? "";
+    });
+    if (values.some((value) => String(value ?? "").trim())) return values;
+  }
+  return undefined;
+}
+
+/**
  * 启发式规则检测模型能力（当 models.dev 与清单均未明确定义时）
  */
 function heuristicCapabilities(modelId) {
@@ -501,9 +532,8 @@ function detectModelCapabilities(modelId, provider = "", modelsDevData = null, d
 
   // 2. 端点自声明（参考 dsh-model-detector），不把普通模型目录的 id/name 当能力声明。
   const raw = declared && typeof declared === "object" ? declared : {};
-  const effortValues = raw.reasoning_supported_efforts ?? raw.reasoningSupportedEfforts
-    ?? raw.reasoning_efforts ?? raw.reasoningEfforts;
-  const declaredEfforts = Array.isArray(effortValues)
+  const effortValues = declaredEffortValues(raw);
+  const declaredEfforts = effortValues
     ? extractEffortsFromModelsDev({ reasoning_options: { type: "effort", values: effortValues } })
     : extractEffortsFromModelsDev(raw);
   const declaredReasoning = raw.supports_reasoning ?? raw.supportsReasoning ?? raw.reasoning;
@@ -552,7 +582,7 @@ function browserModelCapabilitiesSource() {
     "const MANIFEST = " + JSON.stringify(MANIFEST).replace(/</g, "\\u003c") + ";",
     "const cachedModelsDev = null;",
     ...[normalizeModelId, modelNameEquivalent, findEntryByName, findInModelsDev,
-      extractEffortsFromModelsDev, heuristicCapabilities, detectModelCapabilities].map((fn) => fn.toString()),
+      extractEffortsFromModelsDev, declaredEffortValues, heuristicCapabilities, detectModelCapabilities].map((fn) => fn.toString()),
     "return detectModelCapabilities; })();",
   ].join("\n");
 }
