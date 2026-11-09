@@ -55,6 +55,46 @@ test("遇到中途后记时不截断后续作品的正文", () => {
   assert.doesNotMatch(sliced, /最终后记/);
 });
 
+test("后记后的特典标题不再阻止后记截断", () => {
+  // 中文 EPUB 的后记与特典短篇各自带结构标题；特典标题不是「后续作品的章节」，
+  // 不能因为它而放弃在后记处截断，否则译本侧会多出后记与特典整段内容。
+  const text = epubHtmlToText(
+    '<h1>第一章</h1><p>第一部正文内容足够长，可以被正文检测逻辑识别。</p>'
+    + '<h1>后记</h1><p>作者后记内容。</p>'
+    + '<h1>特典短篇</h1><h2>GAMERS特典 通过最终Boss来判定社会威胁的理论</h2>'
+    + '<p>特典正文内容。</p>',
+    { structuralHeadings: true },
+  );
+  const sliced = sliceMainDocument(text, "cn");
+  assert.match(sliced, /第一部正文内容/);
+  assert.doesNotMatch(sliced, /作者后记内容/);
+  assert.doesNotMatch(sliced, /特典正文内容/);
+});
+
+test("后记之后的尾声仍然进入正文", () => {
+  // 尾声位于后记之后，但仍是正文故事；只裁掉后记段，不能把尾声一起丢掉。
+  const text = epubHtmlToText(
+    '<h1>第一章</h1><p>正文内容足够长，可以被正文检测逻辑识别。</p>'
+    + '<h1>后记</h1><p>作者后记内容。</p>'
+    + '<h1>尾声</h1><p>尾声仍是正篇故事。</p>',
+    { structuralHeadings: true },
+  );
+  const sliced = sliceMainDocument(text, "cn");
+  assert.match(sliced, /正文内容足够长/);
+  assert.doesNotMatch(sliced, /作者后记内容/);
+  assert.match(sliced, /尾声仍是正篇故事/);
+
+  const jp = epubHtmlToText(
+    '<h1>第一章</h1><p>本文の内容です。</p>'
+    + '<h1>あとがき</h1><p>作者の後書き。</p>'
+    + '<h1>エピローグ</h1><p>エピローグは本文です。</p>',
+    { structuralHeadings: true },
+  );
+  const jpSliced = sliceMainDocument(jp, "jp");
+  assert.doesNotMatch(jpSliced, /作者の後書き/);
+  assert.match(jpSliced, /エピローグは本文です/);
+});
+
 test("识别 index-X 的引子、序章与尾声标题", () => {
   const cn = splitParagraphs("引子\n\n引子正文内容。\n\n序章 启程\n\n序章正文。\n\n尾声\n\n尾声叙述。", "cn");
   assert.deepEqual(cn.map((paragraph) => paragraph.chapter), ["引子", "序章 启程", "尾声"]);

@@ -1,7 +1,6 @@
 import json
 import os
 import sys
-from itertools import permutations
 from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -57,18 +56,18 @@ PIVOT_LANG = os.environ.get("TRANS_COMPARATOR_JP_PIVOT", "cn")
 BATCH_SIZE = 32
 REPORT_BATCH_SIZE = 256
 SEARCH_WINDOW = 24
+BAND_MARGIN = 16
 MAX_CHARS = 420
 PROGRESS_ENV = os.environ.get("TRANS_COMPARATOR_PROGRESS")
 SHOW_PROGRESS = PROGRESS_ENV.lower() not in ("0", "false", "no") if PROGRESS_ENV is not None else sys.stderr.isatty()
 MACHINE_PROGRESS = os.environ.get("TRANS_COMPARATOR_MACHINE_PROGRESS") == "1"
 PROGRESS_PREFIX = "@@transcomparator-progress@@"
 # 原文段落是表格行的最小单位：一张表格行只对应一段原文。
-# 2:2 只作为“相邻两段发生换序”的暂存组，随后按逐段相似度配成两个 1:1；
-# 译文侧仍允许多段对应一段原文（1:2），但不能把多段原文合成一行。
+# 译文侧允许拆并（1:2、0:1、1:0），但不允许换序：旧实现先用 2:2 暂存再按相似度
+# 互换，回填时会产生 pivotStart 回退的交叉区间，写回只能按行序定位，必然错位。
 MOVES = (
     (1, 1),
     (1, 2),
-    (2, 2),
     (1, 0),
     (0, 1),
 )
@@ -203,9 +202,20 @@ def group_score(jp_vecs: np.ndarray, pivot_vecs: np.ndarray, jp_start: int, jp_s
     return float(jp_group @ pivot_group) - merge_penalty
 
 
+def alignment_band(jp_count: int, pivot_count: int) -> int:
+    """搜索带至少覆盖两侧段数差造成的累计偏移。
+
+    旧实现固定 ±SEARCH_WINDOW：当译本侧多出的段落集中在书末（后记、特典未截断等），
+    按比例推算的期望位置会一路领先真实对角线，超过窗口后正确路径被裁掉，DP 只能
+    提前吸收多余译文段，整卷从此错位。带宽覆盖 |pivot-jp| 后再留余量即可避免。
+    """
+    return max(SEARCH_WINDOW, abs(int(pivot_count) - int(jp_count)) + BAND_MARGIN)
+
+
 def align_groups(jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
     jp_count = len(jp_vecs)
     pivot_count = len(pivot_vecs)
+    band = alignment_band(jp_count, pivot_count)
     neg = -1e9
     dp = np.full((jp_count + 1, pivot_count + 1), neg, dtype=np.float32)
     trace = np.full((jp_count + 1, pivot_count + 1, 2), -1, dtype=np.int16)
@@ -215,8 +225,8 @@ def align_groups(jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
         if i % max(1, jp_count // 100) == 0 or i == jp_count:
             report_progress(70 + (27 * i / max(1, jp_count)), "生成稳定对齐组", i, jp_count)
         expected = round((i / max(1, jp_count)) * pivot_count)
-        j_start = max(0, expected - SEARCH_WINDOW)
-        j_end = min(pivot_count, expected + SEARCH_WINDOW)
+        j_start = max(0, expected - band)
+        j_end = min(pivot_count, expected + band)
 
         for j in range(j_start, j_end + 1):
             if dp[i, j] <= neg / 2:
@@ -229,7 +239,7 @@ def align_groups(jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
                     continue
 
                 next_expected = round((ni / max(1, jp_count)) * pivot_count)
-                if abs(nj - next_expected) > SEARCH_WINDOW:
+                if abs(nj - next_expected) > band:
                     continue
 
                 score = group_score(jp_vecs, pivot_vecs, i, jp_step, j, pivot_step)
@@ -268,48 +278,38 @@ def align_groups(jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
         j = pivot_start
 
     groups.reverse()
-    return split_reordered_groups(groups, jp_vecs, pivot_vecs)
+    return validate_alignment_groups(groups, jp_count, pivot_count)
 
 
-def split_reordered_groups(groups: list[dict], jp_vecs: np.ndarray, pivot_vecs: np.ndarray) -> list[dict]:
-    """把 2:2 换序组配成两个 1:1，确保一张表格行只对应一段原文。"""
-    split_groups = []
+def validate_alignment_groups(groups: list[dict], jp_count: int, pivot_count: int) -> list[dict]:
+    """校验对齐组覆盖完整、原文一段一行且译文区间首尾相接。
+
+    行组装与写回都按组顺序定位原文块；任何回退或跳段都会让写回找不到唯一位置。
+    旧数据里的 2:2 换序组会产出交叉区间，这里显式拒绝，不再静默产出错位快照。
+    """
+    jp_cursor = 0
+    pivot_cursor = 0
     for group in groups:
-        jp_size = int(group["jpEnd"]) - int(group["jpStart"])
-        pivot_size = int(group["pivotEnd"]) - int(group["pivotStart"])
-        if jp_size <= 1:
-            split_groups.append(group)
-            continue
-        if jp_size != pivot_size:
-            raise ValueError(f"原文对齐组 {group['jpStart']}:{group['jpEnd']} 无法保证一段原文一行")
-
         jp_start = int(group["jpStart"])
+        jp_end = int(group["jpEnd"])
         pivot_start = int(group["pivotStart"])
-        offsets = range(jp_size)
-        best = max(
-            permutations(offsets),
-            key=lambda assignment: sum(
-                float(jp_vecs[jp_start + jp_offset] @ pivot_vecs[pivot_start + pivot_offset])
-                for jp_offset, pivot_offset in enumerate(assignment)
-            ),
-        )
-        for jp_offset, pivot_offset in enumerate(best):
-            jp_index = jp_start + jp_offset
-            pivot_index = pivot_start + pivot_offset
-            split_groups.append(
-                {
-                    "jpStart": jp_index,
-                    "jpEnd": jp_index + 1,
-                    "pivotStart": pivot_index,
-                    "pivotEnd": pivot_index + 1,
-                    "score": round(float(jp_vecs[jp_index] @ pivot_vecs[pivot_index]), 4),
-                    "relation": "1:1",
-                }
+        pivot_end = int(group["pivotEnd"])
+        if jp_start != jp_cursor or pivot_start != pivot_cursor:
+            raise ValueError(
+                "对齐组区间不连续："
+                f"jp {jp_start}:{jp_end} / pivot {pivot_start}:{pivot_end}，"
+                f"期望起点 jp={jp_cursor} pivot={pivot_cursor}"
             )
+        if jp_end - jp_start > 1:
+            raise ValueError(f"原文对齐组 {jp_start}:{jp_end} 含多段原文，违反一段原文一行")
+        jp_cursor = jp_end
+        pivot_cursor = pivot_end
 
-    split_groups.sort(key=lambda group: (int(group["jpStart"]), int(group["pivotStart"])))
-    return split_groups
-
+    if jp_cursor != jp_count or pivot_cursor != pivot_count:
+        raise ValueError(
+            f"对齐组未覆盖全部段落：jp {jp_cursor}/{jp_count}，pivot {pivot_cursor}/{pivot_count}"
+        )
+    return groups
 
 
 def main() -> None:

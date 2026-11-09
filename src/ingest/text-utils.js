@@ -92,6 +92,15 @@ const documentEndPatterns = {
   ]),
 };
 
+// 后记、特典、版权等书末标题属于附录边界，不是「后续作品的章节」。
+// 中文 EPUB 常见「后记」后紧跟「特典短篇」结构标题；若把它当成后续章节，
+// 后记就不会被截断，译本侧会多出整段后记与特典，跨语言对齐随之整体错位。
+const backMatterHeadingPattern = /(后记|後記|あとがき|後書き|特典|版权|版權|译注|譯注|奥付|colophon|copyright)/i;
+
+function isBackMatterHeading(title) {
+  return Boolean(title) && backMatterHeadingPattern.test(title);
+}
+
 function sliceMain(text, startMarker, endMarker, options = {}) {
   const { requireStart = true, trimEnd = true } = options;
   const start = text.indexOf(startMarker);
@@ -237,19 +246,36 @@ function sliceMainDocument(text, lang, markers = {}) {
   const pattern = documentEndPatterns[lang];
   if (!pattern) return body;
 
-  // 合并的 EPUB 可能包含处于中间位置的后记，后方紧跟另一部作品。
-  // 仅在下一个标记之前未出现后续章节标题时才截断后记/附录标记；
-  // 否则继续扫描直到找到最终末尾标记。
+  // 后记/附录标记之后若还有正文，只裁掉「标记到该正文之间」的部分：
+  // 后记本身不进入比较，但后记之后的尾声仍是正文，合卷中下一部作品的章节也要保留。
+  // 没有任何后续正文时，从标记起到卷末全部截断。
   const matcher = new RegExp(pattern.source, `${pattern.flags.replace(/g/g, "")}g`);
+  const cuts = [];
   let match;
   while ((match = matcher.exec(body)) !== null) {
-    const remainder = body.slice(match.index + match[0].length);
-    const nextMarker = remainder.search(pattern);
-    const section = nextMarker === -1 ? remainder : remainder.slice(0, nextMarker);
-    const hasLaterChapter = blockRanges(section).some((range) => Boolean(normalizeTitle(range.text, lang)));
-    if (!hasLaterChapter) return body.slice(0, match.index);
+    const afterMarker = match.index + match[0].length;
+    const nextMarkerOffset = body.slice(afterMarker).search(pattern);
+    const sectionEnd = nextMarkerOffset === -1 ? body.length : afterMarker + nextMarkerOffset;
+    const section = body.slice(afterMarker, sectionEnd);
+    const laterChapter = blockRanges(section).find((range) => {
+      const title = normalizeTitle(range.text, lang);
+      return Boolean(title) && !isBackMatterHeading(title);
+    });
+    if (!laterChapter) {
+      cuts.push([match.index, body.length]);
+      break;
+    }
+    const resumeAt = afterMarker + laterChapter.start;
+    cuts.push([match.index, resumeAt]);
+    matcher.lastIndex = resumeAt;
   }
-  return body;
+
+  let result = body;
+  for (let k = cuts.length - 1; k >= 0; k -= 1) {
+    const [from, to] = cuts[k];
+    result = result.slice(0, from) + result.slice(to);
+  }
+  return result;
 }
 
 function sliceMainForInput(text, lang, inputMode = "document", markers = {}) {
