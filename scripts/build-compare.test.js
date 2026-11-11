@@ -327,6 +327,39 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
+test("说话习惯构建期摘要不重复相同档案结果", () => {
+  const speechHabits = {
+    version: 6,
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    errors: [],
+    byProfile: {
+      novel: { summary: { activatedChapters: 10, chapters: 11, missRows: 2 }, missIndexes: [] },
+      demo: { summary: { activatedChapters: 10, chapters: 11, missRows: 2 }, missIndexes: [] },
+    },
+  };
+  const html = makeHtml([], {
+    comparisonMode: "bilingual",
+    files: { jp: "", cn: "" },
+    labels: {},
+  }, {
+    generatedAt: "2026-01-01T00:00:00.000Z",
+    projectKey: "speech-habit-summary",
+    rowsSignature: "rows",
+    notesStorage: { key: "notes" },
+  }, speechHabits);
+  const source = html.match(/function speechHabitLayerSummary\(\) \{[\s\S]*?\n    \}/)[0];
+  const summarize = (layer) => vm.runInNewContext(`(${source})`, { speechHabitLayer: layer });
+
+  assert.equal(summarize(speechHabits)(), "10/11 章命中、2 行疑似流失");
+  assert.equal(summarize({
+    ...speechHabits,
+    byProfile: {
+      ...speechHabits.byProfile,
+      demo: { summary: { activatedChapters: 9, chapters: 11, missRows: 3 }, missIndexes: [] },
+    },
+  })(), "10/11 章命中、2 行疑似流失；9/11 章命中、3 行疑似流失");
+});
+
 test("三语工作台允许 AI 目标列选择 B 或 C", () => {
   const rows = [{
     index: 1,

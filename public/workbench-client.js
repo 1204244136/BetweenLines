@@ -789,7 +789,8 @@
     function speechHabitLayerSummary() {
       const entries = Object.values(speechHabitLayer?.byProfile || {});
       if (!entries.length) return "";
-      return entries.map((entry) => `${entry.summary.activatedChapters}/${entry.summary.chapters} 章命中、${entry.summary.missRows} 行疑似流失`).join("；");
+      const summaries = entries.map((entry) => `${entry.summary.activatedChapters}/${entry.summary.chapters} 章命中、${entry.summary.missRows} 行疑似流失`);
+      return [...new Set(summaries)].join("；");
     }
     // 构建期算好的译名表判定：跑任务之前就能看到哪些行会被译名表处理（一致的行不调用模型）。
     // 判定与「校对模式 + 目标列」绑定，切换后重新取用；跑过 AI/预筛的行以真实备注为准，不再叠徽标。
