@@ -315,6 +315,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     <span class="ai-stage-card-label">阶段一 事实初审</span>
                     <span id="stage1StatusPill" class="ai-stage-status-pill" data-state="idle">待命</span>
                   </div>
+                  <div class="ai-stage-runtime-line" aria-label="阶段1运行与进度">
+                    <div id="stage1RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div id="stage1ProgressText" class="ai-stage-progress-text" hidden></div>
+                  </div>
                 </div>
                 <div class="ai-stage-card-body">
                   <div class="ai-stage-card-main">
@@ -334,10 +338,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   </div>
 
                   <div class="ai-stage-runtime" aria-label="阶段1运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage1RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
-                      <div id="stage1ProgressText" class="ai-stage-progress-text" hidden></div>
-                    </div>
                     <div id="stage1ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage1Progress"></span></div>
                   </div>
                 </div>
@@ -347,6 +347,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <div class="ai-stage-card-title-row">
                     <span class="ai-stage-card-label">阶段二 文学复审</span>
                     <span id="stage2StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
+                  </div>
+                  <div class="ai-stage-runtime-line" aria-label="阶段2运行与进度">
+                    <div id="stage2RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div id="stage2ProgressText" class="ai-stage-progress-text" hidden></div>
                   </div>
                 </div>
                 <div class="ai-stage-card-body">
@@ -367,10 +371,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   </div>
 
                   <div class="ai-stage-runtime" aria-label="阶段2运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage2RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
-                      <div id="stage2ProgressText" class="ai-stage-progress-text" hidden></div>
-                    </div>
                     <div id="stage2ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage2Progress"></span></div>
                   </div>
                 </div>
@@ -380,6 +380,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <div class="ai-stage-card-title-row">
                     <span class="ai-stage-card-label">阶段三 终审仲裁</span>
                     <span id="stage3StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
+                  </div>
+                  <div class="ai-stage-runtime-line" aria-label="阶段3运行与进度">
+                    <div id="stage3RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
+                    <div id="stage3ProgressText" class="ai-stage-progress-text" hidden></div>
                   </div>
                 </div>
                 <div class="ai-stage-card-body">
@@ -398,10 +402,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                     </div>
                   </div>
                   <div class="ai-stage-runtime" aria-label="阶段3运行与待办">
-                    <div class="ai-stage-runtime-line">
-                      <div id="stage3RuntimeInfo" class="ai-stage-runtime-info" hidden></div>
-                      <div id="stage3ProgressText" class="ai-stage-progress-text" hidden></div>
-                    </div>
                     <div id="stage3ProgressWrap" class="ai-stage-card-progress" hidden><span id="stage3Progress"></span></div>
                   </div>
                 </div>

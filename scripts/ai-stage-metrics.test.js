@@ -101,7 +101,7 @@ test("初审直通占比：归属通过行子集，空分母不显示百分比�
   assert.doesNotMatch(ui.element("aiStageFastPassRate").title, /228|442|100%/);
 });
 
-test("阶段卡片分组：待办与异常紧随指标，进度条位于运行区底部且无当前行明细条", () => {
+test("阶段卡片分组：标题行显示运行与进度，待办紧随指标且进度条保留底部轨道", () => {
   const ui = createWorkbench(undefined, { strictIds: true });
   const markup = ui.html.split("<script>")[0];
   for (let stage = 1; stage <= 3; stage++) {
@@ -111,6 +111,9 @@ test("阶段卡片分组：待办与异常紧随指标，进度条位于运行�
     const mainPosition = card.indexOf('class="ai-stage-card-main"');
     const summaryPosition = card.indexOf('class="ai-stage-runtime-summary"');
     const runtimePosition = card.indexOf('class="ai-stage-runtime"');
+    const head = card.slice(card.indexOf('class="ai-stage-card-head"'), card.indexOf('class="ai-stage-card-body"'));
+    assert.match(head, new RegExp('id="stage' + stage + 'RuntimeInfo"'));
+    assert.match(head, new RegExp('id="stage' + stage + 'ProgressText"'));
     assert.ok(mainPosition < card.indexOf('class="ai-stage-card-sub"'));
     assert.ok(summaryPosition > card.indexOf('class="ai-stage-card-sub"'));
     assert.ok(summaryPosition < runtimePosition, "待办与异常不再单独占运行区的一行");
@@ -119,7 +122,8 @@ test("阶段卡片分组：待办与异常紧随指标，进度条位于运行�
     if (stage > 1) assert.match(summary, new RegExp('id="stage' + stage + 'PendingItem"'));
     assert.match(card, new RegExp('class="ai-stage-runtime-line"[^>]*>\\s*<div id="stage' + stage + 'RuntimeInfo"[^>]*>\\s*</div>\\s*<div id="stage' + stage + 'ProgressText"'));
     const runtime = card.slice(runtimePosition);
-    assert.ok(runtime.indexOf('id="stage' + stage + 'ProgressWrap"') > runtime.indexOf('id="stage' + stage + 'ProgressText"'));
+    assert.ok(runtime.indexOf('id="stage' + stage + 'ProgressWrap"') >= 0);
+    assert.doesNotMatch(runtime, /id="stage[123](?:RuntimeInfo|ProgressText)"/);
     assert.doesNotMatch(runtime, /id="stage[123](?:ActiveInfo|ActiveRowsText)"/);
     assert.match(runtime, new RegExp('id="stage' + stage + 'ProgressWrap"[^>]*><span id="stage' + stage + 'Progress"></span></div>\\s*</div>\\s*</div>\\s*</div>'));
   }

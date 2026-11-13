@@ -1766,7 +1766,7 @@ details[open] > summary .details-toggle::before {
 /* Shared pool controls retain stable nodes during runtime polling. */
 .ai-pool {
   margin: 6px 0;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--ai-line);
   border-radius: var(--ai-radius);
   background: var(--ai-surface-subtle);
@@ -1817,7 +1817,7 @@ details[open] > summary .details-toggle::before {
 .ai-pool-stage-choice label { font-size: 12px; white-space: nowrap; gap: 4px; }
 .ai-pool-stage-choice input[type="checkbox"], .ai-pool-priority-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--ai-focus); }
 .ai-pool .ai-pool-priority { width: 40px; height: 24px; min-width: 0; padding: 1px 4px; font-size: 11px; }
-.ai-pool-footer { flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; }
+.ai-pool-footer { flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
 .ai-pool-status { font-size: 11px; color: var(--ai-text); overflow-wrap: anywhere; }
 .ai-pool-status[data-state="blocked"] { color: var(--ai-warning-fg-accent); }
 .ai-pool-status[data-state="completed"] { color: var(--ai-success-fg); }
@@ -1840,34 +1840,36 @@ details[open] > summary .details-toggle::before {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(60px, 14%, 200px) minmax(0, 1.2fr);
-  height: clamp(420px, 52vh, 600px);
-  margin-top: 8px;
+  margin-top: 4px;
   isolation: isolate;
 }
 .ai-pool-flow-board .ai-pool-presets {
   grid-column: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  contain: size;
   scrollbar-width: thin;
 }
 .ai-pool-flow-board .ai-pool-preset {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  align-items: center;
   justify-content: center;
   flex: 1 0 auto;
-  min-height: 100px;
-  gap: 6px;
-  padding: 10px 114px 10px 10px;
+  min-height: 56px;
+  gap: 3px 8px;
+  padding: 6px 114px 6px 10px;
 }
-.ai-pool-flow-board .ai-pool-preset-identity { display: block; width: 100%; }
+.ai-pool-flow-board .ai-pool-preset-identity { display: block; width: 100%; grid-column: 1 / -1; }
 .ai-pool-flow-board .ai-pool-preset-name {
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1885,23 +1887,33 @@ details[open] > summary .details-toggle::before {
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
-.ai-pool-flow-board .ai-pool-stage-choices { width: 100%; }
-.ai-pool-flow-board .ai-pool-preset > button { align-self: flex-start; }
+.ai-pool-flow-board .ai-pool-stage-choices { width: 100%; grid-column: 1; }
+.ai-pool-flow-board .ai-pool-preset > button { grid-area: 2 / 2; height: 22px; }
 .ai-pool-flow-board .ai-stage-cards {
   grid-column: 3;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(min-content, 1fr));
   min-width: 0;
-  gap: 8px;
+  min-height: clamp(180px, 16vh, 192px);
+  gap: 6px;
 }
-.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 8px 10px; }
+.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 3px 8px; }
+.ai-pool-flow-board .ai-stage-card-head { display: flex; min-height: 18px; gap: 6px; }
+.ai-pool-flow-board .ai-stage-card-title-row { flex: 0 0 auto; }
+.ai-pool-flow-board .ai-stage-runtime-line { flex: 1; justify-content: flex-end; }
 .ai-pool-flow-board .ai-stage-card-body {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 6px;
+  gap: 1px;
+  padding: 0;
 }
+.ai-pool-flow-board .ai-stage-card-main { display: flex; flex-wrap: wrap; gap: 2px 8px; line-height: 1.35; }
+.ai-pool-flow-board .ai-stage-card-sub { flex-wrap: wrap; }
+.ai-pool-flow-board .ai-stage-runtime { grid-template-rows: 3px; gap: 0; }
+.ai-pool-flow-board .ai-stage-runtime .ai-stage-card-progress { grid-row: 1; }
+.ai-pool-flow-board .ai-stage-card-progress { height: 3px; }
 .ai-pool-flow-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 2; }
 .ai-pool-flow-connection { --flow-color: var(--flow-base); --flow-wave-color: var(--flow-deep); --flow-node-color: var(--ai-focus); }
 .ai-pool-flow-connection.is-hovered { --flow-color: var(--flow-hover-base); --flow-wave-color: var(--flow-hover-deep); --flow-node-color: var(--flow-hover); --flow-idle: var(--flow-hover); }
@@ -1941,14 +1953,13 @@ details[open] > summary .details-toggle::before {
 .ai-pool-flow-tooltip[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .ai-pool-flow-surge { animation: none; opacity: 0; } }
 @media (max-width: 900px) {
-  .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1.2fr); height: 570px; }
+  .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1.2fr); }
   .ai-pool-flow-board .ai-pool-preset { padding-right: 88px; }
   .ai-pool-flow-board .ai-pool-preset-runtime { width: 72px; font-size: 10px; }
 }
 @media (max-width: 640px) {
-  .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr); height: auto; gap: 12px; }
-  .ai-pool-flow-board .ai-pool-presets { max-height: 380px; }
-  .ai-pool-flow-board .ai-stage-cards { grid-column: 1; grid-template-rows: none; }
-  .ai-pool-flow-board .ai-stage-card { min-height: 128px; }
+  .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .ai-pool-flow-board .ai-pool-presets { contain: none; max-height: 144px; }
+  .ai-pool-flow-board .ai-stage-cards { grid-column: 1; grid-template-rows: none; min-height: 0; }
   .ai-pool-flow-svg { display: none; }
 }
