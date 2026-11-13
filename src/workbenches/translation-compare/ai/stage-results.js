@@ -4,6 +4,8 @@
  * stage can use the same shape without introducing a second execution loop.
  */
 
+const { stageNoteState } = require("./stage-note-state");
+
 const CRITIQUE_ATTITUDES = new Set(["accept", "modify", "reject", "escalate"]);
 
 const REVIEW_STAGES = new Set(["gatekeeper", "stylist", "arbiter"]);
@@ -64,7 +66,7 @@ function createStageMetrics(value = {}) {
   const stage3Arbitrated = Math.max(0, Number(value.stage3Arbitrated) || 0);
   const stage2Diverged = Math.max(0, Number(value.stage2Diverged) || stage3Arbitrated);
   const stage2Pending = Math.max(0, Number(value.stage2Pending) || (stage1NeedsEdit + stage1Unclear - stage2Reviewed));
-  const stage3Pending = Math.max(0, Number(value.stage3Pending) || (stage2Diverged - stage3Arbitrated));
+  const stage3Pending = Math.max(0, Number(value.stage3Pending) || 0);
   const arbitrationGatekeeper = Math.max(0, Number(value.arbitrationGatekeeper) || 0);
   const arbitrationStylist = Math.max(0, Number(value.arbitrationStylist) || 0);
   const arbitrationSynthesis = Math.max(0, Number(value.arbitrationSynthesis) || 0);
@@ -236,6 +238,9 @@ function computeResultMetricsDelta(result = {}, { prefilterKind = "" } = {}) {
     const diverged = (hasStage2Review && (attitude === "modify" || attitude === "reject" || attitude === "escalate" || isPendingArbiterResult(result)))
       || arbitrated;
     if (diverged) add("stage2Diverged");
+    if (!arbitrated && stageNoteState(noteText, {
+      reviewed: hasStage2Review, arbitrated, diverged, escalated: attitude === "escalate",
+    }).pendingArbitration) add("stage3Pending");
 
     if (arbitrated) {
       add("stage3Arbitrated");
@@ -286,7 +291,6 @@ function applyMetricsDelta(metrics, delta = {}, sign = 1) {
 function recomputeDerivedMetrics(metrics) {
   metrics.stage1Total = (metrics.stage1Passed || 0) + (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0);
   metrics.stage2Pending = Math.max(0, (metrics.stage1NeedsEdit || 0) + (metrics.stage1Unclear || 0) - (metrics.stage2Reviewed || 0));
-  metrics.stage3Pending = Math.max(0, (metrics.stage2Diverged || 0) - (metrics.stage3Arbitrated || 0));
   return metrics;
 }
 

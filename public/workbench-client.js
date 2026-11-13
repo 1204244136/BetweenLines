@@ -2539,8 +2539,7 @@
       return data.semantic || data.modify || data.severity || data.grade || data.score !== null || data.revision || data.analysis ? data : null;
     }
 
-    // 复审与初审产生立场或方案分歧的判据：阶段二卡片「分歧」、阶段三「待仲裁」、
-    // 「待终审仲裁」筛选与 AI 启动条件共用这一份，避免同一批行各处各说各话。
+    // 历史分歧保留复审调整经历；是否仍须仲裁由 pendingArbitration 独立裁决。
     function isStage2DivergedNote(parsed, noteText = "") {
       return stageNoteState(noteText).diverged;
     }
@@ -4922,12 +4921,8 @@
           }
         }
 
-        // 「复审分歧」= 复审与初审产生立场或方案分歧的行数（含已仲裁与待仲裁）。
-        // 判据必须与「待终审仲裁」筛选、启动弹窗同源（getStage3RowStatus）：
-        // 只在拿到仲裁结论时才 +1 的话，仲裁队列跑空后分歧会塌回「已仲裁数」，
-        // 于是卡片写「1 分歧」、弹窗写「1583 条分歧行待仲裁」，两边各说各话。
-        const stage3RowStatus = projection.stage3;
-        if (stage3RowStatus.isArbitrated || stage3RowStatus.isPending) {
+        // 历史分歧包含已采用复审成品的调整，计数与点击筛选共同保留这些行。
+        if (state.diverged || hasStage3) {
           stage2Diverged += 1;
           recordMetricRow("stage2Diverged");
         }
@@ -4963,7 +4958,7 @@
       }
 
       stage3Settled = Math.max(stage3Arbitrated, arbitrationGatekeeper + arbitrationStylist + arbitrationSynthesis + arbitrationOriginal);
-      // 已仲裁记录保留在分歧统计内；人工确认只移除尚待仲裁的待办。
+      // 分歧记录不因复审定案、仲裁或人工确认而消失。
       stage2Diverged = metricRowIds.stage2Diverged?.size || 0;
       const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
       if (rowCache) {

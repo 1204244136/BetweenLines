@@ -16,7 +16,7 @@ const initial = [
   "分析：初审保留两段叙述。", "修改结果：" + initialRevision,
 ].join("\n");
 const reviewed = [
-  "[AI校对]", "语义是否相同：不同", "是否需要修改：是",
+  "[AI校对]", "语义是否相同：不同", "是否需要修改：待终审",
   "Gatekeeper初审：建议修改时间与动作的表述。", "初审改案：" + initialRevision,
   "Stylist复审[调整]：调整措辞并保留分段。", "复审改案：" + reviewedRevision,
   "分析：复审方案提交仲裁。", "修改结果：" + reviewedRevision,
@@ -224,6 +224,56 @@ test("继续模式排除内存已复审/已仲裁，但显式重跑仍保留对�
     const rerun = prepare({ ...options, continueOnly: false });
     assert.equal(rerun.stageItems[stage].length, 1);
     assert.equal(rerun.skippedDone, 0);
+  }
+});
+
+test("复审已采用调整成品的行不能在续跑或补队时重新进入仲裁", async (t) => {
+  const settledReview = [
+    "[AI校对]", "语义是否相同：不同", "是否需要修改：是",
+    "Gatekeeper初审：建议修改时间与动作的表述。", "初审改案：" + initialRevision,
+    "Stylist复审[调整]：仅改善行文，未驳回初审的具体修改。", "复审改案：" + reviewedRevision,
+    "分析：采用复审方案。", "修改结果：" + reviewedRevision,
+  ].join("\n");
+  assert.equal(isStage3DisputeRow(ROWS[0], settledReview), false);
+  const settledMemory = memory({ note: settledReview, critique: { attitude: "modify" } });
+  assert.equal(isStage3DisputeRow(ROWS[0], "", settledMemory), false);
+  assert.deepEqual(prepare({ stage: "stage3", continueOnly: true, rows: [ROWS[0]],
+    reusableResults: new Map([[1, settledMemory]]) }).stageItems.stage3, []);
+  for (const stage of ["stage1", "stage2", "stage3"]) {
+    await t.test(stage, () => {
+      const result = prepare({ stage, continueOnly: true, rows: [ROWS[0]], rowNotes: { 1: settledReview } });
+      assert.deepEqual(result.stageItems.stage3, []);
+      assert.deepEqual(result.stageItems.stage2, []);
+    });
+  }
+});
+
+test("显式待终审和真实仲裁异常仍能续跑，失败回退稿不替换完整上游输入", async (t) => {
+  const failedArbitration = reviewed.replace("是否需要修改：待终审", "是否需要修改：是")
+    .replace("修改结果：", "Arbiter仲裁调用异常：本地请求超时（等待响应头）。\n修改结果：");
+  for (const [name, note] of [["显式待终审", reviewed], ["仲裁异常", failedArbitration]]) {
+    await t.test(name, () => {
+      for (const stage of ["stage1", "stage2", "stage3"]) for (const reuseMemory of [false, true]) {
+        const completeDecision = {
+          needsEdit: true, better: "neither", revisedText: initialRevision,
+          stage1RevisedText: initialRevision, stage2RevisedText: reviewedRevision,
+          stylistReview: { revisedText: reviewedRevision, critique: { attitude: "modify", rejectedChanges: ["上游分歧"] } },
+        };
+        const snapshot = JSON.stringify(completeDecision);
+        const result = prepare({ stage, continueOnly: true, rows: [ROWS[0]], rowNotes: { 1: note },
+          notesSnapshotProvided: true,
+          reusableResults: reuseMemory ? new Map([[1, memory({ note, decision: completeDecision })]]) : new Map() });
+        assert.deepEqual(indexes(result.stageItems.stage3), [1]);
+        const item = result.stageItems.stage3[0];
+        if (reuseMemory) assert.equal(item.decision, completeDecision);
+        else assert.notEqual(item.decision, completeDecision);
+        assert.equal(item.decision.revisedText, initialRevision);
+        assert.equal(item.decision.stylistReview.revisedText, reviewedRevision);
+        assert.equal(item.targetText, ROWS[0].cn);
+        assert.equal(item.arbCheck.triggered, true);
+        assert.equal(JSON.stringify(completeDecision), snapshot);
+      }
+    });
   }
 });
 

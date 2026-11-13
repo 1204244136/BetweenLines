@@ -184,6 +184,7 @@ test("所有阶段数字独立筛选最新记录，筛选数量与统计一致",
   const ui = createWorkbench(undefined, { rows, strictIds: true });
   const noteItems = Object.fromEntries(noteTexts.map((note, i) => [i + 1, { note, manualDone: i >= 16 }]));
   ui.run(`Object.assign(notes, ${JSON.stringify(noteItems)}); markNotesDirtyForMetrics(); updateStageMetricsDashboard();`);
+  // 18 已人工确认但保留历史分歧；6/7 已交付成品，8 显式升级、15 仲裁失败仍待处理。
   const cases = [
     ["stage1PassedItem", "stage1Passed", [1, 2, 16]],
     ["stage1NeedsEditItem", "stage1NeedsEdit", [3, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 17, 18]],
@@ -192,7 +193,7 @@ test("所有阶段数字独立筛选最新记录，筛选数量与统计一致",
     ["stage1TotalItem", "stage1Total", rows.map((r) => r.index).filter((i) => i !== 13)],
     ["stage1ErrorItem", "stage1Errors", [13]],
     ["stage2ReviewedItem", "stage2Reviewed", [5, 6, 7, 8, 9, 10, 11, 12, 15, 17, 18]],
-    ["stage2DivergedItem", "stage2Diverged", [6, 7, 8, 9, 10, 11, 12, 15, 17]],
+    ["stage2DivergedItem", "stage2Diverged", [6, 7, 8, 9, 10, 11, 12, 15, 17, 18]],
     ["stage2AcceptItem", "critiqueAccept", [5]],
     ["stage2ModifyItem", "critiqueModify", [6, 9, 10, 11, 12, 15, 17, 18]],
     ["stage2RejectItem", "critiqueReject", [7]],
@@ -204,7 +205,7 @@ test("所有阶段数字独立筛选最新记录，筛选数量与统计一致",
     ["stage3StylistItem", "arbitrationStylist", [10]],
     ["stage3SynthesisItem", "arbitrationSynthesis", [11]],
     ["stage3OriginalItem", "arbitrationOriginal", [12]],
-    ["stage3PendingItem", "stage3Pending", [6, 7, 8, 15]],
+    ["stage3PendingItem", "stage3Pending", [8, 15]],
     ["stage3ErrorItem", "stage3Errors", [15]],
   ];
   for (const [id, metric, expected] of cases) {
@@ -225,6 +226,25 @@ test("所有阶段数字独立筛选最新记录，筛选数量与统计一致",
   await ui.element("clearFilter").dispatch("click");
   assert.equal(ui.run("filteredRows.length"), rows.length);
   for (const [id] of cases) assert.equal(ui.element(id).getAttribute("aria-pressed"), "false");
+});
+
+test("人工确认只移除仲裁待办，复审分歧经历与数字筛选继续保留", async () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run(`
+    notes["1"] = { note: "[AI校对]\\n是否需要修改：待终审\\n初审改案：初审案\\nStylist复审[调整]：存在实质分歧\\n复审改案：复审案", manualDone: false };
+    markNotesDirtyForMetrics(); updateStageMetricsDashboard();
+  `);
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage2Diverged"), 1);
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage3Pending"), 1);
+  await ui.element("stage3PendingItem").dispatch("click");
+  assert.deepEqual([...ui.run("filteredRows.map(row => row.index)")], [1]);
+
+  ui.run('notes["1"].manualDone = true; markNotesDirtyForMetrics(); updateStageMetricsDashboard(); applyFilters();');
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage2Diverged"), 1);
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage3Pending"), 0);
+  assert.deepEqual([...ui.run("filteredRows.map(row => row.index)")], []);
+  await ui.element("stage2DivergedItem").dispatch("click");
+  assert.deepEqual([...ui.run("filteredRows.map(row => row.index)")], [1]);
 });
 
 test("自动备注解析：parseAutomatedNote 提取各阶段改案并支持旧版兼容推断", () => {

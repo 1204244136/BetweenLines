@@ -810,6 +810,8 @@ test("独立复审：配了仲裁也仅跑复审，显式启动仲裁才消费�
 
     assert.equal(stylistRequests, totalRows, "每一行初审提改都要复审");
     assert.equal(arbiterRequests, 0, "复审分歧保留为仲裁待办，独立启动不能产生下游请求");
+    assert.ok(clientStatus().results.every((result) => /是否需要修改：待终审/.test(result.note)), "真正需要仲裁的独立复审结果必须显式保留待办");
+    assert.ok(clientStatus().results.every((result) => !/\n修改结果：/.test(result.note)), "未定案复审不得把上游改案交付为成品");
     const reviewedNotes = Object.fromEntries(clientStatus().results.map((result) => [result.index, result.note]));
     await startProofread({
       protocol: "compatible", baseUrl, model: "test-model", stage: "stage3",
@@ -1641,13 +1643,12 @@ test("多段备注重建：清空内存后从复审与仲裁起点保留完整�
   const reviewNote = [
     "[AI校对]",
     "语义是否相同：不同",
-    "是否需要修改：是",
+    "是否需要修改：待终审",
     "Gatekeeper初审：补齐三个段落中的动作与时间信息。",
     `初审改案：${gatekeeperRevision}`,
     "Stylist复审[调整]：调整动作描写，保留三个段落。",
     `复审改案：${stylistRevision}`,
     "分析：复审方案与初审存在分歧，等待终审。",
-    `修改结果：${stylistRevision}`,
   ].join("\n");
   const requests = [];
   const server = http.createServer((req, res) => {

@@ -1591,6 +1591,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     presets: config.presetPool, priorityEnabled: config.poolPriorityEnabled, policy, wake: () => dispatchWake?.(),
   }) : null;
   const retryItems = { stage1: new Map(), stage2: new Map(), stage3: new Map() };
+  // 启动时核对已有待办，随后只核对刚释放的行，不等慢请求收尾，也不反复扫描全页。
+  const poolRefillRows = new Map(poolDispatcher ? allRows.map((row) => [Number(row.index), row]) : []);
   let retryVersion = 0;
   const dispatchers = poolDispatcher?.stages || Object.fromEntries(Object.entries(stageDefinitionsFor(config)).map(([stageKey, definition]) => [stageKey,
     createStageDispatch({ ...definition, stageKey, policy, wake: () => dispatchWake?.() }),
@@ -1614,24 +1616,25 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
 
-  function refillPoolPending({ includeFailures = false } = {}) {
+  function refillPoolPending({ includeFailures = false, rows = allRows } = {}) {
     if (!poolDispatcher) return 0;
     const occupied = new Set(Object.values(dispatchers).flatMap((dispatcher) => {
       const state = dispatcher.snapshot();
       return [...state.pendingRows, ...state.activeRows].map(Number);
     }));
     const failed = new Set(Object.values(retryItems).flatMap((items) => [...items.keys()]));
-    const remaining = poolRemainingRows(config, allRows);
+    const remaining = poolRemainingRows(config, rows);
     const pendingIndexes = new Set(Object.values(remaining).flat().map(Number));
-    const completedIndexes = new Set(allRows.filter((row) => !pendingIndexes.has(Number(row.index))).map((row) => Number(row.index)));
-    const rowNotes = Object.fromEntries(allRows.map((row) => [row.index, poolRowNote(config, row.index)]));
-    const prepared = prepareStageInputs({ rows: allRows, labels,
+    const completedIndexes = new Set(rows.filter((row) => !pendingIndexes.has(Number(row.index))).map((row) => Number(row.index)));
+    const rowNotes = Object.fromEntries(rows.map((row) => [row.index, poolRowNote(config, row.index)]));
+    const prepared = prepareStageInputs({ rows, labels,
       config: { ...config, targetStage: "all", continueOnly: true, completedIndexes, rowNotes },
       plan: { startsAt: "stage1", cascadeToStylist: true, cascadeToArbiter: true },
       notesSnapshotProvided: true, currentResultFor: (index) => proofreadResults.get(index),
     });
     let added = 0;
     for (const stage of config.poolStages) {
+      if (isStageStopped(stage)) continue;
       const candidates = stage === "stage1" ? prepared.stage1Rows : prepared.stageItems[stage];
       for (const item of candidates) {
         const index = Number(item.row?.index ?? item.index);
@@ -1907,10 +1910,6 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       const noInFlight = Object.values(dispatchers).every((dispatcher) => dispatcher.snapshot().inFlight === 0);
       if (allEmpty || (status.stopRequested && noInFlight)) {
         if (poolDispatcher && !status.stopRequested) {
-          if (refillPoolPending()) {
-            queueMicrotask(dispatch);
-            return;
-          }
           if (retryScheduled) return;
           status.poolRuntime.uncovered = poolUncoveredRows(config, allRows);
           const unresolved = Object.values(retryItems).reduce((sum, items) => sum + items.size, 0);
@@ -2013,6 +2012,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
       const execute = { stage1: executeStage1, stage2: executeStage2, stage3: executeStage3 };
       if (poolDispatcher) {
+        if (poolRefillRows.size) {
+          const rows = [...poolRefillRows.values()];
+          poolRefillRows.clear();
+          refillPoolPending({ rows });
+        }
         while (!status.stopRequested && !settled) {
           const next = poolDispatcher.take({ isStageEnabled: (stage) => activeStages.has(stage) && !status.stageControls[stage].stopRequested });
           if (!next) break;
@@ -2129,6 +2133,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } finally {
         dispatchers.stage1.release(request, { ok: !status.stageErrors.stage1[row.index] });
+        if (poolDispatcher) poolRefillRows.set(Number(row.index), row);
         syncStagePipelineQueues();
         dispatch();
       }
@@ -2164,6 +2169,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         // 已有分歧的过程稿仍不运行成品门禁，保留原始仲裁输入。
         const finalDecision = s2.arbCheck?.triggered ? null : guardFinalDecision(s2, config);
         const needsArbiter = s2.arbCheck?.triggered || (finalDecision && shouldRetryWithContext(finalDecision));
+        const pendingResult = needsArbiter ? decisionToResult(s2.row, {
+          ...(finalDecision || s2.decision), stage: "stylist", needsContext: true, better: "unclear",
+        }, s2.targetLabel, s2.counterpartLabel, s2.targetKey, config.proofreadMode) : null;
         if (needsArbiter && links.stage3 && !isStageStopped("stage3")) {
           const arbitrationInput = finalDecision ? {
             ...s2, decision: finalDecision,
@@ -2171,17 +2179,14 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           } : s2;
           // 先发布已复审、待终审的备注，及时解除旧复审异常；仲裁仍使用原始阶段输入。
           // 中间方案不经过成品门禁，也不作为最终修改结果交付或累计处理数量。
-          const pendingResult = decisionToResult(s2.row, {
-            ...arbitrationInput.decision, stage: "stylist", needsContext: true, better: "unclear",
-          }, s2.targetLabel, s2.counterpartLabel, s2.targetKey, config.proofreadMode);
           addResult(pendingResult, { intermediate: true });
           // 产生分歧，且这条流水线配了仲裁：推入 Stage 3 队列！
           dispatchers.stage3.enqueue(arbitrationInput);
           syncStagePipelineQueues();
           pushLog(`第 ${s2.row.index} 行：文学复审产生分歧，移交 Stage 3 (Arbiter 终审仲裁队列)。`);
         } else {
-          // 没有下游仲裁，或未产生分歧：采纳复审结论，直接完成
-          const result = finalizeRowResult(s2, config, finalDecision || undefined);
+          // 尚未启用的仲裁保留显式待办，只有真正定案的复审才交付成品。
+          const result = pendingResult || finalizeRowResult(s2, config, finalDecision || undefined);
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2.row.index);
         }
@@ -2218,6 +2223,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } finally {
         dispatchers.stage2.release(request, { ok: !status.stageErrors.stage2[s1Item.row.index] });
+        if (poolDispatcher) poolRefillRows.set(Number(s1Item.row.index), s1Item.row);
         if (!links.stage3 || !hasPending("stage3", s1Item.row.index)) {
           if (!hasPending("stage2", s1Item.row.index)) {
             status.active = status.active.filter((idx) => idx !== s1Item.row.index);
@@ -2281,6 +2287,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       } finally {
         dispatchers.stage3.release(request, { ok: !status.stageErrors.stage3[s2Item.row.index] });
+        if (poolDispatcher) poolRefillRows.set(Number(s2Item.row.index), s2Item.row);
         if (!hasPending("stage3", s2Item.row.index)) {
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
         }

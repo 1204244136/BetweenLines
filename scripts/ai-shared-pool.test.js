@@ -164,6 +164,44 @@ test("循环池：拒答行换预设，拒答预设不再收到同阶段同一�
   assert.equal(done.stageMetrics.stage3Settled, 1);
 });
 
+test("共享池：复审直接定案的调整行不计待仲裁，也不在慢请求结束后重复仲裁", async (t) => {
+  let releaseSlow;
+  const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
+  const revision = "采用一致的完整改案。";
+  const scenario = await fixture(t, {
+    rowsCount: 2, presets: ["healthy", "slow"],
+    respond: async (call) => {
+      if (call.input.model === "slow") await slowGate;
+      if (call.stage === "stage1") return { content: {
+        semanticSame: false, needsEdit: true, decision: "replace", revisedText: revision, summary: "修正措辞", score: 80,
+      } };
+      if (call.stage === "stage2") return { content: {
+        critique: { attitude: "modify", rationale: "改案一致，无实质分歧", rejectedChanges: [] },
+        revisedText: revision, summary: "采用复审改案",
+      } };
+    },
+  });
+  try {
+    await startProofread({ ...scenario.config, rowNotes: {
+      2: "[AI校对]\n语义是否相同：不同\n是否需要修改：待终审\nGatekeeper初审：修改措辞\n初审改案：初审改案。\nStylist复审[提交仲裁]：存在分歧\n复审改案：复审改案。",
+    } });
+    await until(() => clientStatus().results.some((result) => result.index === 1 && /修改结果：/.test(result.note)));
+    const live = clientStatus();
+    assert.equal(live.stageMetrics.stage2Diverged, 1, "保留复审调整的历史统计");
+    assert.equal(live.stageMetrics.stage3Pending, 0, "已交付完整改案的调整不新增仲裁待办");
+    assert.equal(live.stagePipelines.stage3.inFlight, 1);
+    assert.equal(live.poolPresets.find((preset) => preset.presetId === "healthy").inFlight, 0);
+    assert.equal(scenario.calls.filter((call) => call.stage === "stage3").length, 1);
+  } finally {
+    releaseSlow();
+  }
+  await until(() => !clientStatus().running);
+  assert.deepEqual(scenario.calls.map((call) => call.stage).sort(), ["stage1", "stage2", "stage3"]);
+  assert.equal(clientStatus().poolState, "completed");
+  assert.equal(clientStatus().stageMetrics.stage3Settled, 1);
+  assert.match(clientStatus().results.find((result) => result.index === 1).note, /修改结果：采用一致的完整改案。/);
+});
+
 test("循环池：所有预设拒答后报告阻塞而不无限重跑", async (t) => {
   const scenario = await fixture(t, { rowsCount: 1, mode: "loop", respond: () => ({ status: 400, error: "content_filter: sensitive content" }) });
   await startProofread(scenario.config);

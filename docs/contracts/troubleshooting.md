@@ -208,6 +208,12 @@
 - **当前实现**：复审交接时发布「已复审、待终审」中间结果，立即替换旧失败备注；仲裁成功或失败通过同一修订游标覆盖，处理数量只在整行收尾时累计。重试同步撤销旧下游异常数，仲裁中的行只留在仲裁待办；显式待终审的复审记录可直接恢复仲裁。
 - **回归**：`node --test scripts/ai-stage-controls.test.js scripts/stage-note-state.test.js scripts/ai-stage-metrics-regression.test.js`，覆盖真实请求交接、成功/失败仲裁、同一运行重试、页面异常归属与复审采纳但无改案的待终审恢复。
 
+### 待仲裁很多但预设池几乎空闲，慢请求结束后突然批量仲裁
+
+- **根因**：旧判据把所有复审「调整」都视作仲裁待办，包括已直接采纳完整复审稿的行；它们未进入实际仲裁队列，恢复补队又只在三个阶段全部清空后运行，导致一个慢请求挡住其它通道，随后把复审已定案记录额外送审。
+- **当前实现**：复审定案、历史分歧与真实待仲裁使用共享判据区分；待仲裁逐行计算。启动及请求释放后及时核对真实待办，只检查发生变化的行；异常重试继续保留原阶段输入和等待期限。实现规则见 [AI 契约](ai-proofread-contract.md#当前轮次备注与待办的唯一判据)。
+- **回归**：`node --test scripts/ai-shared-pool.test.js scripts/stage-inputs.test.js scripts/stage-note-state.test.js scripts/ai-stage-metrics-regression.test.js scripts/ai-stage-metrics.test.js`，覆盖复审直接定案不额外仲裁、真实待终审与失败恢复、尾部慢请求和统计口径。
+
 ---
 
 ## 写回异常

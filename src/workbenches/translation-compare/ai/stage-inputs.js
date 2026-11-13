@@ -208,12 +208,13 @@ function parseStoredNote(note = "") {
 }
 
 function isStage3DisputeRow(row, noteText = "", memoryResult = null) {
-  if (String(noteText || "").trim()) {
-    const state = stageNoteState(noteText);
-    return state.arbitrated || state.diverged;
+  if (!String(noteText || "").trim() && memoryResult?.arbitration) return true;
+  const currentNote = String(noteText || "").trim() ? noteText : memoryResult?.note;
+  if (String(currentNote || "").trim()) {
+    const state = stageNoteState(currentNote);
+    return state.arbitrated || state.pendingArbitration;
   }
   if (memoryResult) {
-    if (memoryResult.arbitration) return true;
     if (memoryResult.arbCheck?.triggered || memoryResult.decision?.arbCheck?.triggered) return true;
     const critiqueAtt = memoryResult.critique?.attitude || memoryResult.stageResult?.critique?.attitude;
     if (critiqueAtt === "modify" || critiqueAtt === "reject" || critiqueAtt === "escalate") return true;

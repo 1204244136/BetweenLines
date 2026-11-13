@@ -16,7 +16,8 @@ const { stageNoteState } = require("../src/workbenches/translation-compare/ai/st
 const { createWorkbench, storageFixture } = require("./workbench-fixture");
 
 const initial = "[AI校对]\n语义是否相同：不同\n是否需要修改：是\nGatekeeper初审：修改措辞\n初审改案：初审改案。\n修改结果：初审改案。";
-const reviewed = initial + "\nStylist复审[调整]：两份方案存在分歧\n复审改案：复审改案。\n修改结果：复审改案。";
+const reviewed = initial.replace("是否需要修改：是", "是否需要修改：待终审").replace("\n修改结果：初审改案。", "")
+  + "\nStylist复审[调整]：两份方案存在分歧\n复审改案：复审改案。";
 
 test.after(() => {
   if (previousDataDir === undefined) delete process.env.TRANSCOMPARATOR_DATA_DIR;

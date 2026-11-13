@@ -85,7 +85,7 @@ function createStageNoteTools() {
     return aiParts.length ? aiParts[aiParts.length - 1] : text;
   }
 
-  function stageNoteState(value) {
+  function stageNoteState(value, evidence = {}) {
     const text = latestAiNotePart(value).trim();
     const lines = splitNoteFields(text);
     const automated = marker.test(lines[0] || "");
@@ -112,20 +112,26 @@ function createStageNoteTools() {
       /存疑/.test(stage1) || modify === "待终审" || modify === "待人工确认" || modify === "人工确认" ||
       /存疑转人工|初审存疑/.test(decisionText));
     // 单独的阶段名不是完成证据；必须有明确结论或对应阶段的改案。
-    const reviewed = automated && !failed && !errors.stage2 && Boolean(stage2 && (
+    const reviewed = (automated || evidence.reviewed === true) && !failed && !errors.stage2 && Boolean(evidence.reviewed || (stage2 && (
       /^(采纳|调整|驳回|提交仲裁|升级仲裁|保留原译|复审方案|accept|modify|reject|escalate)$/.test(stage2[1] || "") ||
       stage2Revision || revision || stage3
-    ));
-    const arbitrated = automated && !failed && !errors.stage2 && !errors.stage3 && Boolean(stage3);
+    )));
+    const arbitrated = (automated || evidence.arbitrated === true) && !failed && !errors.stage2 && !errors.stage3 && Boolean(stage3 || evidence.arbitrated);
     const diverged = reviewed && Boolean(
+      evidence.diverged ||
       modify === "待终审" ||
-      /调整|驳回|仲裁|^(modify|reject|escalate)$/.test(stage2[1] || "") ||
+      /调整|驳回|仲裁|^(modify|reject|escalate)$/.test(stage2?.[1] || "") ||
       /提交仲裁|分歧|escalate/.test(decisionText) ||
       (stage1Revision && stage2Revision && stage1Revision !== stage2Revision)
     );
-    return { text, candidate, reviewed, arbitrated, diverged, failed, errors,
+    const escalated = evidence.escalated === true || /^(提交仲裁|升级仲裁|escalate)$/.test(stage2?.[1] || "");
+    const reviewSettled = reviewed && !errors.stage3 && !escalated && Boolean(modify === "否" || (modify === "是" && revision));
+    const pendingArbitration = reviewed && !arbitrated && Boolean(
+      errors.stage3 || escalated || /^(待终审|待人工确认|人工确认)$/.test(modify) || (diverged && !reviewSettled)
+    );
+    return { text, candidate, reviewed, arbitrated, diverged, reviewSettled, failed, errors,
       pendingReview: candidate && !reviewed && !arbitrated,
-      pendingArbitration: diverged && !arbitrated };
+      pendingArbitration };
   }
 
   return { latestAiNotePart, stageNoteState, splitAiNoteParts, splitNoteFields };

@@ -7,6 +7,7 @@ const {
   applyMetricsDelta,
 } = require("../src/workbenches/translation-compare/ai/stage-results");
 const { createWorkbench, storageFixture, ROWS } = require("./workbench-fixture");
+const { stageNoteState } = require("../src/workbenches/translation-compare/ai/stage-note-state");
 
 const doneAfterReview = {
   index: 1,
@@ -75,6 +76,63 @@ test("仲裁行：分歧、仲裁、结合方案各计一次，待仲裁为零",
   assert.equal(metrics.arbitrationSynthesis, 1);
   assert.equal(metrics.arbitrationGatekeeper, 0);
   assert.equal(metrics.stage3Pending, 0);
+});
+
+test("复审历史分歧与当前仲裁待办分别累计，成品、异常与未定案在两端同源", () => {
+  const base = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：初审方案"
+    + "\nStylist复审[调整]：润色\n复审改案：复审方案";
+  const final = base + "\n修改结果：复审方案";
+  const cases = [
+    [final, 0],
+    [base.replace("是否需要修改：是", "是否需要修改：否"), 0],
+    [final + "\nArbiter仲裁调用异常：请求超时", 1],
+    [final.replace("是否需要修改：是", "是否需要修改：待终审"), 1],
+    [base, 1],
+  ];
+  const metrics = createStageMetrics();
+  const deltas = cases.map(([note, pending], index) => {
+    const result = { index, status: "suggestion", done: false, note,
+      critique: { attitude: "modify" }, stageResult: { stage: "stylist", needsEdit: true, revisedText: "复审方案" } };
+    const delta = computeResultMetricsDelta(result);
+    const one = applyMetricsDelta(createStageMetrics(), delta);
+    assert.equal(one.stage2Diverged, 1);
+    assert.equal(one.stage3Pending, pending);
+    assert.equal(one.stage3Pending, Number(stageNoteState(note).pendingArbitration));
+    applyMetricsDelta(metrics, delta);
+    return delta;
+  });
+  assert.equal(metrics.stage2Diverged, 5);
+  assert.equal(metrics.stage3Pending, 3);
+  for (const delta of deltas) applyMetricsDelta(metrics, delta, -1);
+  assert.deepEqual(metrics, createStageMetrics());
+  assert.equal(createStageMetrics({ stage2Diverged: 5, stage3Pending: 0 }).stage3Pending, 0);
+  assert.equal(createStageMetrics({ stage2Diverged: 5 }).stage3Pending, 0);
+});
+
+test("旧结果摘要缺少阶段备注时仍识别明确复审成品与仲裁失败", () => {
+  for (const [note, pending] of [
+    ["[AI校对]\n是否需要修改：是\n修改结果：复审方案", 0],
+    ["[AI校对]\n是否需要修改：否", 0],
+    ["[AI校对]\n是否需要修改：待终审", 1],
+    ["[AI校对]\n是否需要修改：是\nArbiter仲裁调用异常：请求超时\n修改结果：复审方案", 1],
+  ]) {
+    const result = { status: "suggestion", done: false, note,
+      critique: { attitude: "modify" }, stageResult: { stage: "stylist", needsEdit: true, revisedText: "复审方案" } };
+    assert.equal(applyMetricsDelta(createStageMetrics(), computeResultMetricsDelta(result)).stage3Pending, pending);
+  }
+});
+
+test("旧复审摘要显式升级仲裁时不被回退成品掩盖，仲裁完成才清除待办", () => {
+  const result = {
+    status: "suggestion", done: false,
+    note: "[AI校对]\n是否需要修改：是\n修改结果：初审方案",
+    critique: { attitude: "escalate" },
+    stageResult: { stage: "stylist", needsEdit: true, revisedText: "初审方案" },
+  };
+  assert.equal(applyMetricsDelta(createStageMetrics(), computeResultMetricsDelta(result)).stage3Pending, 1);
+  result.arbitration = { winner: "stylist" };
+  result.stageResult.stage = "arbiter";
+  assert.equal(applyMetricsDelta(createStageMetrics(), computeResultMetricsDelta(result)).stage3Pending, 0);
 });
 
 test("复审采纳但无改案的待终审结果计入仲裁待办，初审待终审不算已复审", () => {

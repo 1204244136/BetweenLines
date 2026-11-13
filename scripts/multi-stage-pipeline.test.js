@@ -268,7 +268,7 @@ test("阶段三队列判定：isStage3DisputeRow 全面覆盖已仲裁行与各�
   ].join("\n");
   assert.equal(isStage3DisputeRow(row, noteArbitrated, null), true, "包含 Arbiter仲裁 的行必须被识别为阶段三行");
 
-  // 2. 复审为调整（modify）分歧行，但无「提交仲裁/分歧/escalate」字样
+  // 2. 复审调整已经交付成品，改案有差异也不重新送审；显式待终审仍可继续。
   const noteModifyDiverged = [
     "[AI校对]",
     "语义是否相同：相同",
@@ -279,13 +279,15 @@ test("阶段三队列判定：isStage3DisputeRow 全面覆盖已仲裁行与各�
     "复审改案：改案B",
     "修改结果：改案B",
   ].join("\n");
-  assert.equal(isStage3DisputeRow(row, noteModifyDiverged, null), true, "复审调整且存在改案差异必须被识别为分歧行");
+  assert.equal(isStage3DisputeRow(row, noteModifyDiverged, null), false, "复审已定案的调整不应再次进入仲裁");
+  assert.equal(isStage3DisputeRow(row, noteModifyDiverged.replace("是否需要修改：是", "是否需要修改：待终审"), null), true,
+    "显式待终审的复审调整必须保留仲裁候选资格");
 
-  // 3. 复审为驳回（reject）分歧行，但无「提交仲裁/分歧/escalate」字样
+  // 3. 复审驳回初审的待终审行仍是仲裁候选。
   const noteRejectDiverged = [
     "[AI校对]",
     "语义是否相同：相同",
-    "是否需要修改：是",
+    "是否需要修改：待终审",
     "Gatekeeper初审：建议修改",
     "初审改案：改案A",
     "Stylist复审[驳回]：原译顺畅无瑕疵",

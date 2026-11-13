@@ -33,6 +33,55 @@ test("待复审只计本轮提改或存疑；历史提改不能污染本轮通�
   assert.equal(stageNoteState("人工记录\n是否需要修改：是").pendingReview, false);
 });
 
+test("复审调整已交付成品时保留分歧历史，但不再计入仲裁待办", async () => {
+  const finalModify = dispute + "\n修改结果：本轮复审方案";
+  const finalKeep = dispute.replace("是否需要修改：是", "是否需要修改：否");
+  for (const note of [finalModify, finalKeep]) {
+    const state = stageNoteState(note);
+    assert.equal(state.reviewed, true);
+    assert.equal(state.diverged, true);
+    assert.equal(state.pendingArbitration, false);
+  }
+  const ui = fixture({ 1: { note: finalModify }, 2: { note: finalKeep }, 3: { note: dispute } });
+  assert.equal(ui.run("computeStageMetricsFromNotes().stage3Pending"), 1);
+  await ui.element("stage3PendingItem").dispatch("click");
+  assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [3]);
+});
+
+test("明确待终审、旧未定案与仲裁异常不因已有回退成品而被当成完成", () => {
+  const finalModify = dispute + "\n修改结果：本轮复审方案";
+  for (const note of [
+    finalModify.replace("是否需要修改：是", "是否需要修改：待终审"),
+    finalModify.replace("是否需要修改：是", "是否需要修改：待人工确认"),
+    finalModify + "\nArbiter仲裁调用异常：请求超时",
+    reviewed + "\nArbiter仲裁调用异常：请求超时\n修改结果：本轮初审方案",
+    dispute,
+  ]) {
+    assert.equal(stageNoteState(note).pendingArbitration, true);
+  }
+  assert.equal(stageNoteState(finalModify + "\nArbiter仲裁[复审方案]：采纳复审").pendingArbitration, false);
+});
+
+test("结果元数据可补充缺失阶段字段，默认纯备注判定不借用摘要证据", () => {
+  const note = "[AI校对]\n是否需要修改：是\n修改结果：复审方案";
+  const state = stageNoteState(note, { reviewed: true });
+  assert.equal(state.reviewed, true);
+  assert.equal(state.pendingArbitration, false);
+  assert.equal(stageNoteState(note).reviewed, false);
+  const terminal = stageNoteState(note, { reviewed: true, arbitrated: true });
+  assert.equal(terminal.reviewed, true);
+  assert.equal(terminal.arbitrated, true);
+  assert.equal(terminal.pendingArbitration, false);
+});
+
+test("明确升级仲裁优先于上游成品字段，真实仲裁完成后解除待办", () => {
+  for (const attitude of ["提交仲裁", "升级仲裁", "escalate"]) {
+    const note = initial + `\nStylist复审[${attitude}]：分歧尚未解决\n复审改案：复审方案\n修改结果：初审方案`;
+    assert.equal(stageNoteState(note).pendingArbitration, true);
+    assert.equal(stageNoteState(note + "\nArbiter仲裁[复审方案]：采纳复审").pendingArbitration, false);
+  }
+});
+
 function fixture(records) {
   const connection = { protocol: "compatible", model: "test-model", baseUrl: "http://localhost:1234/v1" };
   return createWorkbench(storageFixture({

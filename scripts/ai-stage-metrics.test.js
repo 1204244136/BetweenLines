@@ -749,8 +749,8 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("metricCritiqueModify").textContent, 1);
   assert.equal(ui.element("metricCritiqueEscalate").textContent, 1);
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1); // 行4仲裁
-  assert.equal(ui.element("metricStage3Pending").textContent, 1); // 行3已分歧但尚未仲裁
-  assert.equal(ui.element("stage3PendingItem").hidden, false, "存在未仲裁的分歧行时必须露出「待仲裁」");
+  assert.equal(ui.element("metricStage3Pending").textContent, 0); // 行3已采用复审成品，不再仲裁
+  assert.equal(ui.element("stage3PendingItem").hidden, true, "已定案的复审调整不属于待仲裁");
   assert.equal(ui.element("metricArbGatekeeper").textContent, 1); // 行4仲裁采纳初审方案
 
   // Status pills reflect ready state
@@ -758,12 +758,14 @@ test("客户端重新载入时直接从备注中恢复阶段指标，无需等�
   assert.equal(ui.element("stage1StatusPill").textContent, "已完成");
   assert.equal(ui.element("stage2StatusPill").dataset.state, "done");
   assert.equal(ui.element("stage2StatusPill").textContent, "已完成");
-  assert.equal(ui.element("stage3StatusPill").dataset.state, "queued");
-  assert.equal(ui.element("stage3StatusPill").textContent, "待处理");
+  assert.equal(ui.element("stage3StatusPill").dataset.state, "done");
+  assert.equal(ui.element("stage3StatusPill").textContent, "已完成");
 });
 
-test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌回「已仲裁数」", async () => {
+test("复审历史分歧与仲裁待办独立：已定案调整仍可筛选但不重复送审", async () => {
   const ui = createWorkbench(storageFixture({}), {
+    rows: Array.from({ length: 4 }, (_, index) => ({ index: index + 1, jp: "原文" + index,
+      cn: "译文" + index, relation: "1:1", score: 0.9, signature: "sig-" + (index + 1) })),
     apiResponses: {
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-arb", results: [] } },
     },
@@ -771,8 +773,7 @@ test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌�
   await ui.settle();
   configureStageModels(ui, ["stage3"]);
 
-  // 4 行复审分歧：2 行「调整」+ 1 行「升级仲裁」尚未仲裁，1 行已仲裁定案。
-  // 仲裁队列此刻是空的——分歧数只能从备注里读出来，不能靠队列实时计数兜。
+  // 两行调整已交付成品，一行显式待终审，一行已仲裁；四行仍保留历史分歧。
   ui.run(`
     notes["1"] = {
       note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案1\\nStylist复审[调整]：深化文学隐喻\\n复审改案：复审案1\\n修改结果：复审案1",
@@ -789,7 +790,7 @@ test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌�
       aiDone: true,
     };
     notes["3"] = {
-      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案3\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：复审案3\\n修改结果：初审案3",
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：待终审\\nGatekeeper初审：建议修改硬伤\\n初审改案：初审案3\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：复审案3\\n修改结果：初审案3",
       revisionText: "初审案3",
       manualDone: false,
       done: false,
@@ -806,16 +807,22 @@ test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌�
 
   ui.run("markNotesDirtyForMetrics(); updateStageMetricsDashboard();");
 
-  // 卡片「分歧」= 复审与初审产生分歧的全部行（含已仲裁与待仲裁），不是「已仲裁数」
-  assert.equal(ui.element("metricStage2Diverged").textContent, 4, "分歧 = 已仲裁 1 + 待仲裁 3");
+  assert.equal(ui.element("metricStage2Diverged").textContent, 4, "历史分歧包含两条已复审定案的调整");
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
-  assert.equal(ui.element("metricStage3Pending").textContent, 3, "待仲裁 = 分歧 4 − 已仲裁 1");
+  assert.equal(ui.element("metricStage3Pending").textContent, 1, "只有显式待终审行属于待仲裁");
+
+  await ui.element("stage2DivergedItem").dispatch("click");
+  assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1, 2, 3, 4]);
+  await ui.element("stage2DivergedItem").dispatch("click");
+  await ui.element("stage3PendingItem").dispatch("click");
+  assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [3]);
+  await ui.element("stage3PendingItem").dispatch("click");
 
   await ui.element("aiPoolStart").dispatch("click");
   const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
   assert.ok(post, "启动池直接继续卡片中的待仲裁行");
   assert.equal(post.body.continueOnly, true);
-  assert.deepEqual(post.body.completedIndexes, [4], "仅跳过已有仲裁结论的行，保留三条待仲裁行");
+  assert.deepEqual(post.body.completedIndexes, [1, 2, 4], "复审已定案和已仲裁的行均跳过，仅保留真实仲裁待办");
 });
 
 test("空闲且全为零的 AI 状态不覆盖从备注中恢复的阶段指标", () => {
