@@ -3567,26 +3567,26 @@
         { id: "aiStageSummaryNeedsCheck", filter: "needsCheck", name: "未定案记录" },
         { id: "aiStageSummaryPendingArbiter", filter: "pendingArbiter", name: "待终审" },
         { id: "stage1PassedItem", filter: "stage1Passed", name: "初审通过", nativeButton: true },
-        { id: "stage1NeedsEditItem", filter: "stage1NeedsEdit", name: "初审提改", nativeButton: true },
+        { id: "stage1NeedsEditItem", filter: "stage1NeedsEdit", name: "初审建议修改", nativeButton: true },
         { id: "stage1UnclearPill", filter: "stage1Unclear", name: "初审存疑", nativeButton: true },
         { id: "stage1FastPassItem", filter: "fastPassHits", name: "快速直通", nativeButton: true },
-        { id: "stage1TotalItem", filter: "stage1Total", name: "初审总检", nativeButton: true },
-        { id: "stage1ErrorItem", filter: "stage1Errors", name: "初审异常", nativeButton: true },
+        { id: "stage1TotalItem", filter: "stage1Total", name: "已初审", nativeButton: true },
+        { id: "stage1ErrorItem", filter: "stage1Errors", name: "初审调用异常", nativeButton: true },
         { id: "stage2ReviewedItem", filter: "stage2Reviewed", name: "文学复审", nativeButton: true },
         { id: "stage2DivergedItem", filter: "stage2Diverged", name: "复审分歧", nativeButton: true },
-        { id: "stage2AcceptItem", filter: "critiqueAccept", name: "复审采纳", nativeButton: true },
-        { id: "stage2ModifyItem", filter: "critiqueModify", name: "复审调整", nativeButton: true },
-        { id: "stage2RejectItem", filter: "critiqueReject", name: "复审驳回", nativeButton: true },
-        { id: "stage2EscalateItem", filter: "critiqueEscalate", name: "复审升级仲裁", nativeButton: true },
+        { id: "stage2AcceptItem", filter: "critiqueAccept", name: "复审采纳初审", nativeButton: true },
+        { id: "stage2ModifyItem", filter: "critiqueModify", name: "复审调整方案", nativeButton: true },
+        { id: "stage2RejectItem", filter: "critiqueReject", name: "复审驳回初审", nativeButton: true },
+        { id: "stage2EscalateItem", filter: "critiqueEscalate", name: "复审提请仲裁", nativeButton: true },
         { id: "stage2PendingItem", filter: "stage2Pending", name: "待文学复审", nativeButton: true },
-        { id: "stage2ErrorItem", filter: "stage2Errors", name: "复审异常", nativeButton: true },
+        { id: "stage2ErrorItem", filter: "stage2Errors", name: "复审调用异常", nativeButton: true },
         { id: "stage3ArbitratedItem", filter: "stage3Arbitrated", name: "终审仲裁", nativeButton: true },
         { id: "stage3GatekeeperItem", filter: "arbitrationGatekeeper", name: "采用初审方案", nativeButton: true },
         { id: "stage3StylistItem", filter: "arbitrationStylist", name: "采用复审方案", nativeButton: true },
         { id: "stage3SynthesisItem", filter: "arbitrationSynthesis", name: "综合方案", nativeButton: true },
-        { id: "stage3OriginalItem", filter: "arbitrationOriginal", name: "维持原译", nativeButton: true },
+        { id: "stage3OriginalItem", filter: "arbitrationOriginal", name: "保留原译", nativeButton: true },
         { id: "stage3PendingItem", filter: "stage3Pending", name: "待终审仲裁", nativeButton: true },
-        { id: "stage3ErrorItem", filter: "stage3Errors", name: "仲裁异常", nativeButton: true },
+        { id: "stage3ErrorItem", filter: "stage3Errors", name: "仲裁调用异常", nativeButton: true },
       ];
 
     function syncSummaryFilterButtons() {
@@ -4358,7 +4358,7 @@
           ? `已触顶 ${toppedCount}/${presetCount} 个预设${allTopped ? "（全部触顶）" : ""}。`
           : (allTopped ? "正在处理的请求数已达预设并发上限（触顶）。" : "");
         setLiveHoverTitle(activeInfoEl, "正在处理 " + inFlight + " 行；当前允许并发 " + allowed + (cap ? "，并发上限 " + cap : "")
-          + "；队列待派发 " + pending + " 行。" + toppedDetail
+          + "；队列待派发 " + pending + " 行，不含正在处理的行。" + toppedDetail
           + "当前允许并发由调度器自动调整，队列不足时正在处理的行数会小于该值。"
           + (wait ? "\n" + wait.text : ""), { reset: resetHover });
       }
@@ -4391,21 +4391,22 @@
       const action = { "1": "已初审", "2": "已复审", "3": "已仲裁" }[stageKey];
       const scope = String(stageKey) === "1" ? "全部" : "当前候选";
       const description = action + " " + safeDone + " / " + scope + " " + safeTotal + " 行 · " + percent + "%";
+      const scopeHint = scope === "全部" ? "" : "；上游新增候选时，总量会增加，完成百分比可能回落";
       const activeRowsText = Array.isArray(activeRows) && activeRows.length ? "\n当前行：" + activeRows.join(", ") : "";
       if (text) {
         text.hidden = false;
-        const progressText = (scope === "全部" ? "全页" : "当前候选") + " " + percent + "%";
+        const progressText = (scope === "全部" ? "全页覆盖" : "候选完成") + " " + percent + "%";
         if (text.textContent !== progressText) text.textContent = progressText;
-        setLiveHoverTitle(text, description, { reset: resetHover });
+        setLiveHoverTitle(text, description + scopeHint, { reset: resetHover });
       }
       wrap.setAttribute("role", "progressbar");
       wrap.setAttribute("aria-label", label + (scope === "全部" ? "全页覆盖进度" : "当前候选进度"));
       wrap.setAttribute("aria-valuemin", "0");
       wrap.setAttribute("aria-valuemax", String(safeTotal));
       wrap.setAttribute("aria-valuenow", String(safeDone));
-      wrap.setAttribute("aria-valuetext", description + activeRowsText);
+      wrap.setAttribute("aria-valuetext", description + scopeHint + activeRowsText);
       setLiveHoverTitle(wrap, (label ? label + "进度：" : "进度：") + "已完成 " + safeDone + " / 共 " + safeTotal + " 行（" + percent + "%）"
-        + (errors > 0 ? "；异常待重试 " + errors + " 行" : "") + activeRowsText, { reset: resetHover });
+        + "；范围：" + scope + (errors > 0 ? "；调用异常待重试 " + errors + " 行" : "") + scopeHint + activeRowsText, { reset: resetHover });
     }
 
     function resetStageProgressBars() {
@@ -4538,7 +4539,7 @@
       if (elS2Pending) elS2Pending.textContent = s2Pending;
       if (itemS2Pending) {
         itemS2Pending.hidden = s2Pending === 0;
-        setLiveHoverTitle(itemS2Pending, "最新一轮初审提改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（点击可筛选）。历史轮次不参与待办判断。");
+        setLiveHoverTitle(itemS2Pending, "最新一轮初审建议修改或存疑、尚未完成复审且未人工确认：" + s2Pending + " 行（含正在复审的行，点击可筛选）。历史轮次不参与待办判断。");
       }
 
       const elCAccept = document.getElementById("metricCritiqueAccept");
@@ -4581,7 +4582,7 @@
       const elRate = document.getElementById("aiStageFastPassRate");
       if (elRate) {
         const rate = s1Passed > 0 ? Math.round((fpHits / s1Passed) * 100) + "%" : "—";
-        elRate.textContent = "通过中: " + rate;
+        elRate.textContent = "占通过行 " + rate;
         let rateTitle = s1Passed > 0
           ? "初审放行 " + s1Passed + " 行中 " + fpHits + " 行快速直通 (" + rate + ")\n快速直通数 ÷ 初审通过数；不是全部审核行的通过率。"
           : "尚无初审通过行，直通占比暂不计算。";
@@ -4723,8 +4724,9 @@
         if (poolRuntimeMatchesPage && hasRuntime) {
           const pending = Math.max(0, Number(pipeline.pending) || 0);
           const wait = waitStates["stage" + number];
-          info.textContent = (pending ? "排队 " + pending + " 行" : "") + (wait ? " · " + wait.text : "");
+          info.textContent = [pending ? "排队 " + pending + " 行" : "", wait?.text].filter(Boolean).join(" · ");
           info.hidden = !pending && !wait;
+          setLiveHoverTitle(info, [pending ? "排队待派发 " + pending + " 行，不含正在处理的行。" : "", wait?.text].filter(Boolean).join("\n"));
         }
       }
 

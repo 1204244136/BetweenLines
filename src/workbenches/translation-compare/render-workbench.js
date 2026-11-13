@@ -320,18 +320,18 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
                 <div class="ai-stage-card-body">
                   <div class="ai-stage-card-main">
-                    <button id="stage1TotalItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false" title="已取得初审结论的行数（通过 + 提改 + 存疑，不含调用异常）"><strong id="metricStage1Total">0</strong><span class="ai-stage-unit">已初审</span></button>
-                    <div class="ai-stage-card-sub" aria-label="初审结论">
-                      <button id="stage1PassedItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--pass" aria-pressed="false" title="初审直接合格放行行数">通过: <span id="metricStage1Passed">0</span></button>
-                      <button id="stage1NeedsEditItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" aria-pressed="false" title="初审建议修改行数（可进入复审）">修改: <span id="metricStage1NeedsEdit">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--edit" id="stage1UnclearPill" type="button" aria-pressed="false" title="初审存疑待定行数（可进入复审）">存疑: <span id="metricStage1Unclear">0</span></button>
+                    <button id="stage1TotalItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false" title="已取得初审结论的行数（通过 + 建议修改 + 存疑，不含调用异常）"><strong id="metricStage1Total">0</strong><span class="ai-stage-unit">已初审</span></button>
+                    <div class="ai-stage-card-sub ai-stage-metric-group" role="group" aria-label="初审结论分布">
+                      <button id="stage1PassedItem" type="button" class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--pass" aria-pressed="false" title="初审通过、无需修改的行数">通过 <span id="metricStage1Passed">0</span></button>
+                      <button id="stage1NeedsEditItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审建议修改的行数，可进入复审；不表示已经写回原文">建议修改 <span id="metricStage1NeedsEdit">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-metric ai-stage-outcome--unclear" id="stage1UnclearPill" type="button" aria-pressed="false" title="初审存疑待定的行数，可进入复审">存疑 <span id="metricStage1Unclear">0</span></button>
                     </div>
-                    <div class="ai-stage-efficiency" aria-label="初审通过方式">
-                      <button id="stage1FastPassItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审通过行中的快速直通子集，包含预筛放行与模型高置信通过">直通: <span id="metricFastPassHits">0</span></button>
-                      <span id="aiStageFastPassRate" class="ai-stage-efficiency-rate" title="快速直通数 ÷ 初审通过数">通过中: —</span>
+                    <div class="ai-stage-efficiency ai-stage-metric-group" role="group" aria-label="初审补充统计：快速直通属于通过行的子集">
+                      <button id="stage1FastPassItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审通过行中的快速直通子集，包含预筛放行与模型高置信通过；已计入通过数">快速直通 <span id="metricFastPassHits">0</span></button>
+                      <span id="aiStageFastPassRate" class="ai-stage-efficiency-rate" title="快速直通数 ÷ 初审通过数">占通过行 —</span>
                     </div>
-                    <div class="ai-stage-runtime-summary">
-                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage1ErrorItem" type="button" aria-pressed="false" title="阶段一调用失败/异常行数">异常: <span id="metricStage1Errors">0</span></button>
+                    <div class="ai-stage-runtime-summary ai-stage-metric-group" role="group" aria-label="初审待办与调用异常">
+                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage1ErrorItem" type="button" aria-pressed="false" title="阶段一调用失败的行数，不计入已初审结论">调用异常 <span id="metricStage1Errors">0</span></button>
                     </div>
                   </div>
 
@@ -355,16 +355,16 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <div class="ai-stage-card-main">
                     <button id="stage2ReviewedItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false" title="已取得复审结论的行数"><strong id="metricStage2Reviewed">0</strong><span class="ai-stage-unit">已复审</span></button>
 
-                    <div class="ai-stage-card-sub" aria-label="复审意见">
-                      <button id="stage2AcceptItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false">采纳: <span id="metricCritiqueAccept">0</span></button>
-                      <button id="stage2ModifyItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false">调整: <span id="metricCritiqueModify">0</span></button>
-                      <button id="stage2RejectItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false">驳回: <span id="metricCritiqueReject">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-metric" id="stage2EscalateItem" type="button" aria-pressed="false" title="复审显式请求升级仲裁">升级仲裁: <span id="metricCritiqueEscalate">0</span></button>
+                    <div class="ai-stage-card-sub ai-stage-metric-group" role="group" aria-label="复审意见分布">
+                      <button id="stage2AcceptItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="复审采纳初审方案的行数，采纳的方案仍可能建议修改译文">采纳初审 <span id="metricCritiqueAccept">0</span></button>
+                      <button id="stage2ModifyItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="复审提出调整方案的行数">调整方案 <span id="metricCritiqueModify">0</span></button>
+                      <button id="stage2RejectItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="复审驳回初审方案的行数，属于审核意见">驳回初审 <span id="metricCritiqueReject">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-metric" id="stage2EscalateItem" type="button" aria-pressed="false" title="复审明确请求仲裁的行数，属于复审意见而非当前待办数">提请仲裁 <span id="metricCritiqueEscalate">0</span></button>
                     </div>
-                    <div class="ai-stage-routing"><button id="stage2DivergedItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="已产生初审与复审分歧的行数（含已仲裁行）">分歧: <span id="metricStage2Diverged">0</span></button></div>
-                    <div class="ai-stage-runtime-summary">
-                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage2PendingItem" type="button" aria-pressed="false" title="最新一轮初审提改或存疑、尚未完成复审且未人工确认的行数（点击可筛选）" hidden>待复审: <span id="metricStage2Pending">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage2ErrorItem" type="button" aria-pressed="false" title="阶段二复审异常行数">异常: <span id="metricStage2Errors">0</span></button>
+                    <div class="ai-stage-routing ai-stage-metric-group" role="group" aria-label="复审补充统计"><button id="stage2DivergedItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="初审与复审有意见或方案分歧的行数，含已仲裁行；与复审意见分布重叠，不等同于待仲裁数">有分歧 <span id="metricStage2Diverged">0</span></button></div>
+                    <div class="ai-stage-runtime-summary ai-stage-metric-group" role="group" aria-label="复审待办与调用异常">
+                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage2PendingItem" type="button" aria-pressed="false" title="最新一轮初审建议修改或存疑、尚未完成复审且未人工确认的行数，含正在复审的行（点击可筛选）" hidden>待复审 <span id="metricStage2Pending">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage2ErrorItem" type="button" aria-pressed="false" title="阶段二调用失败的行数，不计入已复审结论">调用异常 <span id="metricStage2Errors">0</span></button>
                     </div>
                   </div>
 
@@ -388,15 +388,15 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <div class="ai-stage-card-main">
                     <button id="stage3ArbitratedItem" type="button" class="ai-stage-card-value ai-stage-metric" aria-pressed="false" title="已取得仲裁结论的行数（仍可能需人工确认）"><strong id="metricStage3Arbitrated">0</strong><span class="ai-stage-unit">已仲裁</span></button>
 
-                    <div class="ai-stage-card-sub" aria-label="仲裁方案">
-                      <button id="stage3GatekeeperItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁裁定支持初审方案">初审案: <span id="metricArbGatekeeper">0</span></button>
-                      <button id="stage3StylistItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁裁定支持复审润色方案">复审案: <span id="metricArbStylist">0</span></button>
-                      <button id="stage3SynthesisItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁综合双方优点给出结合方案">综合: <span id="metricArbSynthesis">0</span></button>
-                      <button id="stage3OriginalItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁判定双方方案均不妥，维持原译">原译: <span id="metricArbOriginal">0</span></button>
+                    <div class="ai-stage-card-sub ai-stage-metric-group" role="group" aria-label="仲裁方案分布">
+                      <button id="stage3GatekeeperItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁裁定采用初审方案">采用初审 <span id="metricArbGatekeeper">0</span></button>
+                      <button id="stage3StylistItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁裁定采用复审方案">采用复审 <span id="metricArbStylist">0</span></button>
+                      <button id="stage3SynthesisItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁综合双方优点给出方案">综合方案 <span id="metricArbSynthesis">0</span></button>
+                      <button id="stage3OriginalItem" type="button" class="ai-stage-sub-item ai-stage-metric" aria-pressed="false" title="仲裁决定保留原译">保留原译 <span id="metricArbOriginal">0</span></button>
                     </div>
-                    <div class="ai-stage-runtime-summary">
-                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage3PendingItem" type="button" aria-pressed="false" title="复审已产生分歧但尚未执行终审仲裁的行数（点击可筛选）" hidden>待仲裁: <span id="metricStage3Pending">0</span></button>
-                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage3ErrorItem" type="button" aria-pressed="false" title="阶段三仲裁异常行数">异常: <span id="metricStage3Errors">0</span></button>
+                    <div class="ai-stage-runtime-summary ai-stage-metric-group" role="group" aria-label="仲裁待办与调用异常">
+                      <button class="ai-stage-sub-item ai-stage-sub-item--warn ai-stage-metric" id="stage3PendingItem" type="button" aria-pressed="false" title="最新一轮尚未仲裁定案且未人工确认的行数，含正在仲裁的行（点击可筛选）" hidden>待仲裁 <span id="metricStage3Pending">0</span></button>
+                      <button class="ai-stage-sub-item ai-stage-sub-item--error ai-stage-metric" id="stage3ErrorItem" type="button" aria-pressed="false" title="阶段三调用失败的行数，不计入已仲裁结论">调用异常 <span id="metricStage3Errors">0</span></button>
                     </div>
                   </div>
                   <div class="ai-stage-runtime" aria-label="阶段3运行与待办">
