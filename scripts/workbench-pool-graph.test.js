@@ -138,7 +138,7 @@ function graphFixture() {
   ]));
   const graph = createPoolFlowGraph({ board, svg, list, stages });
   const flush = () => { const work = [...frames.values()]; frames.clear(); work.forEach((callback) => callback()); };
-  return { board, svg, list, card, graph, flush, frames, motion };
+  return { board, svg, list, card, stages, graph, flush, frames, motion };
 }
 
 function waveNodes(node) {
@@ -325,5 +325,73 @@ test("实际生成的圆点变化重算移除与总并发操作组中线，列�
   ui.flush();
   assert.equal(ui.svg.children[0].children.length, 0);
   assert.equal(ui.svg.children[1].children.length, 0);
+  ui.graph.destroy();
+});
+
+function sourceMarkers(ui) {
+  return Object.fromEntries(ui.svg.children[2].children
+    .filter((node) => node.attributes.get("visibility") === "visible")
+    .map((node) => [node.attributes.get("data-stage") + ":" + node.attributes.get("data-direction"), Number(node.attributes.get("data-count"))]));
+}
+
+test("阶段入口按真实分工提示上下方隐藏来源，滚动与增高视口实时消除提示", () => {
+  const ui = graphFixture();
+  const addCard = (id, top) => {
+    const card = new ui.card.constructor("div", { ...ui.card.rect, top, bottom: top + 100 });
+    card.dataset.presetId = id;
+    ui.list.append(card);
+    return card;
+  };
+  const b = addCard("b", 310), c = addCard("c", 420);
+  const connections = [
+    ...["stage1", "stage2", "stage3"].map((stage) => ({ presetId: "a", stage, inFlight: 64 })),
+    { presetId: "b", stage: "stage2" },
+    { presetId: "c", stage: "stage1" }, { presetId: "c", stage: "stage3" },
+  ];
+  ui.graph.update(connections); ui.flush();
+  assert.deepEqual(sourceMarkers(ui), { "stage1:below": 1, "stage2:below": 1, "stage3:below": 1 });
+  const running = ui.svg.children[0].children[1];
+  const animations = running.animations;
+  const waves = waveNodes(running);
+  const move = (delta) => {
+    [ui.card, b, c].forEach((card) => { card.rect = { ...card.rect, top: card.rect.top + delta, bottom: card.rect.bottom + delta }; });
+    ui.list.emit("scroll"); ui.flush();
+  };
+  move(-40);
+  assert.deepEqual(sourceMarkers(ui), { "stage1:below": 1, "stage2:below": 1, "stage3:below": 1, "stage1:above": 1 });
+  assert.ok(ui.svg.children[0].children.includes(running));
+  assert.equal(running.animations, animations, "滚动时仍可见管道的动画必须保持连续");
+  assert.deepEqual(waveNodes(running), waves);
+  move(-400);
+  assert.deepEqual(sourceMarkers(ui), { "stage1:above": 1, "stage2:above": 2, "stage3:above": 1 });
+  ui.graph.update(connections.filter((connection) => connection.presetId !== "b")); ui.flush();
+  assert.equal(sourceMarkers(ui)["stage2:above"], 1, "取消分工后只统计仍分配的隐藏来源");
+  move(440);
+  ui.list.rect = { ...ui.list.rect, bottom: 600, height: 600 };
+  ui.graph.schedule(); ui.flush();
+  assert.deepEqual(sourceMarkers(ui), {}, "扩大视口后不应残留方向提示");
+  ui.graph.destroy();
+  assert.equal(ui.svg.children.length, 0);
+});
+
+test("部分卡片以各条源点可见性提示方向，忽略失效目标与已移除预设", () => {
+  const ui = graphFixture();
+  ui.card.rect = { ...ui.card.rect, top: -50, bottom: 50 };
+  ui.stages.stage3 = null;
+  const connections = [
+    { presetId: "a", stage: "stage1", inFlight: 128 },
+    { presetId: "a", stage: "stage2" },
+    { presetId: "a", stage: "stage3" },
+    { presetId: "removed", stage: "stage1" },
+  ];
+  ui.graph.update(connections); ui.flush();
+  assert.deepEqual(sourceMarkers(ui), { "stage1:above": 1 });
+  assert.equal(ui.svg.children[0].children.length, 1, "仅裁掉上侧端口，保留下侧可见端口");
+  const marker = ui.svg.children[2].children[0];
+  assert.match(marker.attributes.get("aria-label"), /列表上方还有 1 个预设/);
+  ui.card.remove();
+  ui.graph.schedule(); ui.flush();
+  assert.deepEqual(sourceMarkers(ui), {});
+  assert.equal(marker.attributes.get("aria-hidden"), "true");
   ui.graph.destroy();
 });

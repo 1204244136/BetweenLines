@@ -78,7 +78,8 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
   };
   const visuals = makeSvg("g", { "aria-hidden": "true" });
   const hits = makeSvg("g");
-  svg.append(visuals, hits);
+  const indicators = makeSvg("g", { class: "ai-pool-flow-indicators" });
+  svg.append(visuals, hits, indicators);
   const tooltip = doc.createElement("div");
   tooltip.className = "ai-pool-flow-tooltip";
   tooltip.id = prefix + "-tooltip";
@@ -86,6 +87,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
   tooltip.hidden = true;
   board.append(tooltip);
   const entries = new Map();
+  const hiddenSources = new Map();
   let connections = [];
   let hovered = null;
   let pointer = null;
@@ -248,6 +250,43 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     schedule();
   }
 
+  function renderHiddenSources(counts, targets, bounds) {
+    hiddenSources.forEach((marker) => {
+      marker.group.setAttribute("visibility", "hidden");
+      marker.group.setAttribute("aria-hidden", "true");
+    });
+    counts.forEach((directions, stage) => {
+      const target = targets.get(stage);
+      for (const direction of ["above", "below"]) {
+        const sources = directions[direction];
+        if (!sources.size) continue;
+        const key = stage + ":" + direction;
+        let marker = hiddenSources.get(key);
+        if (!marker) {
+          const group = makeSvg("g", { class: "ai-pool-flow-hidden-sources", role: "img", "data-stage": stage, "data-direction": direction });
+          const background = makeSvg("rect", { height: 14, rx: 4, "aria-hidden": "true" });
+          const chevron = makeSvg("path", { d: direction === "above" ? "M 5 8.5 l 3 -3 l 3 3" : "M 5 5.5 l 3 3 l 3 -3", "aria-hidden": "true" });
+          const text = makeSvg("text", { x: 14, y: 7, "dominant-baseline": "central", "aria-hidden": "true" });
+          group.append(background, chevron, text);
+          indicators.append(group);
+          marker = { group, background, text };
+          hiddenSources.set(key, marker);
+        }
+        const count = sources.size;
+        const width = count > 9 ? 30 : 24;
+        marker.background.setAttribute("width", String(width));
+        marker.text.textContent = count > 99 ? "99+" : String(count);
+        marker.text.setAttribute("textLength", count > 99 ? "13" : count > 9 ? "12" : "6");
+        marker.text.setAttribute("lengthAdjust", "spacingAndGlyphs");
+        marker.group.setAttribute("transform", `translate(${target.left - bounds.left - 18 - width} ${direction === "above" ? target.top - bounds.top : target.bottom - bounds.top - 14})`);
+        marker.group.setAttribute("data-count", String(count));
+        marker.group.setAttribute("aria-label", `${sources.values().next().value.stageLabel || stage}：列表${direction === "above" ? "上方" : "下方"}还有 ${count} 个预设连接至此阶段`);
+        marker.group.setAttribute("aria-hidden", "false");
+        marker.group.setAttribute("visibility", "visible");
+      }
+    });
+  }
+
   function draw() {
     frame = 0;
     if (destroyed) return;
@@ -261,33 +300,46 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     const cards = new Map(Array.from(list.children).filter((node) => node.dataset?.presetId)
       .map((node) => [node.dataset.presetId, { node, rect: node.getBoundingClientRect(), ports: [] }]));
     const listBounds = list.getBoundingClientRect();
+    const targets = new Map(Object.entries(stages || {}).filter(([, node]) => node?.getBoundingClientRect)
+      .map(([stage, node]) => [stage, node.getBoundingClientRect()]));
     const available = connections.filter((connection) => {
       const card = cards.get(connection.presetId);
-      return card && stages?.[connection.stage] && card.rect.bottom > listBounds.top && card.rect.top < listBounds.bottom;
+      const target = targets.get(connection.stage);
+      return card && target && card.rect.width > 0 && card.rect.height > 0 && target.width > 0 && target.height > 0
+        && target.left > card.rect.right + 20;
     });
-    const outgoing = new Map(), incoming = new Map();
+    const outgoing = new Map(), incoming = new Map(), counts = new Map();
     available.forEach((connection) => {
       if (!outgoing.has(connection.presetId)) outgoing.set(connection.presetId, []);
-      if (!incoming.has(connection.stage)) incoming.set(connection.stage, []);
       outgoing.get(connection.presetId).push(connection);
-      incoming.get(connection.stage).push(connection);
     });
-    const shown = [];
+    const visible = [];
     available.forEach((connection) => {
       const card = cards.get(connection.presetId);
-      const target = stages[connection.stage].getBoundingClientRect();
-      if (!(card.rect.width > 0 && card.rect.height > 0 && target.width > 0 && target.height > 0)) return;
-      const x1 = card.rect.right - bounds.left, x2 = target.left - bounds.left;
-      if (x2 <= x1 + 20) return;
       const sourceConnections = outgoing.get(connection.presetId);
+      const y1 = card.rect.top + card.rect.height / 2 - bounds.top + (sourceConnections.indexOf(connection) - (sourceConnections.length - 1) / 2) * 16;
+      const radius = poolFlowCount(connection.inFlight) > 0 ? Math.max(3, poolFlowWidth(connection.inFlight) / 2) : 2.5;
+      const direction = y1 - radius < listBounds.top - bounds.top ? "above"
+        : y1 + radius > listBounds.bottom - bounds.top ? "below" : "";
+      if (direction) {
+        if (!counts.has(connection.stage)) counts.set(connection.stage, { above: new Map(), below: new Map() });
+        counts.get(connection.stage)[direction].set(connection.presetId, connection);
+        return;
+      }
+      if (!incoming.has(connection.stage)) incoming.set(connection.stage, []);
+      incoming.get(connection.stage).push(connection);
+      visible.push({ connection, y1 });
+    });
+    const shown = [];
+    visible.forEach(({ connection, y1 }) => {
+      const card = cards.get(connection.presetId);
+      const target = targets.get(connection.stage);
+      const x1 = card.rect.right - bounds.left, x2 = target.left - bounds.left;
       const targetConnections = incoming.get(connection.stage);
-      const geometry = poolFlowGeometry({ x1, x2,
-        y1: card.rect.top + card.rect.height / 2 - bounds.top + (sourceConnections.indexOf(connection) - (sourceConnections.length - 1) / 2) * 16,
+      const geometry = poolFlowGeometry({ x1, x2, y1,
         y2: target.top + target.height / 2 - bounds.top + (targetConnections.indexOf(connection) - (targetConnections.length - 1) / 2) * 14,
         inFlight: connection.inFlight,
       });
-      if (geometry.y1 - geometry.radius < listBounds.top - bounds.top
-        || geometry.y1 + geometry.radius > listBounds.bottom - bounds.top) return;
       const key = String(connection.key || connection.presetId + ":" + connection.stage);
       const entry = entries.get(key) || createEntry(key);
       entry.connection = connection;
@@ -311,6 +363,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       if (entry.group.parentNode !== visuals) visuals.append(entry.group);
       if (entry.hit.parentNode !== hits) hits.append(entry.hit);
     });
+    renderHiddenSources(counts, targets, bounds);
     syncAnimationRates(shown);
     refreshTooltip();
   }
@@ -353,7 +406,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       else motion?.removeListener?.(onMotionChange);
       list.removeEventListener("scroll", schedule);
       board.removeEventListener("pointerleave", closeTooltip);
-      closeTooltip(); visuals.remove(); hits.remove(); tooltip.remove(); entries.clear();
+      closeTooltip(); visuals.remove(); hits.remove(); indicators.remove(); tooltip.remove(); entries.clear(); hiddenSources.clear();
     },
   };
 }
