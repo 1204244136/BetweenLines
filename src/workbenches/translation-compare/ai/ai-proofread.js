@@ -1591,6 +1591,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     presets: config.presetPool, priorityEnabled: config.poolPriorityEnabled, policy, wake: () => dispatchWake?.(),
   }) : null;
   const retryItems = { stage1: new Map(), stage2: new Map(), stage3: new Map() };
+  let retryVersion = 0;
   const dispatchers = poolDispatcher?.stages || Object.fromEntries(Object.entries(stageDefinitionsFor(config)).map(([stageKey, definition]) => [stageKey,
     createStageDispatch({ ...definition, stageKey, policy, wake: () => dispatchWake?.() }),
   ]));
@@ -1641,9 +1642,13 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       }
     }
     if (includeFailures) for (const [stage, entries] of Object.entries(retryItems)) {
-      for (const [index, { item }] of entries) {
-        if (occupied.has(index) || !poolDispatcher.canRetry(stage, item)) continue;
+      for (const [index, retry] of entries) {
+        const { item } = retry;
+        if (occupied.has(index) || (config.poolMode === "loop" && retry.retryAt > Date.now())
+          || !poolDispatcher.canRetry(stage, item)) continue;
         dispatchers[stage].enqueue(item);
+        retry.retries += 1;
+        retryVersion += 1;
         occupied.add(index);
         added += 1;
       }
@@ -1697,6 +1702,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (typeof options.priorityEnabled === "boolean") status.poolRuntime.priorityEnabled = options.priorityEnabled;
       config.presetPool = incomingPresets;
       config.poolStages = ["stage1", "stage2", "stage3"].filter((stage) => incomingPresets.some((preset) => preset.stages.includes(stage)));
+      retryVersion += 1;
       // 已创建的领域队列继续接收上游结果，资格由共享池控制；关闭阶段会明确留下待办。
       for (const stage of config.poolStages) activeStages.add(stage);
       links.stage2 = activeStages.has("stage1") && activeStages.has("stage2");
@@ -1756,15 +1762,68 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   return new Promise((resolve) => {
     let settled = false;
     let cycleTimer = null;
-    let cycleWaiting = false;
+    let scheduledRetryVersion = -1;
 
     function rememberFailure(stageKey, item, error) {
       if (!poolDispatcher || isStageStopped(stageKey)) return;
-      retryItems[stageKey].set(Number(item.row?.index ?? item.index), { item, error });
+      const index = Number(item.row?.index ?? item.index);
+      const retries = retryItems[stageKey].get(index)?.retries || 0;
+      retryItems[stageKey].set(index, { item, error, retries,
+        retryAt: Date.now() + Math.min(30000, 1000 * (retries + 1)) });
+      retryVersion += 1;
     }
 
     function clearRetry(stageKey, item) {
-      retryItems[stageKey].delete(Number(item.row?.index ?? item.index));
+      if (retryItems[stageKey].delete(Number(item.row?.index ?? item.index))) retryVersion += 1;
+    }
+
+    function retryCandidates() {
+      const occupied = new Set(Object.values(dispatchers).flatMap((dispatcher) => {
+        const state = dispatcher.snapshot();
+        return [...state.pendingRows, ...state.activeRows].map(Number);
+      }));
+      return Object.entries(retryItems).flatMap(([stageKey, items]) => [...items.entries()]
+        .filter(([index, { item }]) => !occupied.has(index) && !isStageStopped(stageKey) && poolDispatcher.canRetry(stageKey, item))
+        .map(([index, retry]) => ({ stageKey, index, retry })));
+    }
+
+    function schedulePoolRetries() {
+      if (!poolDispatcher || config.poolMode !== "loop" || status.stopRequested) return false;
+      if (scheduledRetryVersion === retryVersion) return Boolean(cycleTimer);
+      scheduledRetryVersion = retryVersion;
+      const candidates = retryCandidates();
+      const retryAt = candidates.length ? Math.min(...candidates.map(({ retry }) => retry.retryAt)) : 0;
+      if (cycleTimer && cycleRetryAt === retryAt) return true;
+      if (cycleTimer) clearTimeout(cycleTimer);
+      cycleTimer = null;
+      cycleRetryAt = retryAt;
+      status.poolRuntime.retryAt = retryAt;
+      if (!retryAt) {
+        if (status.poolRuntime.waitReason === "retry") status.poolRuntime.waitReason = "";
+        return false;
+      }
+      const round = Math.max(status.poolRuntime.round, ...candidates.map(({ retry }) => retry.retries + 2));
+      if (round > status.poolRuntime.round) {
+        status.poolRuntime.round = round;
+        pushLog(`[预设池] 第 ${round} 轮：异常行按就绪时间重新派发，空闲通道继续处理，不等待正在执行的请求全部结束。`);
+      }
+      status.poolRuntime.waitReason = "retry";
+      cycleTimer = setTimeout(() => {
+        cycleTimer = null;
+        cycleRetryAt = 0;
+        status.poolRuntime.retryAt = 0;
+        const queued = new Set();
+        for (const { stageKey, index, retry } of retryCandidates()) {
+          if (retry.retryAt > Date.now() || queued.has(index)) continue;
+          dispatchers[stageKey].enqueue(retry.item);
+          queued.add(index);
+          retry.retries += 1;
+        }
+        retryVersion += 1;
+        syncStagePipelineQueues();
+        dispatch();
+      }, Math.max(0, retryAt - Date.now()));
+      return true;
     }
 
     function clearAllTimers() {
@@ -1772,7 +1831,6 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
       if (status.stopRequested && cycleTimer) {
         clearTimeout(cycleTimer);
         cycleTimer = null;
-        cycleWaiting = false;
         cycleRetryAt = 0;
       }
     }
@@ -1836,8 +1894,8 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
     function checkDone() {
       if (settled) return;
-      if (cycleWaiting && !status.stopRequested) return;
       if (!status.stopRequested) flushBrokenStagePending();
+      const retryScheduled = schedulePoolRetries();
       // 阶段全部预设熔断后，队列中的剩余行已由 flushBrokenStagePending 落成异常结果；
       // 这里仍等待已经发出的请求收尾，并让其它健康阶段继续运行。
       const stageDrained = (stageKey) => {
@@ -1853,25 +1911,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             queueMicrotask(dispatch);
             return;
           }
-          const retries = Object.entries(retryItems).flatMap(([stageKey, items]) => [...items.values()]
-            .filter(({ item }) => !isStageStopped(stageKey) && poolDispatcher.canRetry(stageKey, item))
-            .map(({ item }) => ({ stageKey, item })));
-          if (config.poolMode === "loop" && retries.length) {
-            cycleWaiting = true;
-            status.poolRuntime.round += 1;
-            cycleRetryAt = Date.now() + Math.min(30000, 1000 * (status.poolRuntime.round - 1));
-            status.poolRuntime.retryAt = cycleRetryAt;
-            pushLog(`[预设池] 第 ${status.poolRuntime.round} 轮：${retries.length} 行异常将自动重试，成功后继续移交下游阶段。`);
-            cycleTimer = setTimeout(() => {
-              cycleTimer = null;
-              cycleWaiting = false;
-              cycleRetryAt = 0;
-              status.poolRuntime.retryAt = 0;
-              if (!status.stopRequested) refillPoolPending({ includeFailures: true });
-              dispatch();
-            }, Math.max(0, status.poolRuntime.retryAt - Date.now()));
-            return;
-          }
+          if (retryScheduled) return;
           status.poolRuntime.uncovered = poolUncoveredRows(config, allRows);
           const unresolved = Object.values(retryItems).reduce((sum, items) => sum + items.size, 0);
           const remaining = Object.entries(poolRemainingRows(config, allRows)).filter(([, indexes]) => indexes.length);
@@ -1971,7 +2011,6 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         checkDone();
         return;
       }
-      if (cycleWaiting) return;
       const execute = { stage1: executeStage1, stage2: executeStage2, stage3: executeStage3 };
       if (poolDispatcher) {
         while (!status.stopRequested && !settled) {

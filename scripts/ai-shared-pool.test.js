@@ -115,6 +115,41 @@ test("循环池：初审临时失败后自动重试并继续复审仲裁", async
   assert.equal(done.stageMetrics.stage3Settled, 1);
 });
 
+test("循环池：阶段三慢请求未完成时，空闲健康通道仍重派阶段一失败行", async (t) => {
+  let releaseSlow;
+  const slowGate = new Promise((resolve) => { releaseSlow = resolve; });
+  let healthyCalls = 0;
+  const scenario = await fixture(t, {
+    rowsCount: 2, mode: "loop", presets: ["healthy", "slow"],
+    respond: async (call) => {
+      if (call.input.model === "slow") await slowGate;
+      if (call.input.model === "healthy" && ++healthyCalls === 1) {
+        return { status: 500, error: "temporary upstream error" };
+      }
+      if (call.stage === "stage1") return { content: { semanticSame: true, needsEdit: false, decision: "keep", summary: "含义一致", score: 100 } };
+    },
+  });
+  try {
+    await startProofread({ ...scenario.config, rowNotes: {
+      2: "[AI校对]\n语义是否相同：不同\n是否需要修改：待终审\nGatekeeper初审：修改措辞\n初审改案：初审改案。\nStylist复审[提交仲裁]：存在分歧\n复审改案：复审改案。",
+    } });
+    await until(() => scenario.calls.length === 2 && clientStatus().stageMetrics.stage1Errors === 1);
+    assert.equal(clientStatus().stageControls.stage1.stopRequested, false);
+    const deadline = Date.now() + 2500;
+    while (healthyCalls < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(healthyCalls, 2, "失败行应在有限退避后交给空闲通道，不等另一条慢请求归还");
+    assert.equal(clientStatus().poolPresets.find((preset) => preset.presetId === "slow").inFlight, 1);
+    assert.equal(scenario.calls[1].stage, "stage3");
+    assert.equal(scenario.calls[2].stage, "stage1");
+    assert.equal(clientStatus().stageControls.stage1.running, true, "阶段一暂时空闲不代表停止，重派后恢复运行状态");
+    assert.deepEqual(scenario.calls[0].input.messages, scenario.calls[2].input.messages, "重派保留原行的阶段输入");
+  } finally {
+    releaseSlow();
+  }
+  await until(() => !clientStatus().running);
+  assert.equal(scenario.calls.length, 3);
+});
+
 test("循环池：拒答行换预设，拒答预设不再收到同阶段同一行", async (t) => {
   const scenario = await fixture(t, { rowsCount: 1, mode: "loop", presets: ["refuser", "healthy"], respond: (call) => {
     if (call.input.model === "refuser") return { status: 400, error: "content_filter: sensitive content" };
