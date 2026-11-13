@@ -10,7 +10,7 @@ const result = (index, resultRevision = index, overrides = {}) => ({
 });
 const status = (results = [], overrides = {}) => ({
   kind: "proofread", runId: "run-a", projectKey: "project", rowsSignature: "rows",
-  running: false, total: 3, queued: 3, stageMode: "stage1", active: [],
+  running: false, poolSupported: true, total: 3, queued: 3, stageMode: "stage1", active: [],
   results, resultRevision: results.at(-1)?.resultRevision || 0, ...overrides,
 });
 

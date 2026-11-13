@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createWorkbench, storageFixture } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, addPoolPreset } = require("./workbench-fixture");
 
 async function settledWorkbench(storage) {
   const ui = createWorkbench(storage, { strictIds: true });
@@ -12,6 +12,8 @@ async function settledWorkbench(storage) {
 function renderStatus(ui, done, overrides = {}) {
   ui.run(`renderAiStatus(${JSON.stringify({
     kind: "ai", runId: "hover-run", running: true,
+    poolSupported: true, poolEnabled: true,
+    poolRuntime: { mode: "normal", state: "running", round: 1, presets: Object.values(overrides.presetPipelines || {}).flat() },
     projectKey: "project", rowsSignature: "rows", results: [],
     total: 40, queued: 40, modelProcessed: done,
     stageMetrics: { stage1Passed: done },
@@ -215,26 +217,27 @@ test("实时悬停：预设运行刷新复用条目、悬停锚点与操作按�
       { id: "p2", name: "模型乙", model: "model-b", concurrency: 8 },
     ]),
   }));
-  ui.run('restoreAiConfig(); stagePresetSelections.stage1 = ["p1"];');
+  ui.run('restoreAiConfig();');
+  addPoolPreset(ui, "p1");
   const pipelines = (inFlight) => ({
     stage1: [{ presetId: "p1", inFlight, quota: 3, configuredConcurrency: 4, pending: 4, activeRows: [inFlight + 1] }],
   });
   renderStatus(ui, 1, { presetPipelines: pipelines(1) });
-  const tags = ui.element("stage1PresetTags");
+  const tags = ui.element("aiPoolPresets");
   const tag = tags.children[0];
-  const [name, runtime, remove] = tag.children;
+  const { name, runtime, remove } = tag._poolControls;
   const snapshot = runtime.title;
   await runtime.dispatch("mouseenter");
   renderStatus(ui, 2, { presetPipelines: pipelines(2) });
 
   assert.ok(tags.children[0] === tag, "运行刷新保留原预设条目");
-  assert.ok(tag.children[0] === name, "运行刷新保留名称节点");
-  assert.ok(tag.children[1] === runtime, "运行刷新保留悬停锚点");
-  assert.ok(tag.children[2] === remove, "运行刷新保留操作按钮");
+  assert.ok(tag._poolControls.name === name, "运行刷新保留名称节点");
+  assert.ok(tag._poolControls.runtime === runtime, "运行刷新保留悬停锚点");
+  assert.ok(tag._poolControls.remove === remove, "运行刷新保留操作按钮");
   assert.match(runtime.textContent, /运行 2/);
   assert.equal(runtime.title, snapshot);
   await runtime.dispatch("mouseleave");
-  assert.match(runtime.title, /当前运行 2/);
+  assert.match(runtime.title, /运行 2/);
   await runtime.dispatch("mouseenter");
   renderStatus(ui, 2, {
     running: false,
@@ -242,12 +245,13 @@ test("实时悬停：预设运行刷新复用条目、悬停锚点与操作按�
       stage1: [{ presetId: "p1", inFlight: 0, quota: 0, configuredConcurrency: 4, pending: 0, activeRows: [] }],
     },
   });
-  assert.match(runtime.title, /额定并发上限 4/, "失去运行态立即移除旧行号与运行数字");
+  assert.match(runtime.title, /共享并发上限 4/, "失去运行态立即移除旧行号与运行数字");
   await runtime.dispatch("mouseleave");
   assert.doesNotMatch(runtime.title, /当前行/);
 
   // 删除按钮必须读取最新列表；复用旧节点不能同时复用过期闭包里的列表。
-  ui.run('stagePresetSelections.stage1 = ["p1", "p2"]; renderStagePresetSelection("stage1"); currentAiRunning = false;');
+  addPoolPreset(ui, "p2");
+  ui.run('currentAiRunning = false;');
   assert.ok(tags.children[0] === tag, "新增其它预设后仍复用原条目");
   remove.click();
   assert.deepEqual([...ui.run('committedStagePresetIds("stage1")')], ["p2"]);
@@ -260,7 +264,8 @@ test("实时悬停：运行号切换且新轮仍在运行时，进度与预设�
       { id: "p1", name: "模型甲", model: "model-a", concurrency: 4 },
     ]),
   }));
-  ui.run('restoreAiConfig(); stagePresetSelections.stage1 = ["p1"];');
+  ui.run('restoreAiConfig();');
+  addPoolPreset(ui, "p1");
   const stagePipeline = (done, activeRow) => ({
     stage1: { inFlight: 1, pending: 39 - done, concurrency: 3, concurrencyMax: 6, activeRows: [activeRow] },
   });
@@ -273,13 +278,10 @@ test("实时悬停：运行号切换且新轮仍在运行时，进度与预设�
     presetPipelines: presetPipeline(1, 2),
   });
   const progress = ui.element("stage1ProgressWrap");
-  const trigger = ui.element("stage1AppliedTrigger");
-  const runtime = ui.element("stage1PresetTags").children[0].children[1];
+  const runtime = ui.element("aiPoolPresets").children[0]._poolControls.runtime;
   await progress.dispatch("mouseenter");
-  await trigger.dispatch("mouseenter");
   await runtime.dispatch("mouseenter");
   const oldProgressTitle = progress.title;
-  const oldTriggerTitle = trigger.title;
   const oldRuntimeTitle = runtime.title;
 
   renderStatus(ui, 2, {
@@ -290,10 +292,8 @@ test("实时悬停：运行号切换且新轮仍在运行时，进度与预设�
 
   assert.notEqual(progress.title, oldProgressTitle, "进度提示不能继续显示上一轮");
   assert.match(progress.title, /已完成 2 [\s\S]*当前行：3/);
-  assert.notEqual(trigger.title, oldTriggerTitle, "预设入口提示不能继续显示上一轮");
-  assert.match(trigger.title, /运行 2/);
   assert.notEqual(runtime.title, oldRuntimeTitle, "预设运行提示不能继续显示上一轮");
-  assert.match(runtime.title, /当前运行 2 [\s\S]*当前行：3/);
+  assert.match(runtime.title, /运行 2 [\s\S]*当前行：3/);
 });
 
 test("实时悬停：停止响应仍带预设运行结构时，清除旧当前行提示", async () => {
@@ -302,13 +302,14 @@ test("实时悬停：停止响应仍带预设运行结构时，清除旧当前�
       { id: "p1", name: "模型甲", model: "model-a", concurrency: 4 },
     ]),
   }));
-  ui.run('restoreAiConfig(); stagePresetSelections.stage1 = ["p1"];');
+  ui.run('restoreAiConfig();');
+  addPoolPreset(ui, "p1");
   renderStatus(ui, 1, {
     runId: "run-a",
     stagePipelines: { stage1: { inFlight: 1, pending: 3, concurrency: 3, concurrencyMax: 6, activeRows: [2] } },
     presetPipelines: { stage1: [{ presetId: "p1", inFlight: 1, quota: 3, configuredConcurrency: 4, pending: 3, activeRows: [2] }] },
   });
-  const runtime = ui.element("stage1PresetTags").children[0].children[1];
+  const runtime = ui.element("aiPoolPresets").children[0]._poolControls.runtime;
   await runtime.dispatch("mouseenter");
 
   renderStatus(ui, 1, {

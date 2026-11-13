@@ -146,11 +146,13 @@
 - 包含完整连接与模型参数（`protocol`、`provider`、`baseUrl`、`apiKey`、`model`、`modelOptions`、`modelMetadata`、`reasoningEffort`、`gptReasoningEffort`、`nonGptIntensity`、`concurrency`，即「并发上限」）。`modelMetadata` 只保存能力白名单，恢复预设时与模型 ID 对应，避免丢失端点专属思考档位。`protocol` 只表示接口类型（`local` / `claude` / `compatible`）；`provider` 是可选的供应商名称，不参与传输协议选择。`protocol` 由 `src/ai/connection-config.js` 的 `inferProtocolFromBaseUrl` 按地址决定：地址指向本机/局域网给 `local`，命中 Anthropic/Claude 主机或 `/v1/messages` 路径给 `claude`（优先于本地判定），其余可解析公网地址给 `compatible`；地址为空或无法解析时保留当前值，缺省 `local`。界面不提供手动选择，`provider` 仍然不参与传输。缺少 `protocol` 却携带 `provider` 的请求直接拒绝，运行路径不得将旧 `provider` 当接口类型。熔断与并发调度均由服务端内部决策，不再随预设保存；旧预设里遗留的 `breakerThreshold`、`breakerDisabled` 载入时被丢弃；遗留的 `smartConcurrency`、`concurrencyMax` 折算进 `concurrency` 后丢弃。
 - 接口类型不占界面：地址是唯一依据，「地址」字段只有输入框，协议用隐藏字段随配置与预设保存。恢复预设或配置时先填入保存值，再按地址重判；地址能判断就以地址为准（例如预设里遗留 `compatible`、地址是 `127.0.0.1` 时按 `local` 传输），地址认不出才保留保存值。旧预设无需迁移。回归：`node --test scripts/ai-provider-config.test.js`。
 - 当前预设 ID 保存在 `translation-compare-ai-config-v2` 与 `translation-compare-ai-project-config-v2:<projectKey>` 的 `currentPresetId` 中，页面刷新时由 `restoreAiConfig` 自动恢复。共享传输层、模型列表、连通性测试、任务状态和子阶段配置均使用新字段，接口默认配置统一名为 `protocolDefaults`。
-- 阶段适用预设以 `stagePresetSelections` 为唯一配置来源；`committedStagePresetIds` 不得回退读取候选选择器。候选须经「添加」进入列表，显示、启动请求、热更新及 `stageNPresetIds` 持久化均读取同一列表。空列表表示阶段一用主配置、阶段二/三未启用；移除最后一项后，残留候选不得重新加入配置。阶段三的候选选择、添加与适用列表不依赖阶段二是否配置，执行仲裁仍要求已有复审分歧。旧 `stageNPresetId` 仅由恢复入口迁入列表，显式的空数组优先于旧字段。
-- 开始按钮及启动处理共用模型就绪检查：独立阶段只检查自身，一键开始检查初审及已添加下游预设的阶段。缺失预设、空白模型与 `custom` 占位值禁用对应开始入口并提供原因；配置保存、适用列表变化及状态轮询后重新计算，不影响停止入口。校验必须早于启动接收状态变更与启动请求。适用预设池保留无效条目交由服务端拒绝，不得先过滤再回退主配置。回归：`node --test scripts/ai-start-validation-client.test.js scripts/ai-stage-controls-client.test.js`。
-- 三张阶段卡片的开始/停止只控制自身；单阶段启动以当次最新备注快照准备候选，不自动接收上游后续结果。不同阶段可以同时运行。单阶段与一键开始均直接继续已有进度，固定发送 `continueOnly: true`，不弹出继续或重跑的选择，也不清除备注与人工确认。统计标题右侧的 `#aiStartAll` / `#aiStopAll` 分别提供一键流水线启动与全部停止，总控开始仅在全部阶段空闲时可用。按钮态从服务端 `stageControls` 恢复，不能由本地最后点击的阶段推断；阶段编排与定向停止见 [AI 校对契约](ai-proofread-contract.md#阶段编排独立启停与一键流水线stageplan--runqueue)。
+- 共享池是页面唯一预设分配来源；候选须经「添加」进入池，显示、启动请求、热更新及持久化读取同一份配置。每条记录包含预设 ID、允许的 `stages` 与 `stagePriorities`；新添加默认三个阶段全开，优先级默认关闭，开启后数值越大越优先。空池不回退主配置，显式空阶段数组不回退全开。
+- 池分工持久化字段为 `poolSelections`。首次恢复旧 `stageNPresetIds` / `stageNPresetId` 时按预设 ID 合并，允许阶段取旧配置并集，保留原分工；旧初审未指定预设但有主连接时，将当时的连接参数迁为真实预设，保留未保存到原预设的编辑。一旦存在新池字段（包括显式空数组），不再从旧字段补回删除项。连接与模型参数仍由预设管理器维护，分工与运行模式属于全局/项目 AI 配置。
+- 迁移所需预设保存失败时保留旧字段，不写新池的迁移完成标记，后续普通配置保存也不能绕过此保护；提示用户处理存储问题后重试。未迁移完整时禁止启动，不能静默丢掉原主连接的阶段分工。
+- 启动池按钮与启动处理共用模型就绪检查：缺失预设、空白模型与 `custom` 占位值禁用启动入口并提供原因；配置保存、池变化及状态轮询后重新计算，不影响停止入口。校验早于启动接收状态变更与启动请求，服务端也须独立拒绝无效池，不能先过滤再回退主配置。回归：`node --test scripts/ai-start-validation-client.test.js scripts/ai-stage-controls-client.test.js`。
+- 页面只提供启动池、停止池与常规/循环模式。收到服务端 `poolSupported: true` 后才允许启动；缺失时提示重启服务。启动固定发送 `poolEnabled: true`、`stage: "all"`、`continueOnly: true`、`poolMode`、`poolPriorityEnabled` 与完整 `presetPool`；不清除备注与人工确认。完成排除只认人工确认或真实全流程定案，不因未配置下游而把上游结论误算完成。三张阶段卡片仅负责状态与结果筛选；启停状态来自服务端，循环重试与终止规则见 [AI 校对契约](ai-proofread-contract.md#共享预设池与循环调度)。
 - 预设按「供应商身份 + 名称」判重：有名称时 trim 后忽略大小写；未命名时使用协议与规范化地址。展示地址不包含 URL 凭证、查询串或片段。不同供应商同名预设保持独立 ID；按 ID 修改供应商时遇到同名冲突必须拒绝，不得合并 ID 或改变已有阶段引用。
-- 主预设与三个阶段使用同一分组及标签函数；增强下拉必须保留原生 `optgroup` 分组提示。阶段一读取预设时完整使用预设连接参数，空 API Key 与默认推理强度也不能借用主配置。切换预设时清空旧模型能力缓存，异步模型列表与测试回包须核对协议、供应商、地址和 Key，避免同名模型跨连接污染。
+- 主预设与池候选使用同一分组及标签函数；增强下拉必须保留原生 `optgroup` 分组提示。池读取预设时完整使用该预设连接参数，空 API Key 与默认推理强度也不能借用主配置。切换预设时清空旧模型能力缓存，异步模型列表与测试回包须核对协议、供应商、地址和 Key，避免同名模型跨连接污染。
 - 提供商名称使用可输入 combobox，复用工作台的 `select-menu` / `select-option` 与箭头样式；不得使用浏览器原生 `datalist` 弹层。支持输入筛选、鼠标选择、方向键和 Enter 确认、Escape/Tab/失焦关闭；公共下拉关闭逻辑须同步清理 `aria-expanded` 与 `aria-activedescendant`。
 - 回归：`node --test scripts/ai-model-presets.test.js scripts/ai-provider-config.test.js scripts/stage-preset-binding.test.js scripts/ai-connectivity.test.js`。
 - 支持下拉切换、覆盖保存、另存为和删除预设，操作回执均通过 Toast 提示。
@@ -160,10 +162,10 @@
 
 ## 并发上限与内部自适应调度
 
-面板上只有一个「并发上限」输入。**没有「智能并发」开关**：自适应调度由服务端强制开启，实际并发在 1~上限 之间自动升降，用户填的数字只决定最大并发数。策略实现在纯函数模块 `ai/concurrency-controller.js`（不读 `status`、不碰网络，时钟可注入），阶段内派发归 `ai/stage-dispatch.js`，跨阶段业务与任务状态归 `ai-proofread.js`。
+面板上只有一个「并发上限」输入。**没有「智能并发」开关**：自适应调度由服务端强制开启，实际并发在 1~上限 之间自动升降，用户填的数字只决定最大并发数。策略实现在纯函数模块 `ai/concurrency-controller.js`（不读 `status`、不碰网络，时钟可注入），共享池派发归 `ai/pool-dispatch.js`，旧阶段接口派发归 `ai/stage-dispatch.js`，跨阶段业务与任务状态归 `ai-proofread.js`。
 
 - **起步**：`min(上限, 3)`。默认上限 3 时就是固定 3，与旧行为一致；上限更高时先以 3 个并发请求开始，逐步评估模型服务的承受能力，不会立即用满上限。
-- **阶段多预设（阶段一的「适用 (N)」、阶段二/三的预设列表）**：每个预设是一条**独立并发通道**（各自一个 `createStageController`，上限取该预设自己的 `concurrency`）。阶段可派发量 = 各通道当前允许并发之和，起步也是各通道起步值之和——3 个预设各配 3 并发，点「开始」即可同时处理 9 个请求，而不是被「第一个预设/主配置」的上限卡在 3。配额由 `ai/preset-pool.js` 从通道读取（`quota` 字段就是 `channel.currentConcurrency`），池内不再另算一套 ±1 自适应，避免两套调节规则相互冲突。`cleanConfig` 必须保住 `presetPool` 以及每个预设的 `presetId`/`name`：漏掉整池只剩主配置一条通道，剥掉身份则页面上的预设标签与运行数据对不上号。每条预设通道的退避窗口、单行重试计数与断路器由 `ai/stage-dispatch.js` 持有；断路器打开时只让该通道进入冷却并降到最低，其它预设继续派发，恢复后该通道从较低并发数开始慢启动。阶段及整体任务的终止汇总见 [AI 校对契约](ai-proofread-contract.md#阶段派发状态与请求归属aistage-dispatchjs)。
+- **共享池多预设**：每个预设是一条独立并发通道，三个阶段共用该通道的额度、退避与断路器。例如三个预设各配 3 并发，池起步总量为 9，不能因允许三个阶段而变成 27。`cleanConfig` 保留完整 `presetPool` 及各条 `presetId`、`name`、允许阶段与优先级；移除最后一条不回退主配置。阶段看板是共享容量的投影，不能将三张卡片容量相加。旧阶段接口继续使用原阶段通道，细则见 [AI 校对契约](ai-proofread-contract.md#阶段派发状态与请求归属aistage-dispatchjs)。
 - **上调（两段式）**：
   - *慢启动*：一整轮请求（数量 = 当前并发）全部正常，并发翻倍，封顶到慢启动阈值。取消固定最大值后，慢启动负责逐步提高并发：上限 96 时 3→6→12→24→48→96，不必等 93 个「连续 5 次」；上限填得越高，越需要逐轮增加并发，而非立即用满上限。
   - *固定增量上调*：到达阈值后，每连续 5 次正常应答 +1。要达到或超过「上次触发限制时的并发数」（`knownLimit`）时，需要连续 15 次正常应答；模型服务的并发限制通常不变，反复达到同一限制会增加 HTTP 429 响应。
@@ -179,7 +181,8 @@
 - **日志**：调度相关日志前缀 `[并发调度]`，频控退避为 `[频控退避]`，熔断为 `[熔断]`；任务结束输出「并发调度统计」（起步、峰值、下调/上调次数、限流次数）。
 - **运行与触顶展示**：标题徽标只表示状态，适用预设摘要只表示配置；`stageNRuntimeInfo` 在卡片底部分别标出正在处理的行数、等待派发的行数、动态配额与配置上限，无活跃行号时仍显示队列与容量，停止后清除实时数字和提示。逐条预设详情同样使用明确标签，不混用分母。触顶以服务端 `presetPipelines.stageN[].topped` 为准，不是配额用满；阶段运行区只有全部预设触顶才标「全部触顶」（`stagePipelines.stageN.presetCount`/`toppedCount`），单预设显示「触顶」，部分触顶由预设详情与悬停逐条说明。
 - **等待展示**：卡片与预设详情按服务端 `waitReason` / `retryAt` 显示「限流退避」或「冷却中」及距下次尝试的时间，沿用状态轮询刷新倒计时，不另开客户端定时器。仍有请求执行时标题优先显示「处理中」；只有全部可用通道等待且没有正在执行的请求时，标题才显示等待原因。到期显示等待重新派发，不承诺请求成功；停止或收尾清理等待信息。缺少新字段的旧服务保持「排队中」，不能凭配额或异常数推断退避。
-- **运行中增删预设（热更新）**：页面立刻 `POST /api/ai-proofread/presets`（body `{ stage, presets }`），由 `updateStagePresets` 清洗后交给对应阶段的 `stage-dispatch.updatePresets`。实例重分配待办，调度同步看板并唤醒派发；新预设立即参与处理，已发出的请求照常完成。预设全部移除时改用阶段配置，任务未运行时返回 409（`NOT_RUNNING`）。请求归属、同 ID 重加隔离及已移除的通道清理归 [AI 校对契约](ai-proofread-contract.md#阶段派发状态与请求归属aistage-dispatchjs)。
+- **运行中池热更新**：页面 `POST /api/ai-proofread/presets`，发送 `stage: "all"`、完整 `presets`、优先级开关及 `projectKey` / `rowsSignature` / `runId`，只作用于本页匹配的运行。服务端校验后原子替换允许阶段与待派发配置，唤醒派发；已发出的请求保持原归属并正常完成。失败时保留本地配置，明确提示当前运行未应用改动。空池不回退主配置，任务未运行返回 409（`NOT_RUNNING`）。旧 `{ stage, presets }` 分阶段接口仅服务旧客户端。请求归属、同 ID 重加隔离及已移除通道清理归 [AI 校对契约](ai-proofread-contract.md#共享预设池与循环调度)。
+- **池状态**：轮次、重试等待与阻塞原因来自 `poolRuntime`；阻塞收尾的面板和 Toast 均显示待处理，不能显示审核完成。预设悬停展示本次通道的成功、超时、拒答与限流次数；移除重加后的新通道重新累计性能计数，本轮拒答资格仍由服务端单独保留。
 - **状态接口**：`concurrency` 是起步并发，`concurrencyMax` 是并发上限，`currentConcurrency` 是初审当前放行的并发；多预设时这三个值都是各预设通道之和，`stagePipelines.stageN` 的 `concurrency`（当前）/`concurrencyMax`（上限）同理，并额外带 `presetCount`/`toppedCount`；`presetPipelines.stageN[]` 逐条给出每个预设自己的 `quota`/`inFlight`/`pending`/`configuredConcurrency`/`topped`。不再回报 `smartConcurrency`。
 - **并发边界**：**只有下界 1 是硬约束，不设固定最大值**——用户填多少就是多少（填 64 就跑 64）。负载保护由自适应调度（`min(上限, 3)` 起步后慢启动上调）与熔断（错误率 / 限流饱和即终止）负责，配置层不再截断；熔断完善后，原先固定为 32 的最大值只会限制用户主动选择的高并发，且没有提示（填 64 实际跑 32，页面上仍写着 64）。`ai/concurrency-limits.js` 的 `AI_CONCURRENCY_LIMITS` 仍是唯一权威来源，其中 `max` 已改为 `Number.MAX_SAFE_INTEGER`，只作为各 `clamp` 调用点挡 Infinity / NaN 的算术护栏，不是业务上限；面板输入框因此不再渲染 `max` 属性，`cleanConfig`/`cleanSubStageConfig`/`createStageController`/`preset-pool` 全部以该常量为准。**越界与非整数一律不得回落到默认值**——旧实现把超范围的 20 换成 3，也把非整数换成 3，用户静默降速而无提示；现在低于下界归 1，非整数四舍五入（与服务端 `clampCap` 同口径）。`ai-presets.js` 的 `createPresetTools` 会被 `toString()` 注入页面、无法引用模块作用域，因此自带一份同值口径，两边的边界行为由 `scripts/ai-smart-concurrency.test.js` 锁死，改一边必须同步另一边；共享队列 `src/ai/task-queue.js` 同口径（只保底 1，`workerCount` 另受 `items.length` 限制）。
 - **旧数据折算**：旧客户端、旧预设、旧本地存档还带着 `smartConcurrency` + `concurrencyMax`。开启智能并发的旧数据，有效上限是 `max(concurrency, concurrencyMax)`；关闭的，`concurrencyMax` 从不生效，上限就是 `concurrency`。服务端 `resolveConcurrencyCap`、预设 `sanitizePreset`、页面 `foldLegacyConcurrency` 三处按同一口径折算，读到旧数据即折成一个上限，下一次保存不再回写旧字段，无需迁移脚本。页面的折算必须对全局与项目两份存档**各自**折算后再合并；先合并再折算，会让一份旧存档遗留的 `concurrencyMax` 盖掉另一份存档里用户刚改的值。
@@ -190,6 +193,7 @@
 
 ## 客户端布局缓存边界
 
+- 共享池的标题、预设添加与启停集中在可换行工具栏；预设列表按可用宽度自动分列，条目中的名称、阶段开关和移除操作相邻。模式与运行提示共用页脚，空提示不占高度。阶段卡片标题只占内容所需的一行，不保留已删除控件的轨道；运行区保留固定进度槽，避免轮询时卡片跳动。窄屏阶段卡片单列，预设开关与优先级可换行，不靠整屏宽度才能容纳控件。
 - 术语判定与命中条数由 `renderTermChipHtml` 合成同一个原生按钮；有备注时移除构建期判定，清单仍来自当前译名表变体。旧快照缺少清单时保留静态判定，无命中则隐藏入口。`.term-chip-slot` 在 `.confirm-status` 外，按钮和整宽列表直接参与 `.confirm-row` 布局，展开不能改变顶部标签的位置。原生按钮仅走一次 `click`，同步 `aria-expanded` 与列表 `hidden`；`termOpenRows` 保留本页会话的开合选择，备注回包与分页重绘不得收起清单或触发整表量高。同内容回包复用 `termChipHtmlCache`，入口更新时保留键盘焦点。回归：`node --test scripts/term-layer.test.js`。
 - `workbench-client.js` 的 `syncVisibleRowLayout` 只在四种情况下重新量输入框高度：新节点（整页重渲染）、该行内容改写（`invalidateRevisionEditorHeight`）、视口高度变化、列宽变化（`remeasureEditors`）。面板与抽屉开合只经 `ifFrameMoved` 重算可用高度；开关审核轨迹不触发布局同步。
 - 批量量高由 `measureRevisionEditors` 执行「整批写 `height:auto` → 连续读 `scrollHeight` → 统一写回」。禁止逐行交错读写；单行量高仍走 `syncRevisionEditorHeight`。事件处理器不得逐行调用整批量高，`resize` 要合并到一帧并在尺寸稳定后重新测量。

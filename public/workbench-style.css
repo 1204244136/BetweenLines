@@ -1744,7 +1744,7 @@
     .empty-state.visible {
       display: block;
     }
-    /* 固定轨道看板：按卡片宽度切换行数，启停与待办显隐不改变高度。 */
+    /* 指标随卡片宽度排布，标题不为已移除的阶段控件保留轨道。 */
     .ai-stage-dashboard .ai-stage-dashboard-title-group {
       min-width: 0;
       flex-shrink: 1;
@@ -1760,22 +1760,13 @@
     .ai-stage-card .ai-stage-card-head {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: 22px 22px;
+      grid-template-rows: auto;
       align-items: center;
       gap: 4px;
     }
     .ai-stage-card .ai-stage-card-title-row {
       justify-content: flex-start;
       gap: 4px;
-    }
-    .ai-stage-card .ai-stage-card-ctrls {
-      min-width: 0;
-      justify-content: flex-end;
-      gap: 4px;
-    }
-    .ai-stage-card .ai-stage-card-head .select-combobox {
-      flex: 1 1 0;
-      min-width: 70px;
     }
     .ai-stage-card .ai-stage-card-body {
       display: grid;
@@ -1792,7 +1783,7 @@
     .ai-stage-card .ai-stage-card-main {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-rows: 22px 18px 18px;
+      grid-template-rows: minmax(22px, auto) minmax(18px, auto);
       align-items: baseline;
       gap: 3px 8px;
       min-width: 0;
@@ -1872,11 +1863,6 @@
       }
     }
     @container ai-stage (min-width: 800px) {
-      .ai-stage-card .ai-stage-card-head {
-        grid-template-columns: max-content minmax(0, 1fr);
-        grid-template-rows: 22px;
-        column-gap: 8px;
-      }
       .ai-stage-card .ai-stage-card-main {
         grid-template-columns: max-content max-content minmax(0, 1fr) auto;
         grid-template-rows: 22px;

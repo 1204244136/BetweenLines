@@ -67,7 +67,7 @@ async function handleAiRoutes(req, res, pathname, searchParams) {
       const payload = await readJson(req);
       sendJson(res, 200, { ok: true, ...updateStagePresets(payload) });
     } catch (error) {
-      sendJson(res, error.code === "NOT_RUNNING" ? 409 : 400, { ok: false, error: error.message || String(error) });
+      sendJson(res, ["NOT_RUNNING", "RUN_SCOPE_MISMATCH"].includes(error.code) ? 409 : 400, { ok: false, error: error.message || String(error) });
     }
     return true;
   }

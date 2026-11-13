@@ -109,13 +109,14 @@ const {
   formatArbitrationNoteLines,
 } = require("./arbiter");
 const { classifyAiError, recordAiErrorKind } = require("./error-kinds");
-const { latestAiNotePart } = require("./stage-note-state");
+const { latestAiNotePart, stageNoteState } = require("./stage-note-state");
 const {
   getModelProfile,
   scheduleModels,
 } = require("./scheduler-profile");
 const { normalizePresetPool } = require("./preset-pool");
 const { createStageDispatch, MAX_ROW_RETRIES: maxRowRetries } = require("./stage-dispatch");
+const { createPoolDispatch } = require("./pool-dispatch");
 const { prepareStageInputs, isStage2Candidate, isStage3DisputeRow, textForKey } = require("./stage-inputs");
 const {
   globalFeedbackCollector,
@@ -318,6 +319,8 @@ const status = {
   stageErrors: createStageErrors(),
   stagePipelines: createStagePipelines(),
   presetPipelines: { stage1: [], stage2: [], stage3: [] },
+  poolEnabled: false,
+  poolRuntime: null,
   metrics: createModelCallMetrics(),
   logs: [],
 };
@@ -395,6 +398,14 @@ function clientStatus(options = {}) {
     stageMode: status.stageMode,
     stageCascade: { ...status.stageCascade },
     stageControls: Object.fromEntries(Object.entries(status.stageControls).map(([stage, control]) => [stage, { ...control }])),
+    poolEnabled: status.poolEnabled,
+    poolSupported: true,
+    poolRuntime: status.poolRuntime ? structuredClone(status.poolRuntime) : null,
+    poolMode: status.poolRuntime?.mode || "normal",
+    poolState: status.poolRuntime?.state || "idle",
+    poolRound: status.poolRuntime?.round || 0,
+    poolBlockedReason: status.poolRuntime?.blockedReason || "",
+    poolPresets: status.poolRuntime ? structuredClone(status.poolRuntime.presets || []) : [],
     total: status.total,
     queued: status.queued,
     processed: status.processed,
@@ -558,7 +569,7 @@ function cleanConfig(input = {}) {
   // 字符串形式按 `;` 与换行拆分（环境变量友好），对象形式 `{ label, url }` 原样使用。
   const inputSites = Array.isArray(input.wikiSites) ? input.wikiSites : toPathList(input.wikiSites);
   const envSites = toPathList(process.env.TRANSCOMPARATOR_WIKI_SITES);
-  return {
+  const config = {
     protocol,
     provider,
     target,
@@ -624,6 +635,7 @@ function cleanConfig(input = {}) {
     rowNotes: Object.fromEntries(Object.entries(
       (input.rowNotes && typeof input.rowNotes === "object") ? input.rowNotes : {}
     ).map(([index, note]) => [index, latestAiNotePart(note).trim()])),
+    notesSnapshotProvided: Boolean(input.rowNotes && typeof input.rowNotes === "object"),
     multiStageEnabled: Boolean(input.multiStageEnabled || input.challengerEnabled || input.singleModelPersona || input.stylistConfig || input.stage2Preset),
     challengerEnabled: Boolean(input.challengerEnabled),
     singleModelPersona: Boolean(input.singleModelPersona),
@@ -640,6 +652,27 @@ function cleanConfig(input = {}) {
     // 术语冲突（译名表有强证据差异）的行号：这些行**必须**经过模型，不能被规则/相似度预筛挡掉。
     termConflictIndexes: new Set(),
   };
+  config.poolEnabled = input.poolEnabled === true;
+  config.poolMode = input.poolMode === "loop" ? "loop" : "normal";
+  config.poolPriorityEnabled = input.poolPriorityEnabled === true;
+  if (config.poolEnabled) {
+    config.presetPool = cleanSharedPresetPool(input.presetPool, defaults, concurrency);
+    config.poolStages = ["stage1", "stage2", "stage3"].filter((stage) => config.presetPool.some((preset) => preset.stages.includes(stage)));
+    if (!config.poolStages.length) {
+      const error = new Error("请向预设池添加至少一个预设，并为它开启至少一个审核阶段。");
+      error.code = "POOL_CONFIG_MISSING";
+      throw error;
+    }
+    config.targetStage = config.poolStages[0] === "stage1" ? "all" : config.poolStages[0];
+    config.stylistPresets = config.presetPool.filter((preset) => preset.stages.includes("stage2"));
+    config.arbiterPresets = config.presetPool.filter((preset) => preset.stages.includes("stage3"));
+    config.stylistConfig = config.stylistPresets[0] || null;
+    config.arbiterConfig = config.arbiterPresets[0] || null;
+    config.multiStageEnabled = config.stylistPresets.length > 0;
+    config.arbiterEnabled = config.arbiterPresets.length > 0;
+    config.singleModelPersona = false;
+  }
+  return config;
 }
 
 function cleanSubStageConfig(input = {}, fallbackDefaults = {}, defaultConcurrency = 3) {
@@ -686,6 +719,18 @@ function cleanStagePresetPool(value, fallbackConf = null, fallbackDefaults = {},
     .filter(Boolean);
 }
 
+function cleanSharedPresetPool(value, defaults = {}, concurrency = 3) {
+  const stages = ["stage1", "stage2", "stage3"];
+  return [...new Map(normalizePresetPool(value).map((item) => [item.presetId, {
+    ...cleanSubStageConfig(item, defaults, concurrency),
+    presetId: item.presetId,
+    name: item.name,
+    stages: Array.isArray(item.stages) ? stages.filter((stage) => item.stages.includes(stage)) : [...stages],
+    stagePriorities: Object.fromEntries(stages.map((stage) => [stage,
+      clampInteger(item.stagePriorities?.[stage], 0, 9, 0)])),
+  }])).values()];
+}
+
 function assertStageConnections(connections, stage) {
   const label = stage === "stage1" ? "阶段一" : (stage === "stage2" ? "阶段二" : "阶段三");
   for (const connection of connections) {
@@ -721,6 +766,11 @@ function clampNumber(value, min, max, fallback) {
 
 function resetStatus(config, rowsLength, { reusePrevious = false } = {}) {
   status.running = true;
+  status.poolEnabled = config.poolEnabled === true;
+  status.poolRuntime = status.poolEnabled ? {
+    mode: config.poolMode, priorityEnabled: config.poolPriorityEnabled,
+    round: 1, state: "running", blockedReason: "", presets: [],
+  } : null;
   status.kind = config.kind || "proofread";
   status.stopRequested = false;
   status.runId = new Date().toISOString();
@@ -849,6 +899,8 @@ function resetIdleStatus({ clearPersisted = false } = {}) {
 }
 
 function resetIdleTaskStatus() {
+  status.poolEnabled = false;
+  status.poolRuntime = null;
   status.stopRequested = false;
   status.kind = "proofread";
   status.runId = "";
@@ -960,7 +1012,7 @@ async function startPrefilter(input) {
     throw error;
   }
 
-  const config = cleanConfig(input);
+  const config = cleanConfig({ ...input, poolEnabled: false });
   const { project, rows, termPrefilter } = readRows(config);
   requireMatchingProjectSnapshot(config, project);
   forgetRequestedResultIndexes(config);
@@ -1016,15 +1068,17 @@ async function startPrefilter(input) {
 async function startProofread(input) {
   const joining = status.running;
   const config = cleanConfig(input);
-  if (joining && (status.kind === "prefilter" || status.stopRequested || config.targetStage === "all" || !activeStageRuntime)) {
+  if (joining && (status.poolEnabled || config.poolEnabled || status.kind === "prefilter" || status.stopRequested || config.targetStage === "all" || !activeStageRuntime)) {
     const error = new Error("AI 校对正在运行。");
     error.code = "RUNNING";
     throw error;
   }
 
   const plan = stagePlan(config);
+  if (config.poolEnabled) assertStageConnections(config.presetPool, "all");
   const connectionsFor = (stage) => {
-    const pool = stage === "stage1" ? config.presetPool : (stage === "stage2" ? config.stylistPresets : config.arbiterPresets);
+    const pool = config.poolEnabled ? config.presetPool.filter((preset) => preset.stages.includes(stage))
+      : stage === "stage1" ? config.presetPool : (stage === "stage2" ? config.stylistPresets : config.arbiterPresets);
     const fallback = stage === "stage1" ? config
       : (stage === "stage2" ? config.stylistConfig : config.arbiterConfig) || (config.singleModelPersona ? config : null);
     return pool.length ? pool : [fallback].filter(Boolean);
@@ -1059,6 +1113,7 @@ async function startProofread(input) {
   // 独立复审/仲裁及级联续跑由结果模块先取同快照的完整结果，再初始化本轮。
   const reusableResults = joining ? new Map()
     : resetStatus(config, rows.length, { reusePrevious: reusePreviousResults(config) });
+  if (config.poolEnabled) status.poolRuntime.uncovered = poolUncoveredRows(config, rows);
   // 按行裁剪的审计计数按任务清零：任务完成时会汇报本次省了多少条特化规范。
   if (!joining) resetPromptTrim();
   // 状态接口如实显示本次任务用的查证站点顺序（未声明/已关闭时为空数组，前端据此说明这一层未启用）。
@@ -1079,15 +1134,27 @@ async function startProofread(input) {
     status.speechHabitCharacters = activatedCharacters;
     pushLog(`${speechTableSummary(tables)}：按${scope === "volume" ? "卷" : "章"}命中 ${activatedChapters} ${scope === "volume" ? "卷" : "章"} / ${activatedCharacters.length} 个角色${volume?.code ? `（${volume.code}）` : ""}，这些角色的说话特色不会被判为翻译错误。`);
   }
-  const prepareInputs = (resolvedByTermTable = new Set()) => prepareStageInputs({
-    rows, labels, plan, reusableResults, resolvedByTermTable,
-    config: {
-      proofreadMode: config.proofreadMode, target: config.target, targetStage: config.targetStage,
-      continueOnly: config.continueOnly, completedIndexes: config.completedIndexes, rowNotes: config.rowNotes,
-    },
-    notesSnapshotProvided: Boolean(input.rowNotes && typeof input.rowNotes === "object"),
-    currentResultFor: (index) => proofreadResults.get(index),
-  });
+  const prepareInputs = (resolvedByTermTable = new Set()) => {
+    const completedIndexes = config.poolEnabled ? new Set([...config.completedIndexes,
+      ...rows.filter((row) => /^\[(规则预筛|相似度预筛|译名表|对照表)\]/.test(poolRowNote(config, row.index)))
+        .map((row) => Number(row.index)),
+    ]) : config.completedIndexes;
+    const prepared = prepareStageInputs({
+      rows, labels,
+      plan: config.poolEnabled ? { startsAt: "stage1", cascadeToStylist: true, cascadeToArbiter: true } : plan,
+      reusableResults, resolvedByTermTable,
+      config: {
+        proofreadMode: config.proofreadMode, target: config.target, targetStage: config.poolEnabled ? "all" : config.targetStage,
+        continueOnly: config.continueOnly, completedIndexes, rowNotes: config.rowNotes,
+      },
+      notesSnapshotProvided: config.notesSnapshotProvided,
+      currentResultFor: (index) => proofreadResults.get(index),
+    });
+    if (config.poolEnabled) for (const stage of ["stage2", "stage3"]) {
+      if (!config.poolStages.includes(stage)) prepared.stageItems[stage] = [];
+    }
+    return prepared;
+  };
   let stageItems = { stage2: [], stage3: [] };
   if (joining) {
     const prepared = prepareInputs();
@@ -1100,6 +1167,10 @@ async function startProofread(input) {
     if (joining) activeStageRuntime.start(config, labels, queue, stageItems);
     else runQueue(queue, rows, config, labels, stageItems).catch((error) => {
       status.error = error.message || String(error);
+      if (status.poolRuntime) {
+        status.poolRuntime.state = "blocked";
+        status.poolRuntime.blockedReason = status.error;
+      }
       pushLog(status.error);
       finish();
     });
@@ -1187,7 +1258,7 @@ async function startProofread(input) {
 }
 
 async function listModels(input = {}) {
-  const config = cleanConfig({ ...input, model: input.model || "placeholder" });
+  const config = cleanConfig({ ...input, poolEnabled: false, model: input.model || "placeholder" });
   if (!config.baseUrl) throw new Error("请输入接口地址。");
 
   let modelsDevData = null;
@@ -1229,7 +1300,7 @@ async function listModels(input = {}) {
 
 async function testModel(input = {}) {
   const model = String(input.model || "").trim();
-  const config = cleanConfig({ ...input, model: model || "placeholder" });
+  const config = cleanConfig({ ...input, poolEnabled: false, model: model || "placeholder" });
   if (!model) {
     return {
       ok: false,
@@ -1324,10 +1395,18 @@ function updateStagePresets(payload = {}) {
     error.code = "NOT_RUNNING";
     throw error;
   }
-  const stage = payload.stage === "stage2" ? "stage2" : (payload.stage === "stage3" ? "stage3" : "stage1");
-  const presets = cleanStagePresetPool(payload.presets, null, {}, AI_CONCURRENCY_LIMITS.defaultConcurrency);
+  if ((payload.projectKey && payload.projectKey !== status.projectKey)
+      || (payload.rowsSignature && payload.rowsSignature !== status.rowsSignature)
+      || (payload.runId && payload.runId !== status.runId)) {
+    const error = new Error("预设变更属于另一项目或运行批次，请刷新当前任务状态后重试。");
+    error.code = "RUN_SCOPE_MISMATCH";
+    throw error;
+  }
+  const stage = status.poolEnabled ? "all" : payload.stage === "stage2" ? "stage2" : (payload.stage === "stage3" ? "stage3" : "stage1");
+  const presets = status.poolEnabled ? cleanSharedPresetPool(payload.presets)
+    : cleanStagePresetPool(payload.presets, null, {}, AI_CONCURRENCY_LIMITS.defaultConcurrency);
   assertStageConnections(presets, stage);
-  const result = activePresetPoolUpdater(stage, presets);
+  const result = activePresetPoolUpdater(stage, presets, { priorityEnabled: payload.poolPriorityEnabled });
   return {
     stage,
     added: result.added,
@@ -1428,6 +1507,14 @@ function parseRateLimitReason(error) {
 
 // 单阶段启动只运行自身；只有一键开始的 all 明确启用已配置的下游流水线。
 function stagePlan(config = {}) {
+  if (config.poolEnabled) {
+    const stages = config.poolStages || [];
+    return {
+      startsAt: stages[0] || "stage1",
+      cascadeToStylist: stages[0] === "stage1" && stages.includes("stage2"),
+      cascadeToArbiter: stages[0] !== "stage3" && stages.includes("stage3"),
+    };
+  }
   const persona = Boolean(config.singleModelPersona);
   const hasStylist = Boolean(config.stylistConfig || config.stylistPresets?.length) || persona;
   const hasArbiter = (Boolean(config.arbiterConfig || config.arbiterPresets?.length) || persona) && config.arbiterEnabled !== false;
@@ -1443,6 +1530,32 @@ function stagePlan(config = {}) {
   };
 }
 
+function poolRowNote(config, index) {
+  const result = proofreadResults.get(index);
+  return latestAiNotePart(result?.runId === status.runId ? result.note
+    : config.notesSnapshotProvided ? config.rowNotes[index] || ""
+    : result?.note || config.rowNotes[index] || "").trim();
+}
+
+function poolRemainingRows(config, rows) {
+  const remaining = { stage1: [], stage2: [], stage3: [] };
+  for (const row of rows) {
+    if (config.completedIndexes.has(Number(row.index))) continue;
+    const note = poolRowNote(config, row.index);
+    if (/^\[(规则预筛|相似度预筛|译名表|对照表)\]/.test(note)) continue;
+    const state = stageNoteState(note);
+    if (!/^\[(AI校对|规则预筛|相似度预筛|译名表|对照表)\]/.test(note) || state.failed) remaining.stage1.push(row.index);
+    else if (state.pendingArbitration) remaining.stage3.push(row.index);
+    else if (state.pendingReview) remaining.stage2.push(row.index);
+  }
+  return remaining;
+}
+
+function poolUncoveredRows(config, rows) {
+  return Object.fromEntries(Object.entries(poolRemainingRows(config, rows))
+    .map(([stage, indexes]) => [stage, config.poolStages.includes(stage) ? [] : indexes]));
+}
+
 function shouldCascadeStages(config = {}) {
   return stagePlan(config).cascadeToStylist;
 }
@@ -1455,8 +1568,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const stageSessionIds = { stage1: sessionId, stage2: sessionId, stage3: sessionId };
   const stageConfigs = { stage1: config, stage2: config, stage3: config };
   const stageLabels = { stage1: labels, stage2: labels, stage3: labels };
-  const links = { stage2: plan.cascadeToStylist, stage3: plan.cascadeToStylist && plan.cascadeToArbiter };
+  const links = { stage2: plan.cascadeToStylist, stage3: (plan.startsAt === "stage2" || plan.cascadeToStylist) && plan.cascadeToArbiter };
   let dispatchWake = null;
+  let cycleRetryAt = 0;
   let stage2ReviewedLive = 0;
   const stage2AttitudesLive = { accept: 0, modify: 0, reject: 0, escalate: 0 };
   const policy = {
@@ -1473,7 +1587,11 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     stage2: { label: "文学复审", presets: stageConfig.stylistPresets, fallbackConfig: stageConfig.stylistConfig, fallbackConcurrency: stageConfig.concurrency },
     stage3: { label: "终审仲裁", presets: stageConfig.arbiterPresets, fallbackConfig: stageConfig.arbiterConfig, fallbackConcurrency: 2 },
   });
-  const dispatchers = Object.fromEntries(Object.entries(stageDefinitionsFor(config)).map(([stageKey, definition]) => [stageKey,
+  const poolDispatcher = config.poolEnabled ? createPoolDispatch({
+    presets: config.presetPool, priorityEnabled: config.poolPriorityEnabled, policy, wake: () => dispatchWake?.(),
+  }) : null;
+  const retryItems = { stage1: new Map(), stage2: new Map(), stage3: new Map() };
+  const dispatchers = poolDispatcher?.stages || Object.fromEntries(Object.entries(stageDefinitionsFor(config)).map(([stageKey, definition]) => [stageKey,
     createStageDispatch({ ...definition, stageKey, policy, wake: () => dispatchWake?.() }),
   ]));
   dispatchers.stage1.enqueue(plan.startsAt === "stage1" ? queue : []);
@@ -1487,15 +1605,58 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   const stageAllowance = (stageKey) => dispatchers[stageKey].snapshot().concurrency;
   const stageAllowanceMax = (stageKey) => dispatchers[stageKey].snapshot().concurrencyMax;
   const hasPending = (stageKey, index) => dispatchers[stageKey].snapshot().pendingRows.includes(index);
-  status.concurrency = dispatchers.stage1.snapshot().initialConcurrency;
-  status.currentConcurrency = stageAllowance("stage1");
-  status.concurrencyMax = stageAllowanceMax("stage1");
+  status.concurrency = (poolDispatcher || dispatchers.stage1).snapshot().initialConcurrency;
+  status.currentConcurrency = poolDispatcher ? poolDispatcher.snapshot().concurrency : stageAllowance("stage1");
+  status.concurrencyMax = poolDispatcher ? poolDispatcher.snapshot().concurrencyMax : stageAllowanceMax("stage1");
   status.peakConcurrency = status.currentConcurrency;
   status.concurrencyUps = 0;
   status.concurrencyDowns = 0;
   status.concurrencyLimits = 0;
 
+  function refillPoolPending({ includeFailures = false } = {}) {
+    if (!poolDispatcher) return 0;
+    const occupied = new Set(Object.values(dispatchers).flatMap((dispatcher) => {
+      const state = dispatcher.snapshot();
+      return [...state.pendingRows, ...state.activeRows].map(Number);
+    }));
+    const failed = new Set(Object.values(retryItems).flatMap((items) => [...items.keys()]));
+    const remaining = poolRemainingRows(config, allRows);
+    const pendingIndexes = new Set(Object.values(remaining).flat().map(Number));
+    const completedIndexes = new Set(allRows.filter((row) => !pendingIndexes.has(Number(row.index))).map((row) => Number(row.index)));
+    const rowNotes = Object.fromEntries(allRows.map((row) => [row.index, poolRowNote(config, row.index)]));
+    const prepared = prepareStageInputs({ rows: allRows, labels,
+      config: { ...config, targetStage: "all", continueOnly: true, completedIndexes, rowNotes },
+      plan: { startsAt: "stage1", cascadeToStylist: true, cascadeToArbiter: true },
+      notesSnapshotProvided: true, currentResultFor: (index) => proofreadResults.get(index),
+    });
+    let added = 0;
+    for (const stage of config.poolStages) {
+      const candidates = stage === "stage1" ? prepared.stage1Rows : prepared.stageItems[stage];
+      for (const item of candidates) {
+        const index = Number(item.row?.index ?? item.index);
+        if (occupied.has(index) || failed.has(index) || !poolDispatcher.canRetry(stage, item)) continue;
+        dispatchers[stage].enqueue(item);
+        occupied.add(index);
+        added += 1;
+      }
+    }
+    if (includeFailures) for (const [stage, entries] of Object.entries(retryItems)) {
+      for (const [index, { item }] of entries) {
+        if (occupied.has(index) || !poolDispatcher.canRetry(stage, item)) continue;
+        dispatchers[stage].enqueue(item);
+        occupied.add(index);
+        added += 1;
+      }
+    }
+    return added;
+  }
+
   function syncStagePipelineQueues() {
+    if (poolDispatcher) Object.assign(status.poolRuntime, poolDispatcher.snapshot());
+    if (poolDispatcher && cycleRetryAt) {
+      status.poolRuntime.waitReason = "retry";
+      status.poolRuntime.retryAt = cycleRetryAt;
+    }
     for (const [stageKey, dispatcher] of Object.entries(dispatchers)) {
       const { presets, initialConcurrency, pendingRows, ...pipeline } = dispatcher.snapshot();
       if (status.stopRequested || status.stageControls[stageKey].stopRequested) {
@@ -1525,12 +1686,30 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
   }
 
   function syncConcurrency() {
-    const total = stageAllowance("stage1");
+    const total = poolDispatcher ? poolDispatcher.snapshot().concurrency : stageAllowance("stage1");
     status.peakConcurrency = Math.max(status.peakConcurrency, total);
     status.currentConcurrency = total;
   }
 
-  function applyPresetPoolUpdate(stageKey, incomingPresets) {
+  function applyPresetPoolUpdate(stageKey, incomingPresets, options = {}) {
+    if (poolDispatcher) {
+      const result = poolDispatcher.updatePresets(incomingPresets, options);
+      if (typeof options.priorityEnabled === "boolean") status.poolRuntime.priorityEnabled = options.priorityEnabled;
+      config.presetPool = incomingPresets;
+      config.poolStages = ["stage1", "stage2", "stage3"].filter((stage) => incomingPresets.some((preset) => preset.stages.includes(stage)));
+      // 已创建的领域队列继续接收上游结果，资格由共享池控制；关闭阶段会明确留下待办。
+      for (const stage of config.poolStages) activeStages.add(stage);
+      links.stage2 = activeStages.has("stage1") && activeStages.has("stage2");
+      links.stage3 = activeStages.has("stage2") && activeStages.has("stage3");
+      status.stageCascade = { toStylist: links.stage2, toArbiter: links.stage3 };
+      refillPoolPending({ includeFailures: true });
+      syncConcurrency();
+      status.concurrencyMax = poolDispatcher.snapshot().concurrencyMax;
+      syncStagePipelineQueues();
+      currentQueueWakeup?.();
+      pushLog(`[预设池] 配置已更新，当前 ${incomingPresets.length} 个预设共享三个阶段的派发。`);
+      return result;
+    }
     if (!incomingPresets.length) {
       const fallback = stageDefinitionsFor(stageConfigs[stageKey])[stageKey].fallbackConfig;
       if (fallback) assertStageConnections([fallback], stageKey);
@@ -1557,7 +1736,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     for (const event of result.events) {
       if (event.type === "log") pushLog(event.message);
       else if (event.type === "trip") {
-        if (event.trip.kind === "fatal-request") stopForFatalRequestError(error, stageKey, event.presetId);
+        if (poolDispatcher) {
+          status.breakerWarning = `${event.presetId} 已在预设池暂停：${error?.message || describeTrip(event.trip, event.presetId)}`;
+          pushLog(`[预设池] ${status.breakerWarning}，其他可用预设继续处理。`);
+        } else if (event.trip.kind === "fatal-request") stopForFatalRequestError(error, stageKey, event.presetId);
         else stopForBreakerTrip(event.trip, stageKey, event.presetId);
       }
       else if (event.type === "limit") status.concurrencyLimits += 1;
@@ -1573,9 +1755,26 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let cycleTimer = null;
+    let cycleWaiting = false;
+
+    function rememberFailure(stageKey, item, error) {
+      if (!poolDispatcher || isStageStopped(stageKey)) return;
+      retryItems[stageKey].set(Number(item.row?.index ?? item.index), { item, error });
+    }
+
+    function clearRetry(stageKey, item) {
+      retryItems[stageKey].delete(Number(item.row?.index ?? item.index));
+    }
 
     function clearAllTimers() {
       for (const dispatcher of Object.values(dispatchers)) dispatcher.cancelWakeups();
+      if (status.stopRequested && cycleTimer) {
+        clearTimeout(cycleTimer);
+        cycleTimer = null;
+        cycleWaiting = false;
+        cycleRetryAt = 0;
+      }
     }
 
     // 阶段全部预设熔断后，其待派发行再也派不出去：必须逐行落成异常结果（复审/仲裁回退上一阶段方案），
@@ -1583,13 +1782,15 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
     function flushBrokenStagePending() {
       const breakerError = (stageKey) => {
         const error = new Error(`${STAGE_OUTCOME_LABELS[stageKey] || stageKey}阶段选中的预设已全部熔断，本行未处理。`);
+        if (poolDispatcher) error.message = `${STAGE_OUTCOME_LABELS[stageKey]}当前没有可处理本行的预设（阶段未启用、拒答、通道停用或尝试次数用尽）。`;
         error.code = "BREAKER_TRIPPED";
         return error;
       };
       let flushed = 0;
-      if (isStageBreakerBroken("stage3") && dispatchers.stage3.snapshot().pending) {
-        for (const item of dispatchers.stage3.drainPending()) {
+      if ((isStageBreakerBroken("stage3") || dispatchers.stage3.snapshot().blockedPending) && dispatchers.stage3.snapshot().pending) {
+        for (const item of poolDispatcher ? dispatchers.stage3.drainBlocked() : dispatchers.stage3.drainPending()) {
           const error = breakerError("stage3");
+          rememberFailure("stage3", item, error);
           status.stageMetrics.stage3Errors += 1;
           recordStageError("stage3", item.row.index, error, "");
           addResult(withStageFailureNote(finalizeRowResult(item, config), "stage3", error, { stopped: false, refusal: false }));
@@ -1597,9 +1798,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           flushed += 1;
         }
       }
-      if (isStageBreakerBroken("stage2") && dispatchers.stage2.snapshot().pending) {
-        for (const item of dispatchers.stage2.drainPending()) {
+      if ((isStageBreakerBroken("stage2") || dispatchers.stage2.snapshot().blockedPending) && dispatchers.stage2.snapshot().pending) {
+        for (const item of poolDispatcher ? dispatchers.stage2.drainBlocked() : dispatchers.stage2.drainPending()) {
           const error = breakerError("stage2");
+          rememberFailure("stage2", item, error);
           status.stageMetrics.stage2Errors += 1;
           recordStageError("stage2", item.row.index, error, "");
           addResult(withStageFailureNote(finalizeRowResult(item, config), "stage2", error, { stopped: false, refusal: false }));
@@ -1607,9 +1809,10 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           flushed += 1;
         }
       }
-      if (isStageBreakerBroken("stage1") && dispatchers.stage1.snapshot().pending) {
-        for (const row of dispatchers.stage1.drainPending()) {
+      if ((isStageBreakerBroken("stage1") || dispatchers.stage1.snapshot().blockedPending) && dispatchers.stage1.snapshot().pending) {
+        for (const row of poolDispatcher ? dispatchers.stage1.drainBlocked() : dispatchers.stage1.drainPending()) {
           const error = breakerError("stage1");
+          rememberFailure("stage1", row, error);
           recordStageError("stage1", row.index, error, "");
           addResult({
             runId: status.runId,
@@ -1625,13 +1828,15 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         }
       }
       if (flushed) {
-        pushLog(`[熔断] ${flushed} 行因所属阶段的预设已全部熔断而未能处理，已标记为调用异常，稍后可用「继续剩下的」重跑。`);
+        pushLog(poolDispatcher ? `[预设池] ${flushed} 行暂无可行预设，已保留异常。`
+          : `[熔断] ${flushed} 行因所属阶段的预设已全部熔断而未能处理，已标记为调用异常，稍后可用「继续剩下的」重跑。`);
         syncStagePipelineQueues();
       }
     }
 
     function checkDone() {
       if (settled) return;
+      if (cycleWaiting && !status.stopRequested) return;
       if (!status.stopRequested) flushBrokenStagePending();
       // 阶段全部预设熔断后，队列中的剩余行已由 flushBrokenStagePending 落成异常结果；
       // 这里仍等待已经发出的请求收尾，并让其它健康阶段继续运行。
@@ -1643,7 +1848,41 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
       const noInFlight = Object.values(dispatchers).every((dispatcher) => dispatcher.snapshot().inFlight === 0);
       if (allEmpty || (status.stopRequested && noInFlight)) {
+        if (poolDispatcher && !status.stopRequested) {
+          if (refillPoolPending()) {
+            queueMicrotask(dispatch);
+            return;
+          }
+          const retries = Object.entries(retryItems).flatMap(([stageKey, items]) => [...items.values()]
+            .filter(({ item }) => !isStageStopped(stageKey) && poolDispatcher.canRetry(stageKey, item))
+            .map(({ item }) => ({ stageKey, item })));
+          if (config.poolMode === "loop" && retries.length) {
+            cycleWaiting = true;
+            status.poolRuntime.round += 1;
+            cycleRetryAt = Date.now() + Math.min(30000, 1000 * (status.poolRuntime.round - 1));
+            status.poolRuntime.retryAt = cycleRetryAt;
+            pushLog(`[预设池] 第 ${status.poolRuntime.round} 轮：${retries.length} 行异常将自动重试，成功后继续移交下游阶段。`);
+            cycleTimer = setTimeout(() => {
+              cycleTimer = null;
+              cycleWaiting = false;
+              cycleRetryAt = 0;
+              status.poolRuntime.retryAt = 0;
+              if (!status.stopRequested) refillPoolPending({ includeFailures: true });
+              dispatch();
+            }, Math.max(0, status.poolRuntime.retryAt - Date.now()));
+            return;
+          }
+          status.poolRuntime.uncovered = poolUncoveredRows(config, allRows);
+          const unresolved = Object.values(retryItems).reduce((sum, items) => sum + items.size, 0);
+          const remaining = Object.entries(poolRemainingRows(config, allRows)).filter(([, indexes]) => indexes.length);
+          status.poolRuntime.unresolved = unresolved;
+          status.poolRuntime.state = unresolved || remaining.length ? "blocked" : "completed";
+          status.poolRuntime.blockedReason = unresolved
+            ? `${unresolved} 行异常尚未解决${config.poolMode === "loop" ? "，可用预设均已拒答、停用或达到本轮重试上限" : "，可切换循环模式继续处理"}。`
+            : remaining.map(([stage, indexes]) => `${STAGE_OUTCOME_LABELS[stage]}有 ${indexes.length} 行待办${config.poolStages.includes(stage) ? "，当前没有可行预设" : "，但池内未启用该阶段"}`).join("；");
+        }
         settled = true;
+        if (cycleTimer) clearTimeout(cycleTimer);
         for (const dispatcher of Object.values(dispatchers)) dispatcher.dispose();
         dispatchWake = null;
         currentQueueWakeup = null;
@@ -1732,7 +1971,20 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         checkDone();
         return;
       }
+      if (cycleWaiting) return;
       const execute = { stage1: executeStage1, stage2: executeStage2, stage3: executeStage3 };
+      if (poolDispatcher) {
+        while (!status.stopRequested && !settled) {
+          const next = poolDispatcher.take({ isStageEnabled: (stage) => activeStages.has(stage) && !status.stageControls[stage].stopRequested });
+          if (!next) break;
+          syncStagePipelineQueues();
+          requestStageContext.run({ stage: next.stageKey, sessionId: stageSessionIds[next.stageKey] },
+            () => execute[next.stageKey](next.item, next.request));
+        }
+        syncStagePipelineQueues();
+        checkDone();
+        return;
+      }
       // 仍优先终审，再复审，最后初审；每个阶段内部保持可用预设接 FIFO 队头。
       for (const stageKey of ["stage3", "stage2", "stage1"]) {
         while (!status.stopRequested && !settled && !status.stageControls[stageKey].stopRequested) {
@@ -1785,15 +2037,18 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
             pushLog(`第 ${row.index} 行：事实初审提出修改，移交 Stage 2 (Stylist 文学复审队列)。`);
           }
         }
+        clearRetry("stage1", row);
       } catch (error) {
+        rememberFailure("stage1", row, error);
         const isRefusal = isModelRefusalError(error);
         // 频控识别与并发调度无关：任何并发上限下 429 都要退避重试，不能当成普通失败一路刷到队列尽头。
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage1");
         const fatalRequestError = !isRefusal && !isRateLimit && isFatalRequestError(error) && !isStageStopped("stage1");
 
         if (isRefusal) {
-          feedback("stage1", request, "not-limited");
+          feedback("stage1", request, "not-limited", error);
           status.modelRefusals += 1;
+          if (poolDispatcher) recordStageError("stage1", row.index, error, "refusal");
           const targetKey = config.proofreadMode === "bilingual" ? "cn" : config.target;
           addResult(makeRefusalResult(row, error, targetKey));
           pushLog(`第 ${row.index} 行：模型拒答（内容安全审查），已自动跳过并标记待终审。`);
@@ -1891,7 +2146,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2.row.index);
         }
+        clearRetry("stage2", s1Item);
       } catch (error) {
+        rememberFailure("stage2", s1Item, error);
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage2");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
@@ -1915,7 +2172,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           status.active = status.active.filter((idx) => idx !== s1Item.row.index);
           if (fatalRequestError) feedback("stage2", request, "fatal", error);
           // 拒答是上游的正常应答，不是接口故障：不进失败窗口，只证明限流已放行。
-          else if (isRefusal) feedback("stage2", request, "not-limited");
+          else if (isRefusal) feedback("stage2", request, "not-limited", error);
           else if (!isStageStopped("stage2") && !isRateLimit) {
             feedback("stage2", request, "failure", error);
           }
@@ -1952,7 +2209,9 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
         const result = finalizeRowResult(s3, config);
         addResult(result);
         status.active = status.active.filter((idx) => idx !== s2Item.row.index);
+        clearRetry("stage3", s2Item);
       } catch (error) {
+        rememberFailure("stage3", s2Item, error);
         const isRefusal = isModelRefusalError(error);
         const isRateLimit = !isRefusal && isConcurrencyOrRateLimitError(error) && !isStageStopped("stage3");
         // 与初审对称：接口配置类致命错误（400/401/404/非 JSON 响应）不能一行行刷到底，
@@ -1976,7 +2235,7 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
           addResult(result);
           status.active = status.active.filter((idx) => idx !== s2Item.row.index);
           if (fatalRequestError) feedback("stage3", request, "fatal", error);
-          else if (isRefusal) feedback("stage3", request, "not-limited");
+          else if (isRefusal) feedback("stage3", request, "not-limited", error);
           else if (!isStageStopped("stage3") && !isRateLimit) {
             feedback("stage3", request, "failure", error);
           }
@@ -1997,6 +2256,16 @@ async function runQueue(queue, allRows, config, labels, stageItems = {}) {
 
 function finish() {
   if (!status.running) return;
+  if (status.poolEnabled && status.poolRuntime) {
+    if (status.stopRequested) status.poolRuntime.state = "stopped";
+    else if (status.poolRuntime.state === "running") {
+      const uncovered = Object.entries(status.poolRuntime.uncovered || {}).filter(([, indexes]) => indexes.length);
+      status.poolRuntime.state = uncovered.length ? "blocked" : "completed";
+      status.poolRuntime.blockedReason = uncovered.map(([stage, indexes]) => `${STAGE_OUTCOME_LABELS[stage]}有 ${indexes.length} 行待办，但池内未启用该阶段`).join("；");
+    }
+    status.poolRuntime.retryAt = 0;
+    for (const preset of status.poolRuntime.presets || []) { preset.waitReason = ""; preset.retryAt = 0; }
+  }
   status.running = false;
   status.finishedAt = new Date().toISOString();
   status.active = [];
@@ -2048,7 +2317,9 @@ function finish() {
     }
     pushLog(`并发调度统计：起步并发 ${status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，峰值并发 ${status.peakConcurrency || status.concurrency || AI_CONCURRENCY_LIMITS.defaultConcurrency}，并发下调 ${status.concurrencyDowns || 0} 次，并发上调 ${status.concurrencyUps || 0} 次，遭遇限流 ${status.concurrencyLimits || 0} 次。`);
   }
-  if (status.stopRequested) {
+  if (status.poolRuntime?.state === "blocked") {
+    pushLog(`[预设池] 运行已结束，仍有未完成审核：${status.poolRuntime.blockedReason}`);
+  } else if (status.stopRequested) {
     pushLog(isPrefilter ? "预筛选已终止。" : "AI 校对已终止。");
   } else if (!isPrefilter && Object.values(status.stageControls).some((control) => control.stopRequested)) {
     pushLog("AI 校对已结束（含已停止阶段）。");

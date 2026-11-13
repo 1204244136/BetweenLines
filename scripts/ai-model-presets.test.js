@@ -350,7 +350,7 @@ test("模型预设界面：修改预设更新存储中的已有配置", async ()
   await select.dispatch("change");
 
   // 覆盖保存前：阶段预设下拉的提示文字还是旧值
-  const stage1Select = ui.element("stage1PresetSelect");
+  const stage1Select = ui.element("aiPoolPresetSelect");
   const optionBefore = stage1Select.children.flatMap((child) => child.children || []).find((child) => child.value === p.id);
   assert.ok(optionBefore, "阶段一下拉包含该预设");
   assert.equal(optionBefore.title, "http://127.0.0.1:11434/v1 / 本地 Ollama · qwen2.5:14b（并发上限 2）");

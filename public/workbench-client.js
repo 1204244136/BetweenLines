@@ -115,82 +115,41 @@
     const presetTools = createPresetTools();
     let currentPresetId = "";
     let latestPresetPipelines = {};
-    const stagePresetSelections = { stage1: [], stage2: [], stage3: [] };
-    const stagePresetControls = {
-      stage1: {
-        select: "stage1Preset",
-        add: "stage1PresetAdd",
-        tags: "stage1PresetTags",
-        dropdown: "stage1AppliedDropdown",
-        trigger: "stage1AppliedTrigger",
-        value: "stage1AppliedValue",
-        menu: "stage1AppliedMenu",
-      },
-      stage2: {
-        select: "stage2Preset",
-        add: "stage2PresetAdd",
-        tags: "stage2PresetTags",
-        dropdown: "stage2AppliedDropdown",
-        trigger: "stage2AppliedTrigger",
-        value: "stage2AppliedValue",
-        menu: "stage2AppliedMenu",
-      },
-      stage3: {
-        select: "stage3Preset",
-        add: "stage3PresetAdd",
-        tags: "stage3PresetTags",
-        dropdown: "stage3AppliedDropdown",
-        trigger: "stage3AppliedTrigger",
-        value: "stage3AppliedValue",
-        menu: "stage3AppliedMenu",
-      },
-    };
+    const poolStages = ["stage1", "stage2", "stage3"];
+    let sharedPoolSelections = [];
+    let poolMigrationPending = false;
+    let latestPoolRuntime = null;
+    let poolRunCanUpdate = false;
+    let poolServiceSupported = null;
+    let poolSyncQueue = Promise.resolve();
+    let poolSyncVersion = 0;
 
-    function closeAllStageAppliedMenus() {
-      for (const stage of ["stage1", "stage2", "stage3"]) {
-        const controls = stagePresetControls[stage];
-        const menu = aiIds[controls.menu];
-        const trigger = aiIds[controls.trigger];
-        const dropdown = aiIds[controls.dropdown];
-        if (menu) menu.hidden = true;
-        if (trigger) trigger.setAttribute("aria-expanded", "false");
-        if (dropdown) dropdown.classList.remove("is-open");
-      }
-    }
-
-    function toggleStageAppliedMenu(stage) {
-      const controls = stagePresetControls[stage];
-      const menu = aiIds[controls.menu];
-      const trigger = aiIds[controls.trigger];
-      const dropdown = aiIds[controls.dropdown];
-      if (!menu || !trigger || trigger.disabled) return;
-      const isOpen = !menu.hidden;
-      closeAllStageAppliedMenus();
-      if (!isOpen) {
-        menu.hidden = false;
-        trigger.setAttribute("aria-expanded", "true");
-        if (dropdown) dropdown.classList.add("is-open");
-      }
+    function normalizePoolSelection(item) {
+      const presetId = String(item?.presetId || "");
+      if (!presetId) return null;
+      return {
+        presetId,
+        stages: Array.isArray(item.stages) ? poolStages.filter((stage) => item.stages.includes(stage)) : [...poolStages],
+        stagePriorities: Object.fromEntries(poolStages.map((stage, index) => {
+          const value = Number(item.stagePriorities?.[stage]);
+          return [stage, Number.isFinite(value) ? Math.max(0, Math.min(9, Math.round(value))) : index + 1];
+        })),
+      };
     }
 
     function committedStagePresetIds(stage) {
-      // 候选选择器只用于「添加」；执行与保存都必须和适用预设列表一致。
-      return [...(stagePresetSelections[stage] || [])];
+      return sharedPoolSelections.filter((item) => item.stages.includes(stage)).map((item) => item.presetId);
     }
 
-    // 该阶段当前选中的预设（含完整连接参数与 presetId）：启动时随请求体发送，
-    // 运行中增删预设也用它同步给服务端。保留无效条目交由校验拒绝，不能悄悄回退到其它配置。
+    function poolPresetsFor() {
+      return sharedPoolSelections.map((item) => ({
+        ...(presetTools.getPreset(localStorage, item.presetId) || {}),
+        ...normalizePoolSelection(item),
+      }));
+    }
+
     function stagePresetsFor(stage) {
-      return committedStagePresetIds(stage)
-        .map((id) => ({ ...(presetTools.getPreset(localStorage, id) || {}), presetId: id }));
-    }
-
-    // 触顶 = 这条通道已经达到该预设自己配置的并发上限（不是「配额用满」——配额还会继续上调）。
-    // 口径由服务端 presetPipelines[].topped 给出；旧服务端没有这个字段时按同一口径本地折算。
-    function stagePresetTopped(row) {
-      if (!row.runtime) return false;
-      if (typeof row.runtime.topped === "boolean") return row.runtime.topped;
-      return row.configuredConcurrency > 0 && row.inFlight >= row.configuredConcurrency;
+      return poolPresetsFor().filter((item) => item.stages.includes(stage));
     }
 
     function pipelineWaitState(stage, pipeline, running = currentAiRunning) {
@@ -204,180 +163,168 @@
       return { label, text: label + " · " + (seconds > 0 ? seconds + " 秒后尝试重新派发" : "等待重新派发") };
     }
 
-    function renderStagePresetSelection(stage) {
-      const controls = stagePresetControls[stage];
-      const tags = aiIds[controls.tags];
-      const trigger = aiIds[controls.trigger];
-      const valueEl = aiIds[controls.value];
-      if (!tags) return;
-      const ids = stagePresetSelections[stage] || [];
-      const stagePipelines = Array.isArray(latestPresetPipelines[stage]) ? latestPresetPipelines[stage] : [];
-
-      // 预设标签、下拉栏文本与悬停提示共用这一份运行数据，避免三处各算各的。
-      const rows = ids.map((id) => {
-        const preset = presetTools.getPreset(localStorage, id);
-        const candidateRuntime = stagePipelines.find((item) => String(item.presetId) === String(id));
-        const candidateActiveRows = Array.isArray(candidateRuntime?.activeRows) ? candidateRuntime.activeRows : [];
-        const runtime = candidateRuntime && (currentAiRunning
-          || Number(candidateRuntime.inFlight) > 0
-          || Number(candidateRuntime.pending) > 0
-          || candidateActiveRows.length > 0)
-          ? candidateRuntime : null;
-        const row = {
-          id,
-          preset,
-          runtime,
-          label: preset ? presetTools.presetLabel(preset) : id,
-          configuredConcurrency: Math.max(1, Number(runtime?.configuredConcurrency) || Number(preset?.concurrency) || 3),
-          inFlight: Math.max(0, Number(runtime?.inFlight) || 0),
-          quota: Math.max(0, Number(runtime?.quota) || 0),
-          pending: Math.max(0, Number(runtime?.pending) || 0),
-          breakerTripped: runtime?.breakerTripped === true || runtime?.breakerState === "tripped",
-          wait: runtime ? pipelineWaitState(stage, runtime) : null,
-        };
-        row.topped = stagePresetTopped(row);
-        return row;
-      });
-
-      const stageToppedCount = rows.filter((row) => row.topped).length;
-
-      const existing = new Map(Array.from(tags.children)
-        .filter((tag) => tag.dataset.presetId).map((tag) => [tag.dataset.presetId, tag]));
-      const nextTags = rows.map((row) => {
-        let tag = existing.get(String(row.id));
-        if (!tag) {
-          tag = document.createElement("div");
-          tag.className = "ai-stage-preset-tag";
-          tag.dataset.presetId = String(row.id);
-          const label = document.createElement("span");
-          label.className = "ai-stage-preset-tag-label";
-          const runtimeLabel = document.createElement("span");
-          runtimeLabel.className = "ai-stage-preset-runtime";
-          const remove = document.createElement("button");
-          remove.type = "button";
-          remove.className = "ai-stage-preset-tag-remove";
-          remove.textContent = "×";
-          remove.title = "移除该预设";
-          remove.addEventListener("click", (event) => {
-            event?.stopPropagation?.();
-            stagePresetSelections[stage] = stagePresetSelections[stage].filter((item) => item !== row.id);
-            renderStagePresetSelection(stage);
-            updateStagePresetDependencies();
-            saveAiConfig();
-            void syncRunningStagePresets(stage);
-          });
-          tag.append(label, runtimeLabel, remove);
-        }
-        const [label, runtimeLabel] = tag.children;
-        if (label.textContent !== row.label) label.textContent = row.label;
-        setLiveHoverTitle(label, row.label);
-        let runtimeText = "";
-        if (row.runtime) {
-          runtimeText = `运行 ${row.inFlight} · 当前配额 ${row.quota} · 配置上限 ${row.configuredConcurrency}`
-            + (row.topped ? " · 触顶" : "")
-            + (row.breakerTripped ? " · 熔断" : "")
-            + (row.pending > 0 ? ` · 排队 ${row.pending}` : "")
-            + (row.wait ? " · " + row.wait.text : "");
-          const activeRows = Array.isArray(row.runtime.activeRows) ? row.runtime.activeRows : [];
-          setLiveHoverTitle(runtimeLabel, `当前运行 ${row.inFlight} / 动态配额 ${row.quota} / 配置并发上限 ${row.configuredConcurrency} / 待派发 ${row.pending}`
-            + (row.topped ? "（已触顶）" : "")
-            + (row.breakerTripped ? "（该预设已熔断，后续行改派给其它预设）" : "")
-            + (row.wait ? "；" + row.wait.text : "")
-            + (activeRows.length ? `\n当前行：${activeRows.join(", ")}` : ""),
-          { reset: !currentAiRunning || latestAiStopRequested || pendingStopAll || pendingStageStops.has(stage)
-            || Boolean(latestStageControls?.[stage]?.stopRequested) });
-        } else {
-          // 未运行时不显示无用且占位的「并发上限 XX」，仅在悬停中提示额定并发上限
-          setLiveHoverTitle(runtimeLabel, `额定并发上限 ${row.configuredConcurrency}`, { reset: true });
-        }
-        if (runtimeLabel.textContent !== runtimeText) runtimeLabel.textContent = runtimeText;
-        return tag;
-      });
-
-      if (ids.length === 0) {
-        const emptyItem = tags.children[0]?.className === "ai-stage-applied-empty"
-          ? tags.children[0] : document.createElement("div");
-        emptyItem.className = "ai-stage-applied-empty";
-        emptyItem.textContent = stage === "stage1" ? "当前使用主配置，未添加独立预设" : "当前未启用预设";
-        nextTags.push(emptyItem);
-      }
-      // 状态轮询不替换悬停或聚焦的锚点；只有适用列表真正变化时才更新结构。
-      if (tags.children.length !== nextTags.length || nextTags.some((tag, index) => tags.children[index] !== tag)) {
-        tags.replaceChildren(...nextTags);
-      }
-      tags.hidden = false;
-
-      // 更新适用预设下拉栏 Trigger 的文字与 title
-      if (valueEl && trigger) {
-        // 触顶是运行态：每次重渲染先清掉上一次的样式，否则任务停下后还留着醒目色。
-        valueEl.classList.remove("is-part-topped", "is-all-topped");
-        if (ids.length === 0) {
-          if (stage === "stage1") {
-            valueEl.textContent = "适用：主配置";
-            setLiveHoverTitle(trigger, "阶段一当前未添加独立预设，默认使用主配置", { reset: true });
-          } else {
-            valueEl.textContent = "未启用";
-            setLiveHoverTitle(trigger, stage === "stage2" ? "阶段二未启用预设" : "阶段三未启用预设", { reset: true });
-          }
-        } else {
-          valueEl.textContent = ids.length === 1 ? "适用：" + rows[0].label : "适用 (" + rows.length + ")";
-          const presetList = rows.map((row, index) => {
-            const stateText = row.runtime
-              ? "（运行 " + row.inFlight + "，当前配额 " + row.quota + "，配置上限 " + row.configuredConcurrency + (row.topped ? " · 已触顶" : "") + (row.breakerTripped ? " · 已熔断" : "") + (row.wait ? " · " + row.wait.text : "") + "）"
-              : "（配置上限 " + row.configuredConcurrency + "）";
-            return (index + 1) + ". " + row.label + stateText;
-          }).join("\n");
-          setLiveHoverTitle(trigger, "当前阶段适用预设：\n" + presetList
-            + (stageToppedCount > 0 ? "\n已触顶 " + stageToppedCount + "/" + rows.length + " 个预设" + (stageToppedCount >= rows.length ? "（全部触顶）" : "") + "。" : ""),
-          { reset: !currentAiRunning || stagePipelines.length === 0 || latestAiStopRequested
-            || pendingStopAll || pendingStageStops.has(stage) || Boolean(latestStageControls?.[stage]?.stopRequested) });
-        }
-      }
-    }
-
-    function addSelectedStagePreset(stage) {
-      const controls = stagePresetControls[stage];
-      const select = aiIds[controls.select];
-      const id = select?.value || "";
-      if (!id) return;
-      if (!stagePresetSelections[stage].includes(id)) stagePresetSelections[stage].push(id);
-      select.value = "";
-      syncEnhancedSelect(select);
-      renderStagePresetSelection(stage);
+    function changePoolConfiguration() {
+      renderPoolPresetSelection();
       updateStagePresetDependencies();
       saveAiConfig();
-      void syncRunningStagePresets(stage);
+      void syncRunningPoolPresets();
     }
 
-    // 运行中增删预设要立刻生效：删掉的预设，它的待审行马上改派给其余预设；新加的预设立即参与处理。
-    // 任务没在跑时什么都不做——那种改动本来就会随下次启动的请求体生效。
-    async function syncRunningStagePresets(stage) {
-      if (!currentAiRunning) return;
-      const stageLabel = stage === "stage1" ? "阶段一" : (stage === "stage2" ? "阶段二" : "阶段三");
-      try {
-        const response = await apiFetch("/api/ai-proofread/presets", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ stage, presets: stagePresetsFor(stage) }),
-        });
-        const data = await response.json();
-        if (!data.ok) throw new Error(data.error);
-        const added = Array.isArray(data.added) ? data.added.length : 0;
-        const removed = Array.isArray(data.removed) ? data.removed.length : 0;
-        if (data.rejected) {
-          showToast(`${stageLabel}没有可用的阶段模型配置，这次改动没有生效；请至少保留一个预设。`, { tone: "watch", durationMs: 10000 });
-          return;
-        }
-        const parts = [];
-        if (added) parts.push(`新增 ${added} 个预设，已立刻参与派发`);
-        if (removed) parts.push(`移除 ${removed} 个预设，待审行已改派给其余预设`);
-        if (data.fallback) parts.push("预设已全部移除，本阶段使用阶段配置继续处理剩余行");
-        if (parts.length) {
-          showToast(`${stageLabel}预设已即时生效：${parts.join("；")}。`, { tone: "success", durationMs: 7000 });
-        }
-      } catch (error) {
-        showToast(error.message, { tone: "error", durationMs: 12000 });
+    function setPoolPresetStages(id, stages) {
+      const item = sharedPoolSelections.find((entry) => entry.presetId === id);
+      if (!item) return;
+      item.stages = poolStages.filter((stage) => stages.includes(stage));
+      changePoolConfiguration();
+    }
+
+    function addSelectedPoolPreset() {
+      const id = aiIds.poolPreset?.value || "";
+      if (!id) return;
+      if (!sharedPoolSelections.some((item) => item.presetId === id)) {
+        sharedPoolSelections.push(normalizePoolSelection({ presetId: id }));
       }
+      aiIds.poolPreset.value = "";
+      syncEnhancedSelect(aiIds.poolPreset);
+      changePoolConfiguration();
+    }
+
+    function renderPoolPresetSelection() {
+      const list = aiIds.poolPresets;
+      if (!list) return;
+      const existing = new Map(Array.from(list.children).filter((node) => node.dataset.presetId)
+        .map((node) => [node.dataset.presetId, node]));
+      const next = sharedPoolSelections.map((item) => {
+        let node = existing.get(item.presetId);
+        if (!node) {
+          node = document.createElement("div");
+          node.className = "ai-pool-preset";
+          node.dataset.presetId = item.presetId;
+          const name = document.createElement("strong");
+          name.className = "ai-pool-preset-name";
+          const runtime = document.createElement("span");
+          runtime.className = "ai-pool-preset-runtime";
+          const identity = document.createElement("div");
+          identity.className = "ai-pool-preset-identity";
+          identity.append(name, runtime);
+          const choices = document.createElement("div");
+          choices.className = "ai-pool-stage-choices";
+          const stages = poolStages.map((stage, index) => {
+            const group = document.createElement("div");
+            group.className = "ai-pool-stage-choice";
+            const label = document.createElement("label");
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.setAttribute("aria-label", "允许阶段" + (index + 1));
+            const text = document.createElement("span");
+            text.textContent = "阶段 " + (index + 1);
+            label.append(checkbox, text);
+            checkbox.addEventListener("change", () => {
+              const current = sharedPoolSelections.find((entry) => entry.presetId === item.presetId);
+              if (!current) return;
+              setPoolPresetStages(item.presetId, checkbox.checked ? [...current.stages, stage]
+                : current.stages.filter((key) => key !== stage));
+            });
+            const priority = document.createElement("input");
+            priority.type = "number";
+            priority.min = "0";
+            priority.max = "9";
+            priority.step = "1";
+            priority.className = "ai-pool-priority";
+            priority.setAttribute("aria-label", "阶段" + (index + 1) + "优先级，数值越大越优先");
+            priority.title = "优先级 0–9，数值越大越优先；没有该阶段待办时可接其它已允许阶段";
+            priority.addEventListener("change", () => {
+              const current = sharedPoolSelections.find((entry) => entry.presetId === item.presetId);
+              if (!current) return;
+              current.stagePriorities[stage] = Math.max(0, Math.min(9, Math.round(Number(priority.value) || 0)));
+              changePoolConfiguration();
+            });
+            group.append(label, priority);
+            choices.append(group);
+            return { checkbox, priority };
+          });
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "btn btn--subtle btn--xs";
+          remove.textContent = "移除";
+          remove.addEventListener("click", () => {
+            sharedPoolSelections = sharedPoolSelections.filter((entry) => entry.presetId !== item.presetId);
+            changePoolConfiguration();
+          });
+          node.append(identity, choices, remove);
+          node._poolControls = { name, runtime, stages, remove };
+        }
+        const controls = node._poolControls;
+        const preset = presetTools.getPreset(localStorage, item.presetId);
+        const label = preset ? presetTools.presetLabel(preset) : "预设已失效：" + item.presetId;
+        controls.name.textContent = label;
+        setLiveHoverTitle(controls.name, label);
+        controls.remove.setAttribute("aria-label", "从池中移除" + label);
+        controls.stages.forEach(({ checkbox, priority }, index) => {
+          checkbox.checked = item.stages.includes(poolStages[index]);
+          checkbox.setAttribute("aria-label", label + "允许阶段" + (index + 1));
+          priority.value = String(item.stagePriorities[poolStages[index]]);
+          priority.setAttribute("aria-label", label + "阶段" + (index + 1) + "优先级，数值越大越优先");
+          priority.hidden = !aiIds.poolPriority?.checked;
+          priority.disabled = !checkbox.checked;
+        });
+        const runtime = currentAiRunning && latestPoolRuntime?.presets?.find((entry) => entry.presetId === item.presetId);
+        const wait = runtime ? pipelineWaitState("all", runtime) : null;
+        const summary = runtime ? "运行 " + (Number(runtime.inFlight) || 0) + " · 共享配额 " + (Number(runtime.quota) || 0)
+          + " / 上限 " + (runtime.configuredConcurrency || preset?.concurrency || AI_CONCURRENCY_DEFAULT)
+          + " · 排队 " + (Number(runtime.pending) || 0)
+          + (runtime.breakerTripped ? " · 已停用" : "") + (runtime.topped ? " · 触顶" : "")
+          + (wait ? " · " + wait.text : "")
+          : "共享并发上限 " + (preset?.concurrency || AI_CONCURRENCY_DEFAULT)
+            + (item.stages.length ? "" : " · 未分配阶段");
+        controls.runtime.textContent = summary;
+        const activeRows = runtime?.activeRows || [];
+        const profile = runtime?.profile;
+        const profileText = profile ? "\n本次通道：成功 " + (Number(profile.successes) || 0)
+          + " · 超时 " + (Number(profile.timeouts) || 0) + " · 拒答 " + (Number(profile.refusals) || 0)
+          + " · 限流 " + (Number(profile.rateLimits) || 0) : "";
+        setLiveHoverTitle(controls.runtime, summary + profileText + (activeRows.length ? "\n当前行：" + activeRows.join(", ") : ""),
+          { reset: !currentAiRunning || pendingStopAll || latestAiStopRequested });
+        return node;
+      });
+      if (!next.length) {
+        const empty = list.children[0]?.className === "ai-pool-empty" ? list.children[0] : document.createElement("p");
+        empty.className = "ai-pool-empty";
+        empty.textContent = "添加已保存的模型预设，三个阶段即可共享其空闲并发。";
+        next.push(empty);
+      }
+      if (list.children.length !== next.length || next.some((node, index) => node !== list.children[index])) {
+        list.replaceChildren(...next);
+      }
+      if (aiIds.poolCount) aiIds.poolCount.textContent = String(sharedPoolSelections.length);
+      if (aiIds.poolModeHint) aiIds.poolModeHint.textContent = aiIds.poolMode?.value === "loop"
+        ? "循环：自动续跑可重试异常并衔接下游；拒答行换预设。没有可用路线或重试耗尽时暂停并保留异常。重试可能重复计费。"
+        : "常规：从已有进度继续，三个阶段自动接力；本轮异常保留，结束后可再次启动。";
+    }
+
+    function syncRunningPoolPresets() {
+      if (!poolRunCanUpdate) return Promise.resolve();
+      const runId = aiResultReception.snapshot().runId;
+      const version = ++poolSyncVersion;
+      const payload = { stage: "all", poolEnabled: true, runId,
+        projectKey: pageMeta.projectKey, rowsSignature: pageMeta.rowsSignature, presets: poolPresetsFor(),
+        poolPriorityEnabled: Boolean(aiIds.poolPriority?.checked) };
+      poolSyncQueue = poolSyncQueue.then(async () => {
+        if (!poolRunCanUpdate || aiResultReception.snapshot().runId !== runId || version !== poolSyncVersion) return;
+        try {
+          const response = await apiFetch("/api/ai-proofread/presets", {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok || data.rejected) throw new Error(data.error || "没有可用的预设");
+          if (version === poolSyncVersion && aiResultReception.snapshot().runId === runId && aiIds.poolSyncStatus) aiIds.poolSyncStatus.textContent = "池配置已同步，已发出的请求继续完成。";
+        } catch (error) {
+          if (version !== poolSyncVersion || aiResultReception.snapshot().runId !== runId) return;
+          const message = "本地配置已保存，当前运行未应用本次改动：" + error.message;
+          if (aiIds.poolSyncStatus) aiIds.poolSyncStatus.textContent = message;
+          showToast(message, { tone: "error", durationMs: 12000 });
+        }
+      });
+      return poolSyncQueue;
     }
     const notes = {};
     const initialRaw = notesStorage.getItem(storageKey);
@@ -672,37 +619,19 @@
       concurrency: document.getElementById("aiConcurrency"),
       concurrencyLabel: document.getElementById("aiConcurrencyLabel"),
       promptVisible: document.getElementById("aiPromptVisible"),
-      stage1Preset: document.getElementById("stage1PresetSelect"),
-      stage2Preset: document.getElementById("stage2PresetSelect"),
-      stage3Preset: document.getElementById("stage3PresetSelect"),
-      stage1PresetAdd: document.getElementById("stage1PresetAdd"),
-      stage2PresetAdd: document.getElementById("stage2PresetAdd"),
-      stage3PresetAdd: document.getElementById("stage3PresetAdd"),
-      stage1PresetTags: document.getElementById("stage1PresetTags"),
-      stage2PresetTags: document.getElementById("stage2PresetTags"),
-      stage3PresetTags: document.getElementById("stage3PresetTags"),
-      stage1AppliedDropdown: document.getElementById("stage1AppliedDropdown"),
-      stage2AppliedDropdown: document.getElementById("stage2AppliedDropdown"),
-      stage3AppliedDropdown: document.getElementById("stage3AppliedDropdown"),
-      stage1AppliedTrigger: document.getElementById("stage1AppliedTrigger"),
-      stage2AppliedTrigger: document.getElementById("stage2AppliedTrigger"),
-      stage3AppliedTrigger: document.getElementById("stage3AppliedTrigger"),
-      stage1AppliedValue: document.getElementById("stage1AppliedValue"),
-      stage2AppliedValue: document.getElementById("stage2AppliedValue"),
-      stage3AppliedValue: document.getElementById("stage3AppliedValue"),
-      stage1AppliedMenu: document.getElementById("stage1AppliedMenu"),
-      stage2AppliedMenu: document.getElementById("stage2AppliedMenu"),
-      stage3AppliedMenu: document.getElementById("stage3AppliedMenu"),
+      poolPreset: document.getElementById("aiPoolPresetSelect"),
+      poolAdd: document.getElementById("aiPoolPresetAdd"),
+      poolPresets: document.getElementById("aiPoolPresets"),
+      poolCount: document.getElementById("aiPoolCount"),
+      poolPriority: document.getElementById("aiPoolPriorityEnabled"),
+      poolMode: document.getElementById("aiPoolMode"),
+      poolModeHint: document.getElementById("aiPoolModeHint"),
+      poolStatus: document.getElementById("aiPoolStatus"),
+      poolSyncStatus: document.getElementById("aiPoolSyncStatus"),
       stage2Card: document.getElementById("stage2Card"),
       stage3Card: document.getElementById("stage3Card"),
-      start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
-      stop: document.getElementById("stage1Stop") || document.getElementById("aiStop"),
-      stage1Start: document.getElementById("stage1Start") || document.getElementById("aiStart"),
-      stage1Stop: document.getElementById("stage1Stop") || document.getElementById("aiStop"),
-      stage2Start: document.getElementById("stage2Start"),
-      stage2Stop: document.getElementById("stage2Stop"),
-      stage3Start: document.getElementById("stage3Start"),
-      stage3Stop: document.getElementById("stage3Stop"),
+      start: document.getElementById("aiPoolStart"),
+      stop: document.getElementById("aiPoolStop"),
       clearCache: document.getElementById("clearAiLog"),
       panelState: document.getElementById("aiPanelState"),
       cacheHitRate: document.getElementById("aiCacheHitRate"),
@@ -1198,7 +1127,18 @@
       }
       if (!globalConfig || typeof globalConfig !== "object" || Array.isArray(globalConfig)) globalConfig = {};
       if (!projectConfig || typeof projectConfig !== "object" || Array.isArray(projectConfig)) projectConfig = {};
-      return { ...foldLegacyConcurrency(globalConfig), ...foldLegacyConcurrency(projectConfig) };
+      const merged = { ...foldLegacyConcurrency(globalConfig), ...foldLegacyConcurrency(projectConfig) };
+      const projectHasLegacyStages = Object.prototype.hasOwnProperty.call(projectConfig, "model")
+        || Object.prototype.hasOwnProperty.call(projectConfig, "currentPresetId") || poolStages.some((stage) => Object.prototype.hasOwnProperty.call(projectConfig, stage + "PresetIds")
+        || Object.prototype.hasOwnProperty.call(projectConfig, stage + "PresetId"));
+      if (!Object.prototype.hasOwnProperty.call(projectConfig, "poolSelections") && projectHasLegacyStages) {
+        delete merged.poolSelections;
+        for (const stage of poolStages) {
+          merged[stage + "PresetIds"] = projectConfig[stage + "PresetIds"];
+          merged[stage + "PresetId"] = projectConfig[stage + "PresetId"];
+        }
+      }
+      return merged;
     }
 
     function isReasoningModelName(model) {
@@ -1301,37 +1241,21 @@
       fillSelect(aiIds.presetSelect, "新建预设", selectedId, "清空下方 AI 服务配置，从零填写后点「另存为预设」保存");
       currentPresetId = aiIds.presetSelect.value;
       updatePresetActionButtons();
-      fillSelect(aiIds.stage1Preset, "选择预设", stagePresetSelections.stage1[0] || aiIds.stage1Preset?.value || "");
-      fillSelect(aiIds.stage2Preset, "选择预设", stagePresetSelections.stage2[0] || aiIds.stage2Preset?.value || "");
-      fillSelect(aiIds.stage3Preset, "选择预设", stagePresetSelections.stage3[0] || aiIds.stage3Preset?.value || "");
-      renderStagePresetSelection("stage1");
-      renderStagePresetSelection("stage2");
-      renderStagePresetSelection("stage3");
+      fillSelect(aiIds.poolPreset, "选择预设加入池", aiIds.poolPreset?.value || "");
+      renderPoolPresetSelection();
       const names = [...new Set(presets.map(presetTools.providerName).filter(Boolean))];
       aiIds.provider._syncProviderOptions?.(names);
       updateStagePresetDependencies();
     }
 
     function updateStagePresetDependencies() {
-      const hasStage2 = committedStagePresetIds("stage2").length > 0;
-      if (aiIds.stage3Preset) {
-        aiIds.stage3Preset.disabled = false;
-        if (aiIds.stage3PresetAdd) aiIds.stage3PresetAdd.disabled = false;
-        if (aiIds.stage3AppliedTrigger) aiIds.stage3AppliedTrigger.disabled = false;
-        aiIds.stage3Preset.title = "选择阶段三候选预设，点击添加后启用";
-        aiIds.stage3Card?.classList.remove("is-disabled");
-        syncEnhancedSelect(aiIds.stage3Preset);
-      }
-      const pill2 = document.getElementById("stage2StatusPill");
-      if (pill2 && pill2.dataset.state !== "running") {
-        pill2.dataset.state = hasStage2 ? "idle" : "disabled";
-        pill2.textContent = hasStage2 ? "待命" : "未启用";
-      }
-      const pill3 = document.getElementById("stage3StatusPill");
-      if (pill3 && pill3.dataset.state !== "running") {
-        const hasStage3 = committedStagePresetIds("stage3").length > 0;
-        pill3.dataset.state = hasStage3 ? "idle" : "disabled";
-        pill3.textContent = hasStage3 ? "待命" : "未启用";
+      for (const stage of poolStages) {
+        const pill = document.getElementById(stage + "StatusPill");
+        if (pill && pill.dataset.state !== "running") {
+          const enabled = committedStagePresetIds(stage).length > 0;
+          pill.dataset.state = enabled ? "idle" : "disabled";
+          pill.textContent = enabled ? "待命" : "未分配预设";
+        }
       }
       refreshRevisionStagePills();
       setAllStageButtonsRunning();
@@ -1437,10 +1361,19 @@
         similarity: prefilterIds.similarity ? formatPercentRatio(prefilterIds.similarity.value) : (prevSaved.similarity || "92%"),
         promptVisible: Boolean(aiIds.promptVisible?.checked),
         currentPresetId: currentPresetId || "",
-        stage1PresetIds: committedStagePresetIds("stage1"),
-        stage2PresetIds: committedStagePresetIds("stage2"),
-        stage3PresetIds: committedStagePresetIds("stage3"),
+        poolSelections: sharedPoolSelections.map(normalizePoolSelection),
+        poolMode: aiIds.poolMode?.value === "loop" ? "loop" : "normal",
+        poolPriorityEnabled: Boolean(aiIds.poolPriority?.checked),
       };
+      if (poolMigrationPending) {
+        delete config.poolSelections;
+        for (const stage of poolStages) {
+          for (const suffix of ["PresetIds", "PresetId"]) {
+            const key = stage + suffix;
+            if (Object.prototype.hasOwnProperty.call(prevSaved, key)) config[key] = prevSaved[key];
+          }
+        }
+      }
       localStorage.setItem(aiConfigStorageKey, JSON.stringify(config));
       if (projectAiConfigStorageKey) {
         localStorage.setItem(projectAiConfigStorageKey, JSON.stringify(config));
@@ -1454,6 +1387,49 @@
         systemPrompt: aiIds.prompt.value,
         promptTouched: Boolean(aiIds.prompt.dataset.touched),
       }));
+    }
+
+    function restorePoolSelections(saved) {
+      poolMigrationPending = false;
+      if (Object.prototype.hasOwnProperty.call(saved, "poolSelections")) {
+        const ids = new Set();
+        sharedPoolSelections = (Array.isArray(saved.poolSelections) ? saved.poolSelections : []).map(normalizePoolSelection).filter((item) => {
+          if (!item || ids.has(item.presetId)) return false;
+          ids.add(item.presetId);
+          return true;
+        });
+        return;
+      }
+      const migrated = new Map();
+      for (const stage of poolStages) {
+        const ids = Array.isArray(saved[stage + "PresetIds"]) ? saved[stage + "PresetIds"]
+          : saved[stage + "PresetId"] ? [saved[stage + "PresetId"]] : [];
+        for (const rawId of ids) {
+          const id = String(rawId || "");
+          if (!id) continue;
+          if (!migrated.has(id)) migrated.set(id, normalizePoolSelection({ presetId: id, stages: [] }));
+          if (!migrated.get(id).stages.includes(stage)) migrated.get(id).stages.push(stage);
+        }
+      }
+      if (![...migrated.values()].some((item) => item.stages.includes("stage1")) && String(saved.model || "").trim()) {
+        let preset = saved.currentPresetId && presetTools.getPreset(localStorage, saved.currentPresetId);
+        if (preset && ["protocol", "provider", "baseUrl", "apiKey", "model", "reasoningEffort", "concurrency"]
+          .some((key) => String(preset[key] ?? "") !== String(saved[key] ?? ""))) preset = null;
+        if (!preset) preset = presetTools.savePreset(localStorage, { ...saved, id: "", name: "原主配置 " + Date.now().toString(36) });
+        if (preset) {
+          if (!migrated.has(preset.id)) migrated.set(preset.id, normalizePoolSelection({ presetId: preset.id, stages: [] }));
+          migrated.get(preset.id).stages.unshift("stage1");
+        } else {
+          poolMigrationPending = true;
+          showToast("旧主配置尚未迁入预设池，原配置已保留。请释放浏览器存储空间后刷新重试。", { tone: "watch", durationMs: 12000 });
+        }
+      }
+      sharedPoolSelections = [...migrated.values()];
+      if (!poolMigrationPending && Object.keys(saved).length) {
+        const config = { ...saved, poolSelections: sharedPoolSelections.map(normalizePoolSelection) };
+        try { localStorage.setItem(projectAiConfigStorageKey, JSON.stringify(config)); }
+        catch { showToast("共享池配置暂未保存，请释放浏览器存储空间后重试。", { tone: "watch", durationMs: 10000 }); }
+      }
     }
 
     function restoreAiConfig() {
@@ -1523,15 +1499,11 @@
       normalizeSimilarityInput();
       updateProofreadModeHint();
       updateInferenceSettingOptions();
-      stagePresetSelections.stage1 = Array.isArray(saved.stage1PresetIds) ? saved.stage1PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage1PresetId && presetTools.getPreset(localStorage, saved.stage1PresetId) ? [saved.stage1PresetId] : []);
-      stagePresetSelections.stage2 = Array.isArray(saved.stage2PresetIds) ? saved.stage2PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage2PresetId && presetTools.getPreset(localStorage, saved.stage2PresetId) ? [saved.stage2PresetId] : []);
-      stagePresetSelections.stage3 = Array.isArray(saved.stage3PresetIds) ? saved.stage3PresetIds.filter((id) => presetTools.getPreset(localStorage, id)) : (saved.stage3PresetId && presetTools.getPreset(localStorage, saved.stage3PresetId) ? [saved.stage3PresetId] : []);
-      if (aiIds.stage1Preset) aiIds.stage1Preset.value = stagePresetSelections.stage1[0] || "";
-      if (aiIds.stage2Preset) aiIds.stage2Preset.value = stagePresetSelections.stage2[0] || "";
-      if (aiIds.stage3Preset) aiIds.stage3Preset.value = stagePresetSelections.stage3[0] || "";
-      renderStagePresetSelection("stage1");
-      renderStagePresetSelection("stage2");
-      renderStagePresetSelection("stage3");
+      restorePoolSelections(saved);
+      renderPresetOptions(currentPresetId);
+      if (aiIds.poolMode) aiIds.poolMode.value = saved.poolMode === "loop" ? "loop" : "normal";
+      if (aiIds.poolPriority) aiIds.poolPriority.checked = saved.poolPriorityEnabled === true;
+      renderPoolPresetSelection();
       updateStagePresetDependencies();
       // 接好地址后再判定接口类型：地址是唯一依据，保存的 protocol 只在地址认不出时沿用。
       syncProtocolFromAddress();
@@ -4092,7 +4064,7 @@
       const s1PresetIds = committedStagePresetIds("stage1");
       const s2PresetIds = committedStagePresetIds("stage2");
       const s3PresetIds = committedStagePresetIds("stage3");
-      const s1PresetId = s1PresetIds[0] || "";
+      const s1PresetId = s1PresetIds[0] || sharedPoolSelections.find((item) => item.stages.length)?.presetId || "";
       const s2PresetId = s2PresetIds[0] || "";
       const s3PresetId = s3PresetIds[0] || "";
 
@@ -4120,7 +4092,7 @@
         }
       }
 
-      // 预设只表示各阶段可用的配置；是否运行由独立启停或总控决定。
+      // 子阶段配置保留领域调用参数；调度只从共享池领取通道。
       const multiStageEnabled = Boolean(s2PresetId);
       const challengerEnabled = Boolean(s2PresetId);
       const stylistConfig = s2PresetId ? presetTools.getPreset(localStorage, s2PresetId) : null;
@@ -4148,7 +4120,10 @@
         arbiterConfig,
         stylistPresets: stage2Presets,
         arbiterPresets: stage3Presets,
-        presetPool: stagePresetsFor("stage1"),
+        poolEnabled: true,
+        poolMode: aiIds.poolMode?.value === "loop" ? "loop" : "normal",
+        poolPriorityEnabled: Boolean(aiIds.poolPriority?.checked),
+        presetPool: poolPresetsFor(),
         concurrency: mainConcurrency,
         similarityThreshold: parsePercentRatio(prefilterIds.similarity.value),
         systemPrompt: aiIds.prompt?.value || defaultProofreadPrompt || "",
@@ -4558,7 +4533,7 @@
         stage, Number(pipeline.pending) > 0 ? pipelineWaitState(stage, pipeline, aiRunning) : null,
       ]));
       const activeStages = getStageActiveStates(aiRunning, stagePipelines);
-      for (const stage of ["stage1", "stage2", "stage3"]) renderStagePresetSelection(stage);
+      renderPoolPresetSelection();
       const s1Done = s1Passed + s1NeedsEdit + s1Unclear;
       const s1Queue = Math.max(0, Number(p1.pending) || 0) + Math.max(0, Number(p1.inFlight) || 0);
       // 初审覆盖整张工作台；异常重试行也在队列中，不能再加一遍。
@@ -5048,6 +5023,23 @@
         toArbiter: isRunning && Boolean(ai.stageCascade?.toArbiter),
       };
 
+      poolServiceSupported = ai.poolSupported === true;
+      poolRunCanUpdate = isRunning && receipt.sameScope && ai.poolEnabled === true;
+      latestPoolRuntime = ai.poolRuntime || (ai.poolEnabled ? {
+        mode: ai.poolMode, state: ai.poolState, round: ai.poolRound,
+        blockedReason: ai.poolBlockedReason, presets: ai.poolPresets || [],
+      } : null);
+      if (aiIds.poolStatus) {
+        const labels = { running: "运行中", completed: "审核完成", blocked: "需要处理", stopped: "已停止" };
+        const runtime = latestPoolRuntime;
+        aiIds.poolStatus.dataset.state = runtime?.state || "idle";
+        aiIds.poolStatus.textContent = runtime ? (runtime.mode === "loop" ? "循环" : "常规")
+          + " · 第 " + (Number(runtime.round) || 1) + " 轮 · " + (labels[runtime.state] || "待命")
+          + (isRunning && Number(runtime.retryAt) > Date.now()
+            ? " · " + Math.ceil((runtime.retryAt - Date.now()) / 1000) + " 秒后重试异常" : "")
+          + (runtime.blockedReason ? " · " + runtime.blockedReason : "")
+          : poolServiceSupported ? "待命" : "请重启控制台服务以启用共享池";
+      }
       latestPresetPipelines = ai.presetPipelines || {};
       window.__transComparatorAiPresetPipelines = latestPresetPipelines;
       const stageMetrics = updateStageMetricsDashboard(ai.stageMetrics, ai.stagePipelines, isRunning, ai.stageErrors);
@@ -5056,10 +5048,10 @@
       if (receipt.runChanged) {
         warnedLegacyService = false;
       }
-      // 旧服务仍将单阶段按钮解释成整条流水线，提示用户更新常驻进程。
-      if (isRunning && ai.stagePipelines && !ai.stageControls && !warnedLegacyService) {
+      // 旧服务会忽略共享池字段，能力不匹配时不能继续发起新运行。
+      if (isRunning && !poolServiceSupported && !warnedLegacyService) {
         warnedLegacyService = true;
-        showToast("控制台服务未更新（没有回报独立阶段启停信息），本次无法独立控制各阶段。请重启控制台服务（start-setup.bat）后重新启动任务。", { tone: "watch", durationMs: 20000 });
+        showToast("控制台服务未更新，当前任务不支持共享预设池。请先停止任务，再重启控制台服务（start-setup.bat）。", { tone: "watch", durationMs: 20000 });
       }
       const sameAiScope = receipt.sameScope;
       if (receipt.cleared) {
@@ -5112,7 +5104,8 @@
         committedStagePresetIds("stage2").length > 0
       );
       const hasStoppedStage = Object.values(ai.stageControls || {}).some((control) => control.stopRequested);
-      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : (hasStoppedStage ? "AI 校对已结束（含已停止阶段）：" : "AI 校对完成：")) + "实际调用 " + queueText + "，") +
+      const poolBlocked = latestPoolRuntime?.state === "blocked";
+      const finishedStatus = (isPrefilter ? (ai.stopRequested ? "预筛选已终止：" : "预筛选完成：") : (ai.stopRequested ? "AI 校对已终止：" : (poolBlocked ? "AI 校对尚未完成：" : hasStoppedStage ? "AI 校对已结束（含已停止阶段）：" : "AI 校对完成：")) + "实际调用 " + queueText + "，") +
         (isPrefilter ? "" : (isMultiStage ? "" : skipText + "，")) +
         (isMultiStage
           ? "建议 " + (ai.suggested || 0) + "，错误 " + (ai.errors || 0)
@@ -5128,7 +5121,7 @@
         } else if (ai.finishedAt) {
           aiIds.panelState.textContent = isPrefilter
             ? (ai.stopRequested ? "预筛选已终止" : "预筛选完成")
-            : (ai.stopRequested ? "已终止" : (hasStoppedStage ? "校对已结束" : "校对完成"));
+            : (ai.stopRequested ? "已终止" : (poolBlocked ? "审核待处理" : hasStoppedStage ? "校对已结束" : "校对完成"));
           aiIds.panelState.className = "ai-status-badge";
         } else if (ai.error && !ai.breakerWarning) {
           aiIds.panelState.textContent = "调用异常";
@@ -5155,8 +5148,8 @@
       if (finishedRunId && finishedRunId === observedRunningRunId && notifiedFinishedRunId !== finishedRunId) {
         notifiedFinishedRunId = finishedRunId;
         // 失败轮次优先报错因（固定状态行只给统计数字），原因比数字更可行动。
-        showToast(ai.error || ai.breakerWarning || finishedStatus, {
-          tone: ai.error && !ai.breakerWarning ? "error" : (ai.breakerWarning || ai.stopRequested ? "watch" : (hasStoppedStage ? "info" : "success")),
+        showToast(ai.error || (poolBlocked && ("审核尚未完成：" + latestPoolRuntime.blockedReason)) || ai.breakerWarning || finishedStatus, {
+          tone: ai.error && !ai.breakerWarning ? "error" : (poolBlocked || ai.breakerWarning || ai.stopRequested ? "watch" : (hasStoppedStage ? "info" : "success")),
           durationMs: ai.error ? 15000 : 12000,
         });
       }
@@ -5496,9 +5489,11 @@
         const deleted = presetTools.deletePreset(localStorage, current.id);
         if (deleted) {
           const deletedName = presetTools.presetLabel(current);
+          sharedPoolSelections = sharedPoolSelections.filter((item) => item.presetId !== current.id);
           currentPresetId = "";
           renderPresetOptions("");
           saveAiConfig();
+          void syncRunningPoolPresets();
           showToast("已删除模型预设「" + deletedName + "」", { tone: "watch", durationMs: 5000 });
         } else {
           showToast("删除模型预设失败", { tone: "error", durationMs: 5000 });
@@ -5527,44 +5522,12 @@
         }
       });
     });
-    if (aiIds.stage1Preset) {
-      aiIds.stage1Preset.addEventListener("change", () => {
-        saveAiConfig();
-      });
-    }
-    if (aiIds.stage2Preset) {
-      aiIds.stage2Preset.addEventListener("change", () => {
-        updateStagePresetDependencies();
-        saveAiConfig();
-      });
-    }
-    if (aiIds.stage3Preset) {
-      aiIds.stage3Preset.addEventListener("change", () => {
-        saveAiConfig();
-      });
-    }
-    [["stage1", aiIds.stage1PresetAdd], ["stage2", aiIds.stage2PresetAdd], ["stage3", aiIds.stage3PresetAdd]].forEach(([stage, button]) => {
-      button?.addEventListener("click", () => addSelectedStagePreset(stage));
+    aiIds.poolAdd?.addEventListener("click", addSelectedPoolPreset);
+    aiIds.poolPriority?.addEventListener("change", changePoolConfiguration);
+    aiIds.poolMode?.addEventListener("change", () => {
+      renderPoolPresetSelection();
+      saveAiConfig();
     });
-    ["stage1", "stage2", "stage3"].forEach((stage) => {
-      const controls = stagePresetControls[stage];
-      const trigger = aiIds[controls.trigger];
-      trigger?.addEventListener("click", (event) => {
-        event?.stopPropagation?.();
-        toggleStageAppliedMenu(stage);
-      });
-    });
-    document.addEventListener("click", (event) => {
-      if (!event.target.closest(".ai-stage-applied-dropdown")) {
-        closeAllStageAppliedMenus();
-      }
-    });
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        closeAllStageAppliedMenus();
-      }
-    });
-    closeAllStageAppliedMenus();
     aiIds.proofreadMode.addEventListener("change", updateProofreadModeHint);
     prefilterIds.similarity.addEventListener("input", saveAiConfig);
     prefilterIds.similarity.addEventListener("change", () => {
@@ -5722,29 +5685,20 @@
     const pendingStageStarts = new Set();
     const pendingStageStops = new Set();
 
-    function aiStartConfigurationError(stage) {
-      if (stage === "all") {
-        for (const key of ["stage1", "stage2", "stage3"]) {
-          if (key !== "stage1" && !committedStagePresetIds(key).length) continue;
-          const error = aiStartConfigurationError(key);
-          if (error) return error;
-        }
-        return "";
-      }
-      const label = { stage1: "阶段一", stage2: "阶段二", stage3: "阶段三" }[stage];
-      const ids = committedStagePresetIds(stage);
-      if (!ids.length && stage !== "stage1") return `请先为${label}添加适用的模型预设。`;
-      const configs = ids.length
-        ? ids.map((id) => ({ id, preset: presetTools.getPreset(localStorage, id) }))
-        : [{ preset: { model: aiIds.model.value }, main: true }];
-      for (const { id, preset, main } of configs) {
-        if (!preset) return `${label}适用预设已失效，请移除后重新添加（${id}）。`;
-        const model = String(preset.model || "").trim();
-        if (!model || model === "custom") {
-          const source = main ? "主配置" : `适用预设「${presetTools.presetLabel(preset)}」`;
-          return `${label}${source}尚未选择模型，请先补全模型配置。`;
+    function aiStartConfigurationError() {
+      if (poolMigrationPending) return "旧主配置尚未迁入预设池，请释放浏览器存储空间后刷新重试。";
+      if (!sharedPoolSelections.length) return "请先添加模型预设到共享池。";
+      const active = sharedPoolSelections.filter((item) => item.stages.length);
+      if (!active.length) return "请至少为一个预设开启一个审核阶段。";
+      for (const { presetId } of sharedPoolSelections) {
+        const preset = presetTools.getPreset(localStorage, presetId);
+        if (!preset) return `池中预设已失效，请移除后重新添加（${presetId}）。`;
+        if (!String(preset.model || "").trim() || preset.model === "custom") {
+          return `预设「${presetTools.presetLabel(preset)}」尚未选择模型，请先补全模型配置。`;
         }
       }
+      if (poolServiceSupported === null) return "正在确认控制台服务是否支持共享预设池。";
+      if (!poolServiceSupported) return "控制台服务尚不支持共享预设池，请重启控制台服务后重试。";
       return "";
     }
 
@@ -5754,14 +5708,6 @@
       setAllStageButtonsRunning();
       showToast(error, { tone: "watch", durationMs: 8000 });
       return false;
-    }
-
-    function cascadeFromStage(stage) {
-      if (stage !== "all") return { toStylist: false, toArbiter: false };
-      return {
-        toStylist: stagePresetsFor("stage2").length > 0,
-        toArbiter: stagePresetsFor("stage3").length > 0,
-      };
     }
 
     function getStageActiveStates(running, stagePipelines = null) {
@@ -5783,60 +5729,30 @@
 
     function setAllStageButtonsRunning(running = null, stagePipelines = null) {
       if (stagePipelines) latestStagePipelines = stagePipelines;
-      const active = getStageActiveStates(running, stagePipelines);
-      for (const stage of ["stage1", "stage2", "stage3"]) {
-        const start = document.getElementById(stage + "Start") || (stage === "stage1" ? aiIds.start : null);
-        const stop = document.getElementById(stage + "Stop") || (stage === "stage1" ? aiIds.stop : null);
-        const stopping = pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested;
-        if (start) {
-          const error = aiStartConfigurationError(stage);
-          start.disabled = Boolean(error) || active[stage] || pendingStageStops.has(stage) || pendingStopAll || latestAiStopRequested;
-          start.title = error;
-        }
-        if (stop) stop.disabled = !active[stage] || Boolean(stopping) || pendingStageStarts.has(stage);
+      const anyRunning = Boolean(running ?? currentAiRunning) || pendingStageStarts.size > 0;
+      if (aiIds.start) {
+        const error = aiStartConfigurationError();
+        aiIds.start.disabled = Boolean(error) || anyRunning || pendingStageStops.size > 0 || pendingStopAll;
+        aiIds.start.title = error || "从已有审核进度继续运行共享预设池";
       }
-      const anyRunning = (running ?? currentAiRunning) || Object.values(active).some(Boolean);
-      const startAll = document.getElementById("aiStartAll");
-      const stopAll = document.getElementById("aiStopAll");
-      if (startAll) {
-        const error = aiStartConfigurationError("all");
-        startAll.disabled = Boolean(error) || Boolean(anyRunning) || pendingStageStops.size > 0 || pendingStopAll;
-        startAll.title = error;
+      if (aiIds.stop) aiIds.stop.disabled = !anyRunning || pendingStageStarts.size > 0 || pendingStopAll || latestAiStopRequested;
+      if (aiIds.poolMode) {
+        aiIds.poolMode.disabled = anyRunning;
+        syncEnhancedSelect(aiIds.poolMode);
       }
-      if (stopAll) stopAll.disabled = !anyRunning || pendingStageStarts.size > 0 || pendingStopAll || Object.entries(active).every(([stage, enabled]) =>
-        !enabled || pendingStageStarts.has(stage) || pendingStageStops.has(stage) || latestStageControls?.[stage]?.stopRequested);
     }
     setAllStageButtonsRunning(false);
 
-    async function startAiStage(stage = "stage1") {
-      const active = getStageActiveStates(currentAiRunning);
-      if (pendingStopAll || latestAiStopRequested || pendingStageStops.has(stage) || active[stage]
-        || (stage === "all" && (currentAiRunning || pendingStageStarts.size || pendingStageStops.size))) return;
-      if (!validateAiStart(stage)) return;
-
-      if (stage === "stage2" && !Object.values(notes).some((item) => getStage2RowStatus(item).isPending)) {
-        showToast("当前没有未人工确认的初审提改或存疑行待复审，请先运行阶段一事实初审。", { tone: "watch", durationMs: 6000 });
-        return;
-      }
-      if (stage === "stage3") {
-        const states = Object.values(notes).map(getStage3RowStatus);
-        if (!states.some((state) => state.isPending)) {
-          const message = states.some((state) => state.isArbitrated)
-            ? "所有分歧行均已完成终审仲裁。"
-            : "当前没有需要终审仲裁的分歧行。";
-          showToast(message, { tone: "info", durationMs: 5000 });
-          return;
-        }
-      }
-
-      await startAiProofread({ stage });
+    async function startAiStage() {
+      if (currentAiRunning || pendingStopAll || latestAiStopRequested || pendingStageStarts.size || pendingStageStops.size) return;
+      if (!validateAiStart("all")) return;
+      await startAiProofread({ stage: "all" });
     }
 
-    async function startAiProofread({ stage = "stage1" } = {}) {
+    async function startAiProofread({ stage = "all" } = {}) {
       if (!validateAiStart(stage)) return;
-      const plan = cascadeFromStage(stage);
       const startingStages = stage === "all"
-        ? ["stage1", ...(plan.toStylist ? ["stage2"] : []), ...(plan.toArbiter ? ["stage3"] : [])]
+        ? poolStages.filter((key) => committedStagePresetIds(key).length > 0)
         : [stage];
       if (pendingStopAll || latestAiStopRequested || startingStages.some((key) => pendingStageStarts.has(key) || pendingStageStops.has(key))) return;
       startingStages.forEach((key) => pendingStageStarts.add(key));
@@ -5857,13 +5773,7 @@
       const forgetResultIndexes = aiResultReception.snapshot().forgottenIndexes;
       baseConfig.forgetResultIndexes = forgetResultIndexes;
 
-      // 跳过口径取决于本次是「从起点一路推进到尽头」还是「只跑这一段」：
-      // 级联时整行必须走完从起点往下的所有阶段才算处理过，单阶段时只看本阶段有没有结论。
-      const cascadeToStylist = stage === "all"
-        && Boolean(baseConfig.stylistConfig || baseConfig.singleModelPersona);
-      const cascadeToArbiter = stage === "all"
-        && Boolean(baseConfig.arbiterConfig || baseConfig.singleModelPersona)
-        && baseConfig.arbiterEnabled !== false;
+      // 缺少某阶段的模型不能把该阶段待办变成完成；只跳过真实定案与人工确认。
       const completedSet = new Set(baseConfig.completedIndexes || []);
       for (const [id, item] of Object.entries(notes)) {
         if (!item) continue;
@@ -5874,38 +5784,13 @@
           continue;
         }
         const noteText = latestAiNotePart(item.note).trim();
-        // 初审续跑必须先有可用结论才可跳过。失败/终止/空备注不属于复审候选，
-        // 但不能因此被下面的「无需复审」分支误判为整行已经完成。
-        if ((stage === "stage1" || stage === "all") && !hasAutomatedDecisionNote(noteText)) {
-          completedSet.delete(num);
-          continue;
-        }
-        const p = parseAutomatedNote(noteText);
-        if (cascadeToStylist || cascadeToArbiter) {
-          // 整行口径：已终审、复审已定案、初审明确通过且非复审候选，都算走完。
-          // 「提交仲裁/升级仲裁」是复审的中途态不是结论——有分歧却还没仲裁的行必须留在流水线里，
-          // 初审提改却还没复审的行同理，都不能被当成已完成跳过。
-          const hasPendingArbitration = cascadeToArbiter && stageNoteState(noteText).pendingArbitration;
-          const stage3Done = stageNoteState(noteText).arbitrated;
-          const stage2Settled = !hasPendingArbitration
-            && (hasCompletedStage2Note(p, noteText) || !isStage2CandidateNote(p, noteText));
-          const stage1Clear = p?.modify === "否" && !isStage2CandidateNote(p, noteText);
-          const settled = cascadeToArbiter
-            ? (stage3Done || stage2Settled || stage1Clear)
-            : (stage2Settled || stage1Clear);
-          if (settled) completedSet.add(num);
-        } else if (stage === "stage1" || stage === "all") {
-          if (item.aiDone || hasAutomatedDecisionNote(noteText)) completedSet.add(num);
-        } else if (stage === "stage2") {
-          if (!getStage2RowStatus(item).isPending) {
-            completedSet.add(num);
-          }
-        } else if (stage === "stage3") {
-          const hasS3 = stageNoteState(noteText).arbitrated;
-          if (hasS3) {
-            completedSet.add(num);
-          }
-        }
+        const state = stageNoteState(noteText);
+        const parsed = parseAutomatedNote(noteText);
+        const settled = hasAutomatedDecisionNote(noteText) && !Object.keys(state.errors).length
+          && (state.arbitrated || (state.reviewed && !state.pendingArbitration)
+            || (!state.candidate && parsed?.modify === "否"));
+        if (settled) completedSet.add(num);
+        else completedSet.delete(num);
       }
       baseConfig.completedIndexes = [...completedSet];
 
@@ -5964,38 +5849,8 @@
       }
     }
 
-    const boundStartButtons = new Set();
-    const stage1StartEl = document.getElementById("stage1Start") || aiIds.start;
-    if (stage1StartEl) {
-      stage1StartEl.addEventListener("click", async () => { await startAiStage("stage1"); });
-      boundStartButtons.add(stage1StartEl);
-    }
-    const stage2StartEl = document.getElementById("stage2Start");
-    if (stage2StartEl && !boundStartButtons.has(stage2StartEl)) {
-      stage2StartEl.addEventListener("click", async () => { await startAiStage("stage2"); });
-      boundStartButtons.add(stage2StartEl);
-    }
-    const stage3StartEl = document.getElementById("stage3Start");
-    if (stage3StartEl && !boundStartButtons.has(stage3StartEl)) {
-      stage3StartEl.addEventListener("click", async () => { await startAiStage("stage3"); });
-      boundStartButtons.add(stage3StartEl);
-    }
-    if (aiIds.start && !boundStartButtons.has(aiIds.start)) {
-      aiIds.start.addEventListener("click", async () => { await startAiStage("stage1"); });
-    }
-
-    document.getElementById("aiStartAll")?.addEventListener("click", () => startAiStage("all"));
-    document.getElementById("aiStopAll")?.addEventListener("click", () => stopAiProofread("all"));
-
-    const stage1StopEl = document.getElementById("stage1Stop");
-    if (stage1StopEl) stage1StopEl.addEventListener("click", () => stopAiProofread("stage1"));
-    const stage2StopEl = document.getElementById("stage2Stop");
-    if (stage2StopEl) stage2StopEl.addEventListener("click", () => stopAiProofread("stage2"));
-    const stage3StopEl = document.getElementById("stage3Stop");
-    if (stage3StopEl) stage3StopEl.addEventListener("click", () => stopAiProofread("stage3"));
-    if (aiIds.stop && aiIds.stop !== stage1StopEl) {
-      aiIds.stop.addEventListener("click", () => stopAiProofread(""));
-    }
+    aiIds.start?.addEventListener("click", () => startAiStage());
+    aiIds.stop?.addEventListener("click", () => stopAiProofread("all"));
 
     if (aiIds.clearCache) {
       aiIds.clearCache.addEventListener("click", async () => {

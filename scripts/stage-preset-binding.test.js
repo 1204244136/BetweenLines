@@ -1,450 +1,258 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { makeHtml } = require("./build-compare");
-const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
-const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
+const { createWorkbench, storageFixture, addPoolPreset, toastMessages } = require("./workbench-fixture");
 
-test("工作台构建：在阶段卡片内渲染预设选择下拉框", () => {
-  const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
-  const selection = {
-    comparisonMode: "bilingual",
-    inputMode: "txt",
-    files: { jp: "A.txt", cn: "B.txt", tw: "" },
-    labels: { jp: "A 原文", cn: "B 译文", tw: "C 版本" },
-  };
-  const html = makeHtml(rows, selection, {
-    generatedAt: "2026-01-01T00:00:00.000Z",
-    projectKey: "project",
-    rowsSignature: "rows",
-    notesStorage: { key: "notes" },
-  }, "");
-
-  // 验证上方冗杂的绑定区域已被移除
-  assert.equal(html.includes('id="aiStageBindingBox"'), false, "上方的审核编排冗杂区域已移除");
-
-  // 验证选择器直接位于各卡片内部
-  assert.match(html, /id="stage1PresetSelect"/);
-  assert.match(html, /id="stage2PresetSelect"/);
-  assert.match(html, /id="stage3PresetSelect"/);
-});
-
-test("客户端阶段预设绑定：独立启用与 AI 配置组装", async () => {
-  const presetTools = createPresetTools();
-  const ui = createWorkbench();
-
-  // Seed two presets
-  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
-    {
-      id: "preset_claude",
-      name: "Claude 文学润色",
-      protocol: "claude",
-      baseUrl: "https://api.anthropic.com",
-      model: "claude-3-7-sonnet",
-      apiKey: "sk-claude",
-    },
-    {
-      id: "preset_r1",
-      name: "DeepSeek 推理仲裁",
-      protocol: "compatible",
-      baseUrl: "https://api.deepseek.com",
-      model: "deepseek-reasoner",
-      apiKey: "sk-deepseek",
-    },
-  ]));
-
-  // Re-initialize workbench with saved presets
-  ui.run("restoreAiConfig()");
-
-  const s1Select = ui.element("stage1PresetSelect");
-  const s2Select = ui.element("stage2PresetSelect");
-  const s3Select = ui.element("stage3PresetSelect");
-
-  assert.ok(s1Select);
-  assert.ok(s2Select);
-  assert.ok(s3Select);
-
-  // 阶段三可以处理已有复审结果，不依赖阶段二当前是否配置模型。
-  assert.equal(s2Select.value, "");
-  assert.equal(s3Select.disabled, false);
-
-  // 初始时未启用 Stage 2，aiConfig() 为经典单阶段模式
-  let config = ui.run("aiConfig()");
-  assert.equal(config.multiStageEnabled, false);
-  assert.equal(config.challengerEnabled, false);
-  assert.equal(config.stylistConfig, null);
-  assert.equal(config.arbiterConfig, null);
-
-  // 2. 启用 Stage 2（选择并添加 Claude）
-  s2Select.value = "preset_claude";
-  await s2Select.dispatch("change");
-  ui.element("stage2PresetAdd").click();
-
-  // Stage 3 应该被解禁
-  assert.equal(s3Select.disabled, false);
-
-  config = ui.run("aiConfig()");
-  assert.equal(config.multiStageEnabled, true);
-  assert.equal(config.challengerEnabled, true);
-  assert.ok(config.stylistConfig);
-  assert.equal(config.stylistConfig.model, "claude-3-7-sonnet");
-  assert.equal(config.arbiterConfig, null);
-  assert.equal(config.arbiterEnabled, false); // Stage 3 尚未选预设，不启用仲裁
-
-  // 3. 启用 Stage 3（选择并添加 DeepSeek R1）
-  s3Select.value = "preset_r1";
-  await s3Select.dispatch("change");
-  ui.element("stage3PresetAdd").click();
-
-  config = ui.run("aiConfig()");
-  assert.equal(config.arbiterEnabled, true);
-  assert.ok(config.arbiterConfig);
-  assert.equal(config.arbiterConfig.model, "deepseek-reasoner");
-
-  // 移除阶段二只关闭复审配置，已应用的仲裁配置独立保留。
-  const stage3Candidate = s3Select.value;
-  ui.element("stage2PresetTags").children[0].children[2].click();
-
-  assert.equal(s3Select.value, stage3Candidate, "移除阶段二不改变阶段三候选状态");
-  assert.equal(s3Select.disabled, false);
-
-  config = ui.run("aiConfig()");
-  assert.equal(config.stylistConfig, null);
-  assert.equal(config.arbiterEnabled, true);
-  assert.equal(config.arbiterConfig.model, "deepseek-reasoner");
-  assert.deepEqual([...ui.run('committedStagePresetIds("stage3")')], ["preset_r1"]);
-});
-
-test("阶段三预设：可见模型下拉在阶段二未配置、移除和恢复后始终独立可用", async () => {
-  const ui = createWorkbench(storageFixture({
-    "translation-compare-ai-presets-v2": JSON.stringify([
-      { id: "review", name: "复审", protocol: "compatible", model: "review-model" },
-      { id: "arbiter", name: "仲裁", protocol: "compatible", model: "arbiter-model" },
-    ]),
-  }));
-  ui.run("restoreAiConfig()");
-  const select = ui.element("stage3PresetSelect");
-  // VM 夹具不解析父节点与 options；补齐挂载信息，实际增强、同步及交互仍运行页面脚本。
-  select.parentNode = { insertBefore() {} };
-  Object.defineProperty(select, "options", {
-    get: () => select.children.flatMap((child) => child.tagName === "OPTGROUP" ? child.children : [child]),
-  });
-  Object.defineProperty(select, "selectedIndex", {
-    get: () => select.options.findIndex((option) => option.value === select.value),
-  });
-  ui.run("enhanceSelect(aiIds.stage3Preset)");
-  const [, trigger, menu] = select.parentNode.children;
-  assert.equal(trigger.disabled, false, "阶段二未配置时即可选择仲裁预设");
-  assert.equal(select.disabled, false);
-  trigger.click();
-  assert.equal(menu.hidden, false, "可见下拉可以打开");
-  const option = menu.children.find((item) => item.dataset.value === "arbiter");
-  assert.ok(option, "下拉包含可添加的仲裁预设");
-  await menu.dispatch("click", { target: { closest: () => option } });
-  assert.equal(select.value, "arbiter");
-  assert.match(trigger.children[0].textContent, /仲裁/);
-  assert.equal(ui.run("aiConfig().arbiterConfig"), null, "仅切换候选仍不得启用阶段三");
-  ui.element("stage3PresetAdd").click();
-
-  ui.element("stage2PresetSelect").value = "review";
-  ui.element("stage2PresetAdd").click();
-  const candidateBeforeRemove = select.value;
-  const triggerBeforeRemove = trigger.children[0].textContent;
-
-  ui.element("stage2PresetTags").children[0].children[2].click();
-  assert.equal(select.disabled, false);
-  assert.equal(select.value, candidateBeforeRemove);
-  assert.equal(trigger.disabled, false, "移除阶段二不能锁定阶段三可见按钮");
-  assert.equal(trigger.children[0].textContent, triggerBeforeRemove);
-  assert.match(ui.element("stage3AppliedValue").textContent, /仲裁/);
-  assert.equal(ui.run("aiConfig().arbiterConfig.model"), "arbiter-model");
-
-  ui.run("restoreAiConfig()");
-  assert.equal(select.disabled, false);
-  assert.equal(trigger.disabled, false, "恢复仅阶段三配置时，可见下拉仍可操作");
-  assert.deepEqual([...ui.run('committedStagePresetIds("stage3")')], ["arbiter"]);
-  trigger.click();
-  assert.equal(menu.hidden, false);
-});
-
-test("阶段预设恢复：旧单值迁入适用列表，显式空数组保持未启用", () => {
-  for (const explicitlyEmpty of [false, true]) {
-    const saved = { stage1PresetId: "legacy", stage2PresetId: "legacy", stage3PresetId: "legacy" };
-    if (explicitlyEmpty) Object.assign(saved, { stage1PresetIds: [], stage2PresetIds: [], stage3PresetIds: [] });
-    const ui = createWorkbench(storageFixture({
-      "translation-compare-ai-presets-v2": JSON.stringify([
-        { id: "legacy", name: "旧预设", protocol: "compatible", model: "legacy-model" },
-      ]),
-      "translation-compare-ai-project-config-v2:project": JSON.stringify(saved),
-    }));
-    for (const stage of ["stage1", "stage2", "stage3"]) {
-      assert.deepEqual([...ui.run(`committedStagePresetIds("${stage}")`)], explicitlyEmpty ? [] : ["legacy"]);
-    }
-    const config = ui.run("aiConfig()");
-    assert.equal(Boolean(config.stylistConfig), !explicitlyEmpty);
-    assert.equal(Boolean(config.arbiterConfig), !explicitlyEmpty);
-  }
-});
-
-for (const stage of ["stage1", "stage2", "stage3"]) {
-  test(`${stage} 候选预设：未添加时不进入启动请求或刷新后的适用配置`, async () => {
-    const ui = createWorkbench(storageFixture({
-      "translation-compare-ai-presets-v2": JSON.stringify([
-        { id: "candidate", name: "候选", protocol: "compatible", model: "candidate-model" },
-      ]),
-    }));
-    ui.run('restoreAiConfig(); aiIds.model.value = "main-model";');
-    if (stage === "stage3") {
-      ui.element("stage2PresetSelect").value = "candidate";
-      ui.element("stage2PresetAdd").click();
-    }
-    ui.element(`${stage}PresetSelect`).value = "candidate";
-    await ui.element(`${stage}PresetSelect`).dispatch("change");
-
-    assert.equal(ui.element(`${stage}AppliedValue`).textContent, stage === "stage1" ? "适用：主配置" : "未启用");
-    if (stage === "stage2") assert.equal(ui.element("stage3PresetSelect").disabled, false);
-    const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-config-v2"));
-    assert.deepEqual(saved[`${stage}PresetIds`], [], "候选不得隐式保存为已应用预设");
-
-    await ui.run('startAiProofread({ stage: "stage1" })');
-    const request = ui.posts.find((post) => post.url === "/api/ai-proofread/start").body;
-    assert.deepEqual(request[stage === "stage1" ? "presetPool" : stage === "stage2" ? "stylistPresets" : "arbiterPresets"], []);
-    if (stage === "stage1") assert.equal(request.model, "main-model");
-    if (stage === "stage2") assert.equal(request.stylistConfig, null);
-    if (stage === "stage3") {
-      assert.equal(request.arbiterConfig, null);
-      assert.equal(request.arbiterEnabled, false);
-    }
-
-    const restored = createWorkbench(ui.storage);
-    restored.run("restoreAiConfig()");
-    assert.deepEqual([...restored.run(`committedStagePresetIds("${stage}")`)], []);
-    assert.equal(restored.element(`${stage}AppliedValue`).textContent, stage === "stage1" ? "适用：主配置" : "未启用");
-  });
-
-  test(`${stage} 移除最后一个适用预设：残留候选不得重新启用或保存`, () => {
-    const ui = createWorkbench(storageFixture({
-      "translation-compare-ai-presets-v2": JSON.stringify([
-        { id: "applied", name: "已应用", protocol: "compatible", model: "applied-model" },
-      ]),
-    }));
-    ui.run("restoreAiConfig()");
-    if (stage === "stage3") {
-      ui.element("stage2PresetSelect").value = "applied";
-      ui.element("stage2PresetAdd").click();
-    }
-    ui.element(`${stage}PresetSelect`).value = "applied";
-    ui.element(`${stage}PresetAdd`).click();
-    // 预设列表重渲染会把已应用的第一项填回候选选择器。
-    ui.run("renderPresetOptions()");
-    assert.equal(ui.element(`${stage}PresetSelect`).value, "applied");
-    ui.element(`${stage}PresetTags`).children[0].children[2].click();
-
-    assert.deepEqual([...ui.run(`committedStagePresetIds("${stage}")`)], []);
-    assert.deepEqual([...ui.run(`stagePresetsFor("${stage}")`)], []);
-    const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-project-config-v2:project"));
-    assert.deepEqual(saved[`${stage}PresetIds`], []);
-    const restored = createWorkbench(ui.storage);
-    restored.run("restoreAiConfig()");
-    assert.deepEqual([...restored.run(`committedStagePresetIds("${stage}")`)], []);
-  });
+const presets = [
+  { id: "p1", name: "快速模型", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "fast", concurrency: 4 },
+  { id: "p2", name: "高级模型", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "advanced", concurrency: 8 },
+];
+function setup(config = {}, options = {}) {
+  return createWorkbench(storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify(presets),
+    "translation-compare-ai-config-v2": JSON.stringify(config),
+  }), { strictIds: true, ...options });
 }
+const plain = (value) => JSON.parse(JSON.stringify(value));
+const selected = (ui) => plain(ui.run("sharedPoolSelections"));
 
-test("阶段多预设下拉栏：收纳适用预设并遵从当前并发数/当前并发上限/触顶规则", async () => {
-  const ui = createWorkbench();
-
-  // 写入 3 个模型预设
-  ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
-    { id: "p1", name: "词元聚合", protocol: "compatible", model: "v3", concurrency: 4 },
-    { id: "p2", name: "火山方舟", protocol: "compatible", model: "doubao", concurrency: 8 },
-    { id: "p3", name: "WorkBud", protocol: "compatible", model: "claude", concurrency: 32 },
-  ]));
-
-  ui.run("restoreAiConfig()");
-
-  const s1Dropdown = ui.element("stage1AppliedDropdown");
-  const s1Trigger = ui.element("stage1AppliedTrigger");
-  const s1Value = ui.element("stage1AppliedValue");
-  const s1Menu = ui.element("stage1AppliedMenu");
-  const s1Tags = ui.element("stage1PresetTags");
-  const s1Select = ui.element("stage1PresetSelect");
-  const s1Add = ui.element("stage1PresetAdd");
-
-  assert.ok(s1Dropdown, "阶段一适用预设下拉栏存在");
-  assert.ok(s1Trigger, "阶段一适用预设 Trigger 存在");
-  assert.ok(s1Value, "阶段一适用预设文本展示存在");
-  assert.ok(s1Menu, "阶段一适用预设浮层菜单存在");
-  assert.equal(s1Menu.hidden, true, "菜单默认收起");
-
-  // 1. 默认无预设时：阶段一显示「适用：主配置」
-  assert.equal(s1Value.textContent, "适用：主配置");
-
-  // 2. 点击 Trigger 展开下拉菜单，再次点击收起
-  s1Trigger.click();
-  assert.equal(s1Menu.hidden, false, "点击 Trigger 展开适用预设菜单");
-  assert.equal(s1Trigger.getAttribute("aria-expanded"), "true");
-
-  s1Trigger.click();
-  assert.equal(s1Menu.hidden, true, "再次点击 Trigger 收起适用预设菜单");
-  assert.equal(s1Trigger.getAttribute("aria-expanded"), "false");
-
-  // 3. 依次添加 3 个预设到阶段一
-  s1Select.value = "p1";
-  s1Add.click();
-  assert.match(s1Value.textContent, /适用：.*词元聚合/);
-
-  s1Select.value = "p2";
-  s1Add.click();
-  assert.equal(s1Value.textContent, "适用 (2)");
-
-  s1Select.value = "p3";
-  s1Add.click();
-  // 3 个预设被收纳进下拉栏中，标题为「适用 (3)」，头部保持整洁
-  assert.equal(s1Value.textContent, "适用 (3)");
-  assert.equal(s1Tags.children.length, 3, "下拉菜单内包含 3 个预设条目");
-
-  // 4. 并发信息展示规则：未运行时，额定并发上限 32 不展示
-  const tag1 = s1Tags.children[0];
-  const tag2 = s1Tags.children[1];
-  const tag3 = s1Tags.children[2];
-  assert.equal(tag1.children[1].textContent, "", "未运行时不显示「并发上限 4」占位");
-  assert.match(tag1.children[1].title, /额定并发上限 4/);
-  assert.equal(tag3.children[1].textContent, "", "未运行时不显示「并发上限 32」占位");
-  assert.match(tag3.children[1].title, /额定并发上限 32/);
-
-  // 5. 运行状态下：展示「当前并发数/当前并发上限」，触顶时提示「触顶」
-  ui.run(`
-    latestPresetPipelines = {
-      stage1: [
-        { presetId: "p1", inFlight: 2, quota: 3, configuredConcurrency: 4, pending: 5, activeRows: [10, 11] },
-        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, pending: 1, activeRows: [12] },
-        { presetId: "p3", inFlight: 0, quota: 16, configuredConcurrency: 32, pending: 0, activeRows: [] },
-      ]
-    };
-    renderStagePresetSelection("stage1");
-  `);
-
-  const activeTag1 = s1Tags.children[0];
-  const activeTag2 = s1Tags.children[1];
-  const activeTag3 = s1Tags.children[2];
-
-  // p1: 运行 2，配额 3，未触顶（2 < 4）
-  assert.equal(activeTag1.children[1].textContent, "运行 2 · 当前配额 3 · 配置上限 4 · 排队 5");
-  assert.match(activeTag1.children[1].title, /当前运行 2 \/ 动态配额 3 \/ 配置并发上限 4 \/ 待派发 5/);
-
-  // p2: 运行 8，配额 8，额定上限 8，已触顶（8 >= 8）
-  assert.equal(activeTag2.children[1].textContent, "运行 8 · 当前配额 8 · 配置上限 8 · 触顶 · 排队 1");
-  assert.match(activeTag2.children[1].title, /已触顶/);
-
-  // Trigger 汇总显示：inFlight=2+8+0=10, quota=3+8+16=27，只有 p2 顶到了自己的配置上限 8
-  assert.equal(s1Value.textContent, "适用 (3)", "触顶要精确到「几个预设触顶」");
-  assert.equal(s1Value.classList.contains("is-part-topped"), false, "部分触顶给警示色");
-  assert.equal(s1Value.classList.contains("is-all-topped"), false);
-  // 悬停里说清是哪一个触顶，而不是只给一个数字
-  assert.match(s1Trigger.title, /1\. [^\n]*词元聚合[^\n]*运行 2，当前配额 3，配置上限 4/);
-  assert.match(s1Trigger.title, /2\. [^\n]*火山方舟[^\n]*运行 8，当前配额 8，配置上限 8 · 已触顶/);
-  assert.match(s1Trigger.title, /已触顶 1\/3 个预设/);
-
-  // 6. 全部预设都顶到各自上限：换成「全部触顶」并加粗强调
-  ui.run(`
-    latestPresetPipelines = {
-      stage1: [
-        { presetId: "p1", inFlight: 4, quota: 4, configuredConcurrency: 4, pending: 0, activeRows: [10] },
-        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, pending: 0, activeRows: [11] },
-        { presetId: "p3", inFlight: 32, quota: 32, configuredConcurrency: 32, pending: 0, activeRows: [12] },
-      ]
-    };
-    renderStagePresetSelection("stage1");
-  `);
-  assert.equal(s1Value.textContent, "适用 (3)");
-  assert.equal(s1Value.classList.contains("is-all-topped"), false, "全部触顶才用更强的一档");
-  assert.equal(s1Value.classList.contains("is-part-topped"), false);
-  assert.match(s1Trigger.title, /已触顶 3\/3 个预设（全部触顶）/);
-
-  // 7. 服务端回报 topped 字段时以它为准（不再由页面重算触顶口径）
-  ui.run(`
-    latestPresetPipelines = {
-      stage1: [
-        { presetId: "p1", inFlight: 1, quota: 4, configuredConcurrency: 4, topped: true, pending: 0, activeRows: [10] },
-        { presetId: "p2", inFlight: 8, quota: 8, configuredConcurrency: 8, topped: false, pending: 0, activeRows: [11] },
-        { presetId: "p3", inFlight: 0, quota: 32, configuredConcurrency: 32, topped: false, pending: 0, activeRows: [] },
-      ]
-    };
-    renderStagePresetSelection("stage1");
-  `);
-  assert.equal(s1Value.textContent, "适用 (3)", "服务端的 topped 字段优先于页面的 inFlight 比较");
-  assert.equal(s1Tags.children[0].children[1].textContent, "运行 1 · 当前配额 4 · 配置上限 4 · 触顶");
-
-  // 8. 停止运行后不能残留触顶样式
-  ui.run(`
-    latestPresetPipelines = {
-      stage1: [
-        { presetId: "p1", inFlight: 0, quota: 4, configuredConcurrency: 4, pending: 0, activeRows: [] },
-        { presetId: "p2", inFlight: 0, quota: 8, configuredConcurrency: 8, pending: 0, activeRows: [] },
-        { presetId: "p3", inFlight: 0, quota: 32, configuredConcurrency: 32, pending: 0, activeRows: [] },
-      ]
-    };
-    renderStagePresetSelection("stage1");
-  `);
-  assert.equal(s1Value.textContent, "适用 (3)");
-  assert.equal(s1Value.classList.contains("is-all-topped"), false, "停下后必须清掉上一轮的触顶样式");
-  assert.equal(s1Value.classList.contains("is-part-topped"), false);
-
-  // 9. 移除预设：点击 p3 的删除按钮
-  const removeBtn3 = s1Tags.children[2].children[2];
-  removeBtn3.click();
-  assert.match(s1Value.textContent, /适用 \(2\)/);
-  assert.equal(s1Tags.children.length, 2, "移除后菜单内剩余 2 个条目");
-
-  // 10. 只剩一个预设时不写「1/1 触顶」，沿用原来的「触顶」
-  s1Tags.children[1].children[2].click();
-  assert.equal(s1Tags.children.length, 1);
-  ui.run(`
-    latestPresetPipelines = {
-      stage1: [{ presetId: "p1", inFlight: 4, quota: 4, configuredConcurrency: 4, pending: 2, activeRows: [10] }]
-    };
-    renderStagePresetSelection("stage1");
-  `);
-  assert.match(s1Value.textContent, /适用：.*词元聚合/, "单个预设不写「1/1 触顶」");
-  assert.equal(s1Value.classList.contains("is-all-topped"), false);
+test("共享池布局：每阶段仅展示进度，配置与启停入口各只有一处", () => {
+  const { html } = setup();
+  for (const id of ["aiPoolPresetSelect", "aiPoolPresetAdd", "aiPoolPresets", "aiPoolStart", "aiPoolStop", "aiPoolMode"]) {
+    assert.equal([...html.matchAll(new RegExp('id="' + id + '"', "g"))].length, 1, id);
+  }
+  assert.doesNotMatch(html, /id="(?:stage[123](?:PresetSelect|PresetAdd|Start|Stop)|aiStartAll|aiStopAll)"/);
 });
 
-test("阶段多预设热更新：运行中增删立刻同步给服务端，未运行时留给下次启动", async () => {
-  const ui = createWorkbench(storageFixture({
-    "translation-compare-ai-presets-v2": JSON.stringify([
-      { id: "p1", name: "甲", protocol: "compatible", baseUrl: "https://a.example/v1", model: "m1", apiKey: "k1", concurrency: 2 },
-      { id: "p2", name: "乙", protocol: "compatible", baseUrl: "https://b.example/v1", model: "m2", apiKey: "k2", concurrency: 2 },
-    ]),
-  }), {
-    apiResponses: {
-      "/api/ai-proofread/presets": { ok: true, stage: "stage1", added: ["p2"], removed: ["p3"], fallback: false },
-    },
+test("候选预设必须添加才进入池，新加入默认允许三个阶段且不重复占一条通道", async () => {
+  const ui = setup();
+  await ui.settle();
+  ui.element("aiPoolPresetSelect").value = "p1";
+  await ui.element("aiPoolPresetSelect").dispatch("change");
+  assert.deepEqual(selected(ui), []);
+  addPoolPreset(ui, "p1");
+  addPoolPreset(ui, "p1");
+  assert.equal(selected(ui).length, 1);
+  assert.deepEqual(selected(ui)[0].stages, ["stage1", "stage2", "stage3"]);
+  const config = plain(ui.run("aiConfig()"));
+  assert.equal(config.poolEnabled, true);
+  assert.equal(config.presetPool.length, 1);
+  assert.equal(config.presetPool[0].model, "fast");
+  assert.equal(config.poolPriorityEnabled, false);
+  assert.equal(config.poolMode, "normal");
+});
+
+test("阶段权限和可选优先级写入同一池条目，刷新保持相同路由", async () => {
+  const ui = setup();
+  await ui.settle();
+  addPoolPreset(ui, "p2");
+  const controls = ui.element("aiPoolPresets").children[0]._poolControls;
+  controls.stages[0].checkbox.checked = false;
+  await controls.stages[0].checkbox.dispatch("change");
+  ui.element("aiPoolPriorityEnabled").checked = true;
+  await ui.element("aiPoolPriorityEnabled").dispatch("change");
+  controls.stages[2].priority.value = "9";
+  await controls.stages[2].priority.dispatch("change");
+  ui.element("aiPoolMode").value = "loop";
+  await ui.element("aiPoolMode").dispatch("change");
+  assert.deepEqual(selected(ui)[0].stages, ["stage2", "stage3"]);
+  assert.equal(selected(ui)[0].stagePriorities.stage3, 9);
+  assert.equal(controls.stages[0].priority.disabled, true);
+  assert.equal(controls.stages[2].priority.hidden, false);
+  ui.run("restoreAiConfig()");
+  const config = plain(ui.run("aiConfig()"));
+  assert.equal(config.poolPriorityEnabled, true);
+  assert.equal(config.poolMode, "loop");
+  assert.equal(config.presetPool[0].stagePriorities.stage3, 9);
+  assert.deepEqual(config.presetPool[0].stages, ["stage2", "stage3"]);
+});
+
+test("移除最后一个预设保持显式空池，候选和旧配置不会重新加入", async () => {
+  const ui = setup({ stage1PresetIds: ["p1"] });
+  await ui.settle();
+  ui.element("aiPoolPresetSelect").value = "p2";
+  await ui.element("aiPoolPresets").children[0]._poolControls.remove.dispatch("click");
+  ui.run("restoreAiConfig()");
+  assert.deepEqual(selected(ui), []);
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  const saved = JSON.parse(ui.storage.getItem("translation-compare-ai-project-config-v2:project"));
+  assert.deepEqual(saved.poolSelections, []);
+  assert.equal(Object.hasOwn(saved, "stage1PresetIds"), false);
+});
+
+test("迁移合并旧阶段选择，保留适用范围和显式空数组", () => {
+  const ui = setup({ stage1PresetId: "p1", stage2PresetIds: ["p1", "p2"], stage3PresetIds: [], stage3PresetId: "p2" });
+  assert.deepEqual(selected(ui).map((item) => [item.presetId, item.stages]), [
+    ["p1", ["stage1", "stage2"]], ["p2", ["stage2"]],
+  ]);
+  ui.run("restoreAiConfig()");
+  assert.equal(selected(ui).length, 2, "迁移仅发生一次");
+});
+
+test("旧未保存主连接迁入真实预设，保留连接与并发且刷新不重复创建", () => {
+  const ui = setup({ protocol: "compatible", provider: "旧提供商", baseUrl: "https://old.invalid/v1", apiKey: "test-key", model: "old-model", concurrency: 7 });
+  const first = selected(ui);
+  assert.equal(first.length, 1);
+  assert.deepEqual(first[0].stages, ["stage1"]);
+  const config = ui.run("aiConfig()");
+  assert.equal(config.presetPool[0].apiKey, "test-key");
+  assert.equal(config.presetPool[0].concurrency, 7);
+  ui.run("restoreAiConfig()");
+  assert.deepEqual(selected(ui), first);
+});
+
+test("旧项目配置独立迁移，不继承其它项目的共享池", () => {
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] });
+  ui.storage.setItem("translation-compare-ai-project-config-v2:project", JSON.stringify({ stage2PresetIds: ["p2"] }));
+  ui.run("restoreAiConfig()");
+  assert.deepEqual(selected(ui).map((item) => [item.presetId, item.stages]), [["p2", ["stage2"]]]);
+});
+
+test("运行时修改统一池原子同步，失败保留本地配置并明确提示", async () => {
+  let reject = false;
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] }, {
+    statusResponse: () => ({ ok: true, ai: { poolSupported: true, poolEnabled: true, running: true, kind: "ai", runId: "pool", projectKey: "project", rowsSignature: "rows", results: [] } }),
+    apiResponses: { "/api/ai-proofread/presets": () => reject ? { ok: false, error: "服务暂不可用" } : { ok: true } },
   });
-  ui.run("restoreAiConfig();");
-  ui.run('stagePresetSelections.stage1 = ["p1", "p2"]; renderStagePresetSelection("stage1");');
-
-  const syncPosts = () => ui.posts.filter((post) => post.url === "/api/ai-proofread/presets");
-  const removeButtons = () => ui.element("stage1PresetTags").children.map((tag) => tag.children[2]);
-
-  // 未运行：改动只落本地配置，不打扰服务端。
-  removeButtons()[1].click();
   await ui.settle();
-  assert.equal(syncPosts().length, 0, "任务没在跑时不该发起同步请求");
-  assert.deepEqual([...ui.run("stagePresetSelections.stage1")], ["p1"]);
-
-  // 运行中删除：立刻同步，服务端据此把该预设的待审行改派给其余预设。
-  ui.run('stagePresetSelections.stage1 = ["p1", "p2"]; renderStagePresetSelection("stage1");');
-  ui.run("currentAiRunning = true;");
-  removeButtons()[1].click();
+  addPoolPreset(ui, "p2");
   await ui.settle();
-  assert.equal(syncPosts().length, 1, "运行中删预设必须立刻同步");
-  assert.equal(syncPosts()[0].body.stage, "stage1");
-  assert.deepEqual(syncPosts()[0].body.presets.map((item) => item.presetId), ["p1"]);
-  assert.match(toastMessages(ui).join("|"), /阶段一预设已即时生效/, "同步结果要给回执");
-
-  // 运行中加入：同样立刻同步，新预设马上参与派发。
-  ui.run('aiIds.stage1Preset.value = "p2";');
-  ui.element("stage1PresetAdd").click();
+  const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/presets");
+  assert.equal(post.body.stage, "all");
+  assert.equal(post.body.poolEnabled, true);
+  assert.deepEqual(post.body.presets.map((item) => item.presetId), ["p1", "p2"]);
+  reject = true;
+  ui.run('setPoolPresetStages("p2", ["stage3"])');
   await ui.settle();
-  assert.equal(syncPosts().length, 2, "运行中加预设必须立刻同步");
-  assert.deepEqual(syncPosts()[1].body.presets.map((item) => item.presetId), ["p1", "p2"]);
+  assert.deepEqual(selected(ui)[1].stages, ["stage3"]);
+  assert.match(toastMessages(ui).join("|"), /本地配置已保存.*当前运行未应用/);
+});
+
+test("状态轮询保留预设节点与焦点，并展示单份共享额度及冷却信息", async () => {
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] });
+  await ui.settle();
+  const node = ui.element("aiPoolPresets").children[0];
+  const state = { poolSupported: true, running: true, kind: "ai", runId: "pool", projectKey: "project", rowsSignature: "rows", results: [],
+    poolRuntime: { state: "running", mode: "loop", round: 2, presets: [{ presetId: "p1", inFlight: 2, quota: 3, configuredConcurrency: 4, waitReason: "cooldown", retryAt: Date.now() + 30000, activeRows: [1, 2] }] } };
+  ui.run(`renderAiStatus(${JSON.stringify(state)})`);
+  assert.equal(ui.element("aiPoolPresets").children[0], node);
+  assert.match(node._poolControls.runtime.textContent, /运行 2.*共享配额 3.*上限 4.*冷却中/);
+  assert.match(ui.element("aiPoolStatus").textContent, /循环.*第 2 轮.*运行中/);
+  ui.run(`renderAiStatus(${JSON.stringify({ ...state, running: false, poolRuntime: { ...state.poolRuntime, state: "blocked", blockedReason: "所有预设均拒答" } })})`);
+  assert.match(ui.element("aiPoolStatus").textContent, /需要处理.*所有预设均拒答/);
+  assert.doesNotMatch(node._poolControls.runtime.textContent, /运行 2|冷却中/);
+});
+
+test("旧主配置有未保存修改时迁入修改后的连接，原预设保持不变", () => {
+  const ui = setup({ currentPresetId: "p1", protocol: "compatible", baseUrl: "https://changed.invalid/v1", model: "changed", concurrency: 9 });
+  const config = ui.run("aiConfig()");
+  assert.notEqual(config.presetPool[0].presetId, "p1");
+  assert.equal(config.presetPool[0].baseUrl, "https://changed.invalid/v1");
+  assert.equal(config.presetPool[0].model, "changed");
+  const old = JSON.parse(ui.storage.getItem("translation-compare-ai-presets-v2")).find((preset) => preset.id === "p1");
+  assert.equal(old.model, "fast");
+});
+
+test("另一个项目的运行状态不得触发本页池配置热更新", async () => {
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] }, {
+    statusResponse: () => ({ ok: true, ai: { poolSupported: true, poolEnabled: true, running: true, kind: "ai", runId: "other", projectKey: "other", rowsSignature: "different", results: [] } }),
+  });
+  await ui.settle();
+  addPoolPreset(ui, "p2");
+  await ui.settle();
+  assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/presets").length, 0);
+  assert.equal(selected(ui).length, 2, "仍保存本页下次使用的配置");
+});
+
+test("阻塞收尾的面板与通知不宣称审核完成", async () => {
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] });
+  await ui.settle();
+  const base = { kind: "ai", poolEnabled: true, poolSupported: true, projectKey: "project", rowsSignature: "rows", runId: "blocked-run", results: [] };
+  ui.run(`renderAiStatus(${JSON.stringify({ ...base, running: true, poolRuntime: { state: "running", mode: "loop", round: 1, presets: [] } })})`);
+  ui.run(`renderAiStatus(${JSON.stringify({ ...base, running: false, finishedAt: "2026-11-13T00:00:00Z", poolRuntime: { state: "blocked", mode: "loop", round: 2, blockedReason: "仍有 1 行异常", presets: [] } })})`);
+  assert.equal(ui.element("aiPanelState").textContent, "审核待处理");
+  assert.match(toastMessages(ui).join("|"), /审核尚未完成.*仍有 1 行异常/);
+  assert.doesNotMatch(toastMessages(ui).join("|"), /AI 校对完成/);
+});
+
+test("仅存过主连接的旧项目也独立迁移，不继承其它项目的新池", () => {
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] });
+  ui.storage.setItem("translation-compare-ai-project-config-v2:project", JSON.stringify({ protocol: "compatible", model: "project-model", baseUrl: "https://project.invalid/v1" }));
+  ui.run("restoreAiConfig()");
+  const pool = ui.run("poolPresetsFor()");
+  assert.equal(pool.length, 1);
+  assert.notEqual(pool[0].presetId, "p1");
+  assert.equal(pool[0].model, "project-model");
+});
+
+test("新池字段损坏也不会从旧阶段记录复活已移除预设", () => {
+  const ui = setup({ poolSelections: null, stage1PresetIds: ["p1"] });
+  assert.deepEqual(selected(ui), []);
+});
+
+test("热更新请求串行且合并连续编辑，旧回包不能覆盖新运行的提示", async () => {
+  let resolveFirst;
+  const first = new Promise((resolve) => { resolveFirst = resolve; });
+  let calls = 0;
+  const state = { poolSupported: true, poolEnabled: true, running: true, kind: "ai", runId: "pool-one", projectKey: "project", rowsSignature: "rows", results: [] };
+  const ui = setup({ poolSelections: [{ presetId: "p1" }] }, {
+    statusResponse: () => ({ ok: true, ai: state }),
+    apiResponses: { "/api/ai-proofread/presets": () => ++calls === 1 ? first : { ok: true } },
+  });
+  await ui.settle();
+  addPoolPreset(ui, "p2");
+  await ui.settle();
+  ui.run('setPoolPresetStages("p2", ["stage2"])');
+  ui.run('setPoolPresetStages("p2", ["stage3"])');
+  await ui.settle();
+  assert.equal(calls, 1);
+  resolveFirst({ ok: true });
+  await ui.settle();
+  assert.equal(calls, 2);
+  const posts = ui.posts.filter((item) => item.url === "/api/ai-proofread/presets");
+  assert.deepEqual(posts[1].body.presets.find((item) => item.presetId === "p2").stages, ["stage3"]);
+  assert.equal(posts[1].body.runId, "pool-one");
+
+  let rejectOld;
+  const late = new Promise((resolve) => { rejectOld = resolve; });
+  const isolated = setup({ poolSelections: [{ presetId: "p1" }] }, {
+    statusResponse: () => ({ ok: true, ai: state }),
+    apiResponses: { "/api/ai-proofread/presets": () => late },
+  });
+  await isolated.settle();
+  addPoolPreset(isolated, "p2");
+  await isolated.settle();
+  isolated.run(`renderAiStatus(${JSON.stringify({ ...state, runId: "pool-two" })})`);
+  rejectOld({ ok: false, error: "旧运行已结束" });
+  await isolated.settle();
+  assert.doesNotMatch(toastMessages(isolated).join("|"), /旧运行已结束/);
+});
+
+test("预设存储写失败不写迁移完成标记，小配置可写也保留旧分配供下次重试", async () => {
+  const legacy = { protocol: "compatible", baseUrl: "https://old.invalid/v1", model: "unsaved-main", stage2PresetIds: ["p2"] };
+  const storage = storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify(presets),
+    "translation-compare-ai-config-v2": JSON.stringify(legacy),
+  });
+  const write = storage.setItem.bind(storage);
+  let failPresets = true;
+  storage.setItem = (key, value) => {
+    if (failPresets && key === "translation-compare-ai-presets-v2") throw new Error("QuotaExceededError");
+    write(key, value);
+  };
+  const ui = createWorkbench(storage, { strictIds: true });
+  await ui.settle();
+  assert.equal(storage.getItem("translation-compare-ai-project-config-v2:project"), null);
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  assert.match(toastMessages(ui).join("|"), /旧主配置尚未迁入预设池.*原配置已保留/);
+  ui.run("saveAiConfig()");
+  const saved = JSON.parse(storage.getItem("translation-compare-ai-project-config-v2:project"));
+  assert.equal(Object.hasOwn(saved, "poolSelections"), false);
+  assert.deepEqual(saved.stage2PresetIds, ["p2"]);
+  failPresets = false;
+  ui.run("restoreAiConfig()");
+  assert.equal(ui.run("poolMigrationPending"), false);
+  const pool = ui.run("poolPresetsFor()");
+  assert.equal(pool.some((item) => item.model === "unsaved-main" && item.stages.includes("stage1")), true);
+  assert.equal(pool.some((item) => item.presetId === "p2" && item.stages.includes("stage2")), true);
+  assert.equal(JSON.parse(storage.getItem("translation-compare-ai-project-config-v2:project")).poolSelections.length, 2);
 });

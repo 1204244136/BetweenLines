@@ -1,118 +1,87 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, addPoolPreset, toastMessages } = require("./workbench-fixture");
 
-const presetKey = "translation-compare-ai-presets-v2";
-const initial = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：初审方案";
-const dispute = initial + "\nStylist复审[调整]：复审有不同方案\n复审改案：复审方案";
-const starts = (ui) => ui.posts.filter((post) => post.url === "/api/ai-proofread/start");
-
-async function workbench(presets = []) {
-  const ui = createWorkbench(storageFixture({ [presetKey]: JSON.stringify(presets) }));
-  await ui.settle();
-  ui.run('aiIds.model.value = "main-model"; saveAiConfig();');
-  return ui;
+function setup(presets = [], config = {}, options = {}) {
+  return createWorkbench(storageFixture({
+    "translation-compare-ai-presets-v2": JSON.stringify(presets),
+    "translation-compare-ai-config-v2": JSON.stringify({ poolSelections: [], ...config }),
+  }), { strictIds: true, ...options });
 }
+const good = { id: "good", name: "可用模型", model: "model", protocol: "compatible", baseUrl: "https://example.invalid/v1" };
 
 for (const model of ["", "   ", "custom"]) {
-  test(`主模型 ${JSON.stringify(model)} 不得启动，也不得清空已有备注`, async () => {
-    const ui = await workbench();
-    ui.run(`aiIds.model.value = ${JSON.stringify(model)}; notes["1"] = { note: ${JSON.stringify(initial)}, aiDone: true }; saveAiConfig();`);
-    assert.equal(ui.element("stage1Start").disabled, true);
-    assert.equal(ui.element("aiStartAll").disabled, true);
-    for (const stage of ["stage1", "all"]) await ui.run(`startAiStage("${stage}")`);
+  test(`空白或占位模型 ${JSON.stringify(model)} 不能启动池，已有备注保留`, async () => {
+    const ui = setup([good, { ...good, id: "bad", name: "未配置", model }]);
     await ui.settle();
-    assert.equal(starts(ui).length, 0);
-    assert.equal(ui.run('notes["1"].note'), initial);
-    assert.match(toastMessages(ui).join("|"), /阶段一.*模型/);
+    addPoolPreset(ui, "good");
+    addPoolPreset(ui, "bad");
+    ui.run('notes["1"] = { note: "人工备注", manualDone: true };');
+    assert.equal(ui.element("aiPoolStart").disabled, true);
+    await ui.element("aiPoolStart").dispatch("click");
+    assert.equal(ui.posts.filter((post) => post.url === "/api/ai-proofread/start").length, 0);
+    assert.equal(ui.run('notes["1"].note'), "人工备注");
+    assert.match(toastMessages(ui).join("|"), /尚未选择模型/);
   });
 }
 
-for (const stage of ["stage1", "stage2", "stage3"]) {
-  test(`${stage} 适用列表内空模型不能被其它有效预设掩盖`, async () => {
-    const ui = await workbench([
-      { id: "good", name: "有效", protocol: "compatible", model: "good-model" },
-      { id: "empty", name: "未配置", protocol: "compatible", model: "" },
-    ]);
-    ui.run(`stagePresetSelections.${stage} = ["good", "empty"]; updateStagePresetDependencies();`);
-    assert.equal(ui.element(`${stage}Start`).disabled, true);
-    assert.equal(ui.element("aiStartAll").disabled, true);
-    for (const target of [stage, "all"]) await ui.run(`startAiStage("${target}")`);
-    await ui.settle();
-    assert.equal(starts(ui).length, 0);
-    assert.match(toastMessages(ui).join("|"), /未配置.*模型/);
-  });
-}
-
-test("下游未添加预设时禁用独立开始，一键开始仍只运行有效初审", async () => {
-  const ui = await workbench();
-  assert.equal(ui.element("stage1Start").disabled, false);
-  assert.equal(ui.element("stage2Start").disabled, true);
-  assert.equal(ui.element("stage3Start").disabled, true);
-  assert.equal(ui.element("aiStartAll").disabled, false);
-  await ui.element("aiStartAll").dispatch("click");
+test("空池不回退编辑区主配置，所有阶段关闭也不能启动", async () => {
+  const ui = setup([good], { model: "editor-model" });
   await ui.settle();
-  assert.equal(starts(ui).length, 1);
-  assert.equal(starts(ui)[0].body.stage, "all");
-  assert.equal(starts(ui)[0].body.stylistConfig, null);
-  assert.equal(starts(ui)[0].body.arbiterConfig, null);
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  addPoolPreset(ui, "good", []);
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  await ui.element("aiPoolStart").dispatch("click");
+  assert.match(toastMessages(ui).join("|"), /至少.*开启.*阶段/);
+  assert.equal(ui.posts.length, 0);
 });
 
-for (const stage of ["stage2", "stage3"]) {
-  test(`${stage} 独立启动只检查自身模型，保留其它阶段停止入口`, async () => {
-    const ui = await workbench([{ id: "good", name: "有效", protocol: "compatible", model: "good-model" }]);
-    const note = stage === "stage2" ? initial : dispute;
-    ui.run(`aiIds.model.value = ""; stagePresetSelections.${stage} = ["good"]; notes["1"] = { note: ${JSON.stringify(note)} }; updateStagePresetDependencies();`);
-    assert.equal(ui.element(`${stage}Start`).disabled, false);
-    await ui.element(`${stage}Start`).dispatch("click");
-    await ui.settle();
-    assert.equal(starts(ui).length, 1);
-    assert.equal(starts(ui)[0].body.stage, stage);
-    ui.run(`currentAiRunning = true; latestStageControls = { ${stage}: { running: true } }; stagePresetSelections.${stage} = []; setAllStageButtonsRunning();`);
-    assert.equal(ui.element(`${stage}Stop`).disabled, false);
-    assert.equal(ui.element("aiStopAll").disabled, false);
-  });
-}
-
-for (const stage of ["stage1", "stage2", "stage3"]) {
-  test(`${stage} 失效预设不得回落，移除后立即恢复按钮`, async () => {
-    const ui = await workbench();
-    ui.run(`stagePresetSelections.${stage} = ["deleted"]; updateStagePresetDependencies();`);
-    assert.equal(ui.element(`${stage}Start`).disabled, true);
-    assert.equal(ui.element("aiStartAll").disabled, true);
-    await ui.run(`startAiStage("${stage}")`);
-    await ui.run('startAiStage("all")');
-    assert.equal(starts(ui).length, 0);
-    assert.match(toastMessages(ui).join("|"), /预设已失效/);
-    ui.run(`stagePresetSelections.${stage} = []; updateStagePresetDependencies();`);
-    assert.equal(ui.element("aiStartAll").disabled, false);
-    assert.equal(ui.element(`${stage}Start`).disabled, stage !== "stage1");
-  });
-}
-
-test("补全主模型后立即解锁开始，空主配置不影响有效初审预设", async () => {
-  const ui = await workbench([{ id: "good", name: "有效", protocol: "compatible", model: "good-model" }]);
-  ui.run('aiIds.model.value = ""; saveAiConfig();');
-  assert.equal(ui.element("stage1Start").disabled, true);
-  ui.run('aiIds.model.value = "fixed-model"; saveAiConfig();');
-  assert.equal(ui.element("stage1Start").disabled, false);
-  ui.run('aiIds.model.value = ""; stagePresetSelections.stage1 = ["good"]; updateStagePresetDependencies();');
-  assert.equal(ui.element("stage1Start").disabled, false);
-  await ui.element("stage1Start").dispatch("click");
+test("已失效预设不会被有效预设掩盖，移除后恢复启动", async () => {
+  const ui = setup([good], { poolSelections: [{ presetId: "good" }, { presetId: "missing" }] });
   await ui.settle();
-  assert.equal(starts(ui).length, 1);
-  assert.equal(starts(ui)[0].body.model, "good-model");
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  assert.match(ui.element("aiPoolStart").title, /已失效/);
+  const invalid = ui.element("aiPoolPresets").children.find((node) => node.dataset.presetId === "missing");
+  await invalid._poolControls.remove.dispatch("click");
+  assert.equal(ui.element("aiPoolStart").disabled, false);
 });
 
-test("直接启动与清除旧运行记录均不能绕过空模型门禁", async () => {
-  const ui = await workbench();
-  ui.run('aiIds.model.value = ""; saveAiConfig();');
-  const reception = JSON.stringify(ui.run("aiResultReception.snapshot()"));
-  await ui.run('startAiProofread({ stage: "stage1" })');
-  assert.equal(starts(ui).length, 0);
-  assert.equal(ui.run("pendingStageStarts.size"), 0);
-  assert.equal(JSON.stringify(ui.run("aiResultReception.snapshot()")), reception);
-  ui.run("renderClearedAiStatus()");
-  assert.equal(ui.element("stage1Start").disabled, true);
-  assert.equal(ui.element("aiStartAll").disabled, true);
+test("只有下游阶段的池可以续跑已有结果，编辑区未配置不影响有效预设", async () => {
+  const ui = setup([good]);
+  await ui.settle();
+  addPoolPreset(ui, "good", ["stage3"]);
+  assert.equal(ui.element("aiPoolStart").disabled, false);
+  await ui.element("aiPoolStart").dispatch("click");
+  const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
+  assert.ok(post);
+  assert.equal(post.body.stage, "all");
+  assert.deepEqual(post.body.presetPool[0].stages, ["stage3"]);
+});
+
+test("旧服务缺少共享池能力时拒绝请求并明确要求重启，不能静默按旧模式运行", async () => {
+  const ui = setup([good], { poolSelections: [{ presetId: "good" }] }, {
+    statusResponse: () => ({ ok: true, ai: { running: false, kind: "", results: [] } }),
+  });
+  await ui.settle();
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  await ui.element("aiPoolStart").dispatch("click");
+  assert.equal(ui.posts.length, 0);
+  assert.match(toastMessages(ui).join("|"), /尚不支持共享预设池.*重启/);
+});
+
+test("启动前再次检查池配置，直接调用不能绕过模型门禁", async () => {
+  const ui = setup([good]);
+  await ui.settle();
+  await ui.run("startAiProofread()");
+  assert.equal(ui.posts.length, 0);
+  assert.match(toastMessages(ui).join("|"), /先添加模型预设/);
+});
+
+test("阶段全关只暂停路由，不能借此绕过池中失效配置的校验", async () => {
+  const ui = setup([good], { poolSelections: [{ presetId: "good" }, { presetId: "missing", stages: [] }] });
+  await ui.settle();
+  assert.equal(ui.element("aiPoolStart").disabled, true);
+  assert.match(ui.element("aiPoolStart").title, /已失效/);
+  await ui.element("aiPoolStart").dispatch("click");
+  assert.equal(ui.posts.length, 0);
 });

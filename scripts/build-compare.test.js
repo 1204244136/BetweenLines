@@ -320,7 +320,7 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.match(script, /node\.classList\.add\("toast--leaving"\)/);
   assert.match(script, /while \(toasts\.length > maxVisible\) dismissToast\(toasts\[0\]\.id\)/);
   assert.match(html, /@keyframes toast-out/);
-  assert.match(script, /showToast\(ai\.error \|\| ai\.breakerWarning \|\| finishedStatus/);
+  assert.match(script, /showToast\(ai\.error \|\| \(poolBlocked && \("审核尚未完成：" \+ latestPoolRuntime\.blockedReason\)\) \|\| ai\.breakerWarning \|\| finishedStatus/);
   assert.doesNotMatch(script, /setTemporaryStatus/);
   assert.doesNotMatch(script, /aiIds.modelHint/);
   assert.doesNotMatch(script, /statusMessageLockedUntil/);

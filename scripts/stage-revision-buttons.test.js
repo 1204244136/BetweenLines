@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createWorkbench, storageFixture } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, addPoolPreset } = require("./workbench-fixture");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 
 const original = "他站在房间门口，认真地看了看走廊尽头的窗户，随后转身走进了安静的房间。";
@@ -64,10 +64,7 @@ function expectEnabled(html, stage) {
 }
 
 async function addStage(ui, stage) {
-  const select = ui.element(`stage${stage}PresetSelect`);
-  select.value = "preset-" + stage;
-  await select.dispatch("change", { target: select });
-  ui.element(`stage${stage}PresetAdd`).click();
+  addPoolPreset(ui, "preset-" + stage, ["stage" + stage]);
 }
 
 function assertCannotApply(ui, stage) {
@@ -109,7 +106,7 @@ test("版本按钮：未启用下游时，初审改案和修改结果同时存�
 test("版本按钮：仅选择候选预设不代表启用下游阶段", async () => {
   const ui = workbench();
   for (const stage of [2, 3]) {
-    const select = ui.element(`stage${stage}PresetSelect`);
+    const select = ui.element("aiPoolPresetSelect");
     select.value = "preset-" + stage;
     await select.dispatch("change", { target: select });
   }
@@ -151,7 +148,7 @@ test("版本按钮：真实阶段改案在预设移除后仍可选择，且选�
   const ui = workbench(completedNote());
   await addStage(ui, 2);
   await addStage(ui, 3);
-  for (const stage of [2, 3]) ui.element(`stage${stage}PresetTags`).children[0].children[2].click();
+  for (const stage of [2, 3]) ui.run(`setPoolPresetStages("preset-${stage}", [])`);
   for (const [stage, expected] of [[1, initial], [2, reviewed], [3, arbitrated]]) {
     expectEnabled(render(ui), stage);
     ui.run(`applyStageRevision("1", "${stage}")`);
@@ -239,9 +236,9 @@ test("版本按钮：添加和移除阶段预设立即更新版本栏并保留�
   await addStage(ui, 2);
   expectDisabled(ui.run("visibleSlotHtmlForTest"), 2);
   assert.equal(ui.run("visibleSlotUpdatesForTest"), 1);
-  await ui.element("stage2PresetSelect").dispatch("change");
+  await ui.element("aiPoolPresetSelect").dispatch("change");
   assert.equal(ui.run("visibleSlotUpdatesForTest"), 1, "相同配置不重复改写版本栏 DOM");
-  ui.element("stage2PresetTags").children[0].children[2].click();
+  ui.run('setPoolPresetStages("preset-2", [])');
   assert.equal(stageButton(ui.run("visibleSlotHtmlForTest"), 2), "");
   assert.equal(ui.run("visibleSlotUpdatesForTest"), 2);
   assert.equal(ui.run('renderedRowsById.get("1").querySelector(".revision-editor") === revisionEditorForTest'), true);
@@ -264,6 +261,6 @@ test("版本按钮：无轨迹且无改案的待复审行，可以从空容器�
   assert.equal(ui.run("visibleSlotHtmlForTest"), "");
   await addStage(ui, 2);
   expectDisabled(ui.run("visibleSlotHtmlForTest"), 2);
-  ui.element("stage2PresetTags").children[0].children[2].click();
+  ui.run('setPoolPresetStages("preset-2", [])');
   assert.equal(ui.run("visibleSlotHtmlForTest"), "");
 });

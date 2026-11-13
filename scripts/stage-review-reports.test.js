@@ -112,7 +112,7 @@ test("阶段卡片筛选：选择阶段预设或点击卡片头部不触发筛�
   `);
 
   const card2 = ui.element("stage2Card");
-  const select2 = ui.element("stage2PresetSelect");
+  const select2 = ui.element("aiPoolPresetSelect");
   assert.ok(card2);
   assert.ok(select2);
 

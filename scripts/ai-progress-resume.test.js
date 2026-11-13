@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createWorkbench, storageFixture, currentKey } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, currentKey, addPoolPreset } = require("./workbench-fixture");
 
 const passed = "[AI校对]\n是否需要修改：否\nGatekeeper初审：无需修改";
 const suggested = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：修改后的译文";
@@ -25,7 +25,7 @@ function initialNotes() {
 function status(running, overrides = {}) {
   const stage = overrides.stageMode || "stage1";
   return {
-    kind: "proofread",
+    kind: "proofread", poolSupported: true,
     projectKey: "project",
     rowsSignature: "rows",
     runId: "resume-run",
@@ -49,20 +49,15 @@ function status(running, overrides = {}) {
 function fixture({ storage = storageFixture({ [currentKey]: JSON.stringify(initialNotes()) }), pageRows = rows, stage = "stage1" } = {}) {
   const running = status(true, { stageMode: stage });
   storage.setItem("translation-compare-ai-config-v2", JSON.stringify({ model: "proofread-model" }));
-  if (stage !== "stage1") {
-    storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
-      { id: "review", name: "审核", protocol: "compatible", model: "review-model" },
-    ]));
-  }
+  storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "review", name: "审核", protocol: "compatible", model: "review-model" },
+  ]));
   const ui = createWorkbench(storage, {
     rows: pageRows,
     statusQueue: [{ ok: true, ai: status(false) }, { ok: true, ai: running }],
     apiResponses: { "/api/ai-proofread/start": { ok: true, ai: running } },
   });
-  if (stage !== "stage1") {
-    ui.element(`${stage}PresetSelect`).value = "review";
-    ui.element(`${stage}PresetAdd`).click();
-  }
+  addPoolPreset(ui, "review", [stage]);
   return ui;
 }
 
@@ -88,12 +83,12 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
   assertUnreviewedAndFailed(ui);
   const storedBeforeStart = ui.storage.getItem(currentKey);
 
-  await ui.element("stage1Start").dispatch("click");
+  await ui.element("aiPoolStart").dispatch("click");
   await ui.settle();
   const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
   assert.ok(post);
   assert.equal(post.body.continueOnly, true);
-  assert.deepEqual(post.body.completedIndexes.sort(), [1, 2]);
+  assert.deepEqual(post.body.completedIndexes.sort(), [1], "已初审但待复审的行不算池已完成");
   assert.equal(post.body.rowNotes[3], failed);
   assert.equal(post.body.rowsSignature, "rows");
   assertProgress(ui, 2, 40);
@@ -117,7 +112,7 @@ test("初审继续剩下的：点击开始、停止和刷新均保持全页完�
 test("初审失败重试：请求处理中不计为完成，取得可用结论才增加全页进度", async () => {
   const ui = fixture();
   await ui.settle();
-  await ui.element("stage1Start").dispatch("click");
+  await ui.element("aiPoolStart").dispatch("click");
   await ui.settle();
   assertProgress(ui, 2, 40);
   assert.equal(ui.element("metricStage1Errors").textContent, 1);
@@ -149,11 +144,11 @@ test("全页初审范围与服务端一致：空原文和双列空行也保持�
   const ui = fixture({ pageRows });
   await ui.settle();
   assertProgress(ui, 2, 40);
-  await ui.element("stage1Start").dispatch("click");
+  await ui.element("aiPoolStart").dispatch("click");
   await ui.settle();
   assertProgress(ui, 2, 40);
   const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
-  assert.deepEqual(post.body.completedIndexes.sort(), [1, 2]);
+  assert.deepEqual(post.body.completedIndexes.sort(), [1]);
 });
 
 for (const stage of ["stage2", "stage3"]) {

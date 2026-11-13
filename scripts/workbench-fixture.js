@@ -185,7 +185,7 @@ function createClientFixture(html, storage = storageFixture(), options = {}) {
         return Promise.resolve(options.statusResponse(String(url)))
           .then((result) => ({ ok: result?.ok !== false, json: async () => result }));
       }
-      const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, results: [] } };
+      const payload = statusQueue.shift() || { ok: true, ai: { kind: "", runId: "", running: false, poolSupported: true, results: [] } };
       return Promise.resolve({ ok: true, json: async () => payload });
     },
     setTimeout: scheduleTimeout, clearTimeout: clearScheduledTimeout, setInterval() {},
@@ -236,4 +236,10 @@ function toastMessages(ui) {
   });
 }
 
-module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, createClientFixture, toastMessages, prefilterStatus, prefilterResult };
+function addPoolPreset(ui, presetId, stages = ["stage1", "stage2", "stage3"]) {
+  ui.element("aiPoolPresetSelect").value = presetId;
+  ui.element("aiPoolPresetAdd").click();
+  ui.run(`setPoolPresetStages(${JSON.stringify(presetId)}, ${JSON.stringify(stages)})`);
+}
+
+module.exports = { ROWS, projectKey, currentKey, siblingKey, storageFixture, createWorkbench, createClientFixture, toastMessages, prefilterStatus, prefilterResult, addPoolPreset };

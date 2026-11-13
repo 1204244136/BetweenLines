@@ -989,13 +989,14 @@ test("跨轮次续跑：待复审 20 行从页面请求进入真实队列，旧�
         { id: "latest-s2", name: "复审", protocol: "compatible", baseUrl, model: "stylist-model" },
       ]));
       ui.run(`Object.assign(notes, ${JSON.stringify(records)}); restoreAiConfig();
-        stagePresetSelections.stage2 = ["latest-s2"];
+        sharedPoolSelections = [{ presetId: "latest-s2", stages: ["stage2"], stagePriorities: {} }];
         aiIds.protocol.value = "compatible"; aiIds.baseUrl.value = ${JSON.stringify(baseUrl)};
         aiIds.model.value = "test-model"; saveNotes(); updateStageMetricsDashboard();`);
       assert.equal(Number(ui.element("metricStage2Pending").textContent), 20);
       await ui.element("stage2PendingItem").dispatch("click");
       assert.equal(ui.run("filteredRows.length"), 20);
-      await ui.element(stage === "all" ? "aiStartAll" : stage + "Start").dispatch("click");
+      await ui.settle();
+      await ui.element("aiPoolStart").dispatch("click");
       const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
       assert.ok(post);
       assert.equal(post.body.continueOnly, true);
@@ -1287,7 +1288,7 @@ test("多阶段看板与预设联动：阶段卡片活跃信息展示各阶段�
   const ui = createWorkbench(storage);
 
   // 验证预设选项生成时携带了并发提示
-  const s2Preset = ui.element("stage2PresetSelect");
+  const s2Preset = ui.element("aiPoolPresetSelect");
   const options = (s2Preset.children || []).flatMap((node) => node.tagName === "OPTGROUP" ? node.children : [node]);
   const geminiOpt = options.find((o) => o.value === "p1");
   assert.ok(geminiOpt);

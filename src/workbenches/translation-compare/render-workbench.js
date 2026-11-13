@@ -288,38 +288,35 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="兼容旧版存疑结果与预筛冲突；这些记录尚未定案，可进入 AI 流程继续审核（点击筛选未定案记录）" role="button" tabindex="0" hidden>未定案记录: <strong id="metricFinalNeedsCheck">0</strong></span>
                 <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="尚未完成终审仲裁的存疑行数，等待终审判断修改或不改（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
               </div>
-              <div class="ai-stage-dashboard-actions" role="group" aria-label="全部审核阶段操作">
-                <button id="aiStartAll" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="启动全部已启用阶段，逐行衔接初审、复审与仲裁">一键开始</button>
-                <button id="aiStopAll" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="停止全部正在运行的审核阶段">一键停止</button>
-              </div>
             </div>
+            <section class="ai-pool" aria-labelledby="aiPoolTitle">
+              <div class="ai-pool-head">
+                <div class="ai-pool-heading" title="每个预设共用一份并发额度，空闲时可处理其它已开启阶段。"><strong id="aiPoolTitle">共享预设池</strong><span class="ai-stage-badge"><span id="aiPoolCount">0</span> 个预设</span></div>
+                <div class="ai-pool-toolbar">
+                  <select id="aiPoolPresetSelect" aria-label="选择预设加入共享池"><option value="">选择预设加入池</option></select>
+                  <button id="aiPoolPresetAdd" class="btn btn--secondary btn--xs" type="button">添加到池</button>
+                  <label class="ai-pool-priority-toggle" title="优先级数值越大越优先；无待办时可接其它已开启阶段。"><input id="aiPoolPriorityEnabled" type="checkbox">阶段优先级</label>
+                </div>
+                <div class="ai-pool-actions">
+                  <label for="aiPoolMode">运行模式</label>
+                  <select id="aiPoolMode"><option value="normal">常规</option><option value="loop">循环</option></select>
+                  <button id="aiPoolStart" class="btn btn--primary" type="button">启动池子</button>
+                  <button id="aiPoolStop" class="btn btn--danger" type="button" disabled>停止池子</button>
+                </div>
+              </div>
+              <div id="aiPoolPresets" class="ai-pool-presets" aria-label="池中预设与阶段权限"></div>
+              <div class="ai-pool-footer">
+                <div id="aiPoolStatus" class="ai-pool-status" role="status" aria-live="polite">待命</div>
+                <p id="aiPoolModeHint" class="ai-pool-hint"></p>
+                <div id="aiPoolSyncStatus" class="ai-pool-hint" role="status" aria-live="polite"></div>
+              </div>
+            </section>
             <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" title="阶段一 事实初审：事实性硬伤审查与直接通过">
-                <div class="ai-stage-card-head" title="配置阶段一模型预设（默认使用主配置）">
+                <div class="ai-stage-card-head">
                   <div class="ai-stage-card-title-row">
                     <span class="ai-stage-card-label">阶段一 事实初审</span>
                     <span id="stage1StatusPill" class="ai-stage-status-pill" data-state="idle">待命</span>
-                  </div>
-                  <div class="ai-stage-card-ctrls">
-                    <select id="stage1PresetSelect" class="ai-stage-preset-select" title="选择阶段一候选预设，点击添加后适用（默认使用主配置）">
-                      <option value="">使用主配置</option>
-                    </select>
-                    <button id="stage1PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段一">添加</button>
-                    <div id="stage1AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage1">
-                      <button id="stage1AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设">
-                        <span id="stage1AppliedValue" class="select-value ai-stage-applied-value">适用：主配置</span>
-                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
-                        </svg>
-                      </button>
-                      <div id="stage1AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
-                        <div id="stage1PresetTags" class="ai-stage-preset-tags" aria-label="阶段一已选预设"></div>
-                      </div>
-                    </div>
-                    <div class="ai-stage-card-actions">
-                      <button id="stage1Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段一事实初审">开始</button>
-                      <button id="stage1Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段一事实初审">停止</button>
-                    </div>
                   </div>
                 </div>
                 <div class="ai-stage-card-body">
@@ -349,31 +346,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
               </div>
               <div class="ai-stage-card" id="stage2Card" title="阶段二 文学复审：文学责编复审与同行评议">
-                <div class="ai-stage-card-head" title="配置阶段二模型预设（未启用时不执行复审）">
+                <div class="ai-stage-card-head">
                   <div class="ai-stage-card-title-row">
                     <span class="ai-stage-card-label">阶段二 文学复审</span>
                     <span id="stage2StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
-                  </div>
-                  <div class="ai-stage-card-ctrls">
-                    <select id="stage2PresetSelect" class="ai-stage-preset-select" title="选择阶段二候选预设，点击添加后启用">
-                      <option value="">未启用</option>
-                    </select>
-                    <button id="stage2PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段二">添加</button>
-                    <div id="stage2AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage2">
-                      <button id="stage2AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设">
-                        <span id="stage2AppliedValue" class="select-value ai-stage-applied-value">未启用</span>
-                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
-                        </svg>
-                      </button>
-                      <div id="stage2AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
-                        <div id="stage2PresetTags" class="ai-stage-preset-tags" aria-label="阶段二已选预设"></div>
-                      </div>
-                    </div>
-                    <div class="ai-stage-card-actions">
-                      <button id="stage2Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段二文学复审，处理当前已有的初审候选">开始</button>
-                      <button id="stage2Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段二文学复审">停止</button>
-                    </div>
                   </div>
                 </div>
                 <div class="ai-stage-card-body">
@@ -403,31 +379,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
               </div>
               <div class="ai-stage-card" id="stage3Card" title="阶段三 终审仲裁：初审与复审分歧仲裁">
-                <div class="ai-stage-card-head" title="配置阶段三模型预设（需先在阶段二选择预设启用）">
+                <div class="ai-stage-card-head">
                   <div class="ai-stage-card-title-row">
                     <span class="ai-stage-card-label">阶段三 终审仲裁</span>
                     <span id="stage3StatusPill" class="ai-stage-status-pill" data-state="disabled">未启用</span>
-                  </div>
-                  <div class="ai-stage-card-ctrls">
-                    <select id="stage3PresetSelect" class="ai-stage-preset-select" disabled title="需先在阶段二添加适用预设，方可配置阶段三">
-                      <option value="">未启用</option>
-                    </select>
-                    <button id="stage3PresetAdd" class="btn btn--secondary btn--xs ai-stage-preset-add" type="button" title="把当前预设添加到阶段三">添加</button>
-                    <div id="stage3AppliedDropdown" class="select-combobox ai-stage-applied-dropdown" data-stage="stage3">
-                      <button id="stage3AppliedTrigger" type="button" class="select-trigger ai-stage-applied-trigger" aria-haspopup="listbox" aria-expanded="false" title="当前阶段适用的预设" disabled>
-                        <span id="stage3AppliedValue" class="select-value ai-stage-applied-value">未启用</span>
-                        <svg class="select-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M4.75 6.25L8 9.5L11.25 6.25" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"></path>
-                        </svg>
-                      </button>
-                      <div id="stage3AppliedMenu" class="select-menu ai-stage-applied-menu" hidden>
-                        <div id="stage3PresetTags" class="ai-stage-preset-tags" aria-label="阶段三已选预设"></div>
-                      </div>
-                    </div>
-                    <div class="ai-stage-card-actions">
-                      <button id="stage3Start" class="btn btn--primary btn--xs ai-stage-btn" type="button" title="仅启动阶段三终审仲裁，处理当前已有的复审分歧">开始</button>
-                      <button id="stage3Stop" class="btn btn--danger btn--xs ai-stage-btn" type="button" disabled title="仅停止阶段三终审仲裁">停止</button>
-                    </div>
                   </div>
                 </div>
                 <div class="ai-stage-card-body">

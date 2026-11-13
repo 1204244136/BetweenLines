@@ -229,6 +229,7 @@ for (const [stage, failure, success] of [
       [key]: JSON.stringify({ 1: { note: failure } }),
       "translation-compare-ai-config-v2": JSON.stringify({
         model: "retry-model",
+        poolSelections: [{ presetId: "retry-preset", stages: [stage] }],
         stage2PresetIds: stage === "stage2" ? ["retry-preset"] : [],
         stage3PresetIds: stage === "stage3" ? ["retry-preset"] : [],
       }),
@@ -253,6 +254,7 @@ for (const [stage, failure, success] of [
         assert.equal(ui.run('cachedStageMetrics.stage1NeedsEdit'), 1);
         assert.equal(ui.run('cachedStageMetrics.stage2Reviewed'), stage === "stage3" ? 1 : 0);
       }
+      await ui.settle();
       await ui.run(`startAiProofread({ continueOnly: true, stage: ${JSON.stringify(stage)} })`);
       const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
       assert.equal(post.body.completedIndexes.includes(1), false);

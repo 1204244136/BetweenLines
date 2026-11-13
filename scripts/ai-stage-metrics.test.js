@@ -3,19 +3,17 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { makeHtml } = require("./build-compare");
-const { createWorkbench, createClientFixture, storageFixture, toastMessages } = require("./workbench-fixture");
+const { createWorkbench, createClientFixture, storageFixture, toastMessages, addPoolPreset } = require("./workbench-fixture");
 const { createStageMetrics, createStagePipelines } = require("../src/workbenches/translation-compare/ai/stage-results");
 
 function configureStageModels(ui, stages = []) {
   ui.storage.setItem("translation-compare-ai-presets-v2", JSON.stringify([
+    { id: "preset-s1", name: "初审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "initial-model" },
     { id: "preset-s2", name: "复审", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "review-model" },
     { id: "preset-s3", name: "仲裁", protocol: "compatible", baseUrl: "https://example.invalid/v1", model: "arbiter-model" },
   ]));
   ui.run('aiIds.model.value = "initial-model"; saveAiConfig(); restoreAiConfig();');
-  for (const stage of stages) {
-    ui.element(`${stage}PresetSelect`).value = `preset-s${stage.slice(-1)}`;
-    ui.element(`${stage}PresetAdd`).click();
-  }
+  for (const stage of ["stage1", ...stages]) addPoolPreset(ui, `preset-s${stage.slice(-1)}`, [stage]);
 }
 
 test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
@@ -76,13 +74,9 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.equal(html.includes('id="metricTotalTokens"'), false, "资源统计卡片已被移除");
   assert.equal(html.includes('id="aiPromptVisible"'), false, "内置提示词复选框已被移除");
   assert.equal(html.includes('id="clearAiLog"'), false, "清除AI记录按钮已被移除");
-  assert.match(html, /id="stage1Start"/);
-  assert.match(html, /id="stage1Stop"/);
-  assert.match(html, /id="stage2Start"/);
-  assert.match(html, /id="stage2Stop"/);
-  assert.match(html, /id="stage3Start"/);
-  assert.match(html, /id="stage3Stop"/);
-  // 「级联下游」开关已移除：三个「开始」只表示起点，往下走到哪一段由阶段二/三配没配预设决定。
+  assert.match(html, /id="aiPoolStart"/);
+  assert.match(html, /id="aiPoolStop"/);
+  assert.doesNotMatch(html, /id="stage[123](?:Start|Stop)"/);
   assert.equal(html.includes("stageCascadeToggle"), false, "不再有「级联下游」模式开关");
   assert.match(html, /id="aiStageFastPassRate"/);
   assert.match(html, /id="stage1StatusPill"/);
@@ -90,7 +84,8 @@ test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   assert.match(html, /id="stage3StatusPill"/);
   assert.doesNotMatch(html, /id="stage[123](?:ActiveInfo|ActiveRowsText)"/);
   assert.doesNotMatch(html, /aiPresetRuntimePanel/, "不再在阶段卡片外渲染重复的全局预设运行模块");
-  assert.match(html, /id="stage1PresetTags"/);
+  assert.match(html, /id="aiPoolPresets"/);
+  assert.doesNotMatch(html, /id="stage[123]PresetTags"/);
 });
 
 test("初审直通占比：归属通过行子集，空分母不显示百分比且不保留旧提示", () => {
@@ -170,6 +165,8 @@ test("运行信息：无活跃行号也显示队列与容量，停止后清理�
 function renderWaitingStage(ui, stage, pipeline, overrides = {}) {
   ui.run(`renderAiStatus(${JSON.stringify({
     kind: "ai", runId: "waiting-run", running: true,
+    poolEnabled: true, poolSupported: true,
+    poolRuntime: { mode: "normal", state: "running", round: 1, presets: Object.values(overrides.presetPipelines || {}).flat() },
     projectKey: "project", rowsSignature: "rows", results: [],
     stageControls: { [stage]: { running: true, stopRequested: false } },
     stagePipelines: { [stage]: pipeline },
@@ -218,7 +215,9 @@ test("等待原因：单个预设的退避只显示在自身详情，健康预�
   });
   const ui = createWorkbench(storage, { strictIds: true });
   await ui.settle();
-  ui.run('Date.now = () => 100000; for (const stage of ["stage1", "stage2", "stage3"]) stagePresetSelections[stage] = ["waiting", "healthy"];');
+  addPoolPreset(ui, "waiting");
+  addPoolPreset(ui, "healthy");
+  ui.run('Date.now = () => 100000;');
   for (const stage of ["stage1", "stage2", "stage3"]) {
     const pipeline = { inFlight: 1, pending: 12, concurrency: 4, concurrencyMax: 8 };
     const presets = [
@@ -226,12 +225,11 @@ test("等待原因：单个预设的退避只显示在自身详情，健康预�
       { presetId: "healthy", inFlight: 1, pending: 6, quota: 3, configuredConcurrency: 4, waitReason: "", retryAt: 0 },
     ];
     renderWaitingStage(ui, stage, pipeline, { presetPipelines: { [stage]: presets } });
-    const tags = ui.element(stage + "PresetTags");
-    assert.match(tags.children[0].children[1].textContent, /限流退避 · 15 秒后尝试重新派发/);
-    assert.match(tags.children[0].children[1].title, /限流退避 · 15 秒后尝试重新派发/);
-    assert.doesNotMatch(tags.children[1].children[1].textContent, /限流退避|冷却中/);
-    assert.match(ui.element(stage + "AppliedTrigger").title, /等待预设[^\n]+限流退避/);
-    assert.doesNotMatch(ui.element(stage + "AppliedTrigger").title, /健康预设[^\n]+限流退避/);
+    const tags = ui.element("aiPoolPresets");
+    assert.match(tags.children[0]._poolControls.runtime.textContent, /限流退避 · 15 秒后尝试重新派发/);
+    assert.match(tags.children[0]._poolControls.runtime.title, /限流退避 · 15 秒后尝试重新派发/);
+    assert.doesNotMatch(tags.children[1]._poolControls.runtime.textContent, /限流退避|冷却中/);
+    assert.doesNotMatch(tags.children[1]._poolControls.runtime.title, /限流退避|冷却中/);
     assert.equal(ui.element(stage + "StatusPill").textContent, "处理中");
     assert.doesNotMatch(ui.element(stage + "RuntimeInfo").textContent, /限流退避|冷却中/);
     renderWaitingStage(ui, stage, { ...pipeline, inFlight: 0 }, { presetPipelines: { [stage]: presets } });
@@ -248,16 +246,16 @@ test("等待原因：轮询更新可见倒计时，悬停稳定且停止与完�
   for (const stage of ["stage1", "stage2", "stage3"]) {
     const ui = createWorkbench(storage, { strictIds: true });
     await ui.settle();
-    ui.run(`let waitingNow = 100000; Date.now = () => waitingNow; stagePresetSelections.${stage} = ["waiting"];`);
+    addPoolPreset(ui, "waiting");
+    ui.run(`let waitingNow = 100000; Date.now = () => waitingNow;`);
     const pipeline = { inFlight: 0, pending: 12, concurrency: 1, concurrencyMax: 4, waitReason: "cooldown", retryAt: 115000 };
     const presetPipelines = { [stage]: [{ ...pipeline, presetId: "waiting", quota: 1, configuredConcurrency: 4 }] };
     const render = (overrides) => renderWaitingStage(ui, stage, pipeline, { presetPipelines, ...overrides });
     render();
     const pill = ui.element(stage + "StatusPill");
     const info = ui.element(stage + "RuntimeInfo");
-    const runtime = ui.element(stage + "PresetTags").children[0].children[1];
-    const trigger = ui.element(stage + "AppliedTrigger");
-    const nodes = [pill, info, runtime, trigger];
+    const runtime = ui.element("aiPoolPresets").children[0]._poolControls.runtime;
+    const nodes = [pill, info, runtime];
     const titles = nodes.map((node) => node.title);
     for (const node of nodes) await node.dispatch("mouseenter");
     const timerCount = ui.timeouts.length;
@@ -266,16 +264,13 @@ test("等待原因：轮询更新可见倒计时，悬停稳定且停止与完�
     assert.equal(ui.timeouts.length, timerCount, "倒计时复用状态刷新，不新增定时器");
     assert.match(info.textContent, /10 秒后尝试重新派发/);
     assert.match(runtime.textContent, /10 秒后尝试重新派发/);
-    assert.equal(ui.element(stage + "PresetTags").children[0].children[1], runtime, "倒计时不得重建悬停锚点");
+    assert.equal(ui.element("aiPoolPresets").children[0]._poolControls.runtime, runtime, "倒计时不得重建悬停锚点");
     assert.deepEqual(nodes.map((node) => node.title), titles);
     for (const node of nodes) await node.dispatch("mouseleave");
     for (const node of nodes) assert.match(node.title, /10 秒后尝试重新派发/);
     for (const node of nodes) await node.dispatch("mouseenter");
 
     for (const stopped of [
-      { stageControls: { [stage]: { running: true, stopRequested: true } } },
-      { stageControls: { [stage]: { running: true, stopRequested: true } },
-        presetPipelines: { [stage]: [{ ...presetPipelines[stage][0], inFlight: 1 }] } },
       { stopRequested: true },
       { running: false, finishedAt: "2026-10-27T00:00:00.000Z" },
     ]) {
@@ -286,7 +281,7 @@ test("等待原因：轮询更新可见倒计时，悬停稳定且停止与完�
       render();
       for (const node of nodes) await node.dispatch("mouseenter");
     }
-    for (const cancel of [`pendingStageStops.add("${stage}");`, "pendingStopAll = true;"]) {
+    for (const cancel of ["pendingStopAll = true;"]) {
       ui.run(cancel);
       render();
       for (const node of nodes) assert.doesNotMatch((node.textContent || "") + (node.title || ""), /限流退避|冷却中|重新派发/);
@@ -361,8 +356,7 @@ test("运行停止与进度重置：三阶段清理动态内容，保留已有�
     "stage" + stage, { inFlight: 4, pending: 1, concurrency: 4, concurrencyMax: 8, activeRows: rows },
   ]));
   ui.run(`
-    stagePresetSelections.stage2 = ["preset-s2"];
-    stagePresetSelections.stage3 = ["preset-s3"];
+    sharedPoolSelections = [{ presetId: "preset-s2", stages: ["stage2"], stagePriorities: {} }, { presetId: "preset-s3", stages: ["stage3"], stagePriorities: {} }];
     renderStageMetricsDashboard({ stage1Passed: 1, stage2Reviewed: 1, stage3Arbitrated: 1 }, ${JSON.stringify(pipelines)}, true);
   `);
   for (const stage of [1, 2, 3]) {
@@ -404,7 +398,7 @@ test("运行停止与进度重置：三阶段清理动态内容，保留已有�
   }
 });
 
-test("阶段预设标签：每个预设位置显示自己的并发与排队信息", () => {
+test("共享池预设标签：每个预设显示自己的并发与排队信息", () => {
   const storage = storageFixture({
     "translation-compare-ai-presets-v2": JSON.stringify([
       { id: "p1", name: "快审", protocol: "compatible", model: "m1", concurrency: 4 },
@@ -414,20 +408,21 @@ test("阶段预设标签：每个预设位置显示自己的并发与排队信�
   const ui = createWorkbench(storage);
 
   ui.run(`
-    stagePresetSelections.stage1 = ["p1", "p2"];
-    latestPresetPipelines = { stage1: [
+    sharedPoolSelections = ["p1", "p2"].map((presetId) => normalizePoolSelection({ presetId }));
+    currentAiRunning = true;
+    latestPoolRuntime = { presets: [
       { presetId: "p1", inFlight: 1, quota: 3, configuredConcurrency: 4, pending: 8, activeRows: [12] },
       { presetId: "p2", inFlight: 0, quota: 2, configuredConcurrency: 9, pending: 5, activeRows: [] },
     ] };
-    renderStagePresetSelection("stage1");
+    renderPoolPresetSelection();
   `);
 
-  const tags = ui.element("stage1PresetTags");
+  const tags = ui.element("aiPoolPresets");
   assert.equal(tags.children.length, 2);
-  assert.equal(tags.children[0].children[1].textContent, "运行 1 · 当前配额 3 · 配置上限 4 · 排队 8");
-  assert.match(tags.children[0].children[1].title, /配置并发上限 4/);
-  assert.equal(tags.children[1].children[1].textContent, "运行 0 · 当前配额 2 · 配置上限 9 · 排队 5");
-  assert.match(tags.children[1].children[1].title, /配置并发上限 9/);
+  assert.equal(tags.children[0]._poolControls.runtime.textContent, "运行 1 · 共享配额 3 / 上限 4 · 排队 8");
+  assert.match(tags.children[0]._poolControls.runtime.title, /上限 4/);
+  assert.equal(tags.children[1]._poolControls.runtime.textContent, "运行 0 · 共享配额 2 / 上限 9 · 排队 5");
+  assert.match(tags.children[1]._poolControls.runtime.title, /上限 9/);
 });
 
 test("阶段卡片并发后缀：多预设时只有全部预设触顶才标「全部触顶」", () => {
@@ -684,6 +679,7 @@ test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌�
       "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-arb", results: [] } },
     },
   });
+  await ui.settle();
   configureStageModels(ui, ["stage3"]);
 
   // 4 行复审分歧：2 行「调整」+ 1 行「升级仲裁」尚未仲裁，1 行已仲裁定案。
@@ -726,9 +722,9 @@ test("复审分歧与续跑同源：仲裁队列跑空后「分歧」不得塌�
   assert.equal(ui.element("metricStage3Arbitrated").textContent, 1);
   assert.equal(ui.element("metricStage3Pending").textContent, 3, "待仲裁 = 分歧 4 − 已仲裁 1");
 
-  await ui.element("stage3Start").dispatch("click");
+  await ui.element("aiPoolStart").dispatch("click");
   const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
-  assert.ok(post, "仲裁开始直接继续卡片中的待仲裁行");
+  assert.ok(post, "启动池直接继续卡片中的待仲裁行");
   assert.equal(post.body.continueOnly, true);
   assert.deepEqual(post.body.completedIndexes, [4], "仅跳过已有仲裁结论的行，保留三条待仲裁行");
 });
@@ -1044,96 +1040,50 @@ test("客户端看板：异常清零后悬停提示恢复构建器写入的静�
   assert.equal(item.title, "阶段一调用失败/异常行数", "清零后不能残留上一轮的分类明细");
 });
 
-test("多阶段控制：各个阶段卡片均拥有独立的开始与停止按钮并联动运行状态", async () => {
+test("共享池控制：阶段保留指标，统一开始停止随运行状态更新", async () => {
+  const running = { running: true, poolEnabled: true, poolSupported: true, runId: "run-pool", projectKey: "project", rowsSignature: "rows", results: [] };
   const ui = createWorkbench(storageFixture({}), {
+    strictIds: true,
     apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: true, runId: "run-stage", results: [] } },
-      "/api/ai-proofread/stop": { ok: true, ai: { running: false, stopRequested: true, runId: "run-stage", results: [] } },
+      "/api/ai-proofread/start": { ok: true, ai: running },
+      "/api/ai-proofread/stop": { ok: true, ai: { ...running, running: false, stopRequested: true } },
     },
+    statusResponse: () => ({ ok: true, ai: { ...running, running: false } }),
   });
-  configureStageModels(ui);
-
-  const s1Start = ui.element("stage1Start");
-  const s1Stop = ui.element("stage1Stop");
-  const s2Start = ui.element("stage2Start");
-  const s2Stop = ui.element("stage2Stop");
-  const s3Start = ui.element("stage3Start");
-  const s3Stop = ui.element("stage3Stop");
-
-  // 初始空闲状态：有效初审可开始，未配置下游的开始和所有停止均禁用。
-  assert.equal(s1Start.disabled, false);
-  assert.equal(s1Stop.disabled, true);
-  assert.equal(s2Start.disabled, true);
-  assert.equal(s2Stop.disabled, true);
-  assert.equal(s3Start.disabled, true);
-  assert.equal(s3Stop.disabled, true);
-
-  // 点击阶段一「开始」
-  await s1Start.dispatch("click");
+  await ui.settle();
+  configureStageModels(ui, ["stage2", "stage3"]);
+  const start = ui.element("aiPoolStart");
+  const stop = ui.element("aiPoolStop");
+  assert.equal(start.disabled, false);
+  assert.equal(stop.disabled, true);
+  await start.dispatch("click");
   assert.equal(ui.posts.filter((p) => p.url === "/api/ai-proofread/start").length, 1);
-
-  // 启动后阶段一可独立停止；未配置的阶段二、三继续禁用，不能借初审配置启动。
-  assert.equal(s1Start.disabled, true, "阶段一运行中开始按钮应禁用");
-  assert.equal(s1Stop.disabled, false, "阶段一运行中停止按钮应激活");
-  assert.equal(s2Start.disabled, true, "阶段二未配置模型，开始按钮保持禁用");
-  assert.equal(s2Stop.disabled, true, "阶段二未运行未排队，停止按钮应保持禁用");
-  assert.equal(s3Start.disabled, true, "阶段三未配置模型，开始按钮保持禁用");
-  assert.equal(s3Stop.disabled, true, "阶段三未运行未排队，停止按钮应保持禁用");
-
-  // 点击阶段一「停止」
-  await s1Stop.dispatch("click");
-  assert.equal(ui.fetches.filter((u) => u === "/api/ai-proofread/stop").length, 1);
+  ui.run(`renderAiStatus(${JSON.stringify(running)})`);
+  assert.equal(start.disabled, true);
+  assert.equal(stop.disabled, false);
+  for (const stage of ["stage1", "stage2", "stage3"]) assert.equal(ui.run(`document.getElementById("${stage}Start")`), null);
+  await stop.dispatch("click");
+  const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/stop");
+  assert.deepEqual(post.body, { stage: "all" });
 });
 
-test("独立三阶段执行：未启用级联时，每个阶段开始按钮传递独立 stage 参数，分别独立执行", async () => {
+test("共享池启动：阶段资格放在同一个预设池中，始终传递 all", async () => {
   const ui = createWorkbench(storageFixture({}), {
     apiResponses: {
-      "/api/ai-proofread/start": { ok: true, ai: { running: false, runId: "run-staged", results: [] } },
+      "/api/ai-proofread/start": { ok: true, ai: { running: false, poolSupported: true, runId: "run-pool", results: [] } },
     },
   });
-  configureStageModels(ui);
-
-  // 1. 点击阶段一「开始」（此时阶段二尚未配置，没有可级联的下游）
-  await ui.element("stage1Start").dispatch("click");
-  let lastStartPost = ui.posts.at(-1);
-  assert.equal(lastStartPost.url, "/api/ai-proofread/start");
-  assert.equal(lastStartPost.body.stage, "stage1", "阶段二未配置时阶段一启动只跑初审，不自动跑阶段二");
-
-  // 模拟阶段一产出建议行，且阶段二配置了预设
-  ui.element("stage2PresetSelect").value = "preset-s2";
-  ui.element("stage2PresetAdd").click();
-  ui.run(`
-    notes["1"] = {
-      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\n修改结果：改案A",
-      revisionText: "改案A",
-      manualDone: false,
-      done: false,
-      aiDone: true,
-    };
-  `);
-
-  // 2. 点击阶段二「开始」
-  await ui.element("stage2Start").dispatch("click");
-  lastStartPost = ui.posts.at(-1);
-  assert.equal(lastStartPost.body.stage, "stage2", "阶段二启动必须指定 stage=stage2，专门复审初审建议行");
-
-  // 模拟阶段二产出分歧行，且阶段三配置了预设
-  ui.element("stage3PresetSelect").value = "preset-s3";
-  ui.element("stage3PresetAdd").click();
-  ui.run(`
-    notes["1"] = {
-      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：是\\nGatekeeper初审：建议润色\\n初审改案：改案A\\nStylist复审[提交仲裁]：存在分歧\\n复审改案：改案B\\n修改结果：改案A",
-      revisionText: "改案A",
-      manualDone: false,
-      done: false,
-      aiDone: true,
-    };
-  `);
-
-  // 3. 点击阶段三「开始」
-  await ui.element("stage3Start").dispatch("click");
-  lastStartPost = ui.posts.at(-1);
-  assert.equal(lastStartPost.body.stage, "stage3", "阶段三启动必须指定 stage=stage3，专门仲裁分歧行");
+  await ui.settle();
+  configureStageModels(ui, ["stage2", "stage3"]);
+  await ui.element("aiPoolStart").dispatch("click");
+  const post = ui.posts.find((entry) => entry.url === "/api/ai-proofread/start");
+  assert.ok(post);
+  assert.equal(post.body.stage, "all");
+  assert.equal(post.body.poolEnabled, true);
+  assert.equal(post.body.continueOnly, true);
+  assert.deepEqual(post.body.presetPool.map((preset) => [preset.presetId, preset.stages]), [
+    ["preset-s1", ["stage1"]], ["preset-s2", ["stage2"]], ["preset-s3", ["stage3"]],
+  ]);
 });
 
 test("阶段二实时计数：复审完但还在仲裁队列里的行必须计入复审与分歧，不能显示成「阶段三抢跑」", () => {
@@ -1252,8 +1202,8 @@ test("旧版常驻服务：没有回报 stageControls 时明确提示重启，�
 
   assert.match(toastMessages(ui).join("|"), /控制台服务未更新/, "缺阶段独立启停状态时必须提示重启服务");
   assert.equal(ui.element("stage3StatusPill").textContent, "待命", "配置仲裁模型不代表当前已启动仲裁");
-  assert.equal(ui.element("stage3Start").disabled, false);
-  assert.equal(ui.element("stage3Stop").disabled, true);
+  assert.equal(ui.element("aiPoolStart").disabled, true, "旧服务不能启动共享池");
+  assert.equal(ui.element("aiPoolStop").disabled, false, "仍可停止旧服务的运行");
 });
 
 test("旧版常驻服务：提示一轮只发一次，不刷屏", () => {
@@ -1347,34 +1297,12 @@ test("当前行悬停提示：空行、隐藏进度和完成时清理旧行号",
   assert.equal(progress.getAttribute("aria-valuetext"), null);
 });
 
-test("样式：阶段卡片的预设下拉按内容取宽，不再被固定上限截断", () => {
+test("样式：共享池完整展示预设名称，窄屏阶段选项换行", () => {
   const css = fs.readFileSync(path.resolve(__dirname, "../public/ai-panel.css"), "utf8");
-
-  function ruleBody(selector) {
-    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = css.match(new RegExp(escaped + "\\s*\\{([^}]*)\\}"));
-    assert.ok(match, `ai-panel.css 必须包含 ${selector} 规则`);
-    // 注释里出现的属性名不算声明：只对剥掉注释后的正文做断言。
-    return match[1].replace(/\/\*[\s\S]*?\*\//g, "");
-  }
-
-  // 预设标签是「供应商 / 预设名 · 模型」三段拼接（ai-presets.js 的 presetLabel）：
-  // 固定宽度上限会把三个阶段的下拉截成同一段开头，用户分不清各自选了哪个预设。
-  const combobox = ruleBody(".ai-stage-card-head .select-combobox");
-  assert.match(combobox, /max-width:\s*none/, "预设下拉不得再有固定宽度上限");
-  assert.doesNotMatch(combobox, /max-width:\s*\d+px/, "预设下拉不得回落到固定 px 上限");
-  assert.match(combobox, /flex:\s*0\s+1\s+auto/, "预设下拉要能吃掉卡片头部标题右侧的空白");
-
-  // 控件组必须可压缩，否则「标题 + 全宽下拉」在窄卡片里会顶破卡片边界。
-  const ctrls = ruleBody(".ai-stage-card-ctrls");
-  assert.match(ctrls, /flex:\s*0\s+1\s+auto/);
-  assert.doesNotMatch(ctrls, /flex-shrink:\s*0/, "控件组整块不压缩会把下拉按回窄宽度");
-
-  // 压缩顺序固定为「下拉先省略」：标题单行完整，开始/停止按钮不被挤变形。
-  assert.match(ruleBody(".ai-stage-card-title-row"), /flex:\s*0\s+0\s+auto/);
-  assert.match(ruleBody(".ai-stage-card-actions"), /flex:\s*0\s+0\s+auto/);
-  // 原生 select 已换成 .select-combobox + .select-trigger，隐藏载体上不该再留宽度上限。
-  assert.doesNotMatch(ruleBody(".ai-stage-preset-select"), /max-width:\s*\d+px/);
+  assert.match(css, /\.ai-pool-preset-name\s*\{[^}]*overflow-wrap:\s*anywhere/, "供应商、预设和模型名称允许换行");
+  assert.match(css, /\.ai-pool-preset-identity\s*\{[^}]*min-width:\s*0/, "名称区可压缩而不撑破卡片");
+  assert.match(css, /\.ai-pool-stage-choices\s*\{[^}]*flex-wrap:\s*wrap/, "阶段开关和优先级可换行");
+  assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.ai-pool-stage-choices\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/, "窄屏阶段选项单独占行");
 });
 
 test("认知审核流水线指标：数学意义严格闭环与明确流转脉络", () => {

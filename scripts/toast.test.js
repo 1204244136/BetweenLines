@@ -7,7 +7,7 @@ function aiStatus({ runId = "run-1", running = false, finishedAt = "", stopReque
   return {
     ok: true,
     ai: {
-      kind: "ai", runId, running, finishedAt, stopRequested, error,
+      kind: "ai", runId, running, finishedAt, stopRequested, error, poolSupported: true,
       projectKey, rowsSignature: "rows", total: ROWS.length, queued: 4, modelProcessed: running ? 1 : 4,
       handled: 4, suggested: 1, errors: 0, results: [],
     },

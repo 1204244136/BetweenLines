@@ -795,10 +795,7 @@ details[open] > summary .details-toggle::before {
   align-items: center;
   gap: 5px;
   min-width: 0;
-  /* 标题行不参与压缩：卡片头部标题与预设下拉之间本来就有大片空白，
-     这块空白要优先让给下拉（见 .ai-stage-card-head .select-combobox）。
-     压缩顺序必须是「下拉先省略」，标题永远保持单行完整。 */
-  flex: 0 0 auto;
+  flex-wrap: wrap;
 }
 
 .ai-stage-card-label {
@@ -1764,4 +1761,71 @@ details[open] > summary .details-toggle::before {
   .ai-status { grid-column: 1 / -1; grid-row: 2; }
   .ai-actions { flex-wrap: wrap; }
   .ai-stage-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Shared pool controls retain stable nodes during runtime polling. */
+.ai-pool {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ai-line);
+  border-radius: var(--ai-radius);
+  background: var(--ai-surface-subtle);
+}
+.ai-pool-head, .ai-pool-heading, .ai-pool-actions, .ai-pool-toolbar, .ai-pool-footer,
+.ai-pool-priority-toggle, .ai-pool-stage-choices, .ai-pool-stage-choice,
+.ai-pool-stage-choice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ai-pool-head { flex-wrap: wrap; gap: 6px 12px; }
+.ai-pool-heading { color: var(--ai-text); font-size: 12px; }
+.ai-pool-actions, .ai-pool-toolbar { flex-wrap: wrap; }
+.ai-pool-actions label, .ai-pool-priority-toggle { font-size: 12px; color: var(--ai-muted); }
+.ai-pool-toolbar { flex: 0 1 500px; min-width: 0; }
+.ai-pool-toolbar > .select-combobox, .ai-pool-toolbar > select { flex: 1 1 180px; min-width: 0; width: 180px; }
+.ai-pool .btn, .ai-pool select, .ai-pool .select-trigger {
+  height: 26px;
+  min-height: 0;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.ai-pool-hint, .ai-pool-empty { color: var(--ai-muted); font-size: 11px; line-height: 1.5; margin: 0; }
+.ai-pool-hint:empty { display: none; }
+.ai-pool-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+.ai-pool-preset {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto;
+  justify-content: start;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--ai-line);
+  border-radius: var(--ai-radius-sm);
+  background: var(--ai-surface);
+}
+.ai-pool-preset-identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; grid-column: 1 / -1; }
+.ai-pool-preset-name { font-size: 12px; overflow-wrap: anywhere; }
+.ai-pool-preset-runtime { font-size: 11px; color: var(--ai-muted); overflow-wrap: anywhere; }
+.ai-pool-stage-choices { flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.ai-pool-stage-choice { gap: 5px; }
+.ai-pool-stage-choice label { font-size: 12px; white-space: nowrap; gap: 4px; }
+.ai-pool-stage-choice input[type="checkbox"], .ai-pool-priority-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--ai-focus); }
+.ai-pool .ai-pool-priority { width: 40px; height: 24px; min-width: 0; padding: 1px 4px; font-size: 11px; }
+.ai-pool-footer { flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; }
+.ai-pool-status { font-size: 11px; color: var(--ai-text); overflow-wrap: anywhere; }
+.ai-pool-status[data-state="blocked"] { color: var(--ai-warning-fg-accent); }
+.ai-pool-status[data-state="completed"] { color: var(--ai-success-fg); }
+@media (max-width: 760px) {
+  .ai-stage-cards { grid-template-columns: minmax(0, 1fr); }
+  .ai-pool-toolbar { flex: 1 1 100%; }
+  .ai-pool-preset { grid-template-columns: minmax(0, 1fr) auto; }
+  .ai-pool-preset-identity { grid-column: 1; }
+  .ai-pool-preset > button { grid-area: 1 / 2; }
+  .ai-pool-stage-choices { grid-column: 1 / -1; }
 }

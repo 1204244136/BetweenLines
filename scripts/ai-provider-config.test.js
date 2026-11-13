@@ -4,7 +4,7 @@ const { inferProtocolFromBaseUrl, normalizeConnectionConfig } = require("../src/
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 const { cleanConfig, clientStatus } = require("../src/workbenches/translation-compare/ai/ai-proofread");
 const { buildProtocolHeaders } = require("../src/ai/llm-client");
-const { createWorkbench, storageFixture, toastMessages } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, toastMessages, addPoolPreset } = require("./workbench-fixture");
 const { makeHtml } = require("./build-compare");
 
 const presetTools = createPresetTools();
@@ -113,12 +113,12 @@ test("供应商名称清洗与分组支持相同协议名，不猜测模型所�
   assert.equal(presetTools.groupPresets([a, preset("另一家")]).length, 2);
 });
 
-test("界面：主配置及三个阶段均显示提供商分组和完整模型标签", () => {
+test("界面：主配置及共享池显示提供商分组和完整模型标签", () => {
   const storage = storageFixture();
   const a = presetTools.savePreset(storage, preset("服务甲"));
   const b = presetTools.savePreset(storage, preset("服务乙"));
   const ui = createWorkbench(storage);
-  for (const id of ["aiPresetSelect", "stage1PresetSelect", "stage2PresetSelect", "stage3PresetSelect"]) {
+  for (const id of ["aiPresetSelect", "aiPoolPresetSelect"]) {
     const select = ui.element(id);
     assert.equal(select.children.filter((node) => node.tagName === "OPTGROUP").length, 2);
     assert.equal(options(select).find((item) => item.value === a.id).textContent, "服务甲 / 校对 · same-model");
@@ -152,23 +152,21 @@ test("阶段请求：同名模型取各自协议、供应商、地址与 Key，�
   const ui = createWorkbench(storage);
   ui.element("aiApiKey").value = "main-key";
   ui.element("aiReasoningEffort").value = "high";
-  ui.element("stage1PresetSelect").value = a.id;
-  ui.element("stage1PresetAdd").click();
-  ui.element("stage2PresetSelect").value = b.id;
-  ui.element("stage2PresetAdd").click();
-  ui.element("stage3PresetSelect").value = c.id;
-  ui.element("stage3PresetAdd").click();
+  addPoolPreset(ui, a.id, ["stage1"]);
+  addPoolPreset(ui, b.id, ["stage2"]);
+  addPoolPreset(ui, c.id, ["stage3"]);
   const config = ui.run("aiConfig()");
-  assert.equal(config.protocol, "compatible");
-  assert.equal(config.provider, "服务甲");
-  assert.equal(config.apiKey, "");
-  assert.equal(config.reasoningEffort, "");
-  assert.equal(config.stylistConfig.protocol, "claude");
-  assert.equal(config.stylistConfig.provider, "服务乙");
-  assert.equal(config.stylistConfig.apiKey, "key-b");
-  assert.equal(config.arbiterConfig.provider, "服务丙");
-  assert.equal(config.arbiterConfig.baseUrl, "https://c.test");
-  assert.equal(config.arbiterConfig.apiKey, "key-c");
+  const [initial, review, arbiter] = config.presetPool;
+  assert.equal(initial.protocol, "compatible");
+  assert.equal(initial.provider, "服务甲");
+  assert.equal(initial.apiKey, "");
+  assert.equal(initial.reasoningEffort, "");
+  assert.equal(review.protocol, "claude");
+  assert.equal(review.provider, "服务乙");
+  assert.equal(review.apiKey, "key-b");
+  assert.equal(arbiter.provider, "服务丙");
+  assert.equal(arbiter.baseUrl, "https://c.test");
+  assert.equal(arbiter.apiKey, "key-c");
 });
 
 test("保存修改后更换提供商保持 ID 与阶段绑定；冲突时保留双方", async () => {
@@ -178,10 +176,8 @@ test("保存修改后更换提供商保持 ID 与阶段绑定；冲突时保留�
   const ui = createWorkbench(storage);
   ui.element("aiPresetSelect").value = a.id;
   await ui.element("aiPresetSelect").dispatch("change");
-  ui.element("stage2PresetSelect").value = a.id;
-  ui.element("stage2PresetAdd").click();
-  ui.element("stage3PresetSelect").value = b.id;
-  ui.element("stage3PresetAdd").click();
+  addPoolPreset(ui, a.id, ["stage2"]);
+  addPoolPreset(ui, b.id, ["stage3"]);
   ui.element("aiProvider").value = "服务乙";
   await ui.element("aiPresetSave").dispatch("click");
   assert.equal(presetTools.getPreset(storage, a.id).provider, "服务甲");
@@ -189,11 +185,11 @@ test("保存修改后更换提供商保持 ID 与阶段绑定；冲突时保留�
   ui.element("aiProvider").value = "服务丙";
   await ui.element("aiPresetSave").dispatch("click");
   assert.equal(presetTools.getPreset(storage, a.id).provider, "服务丙");
-  assert.equal(ui.element("stage2PresetSelect").value, a.id);
-  assert.equal(ui.element("stage3PresetSelect").value, b.id);
+  assert.deepEqual([...ui.run('committedStagePresetIds("stage2")')], [a.id]);
+  assert.deepEqual([...ui.run('committedStagePresetIds("stage3")')], [b.id]);
   const refreshed = createWorkbench(storage);
   assert.equal(refreshed.element("aiProvider").value, "服务丙");
-  assert.equal(refreshed.element("stage2PresetSelect").value, a.id);
+  assert.deepEqual([...refreshed.run('committedStagePresetIds("stage2")')], [a.id]);
 });
 
 test("切换提供商预设后丢弃另一供应商同名模型的能力缓存", async () => {

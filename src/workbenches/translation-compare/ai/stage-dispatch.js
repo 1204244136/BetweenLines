@@ -11,6 +11,7 @@ const MAX_ROW_RETRIES = 3;
 function createStageDispatch({
   stageKey, label, presets, fallbackConfig, fallbackConcurrency = 3,
   policy = CONCURRENCY_POLICY, now = Date.now, timers = { setTimeout, clearTimeout }, wake = () => {},
+  retryKeyOf = (item) => item.row?.index ?? item.index,
 } = {}) {
   const pending = [];
   const requests = new Map();
@@ -153,8 +154,8 @@ function createStageDispatch({
     channel.consecutiveLimits += 1;
     const step = stepDownOnLimit(channel, { now: now(), startedAt: request.startedAt, minConcurrency: 1, policy });
     if (step) events.push({ type: "concurrency", direction: "down" });
-    const retries = (channel.rowRetryCounts.get(request.rowIndex) || 0) + 1;
-    channel.rowRetryCounts.set(request.rowIndex, retries);
+    const retries = (channel.rowRetryCounts.get(request.retryKey) || 0) + 1;
+    channel.rowRetryCounts.set(request.retryKey, retries);
     const jitterLimit = Number(process.env.TRANSCOMPARATOR_RETRY_JITTER_MS);
     const jitterMs = Number.isFinite(jitterLimit) && jitterLimit >= 0 ? jitterLimit : 500;
     const delayMs = backoffDelayMs(channel.consecutiveLimits, error.retryAfter)
@@ -174,7 +175,7 @@ function createStageDispatch({
       markTrip(generation, verdict, events, stopped);
       return false;
     }
-    channel.rowRetryCounts.set(request.rowIndex, maxRetries);
+    channel.rowRetryCounts.set(request.retryKey, maxRetries);
     channel.backoffUntil = Math.max(channel.backoffUntil, verdict.until);
     scheduleWake(generation);
     pending.unshift(request.item);
@@ -220,7 +221,7 @@ function createStageDispatch({
       const generation = current.get(preset.presetId);
       const rowIndex = rowIndexOf(item);
       const handle = Object.freeze({});
-      requests.set(handle, { generation, item, rowIndex, startedAt: now() });
+      requests.set(handle, { generation, item, rowIndex, retryKey: retryKeyOf(item), startedAt: now() });
       pool.begin(preset.presetId, rowIndex);
       activeRows.push(rowIndex);
       pendingDirty = true;
@@ -277,13 +278,13 @@ function createStageDispatch({
       syncPending();
       return { added, removed, fallback: !incoming.length && target.length > 0 };
     },
-    snapshot() {
+    snapshot({ includeIdleWait = false } = {}) {
       syncPending();
       const timestamp = now();
       const presets = pool.snapshot().map((item) => {
         const generation = current.get(item.presetId);
         const breakerState = generation.trip ? "tripped" : generation.breaker.state;
-        const waiting = !disposed && pending.length > 0 && !generation.trip && generation.channel.backoffUntil > timestamp;
+        const waiting = !disposed && (pending.length > 0 || includeIdleWait) && !generation.trip && generation.channel.backoffUntil > timestamp;
         return {
           ...item,
           breakerState,

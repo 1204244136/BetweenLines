@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const test = require("node:test");
-const { createWorkbench, storageFixture } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, addPoolPreset } = require("./workbench-fixture");
 const { createPresetTools } = require("../src/workbenches/translation-compare/ai-presets");
 const { cleanConfig } = require("./ai-proofread");
 
@@ -377,10 +377,7 @@ test("端点专属档位随配置和预设保存，刷新后经各阶段进入�
   const refreshed = createWorkbench(storage);
   assert.deepEqual(Array.from(refreshed.element("aiReasoningEffort").children, (item) => item.value), ["", "low", "high"]);
   assert.equal(refreshed.element("aiReasoningEffort").value, "high");
-  for (const stage of ["stage1", "stage2", "stage3"]) {
-    refreshed.element(`${stage}PresetSelect`).value = presetId;
-    refreshed.element(`${stage}PresetAdd`).click();
-  }
+  addPoolPreset(refreshed, presetId);
   const config = cleanConfig(refreshed.run("aiConfig()"));
   for (const stage of [config, config.stylistConfig, config.arbiterConfig]) {
     assert.equal(stage.reasoningEffort, "high");

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { latestAiNotePart, stageNoteState } = require("../src/workbenches/translation-compare/ai/stage-note-state");
-const { createWorkbench, storageFixture, currentKey } = require("./workbench-fixture");
+const { createWorkbench, storageFixture, currentKey, addPoolPreset } = require("./workbench-fixture");
 
 const initial = "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改\n初审改案：本轮初审方案";
 const unclear = "[AI校对]\n是否需要修改：待人工确认\nGatekeeper初审：初审存疑";
@@ -39,6 +39,7 @@ function fixture(records) {
     [currentKey]: JSON.stringify(records),
     "translation-compare-ai-config-v2": JSON.stringify(connection),
     "translation-compare-ai-presets-v2": JSON.stringify([
+      { ...connection, id: "stage1-preset", name: "初审" },
       { ...connection, id: "stage2-preset", name: "复审", model: "test-stylist" },
       { ...connection, id: "stage3-preset", name: "仲裁", model: "test-arbiter" },
     ]),
@@ -49,8 +50,7 @@ function fixture(records) {
 }
 
 function addStagePreset(ui, stage) {
-  ui.element(stage + "PresetSelect").value = stage + "-preset";
-  ui.element(stage + "PresetAdd").click();
+  addPoolPreset(ui, stage + "-preset", [stage]);
 }
 
 test("从初审继续剩下的：失败、终止及空备注行在单阶段和级联时都必须重试", async () => {
@@ -65,8 +65,10 @@ test("从初审继续剩下的：失败、终止及空备注行在单阶段和�
       7: { note: "" },
     };
     const ui = fixture(records);
+    await ui.settle();
+    addStagePreset(ui, "stage1");
     if (cascade) addStagePreset(ui, "stage2");
-    await ui.element(cascade ? "aiStartAll" : "stage1Start").dispatch("click");
+    await ui.element("aiPoolStart").dispatch("click");
     const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
     assert.ok(post);
     assert.equal(Boolean(post.body.stylistConfig), cascade);
@@ -89,11 +91,12 @@ test("待复审统计、点击筛选及直接启动请求跳过列表同源，�
   await ui.element("stage2PendingItem").dispatch("click");
   assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1, 2]);
   addStagePreset(ui, "stage2");
-  await ui.element("stage2Start").dispatch("click");
+  await ui.settle();
+  await ui.run('startAiProofread({ stage: "stage2" })');
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post);
   assert.equal(post.body.continueOnly, true);
-  assert.deepEqual(post.body.completedIndexes.sort(), [3, 4, 5, 6]);
+  assert.deepEqual(post.body.completedIndexes.sort(), [3, 4, 5], "初审失败行仍未完成，由服务端按所需阶段排队或报告缺覆盖");
   assert.equal(post.body.rowNotes[1], records[1].note);
   assert.equal(ui.run('notes["1"].note'), records[1].note);
   assert.equal(ui.run('parseAutomatedNote(notes["1"].note).stage2'), null);
@@ -103,7 +106,8 @@ test("待复审统计、点击筛选及直接启动请求跳过列表同源，�
 test("全部旧轮次已复审但本轮待复审时，点击阶段二直接启动且不跳过", async () => {
   const ui = fixture({ 1: { note: reviewed + "\n\n" + initial } });
   addStagePreset(ui, "stage2");
-  await ui.element("stage2Start").dispatch("click");
+  await ui.settle();
+  await ui.run('startAiProofread({ stage: "stage2" })');
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post);
   assert.deepEqual(post.body.completedIndexes, []);
@@ -120,7 +124,8 @@ test("仲裁待办按本轮逐行计数，已人工确认的历史定案不抵�
   await ui.element("stage3PendingItem").dispatch("click");
   assert.deepEqual(Array.from(ui.run("filteredRows.map(row => row.index)")), [1]);
   addStagePreset(ui, "stage3");
-  await ui.element("stage3Start").dispatch("click");
+  await ui.settle();
+  await ui.run('startAiProofread({ stage: "stage3" })');
   const post = ui.posts.find((p) => p.url === "/api/ai-proofread/start");
   assert.ok(post);
   assert.equal(post.body.completedIndexes.includes(1), false);
@@ -182,7 +187,8 @@ test("复审或仲裁续跑时保留本轮异常、上游、历史与人工确�
     const note = prefix + prior + "\n" + marker + suffix;
     const ui = fixture({ 1: { note }, 2: { note, manualDone: true } });
     addStagePreset(ui, stage);
-    await ui.element(stage + "Start").dispatch("click");
+    await ui.settle();
+    await ui.run(`startAiProofread({ stage: ${JSON.stringify(stage)} })`);
     const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
     assert.ok(post);
     assert.equal(post.body.continueOnly, true);
@@ -195,16 +201,17 @@ test("复审或仲裁续跑时保留本轮异常、上游、历史与人工确�
   }
 });
 
-test("仲裁失败续跑：单阶段只判断自身完成，一键开始仍须补仲裁待办", async () => {
+test("仲裁失败续跑：池的完成判据始终保留尚待仲裁的行", async () => {
   const failure = dispute + "\nArbiter仲裁调用异常：请求超时";
   for (const stage of ["stage1", "stage2", "all"]) {
     const ui = fixture({ 1: { note: failure }, 2: { note: arbitrated }, 3: { note: failure, manualDone: true } });
     addStagePreset(ui, "stage2");
     addStagePreset(ui, "stage3");
+    await ui.settle();
     await ui.run(`startAiProofread({ stage: ${JSON.stringify(stage)} })`);
     const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
     assert.ok(post.body.arbiterConfig);
-    assert.deepEqual(post.body.completedIndexes.sort(), stage === "all" ? [2, 3] : [1, 2, 3]);
+    assert.deepEqual(post.body.completedIndexes.sort(), [2, 3]);
     assert.equal(post.body.rowNotes[1], failure);
   }
 });
@@ -218,7 +225,8 @@ test("初审待终审且没有改案：复审异常仍是待办，继续时不�
   assert.equal(ui.element("metricStage2Pending").textContent, 1);
   assert.equal(ui.element("metricStage2Errors").textContent, 1);
   addStagePreset(ui, "stage2");
-  await ui.element("stage2Start").dispatch("click");
+  await ui.settle();
+  await ui.run('startAiProofread({ stage: "stage2" })');
   const post = ui.posts.find((item) => item.url === "/api/ai-proofread/start");
   assert.deepEqual(post.body.completedIndexes, []);
 });
