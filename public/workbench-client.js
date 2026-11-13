@@ -331,7 +331,9 @@
             : live && Number(pipeline?.pending) > 0 ? "排队中" : "空闲";
           return { key: item.presetId + ":" + stage, presetId: item.presetId, stage,
             label: preset ? presetTools.presetLabel(preset) : item.presetId,
-            stageLabel: stage.slice(-1) + "（" + stageNames[stage] + "）", inFlight: count, state };
+            stageLabel: stage.slice(-1) + "（" + stageNames[stage] + "）", inFlight: count, state,
+            latencyTotalMs: pipeline?.latencyTotalMs ?? null, latencySamples: pipeline?.latencySamples ?? 0,
+            averageLatencyMs: pipeline?.averageLatencyMs ?? null };
         });
       });
     }

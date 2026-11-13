@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  createPoolFlowGraph, poolFlowCount, poolFlowWidth, poolFlowGeometry, poolFlowSourceCenter, poolFlowTooltip,
+  createPoolFlowGraph, poolFlowCount, poolFlowWidth, poolFlowLatency, poolFlowCycleSeconds, poolFlowGeometry, poolFlowSourceCenter, poolFlowTooltip,
 } = require("../public/workbench-pool-graph");
 
 test("管道只按实际在途数变粗，显示宽度封顶不截断真实计数", () => {
@@ -35,14 +35,31 @@ test("总并发的中线使用实际起点组边界，增删起点与线宽变�
   assert.equal(poolFlowSourceCenter([{ y1: 56, radius: 3 }, { y1: 72, radius: 3 }]), 64);
 });
 
-test("悬停只展示本条连接的四行状态，不混入共享配额或预设总量", () => {
+test("每条管道按完成请求样本加权求延迟，周期有界且随延迟单调增加", () => {
+  assert.equal(poolFlowLatency({ latencyTotalMs: 3 * 10000 + 100000, latencySamples: 4 }), 32500);
+  const cycle = (latency) => poolFlowCycleSeconds({ averageLatencyMs: latency, latencySamples: 1 });
+  assert.equal(cycle(30000), 2);
+  assert.equal(cycle(120000), 4);
+  assert.equal(cycle(0), .9, "真实零毫秒样本仍表示低延迟");
+  assert.equal(cycle(3000000), 6);
+  assert.ok(cycle(10000) < cycle(30000) && cycle(30000) < cycle(60000));
+  for (const value of [{}, { averageLatencyMs: 1 }, { averageLatencyMs: 5000, latencySamples: 0 },
+    { latencyTotalMs: -1, latencySamples: 1 }, { averageLatencyMs: Infinity, latencySamples: 3 },
+    { averageLatencyMs: 1, latencySamples: .5 }]) {
+    assert.equal(poolFlowLatency(value), null);
+    assert.equal(poolFlowCycleSeconds(value), 2, "没有可靠样本时使用默认周期");
+  }
+});
+
+test("悬停展示本条连接的五行状态与平均延迟，不混入共享配额或预设总量", () => {
   const connection = { label: "供应商 / 模型", stage: "stage2", stageLabel: "阶段二 文学复审", inFlight: 8, quota: 64, total: 20 };
   assert.deepEqual(poolFlowTooltip(connection).split("\n"), [
-    "预设：供应商 / 模型", "阶段：阶段二 文学复审", "状态：运行中", "当前并发：8",
+    "预设：供应商 / 模型", "阶段：阶段二 文学复审", "状态：运行中", "当前并发：8", "平均延迟：—",
   ]);
-  assert.match(poolFlowTooltip({ ...connection, inFlight: 0, state: "冷却中" }), /状态：冷却中\n当前并发：0$/);
-  assert.match(poolFlowTooltip({ ...connection, state: "停止中" }), /状态：停止中\n当前并发：8$/);
-  assert.match(poolFlowTooltip({ ...connection, inFlight: null, state: "状态未获取" }), /状态：状态未获取\n当前并发：—$/);
+  assert.match(poolFlowTooltip({ ...connection, inFlight: 0, state: "冷却中" }), /状态：冷却中\n当前并发：0\n/);
+  assert.match(poolFlowTooltip({ ...connection, state: "停止中" }), /状态：停止中\n当前并发：8\n/);
+  assert.match(poolFlowTooltip({ ...connection, inFlight: null, state: "状态未获取" }), /状态：状态未获取\n当前并发：—\n/);
+  assert.match(poolFlowTooltip({ ...connection, latencyTotalMs: 65000, latencySamples: 2 }), /平均延迟：32.5 秒$/);
   assert.doesNotMatch(poolFlowTooltip(connection), /64|20|配额|总并发/);
 });
 
@@ -54,10 +71,14 @@ test("缺少 SVG 能力的旧页面和 VM DOM 可安全加载", () => {
 function graphFixture() {
   const frames = new Map();
   let frameId = 0;
+  const motion = { matches: false, listener: null,
+    addEventListener(_name, listener) { this.listener = listener; },
+    removeEventListener() { this.listener = null; } };
   const view = {
     innerWidth: 800, innerHeight: 600, performance: { now: () => 100 },
     requestAnimationFrame(callback) { frames.set(++frameId, callback); return frameId; },
     cancelAnimationFrame(id) { frames.delete(id); }, addEventListener() {}, removeEventListener() {},
+    matchMedia: () => motion,
   };
   const doc = { defaultView: view };
   class Element {
@@ -89,6 +110,14 @@ function graphFixture() {
       this.parentNode = null;
     }
     getBoundingClientRect() { return this.rect; }
+    getAnimations() {
+      this.animationReads = (this.animationReads || 0) + 1;
+      if (!this.animations) this.animations = waveNodes(this).map((wave) => ({
+        animationName: "ai-pool-water-surge", effect: { target: wave }, currentTime: 500, playbackRate: 1, rates: [],
+        updatePlaybackRate(rate) { this.playbackRate = rate; this.rates.push(rate); },
+      }));
+      return this.animations;
+    }
     querySelector(selector) { return selector === ".ai-pool-preset-actions" ? this.actions : null; }
     addEventListener(name, callback) { this.events.set(name, callback); }
     removeEventListener(name) { this.events.delete(name); }
@@ -109,7 +138,7 @@ function graphFixture() {
   ]));
   const graph = createPoolFlowGraph({ board, svg, list, stages });
   const flush = () => { const work = [...frames.values()]; frames.clear(); work.forEach((callback) => callback()); };
-  return { board, svg, list, card, graph, flush, frames };
+  return { board, svg, list, card, graph, flush, frames, motion };
 }
 
 function waveNodes(node) {
@@ -129,21 +158,79 @@ test("轮询复用动效和命中节点，悬停只改颜色状态，实时提�
   hit.emit("pointerenter", { clientX: 380, clientY: 50 });
   assert.equal(group.classList.contains("is-hovered"), true);
   assert.equal(group.style["--flow-width"], "12px");
-  assert.match(tooltip.textContent, /当前并发：128$/);
+  assert.match(tooltip.textContent, /当前并发：128\n/);
   ui.graph.update([{ ...connection, inFlight: 1024 }]); ui.flush();
   assert.equal(ui.svg.children[0].children[0], group);
   assert.equal(ui.svg.children[1].children[0], hit);
   assert.equal(group.htmlWrites, writes);
-  assert.match(tooltip.textContent, /当前并发：1024$/);
+  assert.match(tooltip.textContent, /当前并发：1024\n/);
   ui.graph.update([{ ...connection, inFlight: 1024, state: "停止中" }]); ui.flush();
   assert.equal(group.htmlWrites, writes);
-  assert.match(tooltip.textContent, /状态：停止中\n当前并发：1024$/);
+  assert.match(tooltip.textContent, /状态：停止中\n当前并发：1024\n/);
   ui.graph.update([{ ...connection, inFlight: null, state: "状态未获取" }]); ui.flush();
-  assert.match(tooltip.textContent, /状态：状态未获取\n当前并发：—$/);
+  assert.match(tooltip.textContent, /状态：状态未获取\n当前并发：—\n/);
   assert.equal(group.classList.contains("is-running"), false);
   hit.emit("pointerleave");
   assert.equal(group.classList.contains("is-hovered"), false);
   assert.equal(tooltip.hidden, true);
+  ui.graph.destroy();
+});
+
+test("延迟变化仅调已有水流播放速率，重复轮询不重读或重设动画", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1", inFlight: 32, latencyTotalMs: 300000, latencySamples: 10 };
+  ui.graph.update([connection]); ui.flush();
+  const group = ui.svg.children[0].children[0];
+  const animations = group.animations;
+  const waves = waveNodes(group);
+  assert.equal(animations.length, 128);
+  assert.ok(animations.every((animation) => animation.playbackRate === 1));
+  const reads = group.animationReads;
+  ui.graph.update([connection]); ui.flush();
+  assert.equal(group.animationReads, reads);
+  assert.ok(animations.every((animation) => animation.rates.length === 1));
+  ui.graph.update([{ ...connection, latencyTotalMs: 1200000 }]); ui.flush();
+  assert.equal(group.animations, animations);
+  assert.equal(group.style["--flow-width"], poolFlowWidth(32) + "px");
+  assert.ok(animations.every((animation) => animation.playbackRate === .5 && animation.currentTime === 500));
+  waveNodes(group).forEach((wave, index) => assert.equal(wave, waves[index]));
+  ui.graph.destroy();
+});
+
+test("减少动态效果恢复后重新取得动画，并恢复同管道的延迟速率", () => {
+  const ui = graphFixture();
+  ui.graph.update([{ presetId: "a", stage: "stage1", inFlight: 8, latencyTotalMs: 120000, latencySamples: 1 }]); ui.flush();
+  const group = ui.svg.children[0].children[0];
+  const old = group.animations;
+  assert.ok(old.every((animation) => animation.playbackRate === .5));
+  ui.motion.matches = true; ui.motion.listener(); ui.flush();
+  group.animations = null;
+  ui.motion.matches = false; ui.motion.listener(); ui.flush();
+  assert.notEqual(group.animations, old);
+  assert.ok(group.animations.every((animation) => animation.playbackRate === .5));
+  ui.graph.destroy();
+  assert.equal(ui.motion.listener, null);
+});
+
+test("面板隐藏或动画已取消后，重新取得当前动画并恢复延迟速率", () => {
+  const ui = graphFixture();
+  ui.graph.update([{ presetId: "a", stage: "stage1", inFlight: 8, latencyTotalMs: 120000, latencySamples: 1 }]); ui.flush();
+  const group = ui.svg.children[0].children[0];
+  const bounds = ui.board.rect;
+  const beforeHide = group.animations;
+  ui.board.rect = { ...bounds, width: 0, height: 0 };
+  ui.graph.schedule(); ui.flush();
+  group.animations = null;
+  ui.board.rect = bounds;
+  ui.graph.schedule(); ui.flush();
+  assert.notEqual(group.animations, beforeHide);
+  assert.ok(group.animations.every((animation) => animation.playbackRate === .5));
+  const cancelled = group.animations;
+  cancelled.forEach((animation) => { animation.playState = "idle"; });
+  group.animations = null;
+  ui.graph.schedule(); ui.flush();
+  assert.notEqual(group.animations, cancelled, "未经历零尺寸回调时，仍能识别已取消的旧动画");
+  assert.ok(group.animations.every((animation) => animation.playbackRate === .5));
   ui.graph.destroy();
 });
 

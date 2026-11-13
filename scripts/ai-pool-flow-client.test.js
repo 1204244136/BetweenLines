@@ -102,3 +102,21 @@ test("阶段明细缺失时标记未知，不从总运行数或阶段汇总猜�
   assert.ok(connections(ui).every((connection) => connection.state === "状态未获取"));
   assert.equal(runtimeText(ui), "总并发 3/4", "预设总运行数已知，不代表各阶段的分流数已知");
 });
+
+test("每条管道只接收本阶段延迟样本，缺少样本时不使用共享预设平均值", async () => {
+  const ui = await workbench();
+  const status = poolStatus();
+  Object.assign(status.poolRuntime.presets[0], { averageLatencyMs: 1000, latencySamples: 500, latencyTotalMs: 500000 });
+  Object.assign(status.presetPipelines.stage1[0], { averageLatencyMs: 10000, latencySamples: 2, latencyTotalMs: 20000 });
+  Object.assign(status.presetPipelines.stage2[0], { averageLatencyMs: 60000, latencySamples: 3, latencyTotalMs: 180000 });
+  ui.run(`renderAiStatus(${JSON.stringify(status)})`);
+  assert.deepEqual(connections(ui).map(({ latencySamples, latencyTotalMs, averageLatencyMs }) =>
+    [latencySamples, latencyTotalMs, averageLatencyMs]), [[2, 20000, 10000], [3, 180000, 60000]]);
+  delete status.presetPipelines.stage1[0].latencySamples;
+  delete status.presetPipelines.stage1[0].latencyTotalMs;
+  ui.run(`renderAiStatus(${JSON.stringify(status)})`);
+  assert.equal(connections(ui)[0].latencySamples, 0, "旧接口的预设均值不是已确认的本管道样本");
+  assert.equal(connections(ui)[0].latencyTotalMs, null);
+  ui.run(`renderAiStatus(${JSON.stringify({ ...status, projectKey: "other-project" })})`);
+  assert.ok(connections(ui).every((connection) => connection.latencySamples === 0));
+});

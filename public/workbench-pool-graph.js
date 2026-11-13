@@ -8,6 +8,20 @@ function poolFlowWidth(value) {
   return count > 0 ? 2.5 + 9.5 * Math.min(128, count) / 128 : 1.5;
 }
 
+function poolFlowLatency(connection = {}) {
+  const samples = Number(connection.latencySamples);
+  if (!Number.isInteger(samples) || samples <= 0) return null;
+  const total = Number(connection.latencyTotalMs);
+  if (connection.latencyTotalMs != null && Number.isFinite(total) && total >= 0) return total / samples;
+  const average = Number(connection.averageLatencyMs);
+  return connection.averageLatencyMs != null && Number.isFinite(average) && average >= 0 ? average : null;
+}
+
+function poolFlowCycleSeconds(connection) {
+  const latency = poolFlowLatency(connection);
+  return latency === null ? 2 : Math.max(.9, Math.min(6, 2 * Math.sqrt(latency / 30000)));
+}
+
 function poolFlowGeometry({ x1, y1, x2, y2, inFlight }) {
   const running = poolFlowCount(inFlight) > 0;
   const width = poolFlowWidth(inFlight);
@@ -33,12 +47,16 @@ function poolFlowSourceCenter(ports, fallback = 0) {
 
 function poolFlowTooltip(connection) {
   const inFlight = connection.inFlight == null ? null : poolFlowCount(connection.inFlight);
+  const latency = poolFlowLatency(connection);
+  const latencyText = latency === null ? "—" : latency < 1000 ? Math.round(latency) + " ms"
+    : (latency / 1000).toFixed(1).replace(/\.0$/, "") + " 秒";
   const state = String(connection.state || (inFlight > 0 ? "运行中" : inFlight === null ? "状态未获取" : "已分配 · 空闲"));
   return [
     "预设：" + String(connection.label || connection.presetId || ""),
     "阶段：" + String(connection.stageLabel || connection.stage || ""),
     "状态：" + state,
     "当前并发：" + (inFlight === null ? "—" : inFlight),
+    "平均延迟：" + latencyText,
   ].join("\n");
 }
 
@@ -48,6 +66,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
   if (!board || !svg || !list || !doc?.createElementNS || !board.getBoundingClientRect
     || !svg.getBoundingClientRect || !svg.classList || typeof svg.getScreenCTM !== "function") return noop;
   const view = doc.defaultView || globalThis;
+  const motion = view.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
   const requestFrame = view.requestAnimationFrame?.bind(view) || ((callback) => view.setTimeout(callback, 16));
   const cancelFrame = view.cancelAnimationFrame?.bind(view) || view.clearTimeout.bind(view);
   const ns = "http://www.w3.org/2000/svg";
@@ -145,6 +164,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     group.append(defs, pipe, port, arrow, arrowWave);
     const entry = {
       key, group, hit, clipId, signature: "", label: "", connection: null, wavesReady: false,
+      animations: null, playbackRate: null,
       flow, rect, arrowShape, line, pipeWave, port, arrow, arrowWave,
     };
     hit.addEventListener("pointerenter", (event) => showTooltip(entry, event));
@@ -202,11 +222,41 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     if (running && !entry.wavesReady) createWaves(entry, index);
   }
 
+  function syncAnimationRates(shown) {
+    const updates = [];
+    for (const entry of shown) {
+      if (!entry.wavesReady || typeof entry.group.getAnimations !== "function") continue;
+      if (motion?.matches) { entry.animations = null; entry.playbackRate = null; continue; }
+      if (entry.animations?.some((animation) => animation.playState === "idle")) {
+        entry.animations = null; entry.playbackRate = null;
+      }
+      const rate = 2 / poolFlowCycleSeconds(entry.connection);
+      if (entry.playbackRate === rate && entry.animations?.length) continue;
+      const animations = entry.animations?.length ? entry.animations : entry.group.getAnimations({ subtree: true })
+        .filter((animation) => animation.animationName === "ai-pool-water-surge" && typeof animation.updatePlaybackRate === "function");
+      if (animations.length) updates.push({ entry, animations, rate });
+    }
+    for (const { entry, animations, rate } of updates) {
+      animations.forEach((animation) => animation.updatePlaybackRate(rate));
+      entry.animations = animations;
+      entry.playbackRate = rate;
+    }
+  }
+
+  function onMotionChange() {
+    entries.forEach((entry) => { entry.animations = null; entry.playbackRate = null; });
+    schedule();
+  }
+
   function draw() {
     frame = 0;
     if (destroyed) return;
     const bounds = board.getBoundingClientRect();
-    if (!(bounds.width > 0 && bounds.height > 0)) { closeTooltip(); return; }
+    if (!(bounds.width > 0 && bounds.height > 0)) {
+      closeTooltip();
+      entries.forEach((entry) => { entry.animations = null; entry.playbackRate = null; });
+      return;
+    }
     svg.setAttribute("viewBox", `0 0 ${bounds.width} ${bounds.height}`);
     const cards = new Map(Array.from(list.children).filter((node) => node.dataset?.presetId)
       .map((node) => [node.dataset.presetId, { node, rect: node.getBoundingClientRect(), ports: [] }]));
@@ -261,6 +311,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       if (entry.group.parentNode !== visuals) visuals.append(entry.group);
       if (entry.hit.parentNode !== hits) hits.append(entry.hit);
     });
+    syncAnimationRates(shown);
     refreshTooltip();
   }
 
@@ -271,6 +322,8 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
   const observer = typeof view.ResizeObserver === "function" ? new view.ResizeObserver(schedule) : null;
   [board, list, ...Object.values(stages || {})].forEach((node) => { if (node) observer?.observe(node); });
   view.addEventListener?.("resize", schedule);
+  if (motion?.addEventListener) motion.addEventListener("change", onMotionChange);
+  else motion?.addListener?.(onMotionChange);
   list.addEventListener("scroll", schedule, { passive: true });
   board.addEventListener("pointerleave", closeTooltip);
   return {
@@ -296,6 +349,8 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       if (frame) cancelFrame(frame);
       observer?.disconnect();
       view.removeEventListener?.("resize", schedule);
+      if (motion?.removeEventListener) motion.removeEventListener("change", onMotionChange);
+      else motion?.removeListener?.(onMotionChange);
       list.removeEventListener("scroll", schedule);
       board.removeEventListener("pointerleave", closeTooltip);
       closeTooltip(); visuals.remove(); hits.remove(); tooltip.remove(); entries.clear();
@@ -304,5 +359,5 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createPoolFlowGraph, poolFlowCount, poolFlowWidth, poolFlowGeometry, poolFlowSourceCenter, poolFlowTooltip };
+  module.exports = { createPoolFlowGraph, poolFlowCount, poolFlowWidth, poolFlowLatency, poolFlowCycleSeconds, poolFlowGeometry, poolFlowSourceCenter, poolFlowTooltip };
 }

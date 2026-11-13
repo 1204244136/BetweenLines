@@ -40,6 +40,8 @@ function createPoolDispatch({
       .reduce((sum, value) => sum + String(value || "").length, 0);
   };
   const statsOf = (generation) => generation.dispatch.snapshot({ includeIdleWait: true });
+  const emptyLatency = () => ({ latencyTotalMs: 0, latencySamples: 0 });
+  const latencyOutcomes = new Set(["success", "failure", "fatal", "not-limited", "rate-limit", "refusal"]);
   const attemptOf = (generation, entry) => {
     const key = keyOf(entry.stageKey, entry.item);
     return { count: generation.attempts.get(key) || 0, refused: refusals.get(generation.preset.presetId)?.has(key) || false };
@@ -55,6 +57,8 @@ function createPoolDispatch({
     const generation = {
       preset, retired: false, attempts: new Map(),
       profile: { timeouts: 0, rateLimits: 0, refusals: 0, successes: 0, failures: 0, latencyMs: 0, characters: 0 },
+      latency: emptyLatency(),
+      stageLatency: Object.fromEntries(POOL_STAGES.map((stage) => [stage, emptyLatency()])),
       dispatch: createStageDispatch({
         stageKey: "pool", label: `预设池·${preset.name}`, presets: [preset], fallbackConfig: preset,
         policy, now, timers, wake, retryKeyOf: (entry) => keyOf(entry.stageKey, entry.item),
@@ -151,6 +155,7 @@ function createPoolDispatch({
   function feedback(request, options = {}) {
     const record = requests.get(request);
     if (!record || disposed) return { retry: false, events: [] };
+    if (options.stopped) record.stopped = true;
     const { generation, entry } = record;
     const result = generation.dispatch.feedback(request, options);
     const returned = generation.dispatch.drainPending();
@@ -189,8 +194,15 @@ function createPoolDispatch({
     requests.delete(request);
     const { generation, entry } = record;
     if (!generation.retired) {
-      generation.profile.latencyMs += Math.max(0, now() - record.startedAt);
+      const elapsed = Math.max(0, now() - record.startedAt);
+      generation.profile.latencyMs += elapsed;
       generation.profile.characters += sizeOf(entry.item);
+      if (!record.stopped && !options.stopped && [...record.recordedKinds].some((kind) => latencyOutcomes.has(kind))) {
+        for (const latency of [generation.latency, generation.stageLatency[entry.stageKey]]) {
+          latency.latencyTotalMs += elapsed;
+          latency.latencySamples += 1;
+        }
+      }
     }
     const released = generation.dispatch.release(request, options);
     cleanup(generation);
@@ -213,10 +225,13 @@ function createPoolDispatch({
     const presetStates = relevant.map((generation) => {
       const state = states.get(generation);
       const value = state.presets[0];
+      const latency = stageKey ? generation.stageLatency[stageKey] : generation.latency;
       const running = active.filter((record) => record.generation === generation);
       const waiting = counts.get(generation) > 0;
       return {
-        ...value, stages: [...generation.preset.stages], stagePriorities: { ...generation.preset.stagePriorities },
+        ...value, ...latency,
+        averageLatencyMs: latency.latencySamples ? latency.latencyTotalMs / latency.latencySamples : null,
+        stages: [...generation.preset.stages], stagePriorities: { ...generation.preset.stagePriorities },
         pending: counts.get(generation), inFlight: running.length,
         activeRows: running.map((record) => indexOf(record.entry.item)),
         waitReason: waiting ? value.waitReason : "", retryAt: waiting ? value.retryAt : 0,

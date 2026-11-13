@@ -47,6 +47,107 @@ function finish(pool, next, kind = "success", error = undefined) {
   return feedback;
 }
 
+test("管道延迟按预设和阶段隔离，累计耗时与样本数形成加权平均", (t) => {
+  const clock = fixture(t, [preset("shared")]);
+  const { pool } = clock;
+  const complete = (stage, index, milliseconds, kind = "success", error) => {
+    pool.stages[stage].enqueue(stage === "stage1" ? row(index) : stageItem(index));
+    const next = pool.take();
+    assert.equal(next.stageKey, stage);
+    clock.advance(milliseconds);
+    finish(pool, next, kind, error);
+  };
+  complete("stage1", 1, 100);
+  complete("stage1", 2, 300, "failure", timeout);
+  complete("stage3", 3, 1000);
+  const first = pool.stages.stage1.snapshot().presets[0];
+  const second = pool.stages.stage2.snapshot().presets[0];
+  const third = pool.stages.stage3.snapshot().presets[0];
+  assert.deepEqual([first.latencyTotalMs, first.latencySamples, first.averageLatencyMs], [400, 2, 200]);
+  assert.deepEqual([second.latencyTotalMs, second.latencySamples, second.averageLatencyMs], [0, 0, null]);
+  assert.deepEqual([third.latencyTotalMs, third.latencySamples, third.averageLatencyMs], [1000, 1, 1000]);
+  const total = pool.snapshot().presets[0];
+  assert.equal(total.latencyTotalMs, 1400);
+  assert.equal(total.latencySamples, 3);
+  assert.equal(total.averageLatencyMs, 1400 / 3, "总平均按请求样本加权，不能平均各阶段均值");
+});
+
+test("未完成和取消请求不进入管道延迟样本，释放及多次反馈不重复计权", (t) => {
+  for (const cancellation of ["without-feedback", "stopped-feedback", "success-then-stopped", "stopped-release"]) {
+    const clock = fixture(t, [preset(cancellation)]);
+    const { pool } = clock;
+    pool.stages.stage1.enqueue(row(1));
+    const next = pool.take();
+    clock.advance(500);
+    assert.equal(pool.stages.stage1.snapshot().presets[0].latencySamples, 0);
+    if (cancellation === "success-then-stopped" || cancellation === "stopped-release") pool.stages.stage1.feedback(next.request, { kind: "success" });
+    if (cancellation === "stopped-feedback" || cancellation === "success-then-stopped") pool.stages.stage1.feedback(next.request, { kind: "failure", error: timeout, stopped: true });
+    pool.stages.stage1.release(next.request, { ok: false, stopped: cancellation === "stopped-release" });
+    assert.deepEqual([
+      pool.snapshot().presets[0].latencyTotalMs,
+      pool.snapshot().presets[0].latencySamples,
+      pool.snapshot().presets[0].averageLatencyMs,
+    ], [0, 0, null], cancellation);
+  }
+  const clock = fixture(t, [preset("double-feedback")]);
+  const { pool } = clock;
+  pool.stages.stage2.enqueue(stageItem(2));
+  const next = pool.take();
+  clock.advance(25);
+  pool.stages.stage2.feedback(next.request, { kind: "success" });
+  pool.stages.stage2.feedback(next.request, { kind: "failure", error: timeout });
+  clock.advance(75);
+  assert.equal(pool.stages.stage2.release(next.request, { ok: false }), true);
+  assert.equal(pool.stages.stage2.release(next.request, { ok: false }), false);
+  const state = pool.stages.stage2.snapshot().presets[0];
+  assert.deepEqual([state.latencyTotalMs, state.latencySamples, state.averageLatencyMs], [100, 1, 100]);
+});
+
+test("同阶段不同预设的管道延迟各自累计", (t) => {
+  const clock = fixture(t, [preset("fast"), preset("slow")]);
+  const { pool } = clock;
+  pool.stages.stage1.enqueue([row(1), row(2)]);
+  const fast = pool.take();
+  const slow = pool.take();
+  assert.equal(fast.item.presetId, "fast");
+  assert.equal(slow.item.presetId, "slow");
+  clock.advance(100); finish(pool, fast);
+  clock.advance(300); finish(pool, slow);
+  const values = pool.stages.stage1.snapshot().presets;
+  assert.deepEqual(values.map((state) => [state.presetId, state.latencySamples, state.averageLatencyMs]), [["fast", 1, 100], ["slow", 1, 400]]);
+});
+
+test("拒答、限流和致命答复的完成尝试也保留各自管道耗时", (t) => {
+  for (const [kind, error] of [["not-limited", refusal], ["rate-limit", rateLimit], ["fatal", { httpStatus: 401, message: "unauthorized" }]]) {
+    const clock = fixture(t, [preset(kind)]);
+    clock.pool.stages.stage3.enqueue(stageItem(1));
+    const next = clock.pool.take();
+    clock.advance(250);
+    finish(clock.pool, next, kind, error);
+    const state = clock.pool.stages.stage3.snapshot().presets[0];
+    assert.deepEqual([state.latencyTotalMs, state.latencySamples, state.averageLatencyMs], [250, 1, 250], kind);
+  }
+});
+
+test("移除同 ID 再加入后，旧请求耗时不进入新通道或其阶段样本", (t) => {
+  const clock = fixture(t, [preset("same")]);
+  const { pool } = clock;
+  pool.stages.stage1.enqueue(row(1));
+  const old = pool.take();
+  clock.advance(10);
+  pool.updatePresets([]);
+  pool.updatePresets([preset("same")]);
+  pool.stages.stage1.enqueue(row(2));
+  const fresh = pool.take();
+  clock.advance(100);
+  finish(pool, fresh);
+  clock.advance(500);
+  finish(pool, old);
+  for (const state of [pool.snapshot().presets[0], pool.stages.stage1.snapshot().presets[0]]) {
+    assert.deepEqual([state.latencyTotalMs, state.latencySamples, state.averageLatencyMs], [100, 1, 100]);
+  }
+});
+
 test("预设默认适用三个阶段，并发额度由三个阶段共享", (t) => {
   const { pool } = fixture(t, [preset("shared", { concurrency: 2 })]);
   pool.stages.stage1.enqueue(row(1));
