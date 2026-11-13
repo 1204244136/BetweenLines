@@ -1946,7 +1946,7 @@ details[open] > summary .details-toggle::before {
   min-height: clamp(180px, 16vh, 192px);
   gap: 6px;
 }
-.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 3px 8px; }
+.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 3px 8px 3px 36px; }
 .ai-pool-flow-board .ai-stage-card-head { display: flex; min-height: 18px; gap: 6px; }
 .ai-pool-flow-board .ai-stage-card-title-row { flex: 0 0 auto; }
 .ai-pool-flow-board .ai-stage-runtime-line { flex: 1; justify-content: flex-end; }
@@ -1984,12 +1984,12 @@ details[open] > summary .details-toggle::before {
 }
 @keyframes ai-pool-water-surge { 0% { stroke-dashoffset: var(--flow-start); } 84%, 100% { stroke-dashoffset: var(--flow-end); } }
 .ai-pool-flow-hit { fill: none; stroke: transparent; pointer-events: stroke; stroke-linecap: round; }
-.ai-pool-flow-hidden-sources { pointer-events: none; }
-.ai-pool-flow-hidden-sources rect { fill: var(--ai-surface); stroke: var(--ai-line-strong); stroke-width: 1; }
+.ai-pool-flow-hidden-sources { pointer-events: visiblePainted; }
+.ai-pool-flow-hidden-sources rect { fill: var(--ai-surface-subtle); stroke: none; }
 .ai-pool-flow-hidden-sources path { fill: none; stroke: var(--ai-muted); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .ai-pool-flow-hidden-sources text { fill: var(--ai-muted); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
 @media (forced-colors: active) {
-  .ai-pool-flow-hidden-sources rect { fill: Canvas; stroke: GrayText; }
+  .ai-pool-flow-hidden-sources rect { fill: Canvas; stroke: GrayText; stroke-width: 1; }
   .ai-pool-flow-hidden-sources path { stroke: CanvasText; }
   .ai-pool-flow-hidden-sources text { fill: CanvasText; }
 }
@@ -2021,5 +2021,6 @@ details[open] > summary .details-toggle::before {
   .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .ai-pool-flow-board .ai-pool-presets { contain: none; max-height: 144px; }
   .ai-pool-flow-board .ai-stage-cards { grid-column: 1; grid-template-rows: none; min-height: 0; }
+  .ai-pool-flow-board .ai-stage-card { padding-left: 8px; }
   .ai-pool-flow-svg { display: none; }
 }

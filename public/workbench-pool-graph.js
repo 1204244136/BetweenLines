@@ -264,21 +264,21 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
         let marker = hiddenSources.get(key);
         if (!marker) {
           const group = makeSvg("g", { class: "ai-pool-flow-hidden-sources", role: "img", "data-stage": stage, "data-direction": direction });
-          const background = makeSvg("rect", { height: 14, rx: 4, "aria-hidden": "true" });
-          const chevron = makeSvg("path", { d: direction === "above" ? "M 5 8.5 l 3 -3 l 3 3" : "M 5 5.5 l 3 3 l 3 -3", "aria-hidden": "true" });
-          const text = makeSvg("text", { x: 14, y: 7, "dominant-baseline": "central", "aria-hidden": "true" });
+          const background = makeSvg("rect", { height: 14, rx: 3, "aria-hidden": "true" });
+          const chevron = makeSvg("path", { d: direction === "above" ? "M 3 8.5 l 3 -3 l 3 3" : "M 3 5.5 l 3 3 l 3 -3", "aria-hidden": "true" });
+          const text = makeSvg("text", { x: 12, y: 7, "dominant-baseline": "central", "aria-hidden": "true" });
           group.append(background, chevron, text);
           indicators.append(group);
           marker = { group, background, text };
           hiddenSources.set(key, marker);
         }
         const count = sources.size;
-        const width = count > 9 ? 30 : 24;
+        const width = count > 9 ? 26 : 20;
         marker.background.setAttribute("width", String(width));
         marker.text.textContent = count > 99 ? "99+" : String(count);
         marker.text.setAttribute("textLength", count > 99 ? "13" : count > 9 ? "12" : "6");
         marker.text.setAttribute("lengthAdjust", "spacingAndGlyphs");
-        marker.group.setAttribute("transform", `translate(${target.left - bounds.left - 18 - width} ${direction === "above" ? target.top - bounds.top : target.bottom - bounds.top - 14})`);
+        marker.group.setAttribute("transform", `translate(${target.left - bounds.left + 4} ${direction === "above" ? target.top - bounds.top + 4 : target.bottom - bounds.top - 18})`);
         marker.group.setAttribute("data-count", String(count));
         marker.group.setAttribute("aria-label", `${sources.values().next().value.stageLabel || stage}：列表${direction === "above" ? "上方" : "下方"}还有 ${count} 个预设连接至此阶段`);
         marker.group.setAttribute("aria-hidden", "false");
