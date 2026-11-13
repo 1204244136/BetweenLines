@@ -120,3 +120,48 @@ test("每条管道只接收本阶段延迟样本，缺少样本时不使用共�
   ui.run(`renderAiStatus(${JSON.stringify({ ...status, projectKey: "other-project" })})`);
   assert.ok(connections(ui).every((connection) => connection.latencySamples === 0));
 });
+
+test("纯阶段统计刷新不重复通知管道或重写未变的预设控件", async () => {
+  const ui = await workbench();
+  ui.run(`globalThis.poolFlowUpdates = [];
+    poolFlowGraph = { update(next) { poolFlowUpdates.push(next); }, schedule() {} };
+    updatePoolFlowGraph(); poolFlowUpdates.length = 0;`);
+  const preset = ui.element("aiPoolPresets").children.find((node) => node.dataset.presetId === "p1");
+  const writes = [];
+  const controls = preset._poolControls;
+  for (const [node, properties] of [[controls.name, ["textContent"]], [controls.runtime, ["textContent"]],
+    ...controls.stages.flatMap(({ checkbox, priority }) => [[checkbox, ["checked"]], [priority, ["value", "hidden", "disabled"]]])]) {
+    for (const property of properties) {
+      let value = node[property];
+      Object.defineProperty(node, property, {
+        get: () => value,
+        set(next) { writes.push(property); value = next; },
+      });
+    }
+    const setAttribute = node.setAttribute.bind(node);
+    node.setAttribute = (name, value) => { writes.push(name); setAttribute(name, value); };
+  }
+  for (let done = 1; done <= 4; done++) {
+    ui.run(`renderAiStatus(${JSON.stringify(poolStatus({ modelProcessed: done, stageMetrics: { stage1Passed: done } }))})`);
+  }
+  assert.equal(ui.run("poolFlowUpdates.length"), 0);
+  assert.deepEqual(writes, []);
+});
+
+test("管道投影有变化时继续更新，并在独立预设布局变化时显式重算", async () => {
+  const ui = await workbench();
+  ui.run(`globalThis.poolFlowUpdates = []; globalThis.poolFlowLayouts = 0;
+    poolFlowGraph = { update(next) { poolFlowUpdates.push(next); }, schedule() { poolFlowLayouts++; } };
+    updatePoolFlowGraph(); poolFlowUpdates.length = 0;`);
+  const status = poolStatus();
+  status.presetPipelines.stage1[0].inFlight = 2;
+  ui.run(`renderAiStatus(${JSON.stringify(status)})`);
+  assert.equal(ui.run("poolFlowUpdates.length"), 1);
+  assert.equal(ui.run("poolFlowUpdates[0][0].inFlight"), 2);
+  Object.assign(status.presetPipelines.stage1[0], { latencySamples: 2, latencyTotalMs: 20000 });
+  ui.run(`renderAiStatus(${JSON.stringify(status)})`);
+  assert.equal(ui.run("poolFlowUpdates.length"), 2);
+  ui.run(`aiIds.poolPriority.checked = true; renderPoolPresetSelection()`);
+  assert.equal(ui.run("poolFlowUpdates.length"), 2, "优先级输入显示不改变管道状态投影");
+  assert.ok(ui.run("poolFlowLayouts") > 0, "控制项展开可能改变源端口位置，必须通知布局层");
+});

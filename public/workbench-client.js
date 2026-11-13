@@ -125,6 +125,7 @@
     let poolSyncQueue = Promise.resolve();
     let poolRuntimeMatchesPage = false;
     let poolFlowGraph = null;
+    let poolFlowProjection = "";
     let poolSyncVersion = 0;
 
     function normalizePoolSelection(item) {
@@ -194,6 +195,15 @@
     function renderPoolPresetSelection() {
       const list = aiIds.poolPresets;
       if (!list) return;
+      let layoutChanged = false;
+      const setProperty = (node, name, value) => {
+        if (node[name] === value) return false;
+        node[name] = value;
+        return true;
+      };
+      const setAttribute = (node, name, value) => {
+        if (node.getAttribute(name) !== value) node.setAttribute(name, value);
+      };
       const existing = new Map(Array.from(list.children).filter((node) => node.dataset.presetId)
         .map((node) => [node.dataset.presetId, node]));
       const next = sharedPoolSelections.map((item) => {
@@ -262,16 +272,16 @@
         const controls = node._poolControls;
         const preset = presetTools.getPreset(localStorage, item.presetId);
         const label = preset ? presetTools.presetLabel(preset) : "预设已失效：" + item.presetId;
-        controls.name.textContent = label;
+        layoutChanged = setProperty(controls.name, "textContent", label) || layoutChanged;
         setLiveHoverTitle(controls.name, label);
-        controls.remove.setAttribute("aria-label", "从池中移除" + label);
+        setAttribute(controls.remove, "aria-label", "从池中移除" + label);
         controls.stages.forEach(({ checkbox, priority }, index) => {
-          checkbox.checked = item.stages.includes(poolStages[index]);
-          checkbox.setAttribute("aria-label", label + "允许阶段" + (index + 1));
-          priority.value = String(item.stagePriorities[poolStages[index]]);
-          priority.setAttribute("aria-label", label + "阶段" + (index + 1) + "优先级，数值越大越优先");
-          priority.hidden = !aiIds.poolPriority?.checked;
-          priority.disabled = !checkbox.checked;
+          setProperty(checkbox, "checked", item.stages.includes(poolStages[index]));
+          setAttribute(checkbox, "aria-label", label + "允许阶段" + (index + 1));
+          setProperty(priority, "value", String(item.stagePriorities[poolStages[index]]));
+          setAttribute(priority, "aria-label", label + "阶段" + (index + 1) + "优先级，数值越大越优先");
+          layoutChanged = setProperty(priority, "hidden", !aiIds.poolPriority?.checked) || layoutChanged;
+          setProperty(priority, "disabled", !checkbox.checked);
         });
         const poolLive = currentAiRunning && poolRuntimeMatchesPage;
         const runtime = poolLive && latestPoolRuntime?.presets?.find((entry) => entry.presetId === item.presetId);
@@ -285,8 +295,8 @@
             + (item.stages.length ? "" : " · 未分配阶段");
         const total = runtime ? Math.max(0, Number(runtime.inFlight) || 0) : poolLive ? "—" : 0;
         const cap = runtime?.configuredConcurrency || preset?.concurrency || AI_CONCURRENCY_DEFAULT;
-        controls.runtime.textContent = "总并发 " + total + "/" + cap;
-        controls.runtime.setAttribute("aria-label", "总并发 " + total + "，共享上限 " + cap);
+        setProperty(controls.runtime, "textContent", "总并发 " + total + "/" + cap);
+        setAttribute(controls.runtime, "aria-label", "总并发 " + total + "，共享上限 " + cap);
         const activeRows = runtime?.activeRows || [];
         const profile = runtime?.profile;
         const profileText = profile ? "\n本次通道：成功 " + (Number(profile.successes) || 0)
@@ -298,18 +308,19 @@
       });
       if (!next.length) {
         const empty = list.children[0]?.className === "ai-pool-empty" ? list.children[0] : document.createElement("p");
-        empty.className = "ai-pool-empty";
-        empty.textContent = "添加已保存的模型预设，三个阶段即可共享其空闲并发。";
+        setProperty(empty, "className", "ai-pool-empty");
+        setProperty(empty, "textContent", "添加已保存的模型预设，三个阶段即可共享其空闲并发。");
         next.push(empty);
       }
       if (list.children.length !== next.length || next.some((node, index) => node !== list.children[index])) {
         list.replaceChildren(...next);
+        layoutChanged = true;
       }
-      if (aiIds.poolCount) aiIds.poolCount.textContent = String(sharedPoolSelections.length);
-      updatePoolFlowGraph();
-      if (aiIds.poolModeHint) aiIds.poolModeHint.textContent = aiIds.poolMode?.value === "loop"
+      if (aiIds.poolCount) setProperty(aiIds.poolCount, "textContent", String(sharedPoolSelections.length));
+      updatePoolFlowGraph(layoutChanged);
+      if (aiIds.poolModeHint) setProperty(aiIds.poolModeHint, "textContent", aiIds.poolMode?.value === "loop"
         ? "循环：自动续跑可重试异常并衔接下游；拒答行换预设。没有可用路线或重试耗尽时暂停并保留异常。重试可能重复计费。"
-        : "常规：从已有进度继续，三个阶段自动接力；本轮异常保留，结束后可再次启动。";
+        : "常规：从已有进度继续，三个阶段自动接力；本轮异常保留，结束后可再次启动。");
     }
 
     function poolFlowConnections() {
@@ -338,15 +349,23 @@
       });
     }
 
-    function updatePoolFlowGraph() {
+    function updatePoolFlowGraph(layoutChanged = false) {
       if (!poolFlowGraph && typeof createPoolFlowGraph === "function") {
         poolFlowGraph = createPoolFlowGraph({
           board: document.getElementById("aiPoolFlowBoard"), svg: document.getElementById("aiPoolFlowSvg"),
           list: aiIds.poolPresets,
           stages: Object.fromEntries(poolStages.map((stage) => [stage, document.getElementById(stage + "Card")])),
         });
+        poolFlowProjection = "";
       }
-      poolFlowGraph?.update(poolFlowConnections());
+      if (!poolFlowGraph) return;
+      const connections = poolFlowConnections();
+      const projection = JSON.stringify(connections);
+      if (projection !== poolFlowProjection) {
+        poolFlowProjection = projection;
+        poolFlowGraph.update(connections);
+      }
+      if (layoutChanged) poolFlowGraph.schedule();
     }
 
     function syncRunningPoolPresets() {

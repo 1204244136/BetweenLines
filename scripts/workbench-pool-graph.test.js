@@ -92,11 +92,11 @@ function graphFixture() {
         toggle(value, enabled) { if (enabled) classes.add(value); else classes.delete(value); },
         contains: (value) => classes.has(value),
       };
-      this.htmlWrites = 0; this._html = "";
+      this.htmlWrites = 0; this._html = ""; this.geometryReads = 0; this.attributeWrites = 0;
     }
     set innerHTML(value) { this._html = value; this.htmlWrites += 1; }
     get innerHTML() { return this._html; }
-    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); this.attributeWrites += 1; }
     removeAttribute(name) { this.attributes.delete(name); }
     append(...nodes) { nodes.forEach((node) => this.insertBefore(node, null)); }
     insertBefore(node, before) {
@@ -109,7 +109,7 @@ function graphFixture() {
       if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
       this.parentNode = null;
     }
-    getBoundingClientRect() { return this.rect; }
+    getBoundingClientRect() { this.geometryReads += 1; return this.rect; }
     getAnimations() {
       this.animationReads = (this.animationReads || 0) + 1;
       if (!this.animations) this.animations = waveNodes(this).map((wave) => ({
@@ -147,6 +147,66 @@ function waveNodes(node) {
   ]);
 }
 
+function routeGeometryReads(ui) {
+  return [ui.list, ui.card, ...Object.values(ui.stages)].filter(Boolean)
+    .reduce((count, node) => count + node.geometryReads, 0);
+}
+
+function attributeWrites(node) {
+  return node.attributeWrites + node.children.reduce((count, child) => count + attributeWrites(child), 0);
+}
+
+test("统计轮询的相同管道投影不安排图形帧，也不测量或重写 SVG", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1", inFlight: 8, label: "A", state: "运行中" };
+  ui.graph.update([connection]); ui.flush();
+  const reads = routeGeometryReads(ui), writes = attributeWrites(ui.svg);
+  ui.graph.update([{ state: "运行中", label: "A", stage: "stage1", presetId: "a", inFlight: "8" }]);
+  assert.equal(ui.frames.size, 0, "等价投影不应在每次统计轮询时再进入图形帧");
+  ui.flush();
+  assert.equal(routeGeometryReads(ui), reads);
+  assert.equal(attributeWrites(ui.svg), writes);
+  ui.graph.destroy();
+});
+
+test("状态提示与平均延迟变化直接更新文本和速率，不重新测量走线几何", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1", label: "A", inFlight: 8, latencyTotalMs: 30000, latencySamples: 1 };
+  ui.graph.update([connection]); ui.flush();
+  const group = ui.svg.children[0].children[0], hit = ui.svg.children[1].children[0];
+  const animations = group.animations, waves = waveNodes(group);
+  hit.emit("pointerenter", { clientX: 380, clientY: 50 });
+  const reads = routeGeometryReads(ui);
+  const path = hit.attributes.get("d");
+  ui.graph.update([{ ...connection, label: "新名称", state: "停止中", latencyTotalMs: 120000 }]); ui.flush();
+  assert.equal(routeGeometryReads(ui), reads, "纯数据变化不应量取预设和阶段的位置");
+  assert.equal(hit.attributes.get("d"), path);
+  assert.equal(group.animations, animations);
+  assert.deepEqual(waveNodes(group), waves);
+  assert.ok(animations.every((animation) => animation.playbackRate === .5 && animation.currentTime === 500));
+  assert.match(hit.attributes.get("aria-label"), /预设：新名称\n/);
+  assert.match(ui.board.children[0].textContent, /状态：停止中\n当前并发：8\n平均延迟：120 秒$/);
+  ui.graph.destroy();
+});
+
+test("已空闲管道不随延迟轮询调速，再运行时在原动画上应用最新速率", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1", inFlight: 8, latencyTotalMs: 30000, latencySamples: 1 };
+  ui.graph.update([connection]); ui.flush();
+  const group = ui.svg.children[0].children[0], animations = group.animations, waves = waveNodes(group);
+  ui.graph.update([{ ...connection, inFlight: 0 }]); ui.flush();
+  const reads = group.animationReads;
+  const updates = animations.map((animation) => animation.rates.length);
+  ui.graph.update([{ ...connection, inFlight: 0, latencyTotalMs: 120000 }]); ui.flush();
+  assert.equal(group.animationReads, reads);
+  assert.deepEqual(animations.map((animation) => animation.rates.length), updates, "空闲动画不应继续收到调速写入");
+  ui.graph.update([{ ...connection, latencyTotalMs: 120000 }]); ui.flush();
+  assert.equal(group.animations, animations);
+  assert.deepEqual(waveNodes(group), waves);
+  assert.ok(animations.every((animation) => animation.playbackRate === .5 && animation.currentTime === 500));
+  ui.graph.destroy();
+});
+
 test("轮询复用动效和命中节点，悬停只改颜色状态，实时提示跟随本条并发", () => {
   const ui = graphFixture();
   const connection = { presetId: "a", stage: "stage1", label: "A", inFlight: 128 };
@@ -183,7 +243,7 @@ test("延迟变化仅调已有水流播放速率，重复轮询不重读或重�
   const group = ui.svg.children[0].children[0];
   const animations = group.animations;
   const waves = waveNodes(group);
-  assert.equal(animations.length, 128);
+  assert.equal(animations.length, 64);
   assert.ok(animations.every((animation) => animation.playbackRate === 1));
   const reads = group.animationReads;
   ui.graph.update([connection]); ui.flush();
@@ -243,7 +303,8 @@ test("正并发数字变化只更新粗细，不替换进行中的水流子树",
   const writes = group.htmlWrites;
   const waves = waveNodes(group);
   const phase = group.style["--flow-delay"];
-  assert.equal(waves.length, 128, "管道与箭头共同使用完整渐变波包");
+  assert.equal(waves.length, 64, "管道与箭头共用减半的渐变切片预算");
+  assert.ok(waves.every((wave) => wave.tag === "path" && !wave.attributes.has("href")), "波包直接绘制路径，避免 SVG 实例树样式开销");
   for (const inFlight of [127, 64, 3, 128]) {
     ui.graph.update([{ ...connection, inFlight }]); ui.flush();
     assert.equal(ui.svg.children[0].children[0], group);
@@ -253,6 +314,7 @@ test("正并发数字变化只更新粗细，不替换进行中的水流子树",
     assert.equal(group.htmlWrites, writes, "运行数变化不得重建水流子树并打断其动画时间线");
     assert.equal(waveNodes(group).length, waves.length);
     waveNodes(group).forEach((wave, index) => assert.equal(wave, waves[index]));
+    assert.ok(waves.every((wave) => wave.attributes.get("d") === hit.attributes.get("d")), "粗细变化后，管道和箭头波包继续沿更新后的连续路径流动");
     assert.equal(group.style["--flow-delay"], phase, "线宽变化不重置水流相位");
   }
   ui.graph.destroy();
@@ -274,6 +336,7 @@ test("布局重算更新管道路径但保留进行中的水流子树", () => {
   assert.equal(group.htmlWrites, writes, "几何变化不得替换正在运行的水流子树");
   assert.equal(waveNodes(group).length, waves.length);
   waveNodes(group).forEach((wave, index) => assert.equal(wave, waves[index]));
+  assert.ok(waves.every((wave) => wave.attributes.get("d") === hit.attributes.get("d")), "布局变化必须同步更新保留下来的直接波包路径");
   ui.graph.destroy();
 });
 

@@ -1977,6 +1977,7 @@ details[open] > summary .details-toggle::before {
 .ai-pool-flow-arrow { fill: var(--flow-idle); }
 .ai-pool-flow-connection.is-running .ai-pool-flow-arrow { fill: var(--flow-color); }
 .ai-pool-flow-connection:not(.is-running) .ai-pool-flow-wave { visibility: hidden; }
+.ai-pool-flow-connection:not(.is-running) .ai-pool-flow-surge { animation-play-state: paused; }
 .ai-pool-flow-surge {
   fill: none;
   stroke: var(--flow-wave-color);
