@@ -209,10 +209,10 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       shown.push(entry);
     });
     cards.forEach(({ node, rect, ports }) => {
-      const runtime = node.querySelector(".ai-pool-preset-runtime");
+      const actions = node.querySelector(".ai-pool-preset-actions");
       const measuredBorder = parseFloat(view.getComputedStyle?.(node)?.borderTopWidth);
       const border = Number.isFinite(measuredBorder) ? measuredBorder : (Number(node.clientTop) || 0);
-      if (runtime) runtime.style.top = (poolFlowSourceCenter(ports, rect.top + rect.height / 2 - bounds.top) - rect.top + bounds.top - border) + "px";
+      if (actions) actions.style.top = (poolFlowSourceCenter(ports, rect.top + rect.height / 2 - bounds.top) - rect.top + bounds.top - border) + "px";
     });
     const keys = new Set(shown.map((entry) => entry.key));
     entries.forEach((entry, key) => {

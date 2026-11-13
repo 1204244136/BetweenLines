@@ -1868,14 +1868,14 @@ details[open] > summary .details-toggle::before {
 .ai-pool-flow-board .ai-pool-preset {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-content: center;
   align-items: center;
   justify-content: center;
   flex: 1 0 auto;
   min-height: 56px;
   gap: 3px 8px;
-  padding: 6px 114px 6px 10px;
+  padding: 6px 168px 6px 10px;
 }
 .ai-pool-flow-board .ai-pool-preset-identity { display: block; width: 100%; grid-column: 1 / -1; }
 .ai-pool-flow-board .ai-pool-preset-name {
@@ -1885,12 +1885,21 @@ details[open] > summary .details-toggle::before {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.ai-pool-flow-board .ai-pool-preset-runtime {
+.ai-pool-flow-board .ai-pool-preset-actions {
   position: absolute;
   right: 10px;
   top: 50%;
   transform: translateY(-50%);
-  width: 96px;
+  width: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.ai-pool-flow-board .ai-pool-preset-runtime {
+  flex: 0 1 auto;
+  min-width: 0;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -1898,7 +1907,8 @@ details[open] > summary .details-toggle::before {
   font-variant-numeric: tabular-nums;
 }
 .ai-pool-flow-board .ai-pool-stage-choices { width: 100%; grid-column: 1; }
-.ai-pool-flow-board .ai-pool-preset > button { grid-area: 2 / 2; height: 22px; }
+.ai-pool-flow-board .ai-pool-stage-choice { flex-wrap: wrap; }
+.ai-pool-flow-board .ai-pool-preset-actions > button { flex: 0 0 auto; height: 22px; }
 .ai-pool-flow-board .ai-stage-cards {
   grid-column: 3;
   grid-template-columns: minmax(0, 1fr);
@@ -1964,8 +1974,9 @@ details[open] > summary .details-toggle::before {
 @media (prefers-reduced-motion: reduce) { .ai-pool-flow-surge { animation: none; opacity: 0; } }
 @media (max-width: 900px) {
   .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1.2fr); }
-  .ai-pool-flow-board .ai-pool-preset { padding-right: 88px; }
-  .ai-pool-flow-board .ai-pool-preset-runtime { width: 72px; font-size: 10px; }
+  .ai-pool-flow-board .ai-pool-preset { padding-right: 144px; }
+  .ai-pool-flow-board .ai-pool-preset-actions { width: 126px; }
+  .ai-pool-flow-board .ai-pool-preset-runtime { font-size: 10px; }
 }
 @media (max-width: 640px) {
   .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr); gap: 8px; }

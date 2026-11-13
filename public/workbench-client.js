@@ -252,7 +252,10 @@
             sharedPoolSelections = sharedPoolSelections.filter((entry) => entry.presetId !== item.presetId);
             changePoolConfiguration();
           });
-          node.append(identity, choices, remove, runtime);
+          const actions = document.createElement("div");
+          actions.className = "ai-pool-preset-actions";
+          actions.append(remove, runtime);
+          node.append(identity, choices, actions);
           node._poolControls = { name, runtime, stages, remove };
         }
         const controls = node._poolControls;

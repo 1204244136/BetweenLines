@@ -89,7 +89,7 @@ function graphFixture() {
       this.parentNode = null;
     }
     getBoundingClientRect() { return this.rect; }
-    querySelector(selector) { return selector === ".ai-pool-preset-runtime" ? this.runtime : null; }
+    querySelector(selector) { return selector === ".ai-pool-preset-actions" ? this.actions : null; }
     addEventListener(name, callback) { this.events.set(name, callback); }
     removeEventListener(name) { this.events.delete(name); }
     emit(name, event = {}) { this.events.get(name)?.(event); }
@@ -102,7 +102,7 @@ function graphFixture() {
   const list = new Element("div", { left: 0, top: 0, right: 300, bottom: 300, width: 300, height: 300 });
   const card = new Element("div", { left: 0, top: 0, right: 300, bottom: 100, width: 300, height: 100 });
   card.dataset.presetId = "a";
-  card.runtime = new Element("span");
+  card.actions = new Element("div");
   list.append(card);
   const stages = Object.fromEntries(["stage1", "stage2", "stage3"].map((stage, index) => [stage,
     new Element("article", { left: 500, top: index * 120, right: 800, bottom: index * 120 + 100, width: 300, height: 100 }),
@@ -141,21 +141,21 @@ test("轮询复用动效和命中节点，悬停只改颜色状态，实时提�
   ui.graph.destroy();
 });
 
-test("实际生成的圆点变化重算总并发中线，列表滚动隐藏不可见管道", () => {
+test("实际生成的圆点变化重算移除与总并发操作组中线，列表滚动隐藏不可见管道", () => {
   const ui = graphFixture();
   ui.graph.update(["stage1", "stage2", "stage3"].map((stage, index) => ({ presetId: "a", stage, inFlight: index ? 0 : 128 })));
   ui.flush();
-  assert.equal(ui.card.runtime.style.top, "48.25px");
+  assert.equal(ui.card.actions.style.top, "48.25px");
   assert.equal(ui.svg.children[0].children.length, 3);
   ui.graph.update([{ presetId: "a", stage: "stage1", inFlight: 128 }]); ui.flush();
-  assert.equal(ui.card.runtime.style.top, "50px");
+  assert.equal(ui.card.actions.style.top, "50px");
   ui.card.clientTop = 1;
   ui.graph.schedule(); ui.flush();
-  assert.equal(ui.card.runtime.style.top, "49px", "absolute top 应扣除卡片边框，使文本屏幕中心与源点中心对齐");
-  assert.equal(parseFloat(ui.card.runtime.style.top) + ui.card.clientTop, 50);
+  assert.equal(ui.card.actions.style.top, "49px", "absolute top 应扣除卡片边框，使操作组屏幕中心与源点中心对齐");
+  assert.equal(parseFloat(ui.card.actions.style.top) + ui.card.clientTop, 50);
   ui.card.ownerDocument.defaultView.getComputedStyle = () => ({ borderTopWidth: "0.666667px" });
   ui.graph.schedule(); ui.flush();
-  assert.ok(Math.abs(parseFloat(ui.card.runtime.style.top) + 2 / 3 - 50) < 0.00001,
+  assert.ok(Math.abs(parseFloat(ui.card.actions.style.top) + 2 / 3 - 50) < 0.00001,
     "缩放后的亚像素边框不应被 clientTop 的整数舍入破坏对齐");
   ui.card.rect = { left: 0, top: -120, right: 300, bottom: -20, width: 300, height: 100 };
   ui.list.emit("scroll"); ui.list.emit("scroll");
