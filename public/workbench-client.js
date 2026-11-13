@@ -58,6 +58,7 @@
     const parsedAutomatedNoteCache = new Map();
     const MAX_PARSED_NOTE_CACHE = 5000;
     let cachedStageMetrics = null;
+    const stageMetricsNoteCache = new Map();
     let notesMetricsVersion = 0;
     let lastComputedMetricsVersion = -1;
 
@@ -2523,14 +2524,14 @@
       return stageNoteState(noteText).diverged;
     }
 
-    function getStage3RowStatus(item) {
+    function getStage3RowStatus(item, prepared = null) {
       if (!item || item.manualDone) return { isArbitrated: false, isPending: false, isRelevant: false };
-      const text = latestAiNotePart(item.note).trim();
-      if (!text || !hasAutomatedDecisionNote(text)) return { isArbitrated: false, isPending: false, isRelevant: false };
-      const p = parseAutomatedNote(text);
+      const text = prepared ? prepared.noteText : latestAiNotePart(item.note).trim();
+      if (!text || (!prepared && !hasAutomatedDecisionNote(text))) return { isArbitrated: false, isPending: false, isRelevant: false };
+      const p = prepared ? prepared.parsed : parseAutomatedNote(text);
       if (!p) return { isArbitrated: false, isPending: false, isRelevant: false };
 
-      const state = stageNoteState(text);
+      const state = prepared ? prepared.state : stageNoteState(text);
       const hasS3 = state.arbitrated;
       if (hasS3) {
         return { isArbitrated: true, isPending: false, isRelevant: true };
@@ -2543,9 +2544,9 @@
       return { isArbitrated: false, isPending: false, isRelevant: false };
     }
 
-    function getStage2RowStatus(item) {
+    function getStage2RowStatus(item, preparedState = null) {
       if (!item || item.manualDone) return { isReviewed: false, isPending: false, isRelevant: false };
-      const state = stageNoteState(item.note);
+      const state = preparedState || stageNoteState(item.note);
       return { isReviewed: state.reviewed, isPending: state.pendingReview,
         isRelevant: state.candidate || state.reviewed };
     }
@@ -4733,6 +4734,17 @@
       });
     }
 
+    function projectStageMetricsNote(item) {
+      const noteText = latestAiNotePart(item.note || "").trim();
+      const state = stageNoteState(noteText);
+      const failed = state.text.startsWith("[AI校对]") && state.failed;
+      const parsed = noteText && !failed ? parseAutomatedNote(noteText) : null;
+      const projection = { noteText, state, failed, parsed };
+      projection.stage2 = getStage2RowStatus(item, state);
+      projection.stage3 = getStage3RowStatus(item, projection);
+      return projection;
+    }
+
     function computeStageMetricsFromNotes(sourceNotes = notes) {
       if (sourceNotes === notes && cachedStageMetrics && notesMetricsVersion === lastComputedMetricsVersion) {
         return cachedStageMetrics;
@@ -4745,6 +4757,7 @@
       let fastPassHits = 0;
       let stage2Reviewed = 0;
       let stage2Diverged = 0;
+      let stage2Pending = 0;
       let stage2Errors = 0;
       let critiqueAccept = 0;
       let critiqueModify = 0;
@@ -4752,6 +4765,7 @@
       let critiqueEscalate = 0;
       let stage3Arbitrated = 0;
       let stage3Settled = 0;
+      let stage3Pending = 0;
       let stage3Errors = 0;
       let arbitrationGatekeeper = 0;
       let arbitrationStylist = 0;
@@ -4768,14 +4782,26 @@
       const stageErrorKinds = { stage1: {}, stage2: {}, stage3: {} };
       // 统计时同步保留命中的行号，指标筛选复用同一份分类与缓存。
       const metricRowIds = {};
+      const rowCache = sourceNotes === notes ? stageMetricsNoteCache : null;
 
       for (const [noteRowKey, item] of Object.entries(sourceNotes || {})) {
         if (!item) continue;
-        const noteText = latestAiNotePart(item.note || "").trim();
+        const note = String(item.note || "");
+        const manualDone = Boolean(item.manualDone);
+        let projection = rowCache?.get(noteRowKey);
+        if (!projection || projection.note !== note || projection.manualDone !== manualDone) {
+          projection = { note, manualDone, ...projectStageMetricsNote(item) };
+          rowCache?.set(noteRowKey, projection);
+        }
+        // The visible count follows the same note-level predicate as the filter,
+        // so incomplete/failed Stylist rows remain actionable instead of being
+        // hidden by subtracting aggregate counts from unrelated stages.
+        if (projection.stage2.isPending) stage2Pending += 1;
+        if (projection.stage3.isPending) stage3Pending += 1;
+        const { noteText, state, parsed } = projection;
         if (!noteText) continue;
         const recordMetricRow = (metric) => (metricRowIds[metric] ||= new Set()).add(String(noteRowKey));
 
-        const state = stageNoteState(noteText);
         for (const [stage, failureLine] of Object.entries(state.errors)) {
           recordMetricRow(stage + "Errors");
           if (stage === "stage1") stage1Errors += 1;
@@ -4783,12 +4809,11 @@
           else if (stage === "stage3") stage3Errors += 1;
           recordAiErrorKind(stageErrorKinds[stage], classifyAiError(failureLine), Number(noteRowKey), failureLine);
         }
-        if (isAiFailureNote(noteText)) {
+        if (projection.failed) {
           totalAudited += 1;
           continue;
         }
 
-        const parsed = parseAutomatedNote(noteText);
         if (!parsed) continue;
         recordMetricRow("stage1Total");
 
@@ -4880,7 +4905,7 @@
         // 判据必须与「待终审仲裁」筛选、启动弹窗同源（getStage3RowStatus）：
         // 只在拿到仲裁结论时才 +1 的话，仲裁队列跑空后分歧会塌回「已仲裁数」，
         // 于是卡片写「1 分歧」、弹窗写「1583 条分歧行待仲裁」，两边各说各话。
-        const stage3RowStatus = getStage3RowStatus(item);
+        const stage3RowStatus = projection.stage3;
         if (stage3RowStatus.isArbitrated || stage3RowStatus.isPending) {
           stage2Diverged += 1;
           recordMetricRow("stage2Diverged");
@@ -4920,11 +4945,11 @@
       // 已仲裁记录保留在分歧统计内；人工确认只移除尚待仲裁的待办。
       stage2Diverged = metricRowIds.stage2Diverged?.size || 0;
       const stage1Total = stage1Passed + stage1NeedsEdit + stage1Unclear;
-      // The visible count follows the same note-level predicate as the filter,
-      // so incomplete/failed Stylist rows remain actionable instead of being
-      // hidden by subtracting aggregate counts from unrelated stages.
-      const stage2Pending = Object.values(sourceNotes || {}).filter((item) => getStage2RowStatus(item).isPending).length;
-      const stage3Pending = Object.values(sourceNotes || {}).filter((item) => getStage3RowStatus(item).isPending).length;
+      if (rowCache) {
+        for (const key of rowCache.keys()) {
+          if (!Object.prototype.hasOwnProperty.call(sourceNotes, key) || !sourceNotes[key]) rowCache.delete(key);
+        }
+      }
 
       const resultMetrics = {
         stage1Passed,

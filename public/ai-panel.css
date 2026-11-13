@@ -1942,6 +1942,7 @@ details[open] > summary .details-toggle::before {
 .ai-pool-flow-port { fill: var(--ai-surface); stroke: var(--flow-node-color); stroke-width: 1.6; }
 .ai-pool-flow-arrow { fill: var(--flow-idle); }
 .ai-pool-flow-connection.is-running .ai-pool-flow-arrow { fill: var(--flow-color); }
+.ai-pool-flow-connection:not(.is-running) .ai-pool-flow-wave { visibility: hidden; }
 .ai-pool-flow-surge {
   fill: none;
   stroke: var(--flow-wave-color);

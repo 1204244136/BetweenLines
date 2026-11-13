@@ -112,6 +112,12 @@ function graphFixture() {
   return { board, svg, list, card, graph, flush, frames };
 }
 
+function waveNodes(node) {
+  return node.children.flatMap((child) => [
+    ...(child.attributes.get("class") === "ai-pool-flow-surge" ? [child] : []), ...waveNodes(child),
+  ]);
+}
+
 test("轮询复用动效和命中节点，悬停只改颜色状态，实时提示跟随本条并发", () => {
   const ui = graphFixture();
   const connection = { presetId: "a", stage: "stage1", label: "A", inFlight: 128 };
@@ -138,6 +144,75 @@ test("轮询复用动效和命中节点，悬停只改颜色状态，实时提�
   hit.emit("pointerleave");
   assert.equal(group.classList.contains("is-hovered"), false);
   assert.equal(tooltip.hidden, true);
+  ui.graph.destroy();
+});
+
+test("正并发数字变化只更新粗细，不替换进行中的水流子树", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1", label: "A", inFlight: 128 };
+  ui.graph.update([connection]); ui.flush();
+  const group = ui.svg.children[0].children[0];
+  const hit = ui.svg.children[1].children[0];
+  const writes = group.htmlWrites;
+  const waves = waveNodes(group);
+  const phase = group.style["--flow-delay"];
+  assert.equal(waves.length, 128, "管道与箭头共同使用完整渐变波包");
+  for (const inFlight of [127, 64, 3, 128]) {
+    ui.graph.update([{ ...connection, inFlight }]); ui.flush();
+    assert.equal(ui.svg.children[0].children[0], group);
+    assert.equal(ui.svg.children[1].children[0], hit);
+    assert.equal(group.style["--flow-width"], poolFlowWidth(inFlight) + "px");
+    assert.equal(group.classList.contains("is-running"), true);
+    assert.equal(group.htmlWrites, writes, "运行数变化不得重建水流子树并打断其动画时间线");
+    assert.equal(waveNodes(group).length, waves.length);
+    waveNodes(group).forEach((wave, index) => assert.equal(wave, waves[index]));
+    assert.equal(group.style["--flow-delay"], phase, "线宽变化不重置水流相位");
+  }
+  ui.graph.destroy();
+});
+
+test("布局重算更新管道路径但保留进行中的水流子树", () => {
+  const ui = graphFixture();
+  ui.graph.update([{ presetId: "a", stage: "stage1", inFlight: 64 }]); ui.flush();
+  const group = ui.svg.children[0].children[0];
+  const hit = ui.svg.children[1].children[0];
+  const writes = group.htmlWrites;
+  const waves = waveNodes(group);
+  const before = hit.attributes.get("d");
+  ui.card.rect = { ...ui.card.rect, right: 320, width: 320 };
+  ui.graph.schedule(); ui.flush();
+  assert.notEqual(hit.attributes.get("d"), before, "卡片宽度变化必须更新实际路径");
+  assert.equal(ui.svg.children[0].children[0], group);
+  assert.equal(ui.svg.children[1].children[0], hit);
+  assert.equal(group.htmlWrites, writes, "几何变化不得替换正在运行的水流子树");
+  assert.equal(waveNodes(group).length, waves.length);
+  waveNodes(group).forEach((wave, index) => assert.equal(wave, waves[index]));
+  ui.graph.destroy();
+});
+
+test("其它管道启停不会重排持续运行连接的绘制和命中节点", () => {
+  const ui = graphFixture();
+  const connections = ["stage1", "stage2", "stage3"].map((stage, index) => ({ presetId: "a", stage, inFlight: index === 1 ? 0 : 32 }));
+  ui.graph.update(connections); ui.flush();
+  const visuals = [...ui.svg.children[0].children];
+  const hits = [...ui.svg.children[1].children];
+  for (const inFlight of [1, 0, 32]) {
+    ui.graph.update(connections.map((connection, index) => index === 1 ? { ...connection, inFlight } : connection)); ui.flush();
+    visuals.forEach((node, index) => assert.equal(ui.svg.children[0].children[index], node));
+    hits.forEach((node, index) => assert.equal(ui.svg.children[1].children[index], node));
+  }
+  ui.graph.destroy();
+});
+
+test("空闲与运行切换继续使用真实状态控制虚实及粗细", () => {
+  const ui = graphFixture();
+  const connection = { presetId: "a", stage: "stage1" };
+  for (const inFlight of [0, 64, 0, 32]) {
+    ui.graph.update([{ ...connection, inFlight }]); ui.flush();
+    const group = ui.svg.children[0].children[0];
+    assert.equal(group.classList.contains("is-running"), inFlight > 0);
+    assert.equal(group.style["--flow-width"], poolFlowWidth(inFlight) + "px");
+  }
   ui.graph.destroy();
 });
 

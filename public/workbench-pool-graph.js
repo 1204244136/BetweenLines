@@ -126,7 +126,27 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
   function createEntry(key) {
     const group = makeSvg("g", { class: "ai-pool-flow-connection" });
     const hit = makeSvg("path", { class: "ai-pool-flow-hit", fill: "none", stroke: "transparent", tabindex: "0", role: "img" });
-    const entry = { key, group, hit, signature: "", clipId: prefix + "-" + ++serial, connection: null };
+    const clipId = prefix + "-" + ++serial;
+    const flow = makeSvg("path", { id: clipId + "-flow", pathLength: "1000" });
+    const rect = makeSvg("rect", { x: "0", y: "-20" });
+    const arrowShape = makeSvg("path");
+    const pipeClip = makeSvg("clipPath", { id: clipId + "-pipe", clipPathUnits: "userSpaceOnUse" });
+    const arrowClip = makeSvg("clipPath", { id: clipId + "-arrow", clipPathUnits: "userSpaceOnUse" });
+    pipeClip.append(rect); arrowClip.append(arrowShape);
+    const defs = makeSvg("defs");
+    defs.append(flow, pipeClip, arrowClip);
+    const pipe = makeSvg("g", { class: "ai-pool-flow-pipe", "clip-path": `url(#${clipId}-pipe)` });
+    const line = makeSvg("path", { class: "ai-pool-flow-line" });
+    const pipeWave = makeSvg("g", { class: "ai-pool-flow-wave" });
+    pipe.append(line, pipeWave);
+    const port = makeSvg("circle", { class: "ai-pool-flow-port" });
+    const arrow = makeSvg("path", { class: "ai-pool-flow-arrow" });
+    const arrowWave = makeSvg("g", { class: "ai-pool-flow-arrow-surge ai-pool-flow-wave", "clip-path": `url(#${clipId}-arrow)` });
+    group.append(defs, pipe, port, arrow, arrowWave);
+    const entry = {
+      key, group, hit, clipId, signature: "", label: "", connection: null, wavesReady: false,
+      flow, rect, arrowShape, line, pipeWave, port, arrow, arrowWave,
+    };
     hit.addEventListener("pointerenter", (event) => showTooltip(entry, event));
     hit.addEventListener("pointermove", (event) => showTooltip(entry, event));
     hit.addEventListener("pointerleave", () => { if (hovered === entry) closeTooltip(); });
@@ -137,32 +157,49 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     return entry;
   }
 
+  function createWaves(entry, index) {
+    const phase = -(((view.performance?.now?.() || Date.now()) / 1000 + index * .25) % 2);
+    entry.group.style.setProperty("--flow-delay", phase + "s");
+    const step = 340 / 64;
+    for (let slice = 0; slice < 64; slice++) {
+      const t = (slice + .5) / 64;
+      const strength = t < .82 ? Math.pow(t / .82, 1.7) : Math.pow((1 - t) / .18, .7);
+      const start = 340 - slice * step;
+      for (const layer of [entry.pipeWave, entry.arrowWave]) {
+        const wave = makeSvg("use", { class: "ai-pool-flow-surge", href: `#${entry.clipId}-flow` });
+        wave.style.setProperty("--flow-step", step + .12);
+        wave.style.setProperty("--flow-opacity", strength);
+        wave.style.setProperty("--flow-start", start);
+        wave.style.setProperty("--flow-end", start - 1400);
+        layer.append(wave);
+      }
+    }
+    entry.wavesReady = true;
+  }
+
   function renderEntry(entry, geometry, bounds, index) {
     const { path, flowPath, arrowPath, width, radius, arrowHalf, arrowBase, x1, y1 } = geometry;
     const running = poolFlowCount(entry.connection.inFlight) > 0;
     const signature = JSON.stringify([path, width, radius, arrowPath, bounds.height, running]);
+    const label = poolFlowTooltip(entry.connection);
+    if (label !== entry.label) { entry.hit.setAttribute("aria-label", label); entry.label = label; }
+    if (signature === entry.signature) return;
+    entry.signature = signature;
     entry.group.classList.toggle("is-running", running);
     entry.group.style.setProperty("--flow-width", width + "px");
     entry.hit.setAttribute("d", flowPath);
     entry.hit.setAttribute("stroke-width", String(Math.max(16, width + 6)));
-    entry.hit.setAttribute("aria-label", poolFlowTooltip(entry.connection));
-    if (signature === entry.signature) return;
-    entry.signature = signature;
-    const phase = -(((view.performance?.now?.() || Date.now()) / 1000 + index * .25) % 2);
-    const step = 340 / 64;
-    const surge = running ? Array.from({ length: 64 }, (_, slice) => {
-      const t = (slice + .5) / 64;
-      const strength = t < .82 ? Math.pow(t / .82, 1.7) : Math.pow((1 - t) / .18, .7);
-      const start = 340 - slice * step;
-      return `<path class="ai-pool-flow-surge" pathLength="1000" d="${flowPath}" style="--flow-step:${step + .12};--flow-opacity:${strength};--flow-start:${start};--flow-end:${start - 1400};--flow-delay:${phase}s"/>`;
-    }).join("") : "";
-    const pipeClip = entry.clipId + "-pipe";
-    const arrowClip = entry.clipId + "-arrow";
-    entry.group.innerHTML = `<defs><clipPath id="${pipeClip}" clipPathUnits="userSpaceOnUse"><rect x="0" y="-20" width="${arrowBase}" height="${bounds.height + 40}"/></clipPath><clipPath id="${arrowClip}" clipPathUnits="userSpaceOnUse"><path d="${arrowPath}"/></clipPath></defs><g class="ai-pool-flow-pipe" clip-path="url(#${pipeClip})"><path class="ai-pool-flow-line" d="${path}"/>${surge}</g><circle class="ai-pool-flow-port" cx="${x1}" cy="${y1}" r="${radius}"/><path class="ai-pool-flow-arrow" d="${arrowPath}"/>${running ? `<g class="ai-pool-flow-arrow-surge" clip-path="url(#${arrowClip})" style="--flow-width:${2 * arrowHalf + 2}px">${surge}</g>` : ""}`;
-  }
-
-  function place(layer, node, index) {
-    if (layer.children[index] !== node) layer.insertBefore(node, layer.children[index] || null);
+    entry.flow.setAttribute("d", flowPath);
+    entry.line.setAttribute("d", path);
+    entry.rect.setAttribute("width", String(arrowBase));
+    entry.rect.setAttribute("height", String(bounds.height + 40));
+    entry.arrowShape.setAttribute("d", arrowPath);
+    entry.port.setAttribute("cx", String(x1));
+    entry.port.setAttribute("cy", String(y1));
+    entry.port.setAttribute("r", String(radius));
+    entry.arrow.setAttribute("d", arrowPath);
+    entry.arrowWave.style.setProperty("--flow-width", (2 * arrowHalf + 2) + "px");
+    if (running && !entry.wavesReady) createWaves(entry, index);
   }
 
   function draw() {
@@ -220,8 +257,10 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       if (hovered === entry) closeTooltip();
       entry.group.remove(); entry.hit.remove(); entries.delete(key);
     });
-    shown.sort((a, b) => Number(poolFlowCount(a.connection.inFlight) > 0) - Number(poolFlowCount(b.connection.inFlight) > 0));
-    shown.forEach((entry, index) => { place(visuals, entry.group, index); place(hits, entry.hit, index); });
+    shown.forEach((entry) => {
+      if (entry.group.parentNode !== visuals) visuals.append(entry.group);
+      if (entry.hit.parentNode !== hits) hits.append(entry.hit);
+    });
     refreshTooltip();
   }
 

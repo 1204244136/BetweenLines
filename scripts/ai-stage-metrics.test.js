@@ -16,6 +16,89 @@ function configureStageModels(ui, stages = []) {
   for (const stage of ["stage1", ...stages]) addPoolPreset(ui, `preset-s${stage.slice(-1)}`, [stage]);
 }
 
+test("阶段统计预备判定保留自动备注准入，完整历史与最新块判定一致", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  const cases = [
+    "人工备注\n是否需要修改：待终审\nStylist复审[调整]：人工引用\nArbiter仲裁[结合方案]：人工引用",
+    "是否需要修改：是\nGatekeeper初审：人工引用\nStylist复审[调整]：人工引用",
+    "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改。\nStylist复审[调整]：提交仲裁。",
+    "人工前缀\r\n\r\n[AI校对]\r\n是否需要修改：待终审\r\nStylist复审[调整]：提交仲裁。\r\n\r\n人工后缀",
+    "[AI校对]\n是否需要修改：是\nStylist复审[调整]：旧轮次\nArbiter仲裁[结合方案]：旧裁决\n\n[AI校对]\n是否需要修改：否\n分析：新的初审结果。",
+    "[AI校对]\n是否需要修改：否\n分析：旧通过结果。\n\n[AI校对]\n调用失败：HTTP 500",
+    "[规则预筛]\n是否需要修改：否\n分析：规则通过。",
+    "[AI校对]\n是否需要修改：待人工确认\n分析：旧版存疑。\n\n人工附言\n\n[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改。\nStylist复审调用失败：HTTP 429",
+  ];
+  for (const note of cases) {
+    for (const manualDone of [false, true]) {
+      ui.run(`globalThis.projectionItem = ${JSON.stringify({ note, manualDone })};`);
+      assert.equal(ui.run("JSON.stringify(projectStageMetricsNote(projectionItem).stage3)"),
+        ui.run("JSON.stringify(getStage3RowStatus(projectionItem))"));
+      assert.equal(ui.run("JSON.stringify(projectStageMetricsNote(projectionItem).stage2)"),
+        ui.run("JSON.stringify(getStage2RowStatus(projectionItem))"));
+      assert.equal(ui.run("JSON.stringify(projectStageMetricsNote(projectionItem).state)"),
+        ui.run("JSON.stringify(stageNoteState(projectionItem.note))"));
+    }
+  }
+  for (const note of cases.slice(0, 2)) {
+    ui.run(`globalThis.projectionItem = ${JSON.stringify({ note, manualDone: false })};`);
+    assert.equal(ui.run("projectStageMetricsNote(projectionItem).parsed"), null);
+    assert.equal(ui.run("projectStageMetricsNote(projectionItem).stage3.isRelevant"), false);
+  }
+});
+
+test("阶段统计缓存失效时只重新判定发生变化的备注", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  ui.run(`
+    for (let index = 1; index <= 100; index += 1) notes[String(index)] = {
+      note: "[AI校对]\\n语义是否相同：相同\\n是否需要修改：否\\n分析：合成备注 " + index,
+      manualDone: false,
+    };
+    markNotesDirtyForMetrics();
+    computeStageMetricsFromNotes();
+    globalThis.metricsRowChecks = 0;
+    const originalStage3RowStatus = getStage3RowStatus;
+    getStage3RowStatus = (...args) => { metricsRowChecks += 1; return originalStage3RowStatus(...args); };
+    notes["50"].note = "[AI校对]\\n语义是否相同：不同\\n是否需要修改：是\\nGatekeeper初审：建议修改。\\n分析：新的合成备注";
+    markNotesDirtyForMetrics();
+  `);
+  const metrics = ui.run("computeStageMetricsFromNotes()");
+  assert.equal(metrics.stage1Passed, 99);
+  assert.equal(metrics.stage1NeedsEdit, 1);
+  assert.equal(metrics.stage2Pending, 1);
+  assert.equal(ui.run("metricsRowChecks"), 1, "单条结果使聚合缓存失效时，不重新解析其余 99 条备注");
+  ui.run("metricsRowChecks = 0; markNotesDirtyForMetrics(); computeStageMetricsFromNotes();");
+  assert.equal(ui.run("metricsRowChecks"), 0, "仅使聚合缓存失效，不变备注仍复用既有判定");
+});
+
+test("阶段统计的逐行缓存与即时判据保持一致，覆盖确认、历史、失败与删除重加", () => {
+  const ui = createWorkbench(undefined, { strictIds: true });
+  const initial = {
+    1: { note: "[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改。\n分析：初审结果", manualDone: false },
+    2: { note: "[AI校对]\n是否需要修改：待终审\nGatekeeper初审：建议修改。\nStylist复审[调整]：提交仲裁。\n分析：复审结果", manualDone: false },
+    3: { note: "[AI校对]\n调用失败：HTTP 500", manualDone: false },
+    4: { note: "人工备注", recoveredUnverified: true, manualDone: false },
+  };
+  ui.run(`Object.assign(notes, ${JSON.stringify(initial)}); markNotesDirtyForMetrics();`);
+  const snapshot = (expression) => JSON.parse(ui.run(`JSON.stringify(${expression}, (_key, value) => value instanceof Set ? [...value] : value)`));
+  const compare = () => assert.deepEqual(snapshot("computeStageMetricsFromNotes()"),
+    snapshot("computeStageMetricsFromNotes(JSON.parse(JSON.stringify(notes)))"));
+  compare();
+  for (const change of [
+    'notes["1"].manualDone = true;',
+    'notes["2"].manualDone = true;',
+    'notes["2"].manualDone = false; notes["2"].recoveredUnverified = true;',
+    `notes["1"].note += ${JSON.stringify("\n\n[AI校对]\n是否需要修改：否\n分析：最新一轮无需修改。")};`,
+    `notes["3"].note = ${JSON.stringify("[AI校对]\n是否需要修改：是\nGatekeeper初审：建议修改。\nStylist复审调用失败：HTTP 429\n分析：保留初审结果")};`,
+    'delete notes["2"];',
+    `notes["2"] = ${JSON.stringify({ note: "[AI校对]\n是否需要修改：否\n分析：重加后的结果", manualDone: false })};`,
+    'for (const key of Object.keys(notes)) delete notes[key];',
+    `notes["1"] = ${JSON.stringify(initial[1])};`,
+  ]) {
+    ui.run(change + " markNotesDirtyForMetrics();");
+    compare();
+  }
+});
+
 test("工作台构建：渲染可见的 AI 阶段指标看板", () => {
   const rows = [{ index: 1, relation: "原文-译文 1:1", jp: "テスト原文", cn: "测试译文", score: 0.9, signature: "sig1" }];
   const selection = {
