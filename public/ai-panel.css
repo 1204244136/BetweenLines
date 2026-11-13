@@ -1946,7 +1946,7 @@ details[open] > summary .details-toggle::before {
   min-height: clamp(180px, 16vh, 192px);
   gap: 6px;
 }
-.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 3px 8px 3px 36px; }
+.ai-pool-flow-board .ai-stage-card { min-height: 0; padding: 3px 8px; }
 .ai-pool-flow-board .ai-stage-card-head { display: flex; min-height: 18px; gap: 6px; }
 .ai-pool-flow-board .ai-stage-card-title-row { flex: 0 0 auto; }
 .ai-pool-flow-board .ai-stage-runtime-line { flex: 1; justify-content: flex-end; }
@@ -1960,8 +1960,13 @@ details[open] > summary .details-toggle::before {
 }
 .ai-pool-flow-board .ai-stage-card-main { display: flex; flex-wrap: wrap; gap: 2px 8px; line-height: 1.35; }
 .ai-pool-flow-board .ai-stage-card-sub { flex-wrap: wrap; }
-.ai-pool-flow-board .ai-stage-runtime { grid-template-rows: 3px; gap: 0; }
-.ai-pool-flow-board .ai-stage-runtime .ai-stage-card-progress { grid-row: 1; }
+.ai-pool-flow-board .ai-stage-runtime {
+  grid-template-columns: var(--flow-markers-width, 0px) minmax(0, 1fr);
+  grid-template-rows: 14px;
+  align-items: center;
+  gap: 0 var(--flow-markers-gap, 0px);
+}
+.ai-pool-flow-board .ai-stage-runtime .ai-stage-card-progress { grid-row: 1; grid-column: 2; }
 .ai-pool-flow-board .ai-stage-card-progress { height: 3px; }
 .ai-pool-flow-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 2; }
 .ai-pool-flow-connection { --flow-color: var(--flow-base); --flow-wave-color: var(--flow-deep); --flow-node-color: var(--ai-focus); }
@@ -2021,6 +2026,7 @@ details[open] > summary .details-toggle::before {
   .ai-pool-flow-board { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .ai-pool-flow-board .ai-pool-presets { contain: none; max-height: 144px; }
   .ai-pool-flow-board .ai-stage-cards { grid-column: 1; grid-template-rows: none; min-height: 0; }
-  .ai-pool-flow-board .ai-stage-card { padding-left: 8px; }
+  .ai-pool-flow-board .ai-stage-runtime { grid-template-columns: minmax(0, 1fr); grid-template-rows: 3px; gap: 0; }
+  .ai-pool-flow-board .ai-stage-runtime .ai-stage-card-progress { grid-column: 1; }
   .ai-pool-flow-svg { display: none; }
 }

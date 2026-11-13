@@ -250,16 +250,21 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     schedule();
   }
 
-  function renderHiddenSources(counts, targets, bounds) {
+  function renderHiddenSources(counts, targets, footers, bounds) {
     hiddenSources.forEach((marker) => {
       marker.group.setAttribute("visibility", "hidden");
       marker.group.setAttribute("aria-hidden", "true");
     });
-    counts.forEach((directions, stage) => {
-      const target = targets.get(stage);
-      for (const direction of ["above", "below"]) {
-        const sources = directions[direction];
-        if (!sources.size) continue;
+    targets.forEach((target, stage) => {
+      const footer = footers.get(stage);
+      const slots = ["above", "below"].filter((direction) => counts.get(stage)?.[direction].size)
+        .map((direction) => ({ direction, sources: counts.get(stage)[direction] }));
+      const reserved = slots.reduce((width, { sources }) => width + (sources.size > 9 ? 26 : 20), 0) + Math.max(0, slots.length - 1) * 4;
+      footer?.node?.style.setProperty("--flow-markers-width", reserved + "px");
+      footer?.node?.style.setProperty("--flow-markers-gap", reserved ? "6px" : "0px");
+      let left = footer?.rect?.left ?? target.left + 8;
+      const top = footer?.rect ? footer.rect.top + (footer.rect.height - 14) / 2 : target.bottom - 18;
+      for (const { direction, sources } of slots) {
         const key = stage + ":" + direction;
         let marker = hiddenSources.get(key);
         if (!marker) {
@@ -278,7 +283,8 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
         marker.text.textContent = count > 99 ? "99+" : String(count);
         marker.text.setAttribute("textLength", count > 99 ? "13" : count > 9 ? "12" : "6");
         marker.text.setAttribute("lengthAdjust", "spacingAndGlyphs");
-        marker.group.setAttribute("transform", `translate(${target.left - bounds.left + 4} ${direction === "above" ? target.top - bounds.top + 4 : target.bottom - bounds.top - 18})`);
+        marker.group.setAttribute("transform", `translate(${left - bounds.left} ${top - bounds.top})`);
+        left += width + 4;
         marker.group.setAttribute("data-count", String(count));
         marker.group.setAttribute("aria-label", `${sources.values().next().value.stageLabel || stage}：列表${direction === "above" ? "上方" : "下方"}还有 ${count} 个预设连接至此阶段`);
         marker.group.setAttribute("aria-hidden", "false");
@@ -302,6 +308,10 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
     const listBounds = list.getBoundingClientRect();
     const targets = new Map(Object.entries(stages || {}).filter(([, node]) => node?.getBoundingClientRect)
       .map(([stage, node]) => [stage, node.getBoundingClientRect()]));
+    const footers = new Map([...targets.keys()].map((stage) => {
+      const node = stages[stage].querySelector?.(".ai-stage-runtime");
+      return [stage, { node, rect: node?.getBoundingClientRect() }];
+    }));
     const available = connections.filter((connection) => {
       const card = cards.get(connection.presetId);
       const target = targets.get(connection.stage);
@@ -363,7 +373,7 @@ function createPoolFlowGraph({ board, svg, list, stages } = {}) {
       if (entry.group.parentNode !== visuals) visuals.append(entry.group);
       if (entry.hit.parentNode !== hits) hits.append(entry.hit);
     });
-    renderHiddenSources(counts, targets, bounds);
+    renderHiddenSources(counts, targets, footers, bounds);
     syncAnimationRates(shown);
     refreshTooltip();
   }
