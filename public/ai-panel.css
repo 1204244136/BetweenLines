@@ -1779,10 +1779,20 @@ details[open] > summary .details-toggle::before {
   gap: 8px;
 }
 .ai-pool-head { flex-wrap: wrap; gap: 6px 12px; }
+.ai-pool-head .ai-stage-dashboard-title-group {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ai-pool-head .ai-stage-dashboard-title,
+.ai-pool-head .ai-stage-badge { white-space: nowrap; }
 .ai-pool-heading { color: var(--ai-text); font-size: 12px; }
 .ai-pool-actions, .ai-pool-toolbar { flex-wrap: wrap; }
 .ai-pool-actions label, .ai-pool-priority-toggle { font-size: 12px; color: var(--ai-muted); }
-.ai-pool-toolbar { flex: 0 1 500px; min-width: 0; }
+.ai-pool-toolbar { flex: 0 1 420px; min-width: 0; }
 .ai-pool-toolbar > .select-combobox, .ai-pool-toolbar > select { flex: 1 1 180px; min-width: 0; width: 180px; }
 .ai-pool .btn, .ai-pool select, .ai-pool .select-trigger {
   height: 26px;

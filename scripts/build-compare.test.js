@@ -121,7 +121,9 @@ test("双语工作台将 AI 目标列固定为 B 并完全剔除 C 列", () => {
   assert.doesNotMatch(html, /aiBreaker|ai-breaker|熔断阈值/);
   assert.doesNotMatch(html, /circuitBreaker(ErrorRate|Enabled)|breakerThreshold|breakerDisabled/);
   assert.match(html, /id="aiStageDashboard"/);
-  assert.match(html, /class="ai-stage-dashboard-header"/);
+  assert.doesNotMatch(html, /class="ai-stage-dashboard-header"/);
+  const poolHeadMarkup = html.slice(html.indexOf('<div class="ai-pool-head">'), html.indexOf('<div id="aiPoolFlowBoard"'));
+  assert.match(poolHeadMarkup, /id="aiPoolStop"[\s\S]*class="ai-stage-dashboard-title-group"[\s\S]*id="aiCacheHitRate"/);
   assert.doesNotMatch(html, /id="aiProofreadModeHint"/);
   assert.match(html, /translation-compare-ai-prompt-v1:/);
   assert.match(html, /pageMeta\.projectKey \|\| "unscoped"/);

@@ -280,16 +280,6 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
             </section>
           </div></details>
           <div id="aiStageDashboard" class="ai-stage-dashboard" aria-label="审核流水线阶段统计">
-            <div class="ai-stage-dashboard-header">
-              <div class="ai-stage-dashboard-title-group">
-                <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
-                <span id="aiCacheHitRate" class="ai-stage-badge" title="本轮模型输入的缓存命中占比；尚无接口返回的缓存用量。" aria-label="本轮缓存命中率：尚无数据">缓存命中: —</span>
-                <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
-                <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
-                <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="兼容旧版存疑结果与预筛冲突；这些记录尚未定案，可进入 AI 流程继续审核（点击筛选未定案记录）" role="button" tabindex="0" hidden>未定案记录: <strong id="metricFinalNeedsCheck">0</strong></span>
-                <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="尚未完成终审仲裁的存疑行数，等待终审判断修改或不改（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
-              </div>
-            </div>
             <section class="ai-pool" aria-labelledby="aiPoolTitle">
               <div class="ai-pool-head">
                 <div class="ai-pool-heading" title="每个预设共用一份并发额度，空闲时可处理其它已开启阶段。"><strong id="aiPoolTitle">共享预设池</strong><span class="ai-stage-badge"><span id="aiPoolCount">0</span> 个预设</span></div>
@@ -303,6 +293,14 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <select id="aiPoolMode"><option value="normal">常规</option><option value="loop">循环</option></select>
                   <button id="aiPoolStart" class="btn btn--primary" type="button">启动池子</button>
                   <button id="aiPoolStop" class="btn btn--danger" type="button" disabled>停止池子</button>
+                </div>
+                <div class="ai-stage-dashboard-title-group">
+                  <span class="ai-stage-dashboard-title">认知审核阶段统计</span>
+                  <span id="aiCacheHitRate" class="ai-stage-badge" title="本轮模型输入的缓存命中占比；尚无接口返回的缓存用量。" aria-label="本轮缓存命中率：尚无数据">缓存命中: —</span>
+                  <span id="aiStageSummaryNeedsEdit" class="ai-stage-badge ai-stage-badge--needs-edit" title="最终建议修改行数（点击筛选需修改行）" role="button" tabindex="0">建议修改: <strong id="metricFinalNeedsEdit">0</strong></span>
+                  <span id="aiStageSummaryUnchanged" class="ai-stage-badge ai-stage-badge--unchanged" title="最终判定无需修改行数（点击筛选无需修改行）" role="button" tabindex="0">无需修改: <strong id="metricFinalUnchanged">0</strong></span>
+                  <span id="aiStageSummaryNeedsCheck" class="ai-stage-badge ai-stage-badge--warning" title="兼容旧版存疑结果与预筛冲突；这些记录尚未定案，可进入 AI 流程继续审核（点击筛选未定案记录）" role="button" tabindex="0" hidden>未定案记录: <strong id="metricFinalNeedsCheck">0</strong></span>
+                  <span id="aiStageSummaryPendingArbiter" class="ai-stage-badge ai-stage-badge--warning" title="尚未完成终审仲裁的存疑行数，等待终审判断修改或不改（点击筛选待终审行）" role="button" tabindex="0" hidden>待终审: <strong id="metricFinalPendingArbiter">0</strong></span>
                 </div>
               </div>
               <div id="aiPoolFlowBoard" class="ai-pool-flow-board">
