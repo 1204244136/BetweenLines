@@ -304,7 +304,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
               </div>
               <div id="aiPoolFlowBoard" class="ai-pool-flow-board">
-                <div id="aiPoolPresets" class="ai-pool-presets" aria-label="池中预设与阶段权限"></div>
+                <div id="aiPoolPresets" class="ai-pool-presets" role="group" tabindex="0" aria-label="池中预设与阶段权限"></div>
                 <svg id="aiPoolFlowSvg" class="ai-pool-flow-svg" role="group" aria-label="预设与审核阶段的分配和运行状态"></svg>
                 <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" title="阶段一 事实初审：事实性硬伤审查与直接通过">

@@ -1854,6 +1854,7 @@ details[open] > summary .details-toggle::before {
   isolation: isolate;
 }
 .ai-pool-flow-board .ai-pool-presets {
+  --pool-scroll-thumb: var(--ai-line-strong);
   grid-column: 1;
   display: flex;
   flex-direction: column;
@@ -1861,9 +1862,37 @@ details[open] > summary .details-toggle::before {
   margin: 0;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   contain: size;
+  direction: rtl;
+  padding-left: 4px;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
+}
+.ai-pool-flow-board .ai-pool-presets > * { direction: ltr; }
+.ai-pool-flow-board .ai-pool-presets:hover,
+.ai-pool-flow-board .ai-pool-presets:focus-within { --pool-scroll-thumb: var(--ai-muted-2); }
+.ai-pool-flow-board .ai-pool-presets:focus-visible {
+  outline: 2px solid var(--ai-focus);
+  outline-offset: 2px;
+}
+@media (hover: none) {
+  .ai-pool-flow-board .ai-pool-presets { --pool-scroll-thumb: var(--ai-muted-2); }
+}
+@media (forced-colors: none) {
+  .ai-pool-flow-board .ai-pool-presets { scrollbar-color: var(--pool-scroll-thumb) transparent; }
+  @supports selector(::-webkit-scrollbar) {
+    .ai-pool-flow-board .ai-pool-presets { scrollbar-width: auto; scrollbar-color: auto; }
+    .ai-pool-flow-board .ai-pool-presets::-webkit-scrollbar { width: 6px; }
+    .ai-pool-flow-board .ai-pool-presets::-webkit-scrollbar-track { background: transparent; }
+    .ai-pool-flow-board .ai-pool-presets::-webkit-scrollbar-thumb {
+      background: var(--pool-scroll-thumb);
+      border-radius: 999px;
+    }
+    .ai-pool-flow-board .ai-pool-presets::-webkit-scrollbar-thumb:hover { background: var(--ai-muted); }
+    .ai-pool-flow-board .ai-pool-presets::-webkit-scrollbar-button { display: none; height: 0; }
+  }
 }
 .ai-pool-flow-board .ai-pool-preset {
   position: relative;
