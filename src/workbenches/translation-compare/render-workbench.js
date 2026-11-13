@@ -42,6 +42,7 @@ function readWorkbenchAssets() {
     confirmStyle: fs.readFileSync(path.join(publicDir, "workbench-dialog.css"), "utf8"),
     workbenchShared: fs.readFileSync(path.join(publicDir, "workbench-shared.js"), "utf8"),
     workbenchDiff: fs.readFileSync(path.join(publicDir, "workbench-diff.js"), "utf8"),
+    poolFlowGraph: fs.readFileSync(path.join(publicDir, "workbench-pool-graph.js"), "utf8"),
     workbenchClient: fs.readFileSync(path.join(publicDir, "workbench-client.js"), "utf8"),
     notesCodec: fs.readFileSync(require.resolve("lz-string/libs/lz-string.min.js"), "utf8"),
   };
@@ -304,14 +305,10 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                   <button id="aiPoolStop" class="btn btn--danger" type="button" disabled>停止池子</button>
                 </div>
               </div>
-              <div id="aiPoolPresets" class="ai-pool-presets" aria-label="池中预设与阶段权限"></div>
-              <div class="ai-pool-footer">
-                <div id="aiPoolStatus" class="ai-pool-status" role="status" aria-live="polite">待命</div>
-                <p id="aiPoolModeHint" class="ai-pool-hint"></p>
-                <div id="aiPoolSyncStatus" class="ai-pool-hint" role="status" aria-live="polite"></div>
-              </div>
-            </section>
-            <div class="ai-stage-cards">
+              <div id="aiPoolFlowBoard" class="ai-pool-flow-board">
+                <div id="aiPoolPresets" class="ai-pool-presets" aria-label="池中预设与阶段权限"></div>
+                <svg id="aiPoolFlowSvg" class="ai-pool-flow-svg" role="group" aria-label="预设与审核阶段的分配和运行状态"></svg>
+                <div class="ai-stage-cards">
               <div class="ai-stage-card" id="stage1Card" title="阶段一 事实初审：事实性硬伤审查与直接通过">
                 <div class="ai-stage-card-head">
                   <div class="ai-stage-card-title-row">
@@ -410,6 +407,13 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
                 </div>
               </div>
             </div>
+                </div>
+                <div class="ai-pool-footer">
+                  <div id="aiPoolStatus" class="ai-pool-status" role="status" aria-live="polite">待命</div>
+                  <p id="aiPoolModeHint" class="ai-pool-hint"></p>
+                  <div id="aiPoolSyncStatus" class="ai-pool-hint" role="status" aria-live="polite"></div>
+                </div>
+              </section>
           </div>
         </details>
         <details id="filterPanel" class="panel-details" aria-label="筛选与批处理">
@@ -571,6 +575,7 @@ function makeHtml(rows, selection, projectContext, speechHabits = null, termPref
 ${browserModelCapabilitiesSource()}
 ${assets.workbenchShared}
 ${assets.workbenchDiff}
+${assets.poolFlowGraph}
 ${assets.notesCodec}
 ${createNotesStorage.toString()}
 ${createDiskNotesStorage.toString()}

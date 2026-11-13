@@ -131,11 +131,12 @@ test("状态轮询保留预设节点与焦点，并展示单份共享额度及�
   const ui = setup({ poolSelections: [{ presetId: "p1" }] });
   await ui.settle();
   const node = ui.element("aiPoolPresets").children[0];
-  const state = { poolSupported: true, running: true, kind: "ai", runId: "pool", projectKey: "project", rowsSignature: "rows", results: [],
+  const state = { poolSupported: true, poolEnabled: true, running: true, kind: "ai", runId: "pool", projectKey: "project", rowsSignature: "rows", results: [],
     poolRuntime: { state: "running", mode: "loop", round: 2, presets: [{ presetId: "p1", inFlight: 2, quota: 3, configuredConcurrency: 4, waitReason: "cooldown", retryAt: Date.now() + 30000, activeRows: [1, 2] }] } };
   ui.run(`renderAiStatus(${JSON.stringify(state)})`);
   assert.equal(ui.element("aiPoolPresets").children[0], node);
-  assert.match(node._poolControls.runtime.textContent, /运行 2.*共享配额 3.*上限 4.*冷却中/);
+  assert.equal(node._poolControls.runtime.textContent, "总并发 2/4");
+  assert.match(node._poolControls.runtime.title, /运行 2.*共享配额 3.*上限 4.*冷却中/);
   assert.match(ui.element("aiPoolStatus").textContent, /循环.*第 2 轮.*运行中/);
   ui.run(`renderAiStatus(${JSON.stringify({ ...state, running: false, poolRuntime: { ...state.poolRuntime, state: "blocked", blockedReason: "所有预设均拒答" } })})`);
   assert.match(ui.element("aiPoolStatus").textContent, /需要处理.*所有预设均拒答/);

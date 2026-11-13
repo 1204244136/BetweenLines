@@ -122,6 +122,8 @@
     let poolRunCanUpdate = false;
     let poolServiceSupported = null;
     let poolSyncQueue = Promise.resolve();
+    let poolRuntimeMatchesPage = false;
+    let poolFlowGraph = null;
     let poolSyncVersion = 0;
 
     function normalizePoolSelection(item) {
@@ -205,7 +207,7 @@
           runtime.className = "ai-pool-preset-runtime";
           const identity = document.createElement("div");
           identity.className = "ai-pool-preset-identity";
-          identity.append(name, runtime);
+          identity.append(name);
           const choices = document.createElement("div");
           choices.className = "ai-pool-stage-choices";
           const stages = poolStages.map((stage, index) => {
@@ -250,7 +252,7 @@
             sharedPoolSelections = sharedPoolSelections.filter((entry) => entry.presetId !== item.presetId);
             changePoolConfiguration();
           });
-          node.append(identity, choices, remove);
+          node.append(identity, choices, remove, runtime);
           node._poolControls = { name, runtime, stages, remove };
         }
         const controls = node._poolControls;
@@ -267,7 +269,8 @@
           priority.hidden = !aiIds.poolPriority?.checked;
           priority.disabled = !checkbox.checked;
         });
-        const runtime = currentAiRunning && latestPoolRuntime?.presets?.find((entry) => entry.presetId === item.presetId);
+        const poolLive = currentAiRunning && poolRuntimeMatchesPage;
+        const runtime = poolLive && latestPoolRuntime?.presets?.find((entry) => entry.presetId === item.presetId);
         const wait = runtime ? pipelineWaitState("all", runtime) : null;
         const summary = runtime ? "运行 " + (Number(runtime.inFlight) || 0) + " · 共享配额 " + (Number(runtime.quota) || 0)
           + " / 上限 " + (runtime.configuredConcurrency || preset?.concurrency || AI_CONCURRENCY_DEFAULT)
@@ -276,7 +279,10 @@
           + (wait ? " · " + wait.text : "")
           : "共享并发上限 " + (preset?.concurrency || AI_CONCURRENCY_DEFAULT)
             + (item.stages.length ? "" : " · 未分配阶段");
-        controls.runtime.textContent = summary;
+        const total = runtime ? Math.max(0, Number(runtime.inFlight) || 0) : poolLive ? "—" : 0;
+        const cap = runtime?.configuredConcurrency || preset?.concurrency || AI_CONCURRENCY_DEFAULT;
+        controls.runtime.textContent = "总并发 " + total + "/" + cap;
+        controls.runtime.setAttribute("aria-label", "总并发 " + total + "，共享上限 " + cap);
         const activeRows = runtime?.activeRows || [];
         const profile = runtime?.profile;
         const profileText = profile ? "\n本次通道：成功 " + (Number(profile.successes) || 0)
@@ -296,9 +302,45 @@
         list.replaceChildren(...next);
       }
       if (aiIds.poolCount) aiIds.poolCount.textContent = String(sharedPoolSelections.length);
+      updatePoolFlowGraph();
       if (aiIds.poolModeHint) aiIds.poolModeHint.textContent = aiIds.poolMode?.value === "loop"
         ? "循环：自动续跑可重试异常并衔接下游；拒答行换预设。没有可用路线或重试耗尽时暂停并保留异常。重试可能重复计费。"
         : "常规：从已有进度继续，三个阶段自动接力；本轮异常保留，结束后可再次启动。";
+    }
+
+    function poolFlowConnections() {
+      const live = currentAiRunning && poolRuntimeMatchesPage;
+      const stageNames = { stage1: "事实初审", stage2: "文学复审", stage3: "终审仲裁" };
+      return sharedPoolSelections.flatMap((item) => {
+        const preset = presetTools.getPreset(localStorage, item.presetId);
+        const runtime = live && latestPoolRuntime?.presets?.find((entry) => entry.presetId === item.presetId);
+        return item.stages.map((stage) => {
+          const pipeline = live && latestPresetPipelines?.[stage]?.find((entry) => entry.presetId === item.presetId);
+          const count = pipeline && Number.isFinite(Number(pipeline.inFlight))
+            ? Math.max(0, Number(pipeline.inFlight)) : live ? null : 0;
+          const stopping = latestAiStopRequested || pendingStopAll || pendingStageStops.has(stage)
+            || latestStageControls?.[stage]?.stopRequested;
+          const wait = pipelineWaitState(stage, pipeline || runtime);
+          const state = count > 0 ? (stopping ? "停止中" : "运行中") : count === null ? "状态未获取"
+            : !preset ? "预设已失效" : live && (pipeline?.breakerTripped || runtime?.breakerTripped) ? "已停用"
+            : live && stopping ? "停止中" : live && wait ? wait.text
+            : live && Number(pipeline?.pending) > 0 ? "排队中" : "空闲";
+          return { key: item.presetId + ":" + stage, presetId: item.presetId, stage,
+            label: preset ? presetTools.presetLabel(preset) : item.presetId,
+            stageLabel: stage.slice(-1) + "（" + stageNames[stage] + "）", inFlight: count, state };
+        });
+      });
+    }
+
+    function updatePoolFlowGraph() {
+      if (!poolFlowGraph && typeof createPoolFlowGraph === "function") {
+        poolFlowGraph = createPoolFlowGraph({
+          board: document.getElementById("aiPoolFlowBoard"), svg: document.getElementById("aiPoolFlowSvg"),
+          list: aiIds.poolPresets,
+          stages: Object.fromEntries(poolStages.map((stage) => [stage, document.getElementById(stage + "Card")])),
+        });
+      }
+      poolFlowGraph?.update(poolFlowConnections());
     }
 
     function syncRunningPoolPresets() {
@@ -4642,7 +4684,7 @@
         }
         setLiveHoverTitle(pill3, pillTitle);
       }
-      // 运行数字统一归卡片底部，队列没有活跃行时也如实展示。
+      // 共享池的容量由预设卡和管道展示；旧阶段接口继续保留原运行明细。
       for (const [number, pipeline] of [[1, p1], [2, p2], [3, p3]]) {
         const info = document.getElementById("stage" + number + "RuntimeInfo");
         if (!info) continue;
@@ -4654,6 +4696,12 @@
             || "运行 " + (Number(pipeline.inFlight) || 0) + " 行 · 排队 " + (Number(pipeline.pending) || 0) + " 行")
           : (info.hidden ? "" : "未审 " + s1Unreviewed + " 行");
         if (!hasRuntime) { setLiveHoverTitle(info, ""); info.removeAttribute("title"); }
+        if (poolRuntimeMatchesPage && hasRuntime) {
+          const pending = Math.max(0, Number(pipeline.pending) || 0);
+          const wait = waitStates["stage" + number];
+          info.textContent = (pending ? "排队 " + pending + " 行" : "") + (wait ? " · " + wait.text : "");
+          info.hidden = !pending && !wait;
+        }
       }
 
       // 初审用同一覆盖范围表示累计进度；复审和仲裁只覆盖实际产生的候选行。
@@ -5013,6 +5061,7 @@
       const receipt = aiResultReception.begin(ai);
       if (receipt.runChanged || !receipt.sameScope) liveHoverTitleScope += 1;
       currentAiRunning = Boolean(ai.running);
+      poolRuntimeMatchesPage = receipt.sameScope && !receipt.cleared && ai.poolEnabled === true;
       const isRunning = currentAiRunning;
       runningAiStage = isRunning ? (ai.stageMode || runningAiStage) : null;
       latestStageControls = ai.stageControls || null;

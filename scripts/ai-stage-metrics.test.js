@@ -226,9 +226,9 @@ test("等待原因：单个预设的退避只显示在自身详情，健康预�
     ];
     renderWaitingStage(ui, stage, pipeline, { presetPipelines: { [stage]: presets } });
     const tags = ui.element("aiPoolPresets");
-    assert.match(tags.children[0]._poolControls.runtime.textContent, /限流退避 · 15 秒后尝试重新派发/);
+    assert.equal(tags.children[0]._poolControls.runtime.textContent, "总并发 0/4");
     assert.match(tags.children[0]._poolControls.runtime.title, /限流退避 · 15 秒后尝试重新派发/);
-    assert.doesNotMatch(tags.children[1]._poolControls.runtime.textContent, /限流退避|冷却中/);
+    assert.equal(tags.children[1]._poolControls.runtime.textContent, "总并发 1/4");
     assert.doesNotMatch(tags.children[1]._poolControls.runtime.title, /限流退避|冷却中/);
     assert.equal(ui.element(stage + "StatusPill").textContent, "处理中");
     assert.doesNotMatch(ui.element(stage + "RuntimeInfo").textContent, /限流退避|冷却中/);
@@ -263,7 +263,7 @@ test("等待原因：轮询更新可见倒计时，悬停稳定且停止与完�
     render();
     assert.equal(ui.timeouts.length, timerCount, "倒计时复用状态刷新，不新增定时器");
     assert.match(info.textContent, /10 秒后尝试重新派发/);
-    assert.match(runtime.textContent, /10 秒后尝试重新派发/);
+    assert.equal(runtime.textContent, "总并发 0/4");
     assert.equal(ui.element("aiPoolPresets").children[0]._poolControls.runtime, runtime, "倒计时不得重建悬停锚点");
     assert.deepEqual(nodes.map((node) => node.title), titles);
     for (const node of nodes) await node.dispatch("mouseleave");
@@ -410,6 +410,7 @@ test("共享池预设标签：每个预设显示自己的并发与排队信息",
   ui.run(`
     sharedPoolSelections = ["p1", "p2"].map((presetId) => normalizePoolSelection({ presetId }));
     currentAiRunning = true;
+    poolRuntimeMatchesPage = true;
     latestPoolRuntime = { presets: [
       { presetId: "p1", inFlight: 1, quota: 3, configuredConcurrency: 4, pending: 8, activeRows: [12] },
       { presetId: "p2", inFlight: 0, quota: 2, configuredConcurrency: 9, pending: 5, activeRows: [] },
@@ -419,10 +420,11 @@ test("共享池预设标签：每个预设显示自己的并发与排队信息",
 
   const tags = ui.element("aiPoolPresets");
   assert.equal(tags.children.length, 2);
-  assert.equal(tags.children[0]._poolControls.runtime.textContent, "运行 1 · 共享配额 3 / 上限 4 · 排队 8");
-  assert.match(tags.children[0]._poolControls.runtime.title, /上限 4/);
-  assert.equal(tags.children[1]._poolControls.runtime.textContent, "运行 0 · 共享配额 2 / 上限 9 · 排队 5");
-  assert.match(tags.children[1]._poolControls.runtime.title, /上限 9/);
+  assert.equal(tags.children[0]._poolControls.runtime.textContent, "总并发 1/4");
+  assert.match(tags.children[0]._poolControls.runtime.title, /运行 1 · 共享配额 3 \/ 上限 4 · 排队 8/);
+  assert.match(tags.children[0]._poolControls.runtime.title, /当前行：12$/);
+  assert.equal(tags.children[1]._poolControls.runtime.textContent, "总并发 0/9");
+  assert.match(tags.children[1]._poolControls.runtime.title, /运行 0 · 共享配额 2 \/ 上限 9 · 排队 5/);
 });
 
 test("阶段卡片并发后缀：多预设时只有全部预设触顶才标「全部触顶」", () => {

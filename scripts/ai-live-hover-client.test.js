@@ -234,10 +234,11 @@ test("实时悬停：预设运行刷新复用条目、悬停锚点与操作按�
   assert.ok(tag._poolControls.name === name, "运行刷新保留名称节点");
   assert.ok(tag._poolControls.runtime === runtime, "运行刷新保留悬停锚点");
   assert.ok(tag._poolControls.remove === remove, "运行刷新保留操作按钮");
-  assert.match(runtime.textContent, /运行 2/);
+  assert.equal(runtime.textContent, "总并发 2/4");
   assert.equal(runtime.title, snapshot);
   await runtime.dispatch("mouseleave");
-  assert.match(runtime.title, /运行 2/);
+  assert.match(runtime.title, /运行 2 · 共享配额 3 \/ 上限 4 · 排队 4/);
+  assert.match(runtime.title, /当前行：3$/);
   await runtime.dispatch("mouseenter");
   renderStatus(ui, 2, {
     running: false,
